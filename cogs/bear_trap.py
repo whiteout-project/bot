@@ -215,12 +215,13 @@ class BearTrap(commands.Cog):
 
             channel = self.bot.get_channel(channel_id)
             if not channel:
-                self.cursor.execute("""
-                    UPDATE bear_notifications 
-                    SET is_enabled = 0 
-                    WHERE id = ?
-                """, (id,))
-                self.conn.commit()
+                print(f"Warning: Channel {channel_id} not found for notification {id}.")
+                # self.cursor.execute("""
+                #     UPDATE bear_notifications 
+                #     SET is_enabled = 0 
+                #     WHERE id = ?
+                # """, (id,))
+                # self.conn.commit()
                 return
 
             tz = pytz.timezone(timezone)
