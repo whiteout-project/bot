@@ -12,9 +12,9 @@ services:
       # - DEBUG=${DEBUG:-false}
     volumes:
       # Database persistence
-      - ./data/db:/app/data/db
-      # Log persistence
-      - ./data/log:/app/data/log
+      - ./data/db:/app/db
+      # Log persistence  
+      - ./data/log:/app/log
       # Optional: Mount bot token file (alternative to env var)
       # - ./bot_token.txt:/app/bot_token.txt:ro
     restart: unless-stopped
