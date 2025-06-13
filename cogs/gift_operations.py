@@ -22,6 +22,8 @@ from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
 from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
+from .commercial_captcha_solver import CommercialCaptchaSolver
+from .gift_ui_components import OCRSettingsView, GiftView, CreateGiftCodeModal
 
 class GiftOperations(commands.Cog):
     def __init__(self, bot):
@@ -133,6 +135,20 @@ class GiftOperations(commands.Cog):
         self.test_captcha_cooldowns = {} # User ID: last test timestamp for test button
         self.test_captcha_delay = 60
 
+        # Commercial Captcha Solver Initialization
+        use_commercial_captcha = os.getenv('USE_COMMERCIAL_CAPTCHA', 'true').lower() in ['true', '1', 'yes']
+        anticaptcha_key = os.getenv('ANTICAPTCHA_API_KEY')
+        
+        if use_commercial_captcha and anticaptcha_key:
+            self.commercial_captcha_solver = CommercialCaptchaSolver(api_key=anticaptcha_key, logger=self.logger)
+            self.logger.info(f"Commercial CAPTCHA solver initialized: Enabled={self.commercial_captcha_solver.is_enabled}")
+        else:
+            self.commercial_captcha_solver = None
+            if not use_commercial_captcha:
+                self.logger.info("Commercial CAPTCHA solver disabled via USE_COMMERCIAL_CAPTCHA setting")
+            elif not anticaptcha_key:
+                self.logger.info("Commercial CAPTCHA solver disabled - no ANTICAPTCHA_API_KEY provided")
+
         self.processing_stats = {
         "ocr_solver_calls": 0,       # Times solver.solve_captcha was called
         "ocr_valid_format": 0,     # Times solver returned success=True
@@ -140,7 +156,10 @@ class GiftOperations(commands.Cog):
         "server_validation_success": 0, # Captcha accepted by server (not CAPTCHA_ERROR)
         "server_validation_failure": 0, # Captcha rejected by server (CAPTCHA_ERROR)
         "total_fids_processed": 0,   # Count of completed claim_giftcode calls
-        "total_processing_time": 0.0 # Sum of durations for completed calls
+        "total_processing_time": 0.0, # Sum of durations for completed calls
+        "commercial_solver_calls": 0,   # Times commercial solver was called
+        "commercial_solver_success": 0, # Times commercial solver succeeded
+        "commercial_solver_failure": 0  # Times commercial solver failed
         }
 
         # Captcha Solver Initialization Attempt
@@ -600,14 +619,12 @@ class GiftOperations(commands.Cog):
         )
         return session, response_stove_info
 
-    async def claim_giftcode_rewards_wos(self, player_id, giftcode):
-
+    async def claim_giftcode_rewards_wos_with_fallback(self, player_id, giftcode):
+        """Enhanced gift code redemption with OCR + commercial fallback logic."""
         giftcode = self.clean_gift_code(giftcode)
         process_start_time = time.time()
         status = "ERROR"
-        image_bytes = None
-        captcha_code = None
-        method = "N/A"
+        used_commercial_fallback = False
 
         try:
             # Cache Check
@@ -654,157 +671,48 @@ class GiftOperations(commands.Cog):
                 self.logger.info(log_msg.strip())
                 return status
 
-            # Captcha Fetching and Solving Loop
+            # Try OCR first
             self.logger.info(f"GiftOps: OCR enabled and solver initialized for FID {player_id}.")
-            self.captcha_solver.reset_run_stats()
-            max_ocr_attempts = 4
+            status = await self._try_ocr_captcha_solving(player_id, giftcode, session)
+            
+            # If OCR failed with CAPTCHA_INVALID, try commercial fallback
+            if status == "CAPTCHA_INVALID" and self.commercial_captcha_solver and self.commercial_captcha_solver.is_enabled:
+                self.logger.info(f"GiftOps: OCR failed with CAPTCHA_INVALID, trying commercial fallback for {player_id}")
+                used_commercial_fallback = True
+                status = await self._try_commercial_captcha_solving(player_id, giftcode, session)
 
-            for attempt in range(max_ocr_attempts):
-                self.logger.info(f"GiftOps: Attempt {attempt + 1}/{max_ocr_attempts} to fetch/solve captcha for FID {player_id}")
-                captcha_image_base64, error = await self.fetch_captcha(player_id, session)
-                
-                if error:
-                    status = "TIMEOUT_RETRY" if error == "CAPTCHA_TOO_FREQUENT" else "CAPTCHA_FETCH_ERROR"
-                    self.giftlog.info(f"{datetime.now()} Captcha fetch error for {player_id}: {error}\n")
-                    break
-                
-                if captcha_image_base64 and not error:
-                    try:
-                        if captcha_image_base64.startswith("data:image"):
-                            img_b64_data = captcha_image_base64.split(",", 1)[1]
-                        else:
-                            img_b64_data = captcha_image_base64
-                        image_bytes = base64.b64decode(img_b64_data)
-                    except Exception as decode_err:
-                        self.logger.error(f"Failed to decode base64 image for FID {player_id}: {decode_err}")
-                        status = "CAPTCHA_FETCH_ERROR"
-                        break
-                else:
-                    image_bytes = None
-
-                if image_bytes:
-                    self.processing_stats["ocr_solver_calls"] += 1
-                    captcha_code, success, method, confidence, _ = await self.captcha_solver.solve_captcha(
-                    image_bytes, fid=player_id, attempt=attempt)
-                    if success:
-                        self.processing_stats["ocr_valid_format"] += 1
-                else:
-                    self.logger.warning(f"Skipping OCR attempt for FID {player_id} as image_bytes is None.")
-                    status = "CAPTCHA_FETCH_ERROR"
-                    break
-
-                if not success:
-                    self.giftlog.info(f"{datetime.now()} OCR failed for FID {player_id} on attempt {attempt + 1}\n")
-                    status = "OCR_FAILED_ATTEMPT"
-                    if attempt == max_ocr_attempts - 1:
-                        status = "MAX_CAPTCHA_ATTEMPTS_REACHED"
-                    else:
-                        status = "OCR_FAILED_ATTEMPT"
-                    if status == "MAX_CAPTCHA_ATTEMPTS_REACHED": break
-                    else: continue
-
-                self.giftlog.info(f"{datetime.now()} OCR solved for {player_id}: {captcha_code} (meth:{method}, conf:{confidence:.2f}, att:{attempt+1})\n")
-
-                data_to_encode = {"fid": f"{player_id}", "cdk": giftcode, "captcha_code": captcha_code, "time": f"{int(datetime.now().timestamp()*1000)}"}
-                data = self.encode_data(data_to_encode)
-                self.processing_stats["captcha_submissions"] += 1
-                response_giftcode = session.post(self.wos_giftcode_url, data=data)
-
-                log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
+            # Handle caching and validation for successful statuses
+            if player_id != self.get_test_fid() and status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
                 try:
-                    response_json_redeem = response_giftcode.json()
-                    log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
-                except json.JSONDecodeError:
-                    response_json_redeem = {}
-                    log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse Text (Not JSON): {response_giftcode.text[:500]}...\n"
-                log_entry_redeem += "-" * 50 + "\n"
-                self.giftlog.info(log_entry_redeem.strip())
-
-                msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
-                err_code = response_json_redeem.get("err_code")
-
-                is_captcha_error = (msg == "CAPTCHA CHECK ERROR" and err_code == 40103)
-                is_captcha_rate_limit = (msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101)
-                if is_captcha_error:
-                    self.processing_stats["server_validation_failure"] += 1
-                    status = "CAPTCHA_INVALID"
-                elif not is_captcha_rate_limit:
-                    self.processing_stats["server_validation_success"] += 1
+                    self.cursor.execute("""
+                        INSERT OR REPLACE INTO user_giftcodes (fid, giftcode, status)
+                        VALUES (?, ?, ?)
+                    """, (player_id, giftcode, status))
+                    
+                    self.cursor.execute("""
+                        UPDATE gift_codes 
+                        SET validation_status = 'validated' 
+                        WHERE giftcode = ? AND validation_status = 'pending'
+                    """, (giftcode,))
+                    
+                    if self.cursor.rowcount > 0:
+                        self.logger.info(f"Code '{giftcode}' validated for the first time - sending to API")
+                        try:
+                            asyncio.create_task(self.api.add_giftcode(giftcode))
+                        except Exception as api_err:
+                            self.logger.exception(f"Error sending validated code '{giftcode}' to API: {api_err}")
                 
-                if msg == "CAPTCHA CHECK ERROR" and err_code == 40103:
-                    status = "CAPTCHA_INVALID"
-                elif msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101:
-                    status = "TIMEOUT_RETRY"
-                elif msg == "NOT LOGIN":
-                    status = "LOGIN_EXPIRED_MID_PROCESS"
-                elif msg == "SUCCESS":
-                    status = "SUCCESS"
-                elif msg == "RECEIVED" and err_code == 40008:
-                    status = "RECEIVED"
-                elif msg == "SAME TYPE EXCHANGE" and err_code == 40011:
-                    status = "SAME TYPE EXCHANGE"
-                elif msg == "TIME ERROR" and err_code == 40007:
-                    status = "TIME_ERROR"
-                elif msg == "CDK NOT FOUND" and err_code == 40014:
-                    status = "CDK_NOT_FOUND"
-                elif msg == "USED" and err_code == 40005:
-                    status = "USAGE_LIMIT"
-                elif msg == "TIMEOUT RETRY" and err_code == 40004:
-                    status = "TIMEOUT_RETRY"
-                elif "sign error" in msg.lower():
-                    status = "SIGN_ERROR"
-                    # Log the request that caused the sign error for debugging purposes
-                    self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
-                    self.logger.error(f"[SIGN ERROR] Original request data: fid={player_id}, cdk={giftcode}, captcha_code={captcha_code}, time={int(datetime.now().timestamp()*1000)}")
-                    debug_data_to_encode = {"fid": f"{player_id}", "cdk": giftcode, "captcha_code": captcha_code, "time": f"{int(datetime.now().timestamp()*1000)}"}
-                    self.encode_data(debug_data_to_encode, debug_sign_error=True)
-                    self.logger.error(f"[SIGN ERROR] Response that caused sign error: {response_json_redeem}")
-                else:
-                    status = "UNKNOWN_API_RESPONSE"
-                    self.giftlog.info(f"Unknown API response for {player_id}: msg='{msg}', err_code={err_code}\n")
+                    self.conn.commit()
+                    self.giftlog.info(f"DATABASE - Saved/Updated status for User {player_id}, Code '{giftcode}', Status {status}\n")
+                except Exception as db_err:
+                    self.giftlog.exception(f"DATABASE ERROR saving/replacing status for {player_id}/{giftcode}: {db_err}\n")
+                    self.giftlog.exception(f"STACK TRACE: {traceback.format_exc()}\n")
 
-                if player_id != self.get_test_fid() and status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
-                    try:
-                        self.cursor.execute("""
-                            INSERT OR REPLACE INTO user_giftcodes (fid, giftcode, status)
-                            VALUES (?, ?, ?)
-                        """, (player_id, giftcode, status))
-                        
-                        self.cursor.execute("""
-                            UPDATE gift_codes 
-                            SET validation_status = 'validated' 
-                            WHERE giftcode = ? AND validation_status = 'pending'
-                        """, (giftcode,))
-                        
-                        if self.cursor.rowcount > 0: # If this code was just validated for the first time, send to API
-                            self.logger.info(f"Code '{giftcode}' validated for the first time - sending to API")
-                            try:
-                                asyncio.create_task(self.api.add_giftcode(giftcode))
-                            except Exception as api_err:
-                                self.logger.exception(f"Error sending validated code '{giftcode}' to API: {api_err}")
-                        
-                        self.conn.commit()
-                        self.giftlog.info(f"DATABASE - Saved/Updated status for User {player_id}, Code '{giftcode}', Status {status}\n")
-                    except Exception as db_err:
-                        self.giftlog.exception(f"DATABASE ERROR saving/replacing status for {player_id}/{giftcode}: {db_err}\n")
-                        self.giftlog.exception(f"STACK TRACE: {traceback.format_exc()}\n")
-
-                if status == "CAPTCHA_INVALID":
-                    if attempt == max_ocr_attempts - 1:
-                        self.logger.warning(f"GiftOps: Max OCR attempts reached after CAPTCHA_INVALID for FID {player_id}.")
-                        break
-                    else:
-                        self.logger.info(f"GiftOps: CAPTCHA_INVALID for FID {player_id} on attempt {attempt + 1}. Retrying fetch/solve...")
-                        await asyncio.sleep(random.uniform(1.5, 2.5))
-                        continue
-                else:
-                    break
-                
         except Exception as e:
             error_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             error_details = traceback.format_exc()
             log_message = (
-                f"\n--- UNEXPECTED ERROR in claim_giftcode_rewards_wos ({error_timestamp}) ---\n"
+                f"\n--- UNEXPECTED ERROR in claim_giftcode_rewards_wos_with_fallback ({error_timestamp}) ---\n"
                 f"Player ID: {player_id}, Gift Code: {giftcode}\nError: {str(e)}\n"
                 f"Traceback:\n{error_details}\n"
                 f"---------------------------------------------------------------------\n"
@@ -812,7 +720,8 @@ class GiftOperations(commands.Cog):
             self.logger.exception(f"GiftOps: UNEXPECTED Error claiming code {giftcode} for FID {player_id}. Details logged.")
             try:
                 self.giftlog.error(log_message.strip())
-            except Exception as log_e: self.logger.exception(f"GiftOps: CRITICAL - Failed to write unexpected error log: {log_e}")
+            except Exception as log_e: 
+                self.logger.exception(f"GiftOps: CRITICAL - Failed to write unexpected error log: {log_e}")
             status = "ERROR"
 
         finally:
@@ -820,51 +729,236 @@ class GiftOperations(commands.Cog):
             duration = process_end_time - process_start_time
             self.processing_stats["total_fids_processed"] += 1
             self.processing_stats["total_processing_time"] += duration
-            self.logger.info(f"GiftOps: claim_giftcode_rewards_wos completed for FID {player_id}. Status: {status}, Duration: {duration:.3f}s")
-
-        # Image save handling
-        if image_bytes and self.captcha_solver and self.captcha_solver.save_images_mode > 0:
-            save_mode = self.captcha_solver.save_images_mode
-            should_save = False
-            filename_base = None
-            log_prefix = ""
-
-            is_success = status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]
-            is_fail_server = status == "CAPTCHA_INVALID"
-
-            if is_success and save_mode in [2, 3]:
-                should_save = True
-                log_prefix = f"Captcha OK (Solver: {method})"
-                solved_code_str = captcha_code if captcha_code else "UNKNOWN_SOLVE"
-                filename_base = f"{solved_code_str}.png"
-            elif is_fail_server and save_mode in [1, 3]:
-                should_save = True
-                log_prefix = f"Captcha Fail Server (Solver: {method} -> {status})"
-                solved_code_str = captcha_code if captcha_code else "UNKNOWN_SENT"
-                timestamp = int(time.time())
-                filename_base = f"FAIL_SERVER_{solved_code_str}_{timestamp}.png"
-
-            if should_save and filename_base:
-                try:
-                    save_path = os.path.join(self.captcha_solver.captcha_dir, filename_base)
-                    counter = 1
-                    base, ext = os.path.splitext(filename_base)
-                    while os.path.exists(save_path) and counter <= 100:
-                        save_path = os.path.join(self.captcha_solver.captcha_dir, f"{base}_{counter}{ext}")
-                        counter += 1
-
-                    if counter > 100:
-                        self.logger.warning(f"Could not find unique filename for {filename_base} after 100 tries. Discarding image.")
-                    else:
-                        with open(save_path, "wb") as f:
-                            f.write(image_bytes)
-                        self.logger.info(f"GiftOps: {log_prefix} - Saved captcha image as {os.path.basename(save_path)}")
-
-                except Exception as save_err:
-                    self.logger.exception(f"GiftOps: Error saving captcha image ({filename_base}): {save_err}")
+            
+            # Log commercial usage
+            if used_commercial_fallback:
+                self.processing_stats["commercial_solver_calls"] += 1
+                if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
+                    self.processing_stats["commercial_solver_success"] += 1
+                else:
+                    self.processing_stats["commercial_solver_failure"] += 1
+            
+            self.logger.info(f"GiftOps: claim_giftcode_rewards_wos_with_fallback completed for FID {player_id}. Status: {status}, Duration: {duration:.3f}s, Commercial Used: {used_commercial_fallback}")
 
         self.logger.info(f"GiftOps: Final status for FID {player_id} / Code '{giftcode}': {status}")
         return status
+
+    async def claim_giftcode_rewards_wos(self, player_id, giftcode):
+        """Main entry point for gift code redemption with fallback to commercial service."""
+        return await self.claim_giftcode_rewards_wos_with_fallback(player_id, giftcode)
+
+    async def _try_ocr_captcha_solving(self, player_id, giftcode, session):
+        """Try OCR captcha solving with retry logic."""
+        self.logger.info(f"GiftOps: Trying OCR captcha solving for FID {player_id}")
+        self.captcha_solver.reset_run_stats()
+        max_ocr_attempts = 2  # First attempt + one retry
+        
+        for attempt in range(max_ocr_attempts):
+            if attempt > 0:
+                # Add delay between retry attempts
+                delay = random.uniform(10, 20)
+                self.logger.info(f"GiftOps: OCR retry attempt {attempt + 1} for FID {player_id} after {delay:.1f}s delay")
+                await asyncio.sleep(delay)
+            
+            self.logger.info(f"GiftOps: OCR attempt {attempt + 1}/{max_ocr_attempts} for FID {player_id}")
+            
+            # Fetch captcha
+            captcha_image_base64, error = await self.fetch_captcha(player_id, session)
+            
+            if error:
+                status = "TIMEOUT_RETRY" if error == "CAPTCHA_TOO_FREQUENT" else "CAPTCHA_FETCH_ERROR"
+                self.giftlog.info(f"{datetime.now()} Captcha fetch error for {player_id}: {error}\n")
+                return status
+            
+            # Decode image
+            try:
+                if captcha_image_base64.startswith("data:image"):
+                    img_b64_data = captcha_image_base64.split(",", 1)[1]
+                else:
+                    img_b64_data = captcha_image_base64
+                image_bytes = base64.b64decode(img_b64_data)
+            except Exception as decode_err:
+                self.logger.error(f"Failed to decode base64 image for FID {player_id}: {decode_err}")
+                return "CAPTCHA_FETCH_ERROR"
+            
+            # Solve with OCR
+            self.processing_stats["ocr_solver_calls"] += 1
+            captcha_code, success, method, confidence, _ = await self.captcha_solver.solve_captcha(
+                image_bytes, fid=player_id, attempt=attempt)
+            
+            if not success:
+                self.giftlog.info(f"{datetime.now()} OCR failed for FID {player_id} on attempt {attempt + 1}\n")
+                if attempt == max_ocr_attempts - 1:
+                    return "OCR_FAILED_MAX_ATTEMPTS"
+                continue
+            
+            self.processing_stats["ocr_valid_format"] += 1
+            self.giftlog.info(f"{datetime.now()} OCR solved for {player_id}: {captcha_code} (meth:{method}, conf:{confidence:.2f}, att:{attempt+1})\n")
+            
+            # Submit to API
+            status = await self._submit_captcha_to_api(player_id, giftcode, captcha_code, session)
+            
+            # Handle image saving for OCR
+            await self._save_captcha_image_if_needed(image_bytes, captcha_code, status, method)
+            
+            # If captcha was invalid, continue to next attempt or return for commercial fallback
+            if status == "CAPTCHA_INVALID":
+                if attempt == max_ocr_attempts - 1:
+                    self.logger.info(f"GiftOps: OCR failed after {max_ocr_attempts} attempts, will try commercial fallback")
+                    return "CAPTCHA_INVALID"
+                else:
+                    self.logger.info(f"GiftOps: OCR attempt {attempt + 1} failed with CAPTCHA_INVALID, retrying...")
+                    continue
+            else:
+                # Success or other definitive result
+                return status
+        
+        return "OCR_FAILED_MAX_ATTEMPTS"
+    
+    async def _try_commercial_captcha_solving(self, player_id, giftcode, session):
+        """Try commercial captcha solving."""
+        if not self.commercial_captcha_solver or not self.commercial_captcha_solver.is_enabled:
+            self.logger.error(f"Commercial captcha solver not available for FID {player_id}")
+            return "COMMERCIAL_SOLVER_UNAVAILABLE"
+        
+        self.logger.info(f"GiftOps: Trying commercial captcha solving for FID {player_id}")
+        
+        try:
+            # Use the commercial solver's complete workflow
+            captcha_solution, success = self.commercial_captcha_solver.solve_captcha_for_player(
+                player_id, session, self.wos_encrypt_key, self.wos_captcha_url
+            )
+            
+            if not success or not captcha_solution:
+                self.logger.error(f"Commercial captcha solving failed for FID {player_id}")
+                return "COMMERCIAL_SOLVER_FAILED"
+            
+            self.logger.info(f"Commercial captcha solved for {player_id}: {captcha_solution}")
+            
+            # Submit to API
+            status = await self._submit_captcha_to_api(player_id, giftcode, captcha_solution, session)
+            
+            # Report incorrect captcha if needed
+            if status == "CAPTCHA_INVALID":
+                self.commercial_captcha_solver.report_incorrect_captcha()
+                self.logger.warning(f"Commercial captcha was incorrect for {player_id}, reported to service")
+            
+            return status
+            
+        except Exception as e:
+            self.logger.exception(f"Error in commercial captcha solving for {player_id}: {e}")
+            return "COMMERCIAL_SOLVER_ERROR"
+    
+    async def _submit_captcha_to_api(self, player_id, giftcode, captcha_code, session):
+        """Submit captcha solution to the WOS API."""
+        data_to_encode = {
+            "fid": f"{player_id}", 
+            "cdk": giftcode, 
+            "captcha_code": captcha_code, 
+            "time": f"{int(datetime.now().timestamp()*1000)}"
+        }
+        data = self.encode_data(data_to_encode)
+        self.processing_stats["captcha_submissions"] += 1
+        
+        response_giftcode = session.post(self.wos_giftcode_url, data=data)
+        
+        log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
+        try:
+            response_json_redeem = response_giftcode.json()
+            log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
+        except json.JSONDecodeError:
+            response_json_redeem = {}
+            log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse Text (Not JSON): {response_giftcode.text[:500]}...\n"
+        log_entry_redeem += "-" * 50 + "\n"
+        self.giftlog.info(log_entry_redeem.strip())
+        
+        msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
+        err_code = response_json_redeem.get("err_code")
+        
+        # Update statistics
+        is_captcha_error = (msg == "CAPTCHA CHECK ERROR" and err_code == 40103)
+        is_captcha_rate_limit = (msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101)
+        if is_captcha_error:
+            self.processing_stats["server_validation_failure"] += 1
+        elif not is_captcha_rate_limit:
+            self.processing_stats["server_validation_success"] += 1
+        
+        # Map response to status
+        if msg == "CAPTCHA CHECK ERROR" and err_code == 40103:
+            return "CAPTCHA_INVALID"
+        elif msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101:
+            return "TIMEOUT_RETRY"
+        elif msg == "NOT LOGIN":
+            return "LOGIN_EXPIRED_MID_PROCESS"
+        elif msg == "SUCCESS":
+            return "SUCCESS"
+        elif msg == "RECEIVED" and err_code == 40008:
+            return "RECEIVED"
+        elif msg == "SAME TYPE EXCHANGE" and err_code == 40011:
+            return "SAME TYPE EXCHANGE"
+        elif msg == "TIME ERROR" and err_code == 40007:
+            return "TIME_ERROR"
+        elif msg == "CDK NOT FOUND" and err_code == 40014:
+            return "CDK_NOT_FOUND"
+        elif msg == "USED" and err_code == 40005:
+            return "USAGE_LIMIT"
+        elif msg == "TIMEOUT RETRY" and err_code == 40004:
+            return "TIMEOUT_RETRY"
+        elif "sign error" in msg.lower():
+            # Log the request that caused the sign error for debugging purposes
+            self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
+            self.logger.error(f"[SIGN ERROR] Original request data: fid={player_id}, cdk={giftcode}, captcha_code={captcha_code}, time={int(datetime.now().timestamp()*1000)}")
+            debug_data_to_encode = {"fid": f"{player_id}", "cdk": giftcode, "captcha_code": captcha_code, "time": f"{int(datetime.now().timestamp()*1000)}"}
+            self.encode_data(debug_data_to_encode, debug_sign_error=True)
+            self.logger.error(f"[SIGN ERROR] Response that caused sign error: {response_json_redeem}")
+            return "SIGN_ERROR"
+        else:
+            self.giftlog.info(f"Unknown API response for {player_id}: msg='{msg}', err_code={err_code}\n")
+            return "UNKNOWN_API_RESPONSE"
+    
+    async def _save_captcha_image_if_needed(self, image_bytes, captcha_code, status, method):
+        """Save captcha image if configured to do so."""
+        if not image_bytes or not self.captcha_solver or self.captcha_solver.save_images_mode <= 0:
+            return
+        
+        save_mode = self.captcha_solver.save_images_mode
+        should_save = False
+        filename_base = None
+        log_prefix = ""
+        
+        is_success = status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]
+        is_fail_server = status == "CAPTCHA_INVALID"
+        
+        if is_success and save_mode in [2, 3]:
+            should_save = True
+            log_prefix = f"Captcha OK (Solver: {method})"
+            solved_code_str = captcha_code if captcha_code else "UNKNOWN_SOLVE"
+            filename_base = f"{solved_code_str}.png"
+        elif is_fail_server and save_mode in [1, 3]:
+            should_save = True
+            log_prefix = f"Captcha Fail Server (Solver: {method} -> {status})"
+            solved_code_str = captcha_code if captcha_code else "UNKNOWN_SENT"
+            timestamp = int(time.time())
+            filename_base = f"FAIL_SERVER_{solved_code_str}_{timestamp}.png"
+        
+        if should_save and filename_base:
+            try:
+                save_path = os.path.join(self.captcha_solver.captcha_dir, filename_base)
+                counter = 1
+                base, ext = os.path.splitext(filename_base)
+                while os.path.exists(save_path) and counter <= 100:
+                    save_path = os.path.join(self.captcha_solver.captcha_dir, f"{base}_{counter}{ext}")
+                    counter += 1
+                
+                if counter > 100:
+                    self.logger.warning(f"Could not find unique filename for {filename_base} after 100 tries. Discarding image.")
+                else:
+                    with open(save_path, "wb") as f:
+                        f.write(image_bytes)
+                    self.logger.info(f"GiftOps: {log_prefix} - Saved captcha image as {os.path.basename(save_path)}")
+            
+            except Exception as save_err:
+                self.logger.exception(f"GiftOps: Error saving captcha image ({filename_base}): {save_err}")
 
     @tasks.loop(seconds=1800)
     async def check_channels_loop(self):
@@ -1144,17 +1238,31 @@ class GiftOperations(commands.Cog):
                 }
                 save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
 
+                # Get commercial captcha service status
+                commercial_status = "❌ Disabled"
+                commercial_stats = {}
+                if self.commercial_captcha_solver:
+                    if self.commercial_captcha_solver.is_enabled:
+                        balance = self.commercial_captcha_solver.check_balance()
+                        commercial_status = f"✅ Enabled (Balance: ${balance:.3f})"
+                        commercial_stats = self.commercial_captcha_solver.get_stats()
+                    else:
+                        commercial_status = "⚠️ Configured but not enabled"
+                
                 embed = discord.Embed(
-                    title="🔍 CAPTCHA Solver Settings (ddddocr)",
+                    title="🔍 CAPTCHA Solver Settings",
                     description=(
-                        f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
-                        f"**Current Settings**\n"
+                        f"Configure the CAPTCHA solver for gift code redemption.\n\n"
+                        f"**OCR Settings (Primary)**\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🤖 **OCR Enabled:** {'✅ Yes' if enabled == 1 else '❌ No'}\n"
                         f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
                         f"🆔 **Test FID:** `{current_test_fid}`\n"
                         f"📦 **ddddocr Library:** {'✅ Found' if ddddocr_available else '❌ Missing'}\n"
-                        f"⚙️ **Solver Status:** `{solver_status_msg}`\n"
+                        f"⚙️ **OCR Status:** `{solver_status_msg}`\n\n"
+                        f"**Commercial Service (Fallback)**\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"💳 **Commercial Service:** {commercial_status}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     ),
                     color=discord.Color.blue()
@@ -1192,20 +1300,42 @@ class GiftOperations(commands.Cog):
                 stats_lines.append(f"• Server Validation Failure: `{server_fail}`")
                 stats_lines.append(f"• Server Pass Rate: `{server_pass_rate:.1f}%`")
 
+                # Commercial captcha statistics
+                if commercial_stats:
+                    stats_lines.append("\n**Commercial Captcha Service:**")
+                    total_commercial = commercial_stats.get('total_attempts', 0)
+                    success_commercial = commercial_stats.get('successful_solves', 0)
+                    commercial_rate = (success_commercial / total_commercial * 100) if total_commercial > 0 else 0
+                    cost_estimate = commercial_stats.get('total_cost_estimate', 0.0)
+                    last_solve = commercial_stats.get('last_solve_time')
+                    
+                    stats_lines.append(f"• Total Attempts: `{total_commercial}`")
+                    stats_lines.append(f"• Successful Solves: `{success_commercial}` ({commercial_rate:.1f}%)")
+                    stats_lines.append(f"• Estimated Cost: `${cost_estimate:.3f}`")
+                    if last_solve:
+                        last_solve_str = last_solve.strftime("%Y-%m-%d %H:%M:%S")
+                        stats_lines.append(f"• Last Used: `{last_solve_str}`")
+                    else:
+                        stats_lines.append(f"• Last Used: `Never`")
+
+                stats_lines.append("\n**Overall Processing:**")
                 total_fids = self.processing_stats['total_fids_processed']
                 total_time = self.processing_stats['total_processing_time']
                 avg_time = (total_time / total_fids if total_fids > 0 else 0)
                 stats_lines.append(f"• Avg. FID Processing Time: `{avg_time:.2f}s` (over `{total_fids}` FIDs)")
+                
+                # Stats for commercial usage from processing_stats
+                commercial_calls = self.processing_stats.get('commercial_solver_calls', 0)
+                commercial_success = self.processing_stats.get('commercial_solver_success', 0)
+                commercial_failure = self.processing_stats.get('commercial_solver_failure', 0)
+                if commercial_calls > 0:
+                    commercial_proc_rate = (commercial_success / commercial_calls * 100)
+                    stats_lines.append(f"• Commercial Fallback Usage: `{commercial_calls}` calls")
+                    stats_lines.append(f"• Commercial Success Rate: `{commercial_proc_rate:.1f}%` ({commercial_success}/{commercial_calls})")
 
                 embed.add_field(
-                    name="📊 Processing Statistics (Since Bot Start)",
+                    name="📊 Processing Statistics",
                     value="\n".join(stats_lines),
-                    inline=False
-                )
-
-                embed.add_field(
-                    name="⚠️ Important Note",
-                    value="Saving images (especially 'All') can consume significant disk space over time.",
                     inline=False
                 )
 

@@ -53,6 +53,30 @@ else
     export AUTO_UPDATE=true
 fi
 
+# USE_COMMERCIAL_CAPTCHA
+if [ -n "${USE_COMMERCIAL_CAPTCHA}" ]; then
+    case "${USE_COMMERCIAL_CAPTCHA}" in
+        true|TRUE|1|yes|YES|on|ON|enabled|ENABLED)
+            echo "USE_COMMERCIAL_CAPTCHA: ENABLED"
+            export USE_COMMERCIAL_CAPTCHA=true
+            export COMMERCIAL_CAPTCHA_KEY="${COMMERCIAL_CAPTCHA_KEY:-}"
+            ;;
+        false|FALSE|0|no|NO|off|OFF|disabled|DISABLED)
+            echo "USE_COMMERCIAL_CAPTCHA: DISABLED"
+            export USE_COMMERCIAL_CAPTCHA=false
+            ;;
+        *)
+            echo "Warning: Invalid USE_COMMERCIAL_CAPTCHA value '${USE_COMMERCIAL_CAPTCHA}'. Using default (disabled)."
+            export USE_COMMERCIAL_CAPTCHA=false
+            ;;
+    esac
+else
+    echo "USE_COMMERCIAL_CAPTCHA: DEFAULT (disabled)"
+    export USE_COMMERCIAL_CAPTCHA=false
+fi
+
+# 
+
 # Set proper permissions and switch to bot user if running as root
 if [ "$CONTAINER_ENV" = "true" ]; then
     if [ "$(id -u)" = "0" ]; then

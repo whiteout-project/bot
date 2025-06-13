@@ -8,8 +8,11 @@ services:
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
       - AUTO_UPDATE=${AUTO_UPDATE:-true}
       # Optional: Add other environment variables as needed
-      # - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-false}
+      # Commercial CAPTCHA solving service
+      - ANTICAPTCHA_API_KEY=${ANTICAPTCHA_API_KEY}
+      - USE_COMMERCIAL_CAPTCHA=${USE_COMMERCIAL_CAPTCHA:-true}
     volumes:
       # Database persistence
       - ./data/db:/app/db
