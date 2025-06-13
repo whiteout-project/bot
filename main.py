@@ -17,6 +17,18 @@ def should_skip_venv() -> bool:
     """Check if venv should be skipped"""
     return '--no-venv' in sys.argv or is_container() or is_ci_environment()
 
+def should_auto_update():
+    """Check if auto-update should be enabled."""
+    # Check environment variable first
+    auto_update_env = os.getenv('AUTO_UPDATE', '').lower()
+    if auto_update_env in ['false', '0', 'no', 'off', 'disabled']:
+        return False
+    elif auto_update_env in ['true', '1', 'yes', 'on', 'enabled']:
+        return True
+    
+    # Fallback to command line argument
+    return '--autoupdate' in sys.argv
+
 # Handle venv setup
 if sys.prefix == sys.base_prefix and not should_skip_venv():
     print("Running the bot in a venv (virtual environment) to avoid dependency conflicts.")
@@ -513,15 +525,20 @@ if __name__ == "__main__":
                 update = False
                 
                 if not is_container():
-                    if "--autoupdate" in sys.argv:
+                    if should_auto_update():
                         update = True
                     else:
                         print("Note: If your terminal is not interactive, you can use the --autoupdate argument to skip this prompt.")
                         ask = input("Do you want to update? (y/n): ").strip().lower()
                         update = ask == "y"
                 else:
-                    print(Fore.YELLOW + "Running in a container. Skipping update prompt." + Style.RESET_ALL)
-                    update = True
+                    # In container, check AUTO_UPDATE environment variable
+                    if should_auto_update():
+                        print(Fore.YELLOW + "Running in a container with auto-update enabled." + Style.RESET_ALL)
+                        update = True
+                    else:
+                        print(Fore.YELLOW + "Running in a container with auto-update disabled (AUTO_UPDATE=false)." + Style.RESET_ALL)
+                        update = False
                     
                 if update:
                     if os.path.exists("db") and os.path.isdir("db"):

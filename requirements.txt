@@ -1,0 +1,14 @@
+# Discord Bot Requirements
+discord.py>=2.3.0
+aiohttp-socks>=0.8.0
+python-dotenv>=1.0.0
+colorama>=0.4.6
+requests>=2.31.0
+certifi>=2023.0.0
+
+# OCR Dependencies
+numpy>=1.24.0
+Pillow>=10.0.0
+opencv-python-headless>=4.8.0
+onnxruntime>=1.15.0
+ddddocr==1.5.6

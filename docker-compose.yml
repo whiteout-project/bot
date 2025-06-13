@@ -1,0 +1,38 @@
+services:
+  discord-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wos-discord-bot
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - AUTO_UPDATE=${AUTO_UPDATE:-true}
+      # Optional: Add other environment variables as needed
+      # - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # - DEBUG=${DEBUG:-false}
+    volumes:
+      # Database persistence
+      - ./data/db:/app/data/db
+      # Log persistence
+      - ./data/log:/app/data/log
+      # Optional: Mount bot token file (alternative to env var)
+      # - ./bot_token.txt:/app/bot_token.txt:ro
+    restart: unless-stopped
+    networks:
+      - discord-bot-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import os; exit(0 if os.path.exists(\"/app/bot_token.txt\") else 1)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  discord-bot-network:
+    driver: bridge
+
+# Optional: If you want to run a database separately
+# Uncomment the following if you plan to use external database
+# volumes:
+#   bot_data:
+#     driver: local
