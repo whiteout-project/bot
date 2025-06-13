@@ -676,7 +676,7 @@ class GiftOperations(commands.Cog):
             status = await self._try_ocr_captcha_solving(player_id, giftcode, session)
             
             # If OCR failed with CAPTCHA_INVALID, try commercial fallback
-            if status == "CAPTCHA_INVALID" and self.commercial_captcha_solver and self.commercial_captcha_solver.is_enabled:
+            if (status == "CAPTCHA_INVALID" or status == "OCR_FAILED_MAX_ATTEMPTS") and self.commercial_captcha_solver and self.commercial_captcha_solver.is_enabled:
                 self.logger.info(f"GiftOps: OCR failed with CAPTCHA_INVALID, trying commercial fallback for {player_id}")
                 used_commercial_fallback = True
                 status = await self._try_commercial_captcha_solving(player_id, giftcode, session)
