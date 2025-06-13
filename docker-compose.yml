@@ -35,9 +35,3 @@ services:
 networks:
   discord-bot-network:
     driver: bridge
-
-# Optional: If you want to run a database separately
-# Uncomment the following if you plan to use external database
-# volumes:
-#   bot_data:
-#     driver: local
