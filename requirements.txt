@@ -5,6 +5,8 @@ python-dotenv>=1.0.0
 colorama>=0.4.6
 requests>=2.31.0
 certifi>=2023.0.0
+pytz>=2023.3
+pyzipper>=0.3.6
 
 # OCR Dependencies
 numpy>=1.24.0
