@@ -8,3 +8,4 @@ version
 .env
 data/
 *.bak
+*.zip

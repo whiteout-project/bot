@@ -18,6 +18,8 @@ services:
       - ./data/db:/app/db
       # Log persistence  
       - ./data/log:/app/log
+      # Backup persistence
+      - ./data/backup:/app/backup
       # Optional: Mount bot token file (alternative to env var)
       # - ./bot_token.txt:/app/bot_token.txt:ro
     restart: unless-stopped
