@@ -682,6 +682,7 @@ if __name__ == "__main__":
         "conn_changes": "db/changes.sqlite",
         "conn_users": "db/users.sqlite",
         "conn_settings": "db/settings.sqlite",
+        "conn_attendance": "db/attendance.sqlite",
     }
 
     connections = {name: sqlite3.connect(path) for name, path in databases.items()}
@@ -752,6 +753,14 @@ if __name__ == "__main__":
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
                 alliance_id INTEGER PRIMARY KEY, 
                 name TEXT
+            )""")
+        
+        with connections["conn_attendance"] as conn_attendance:
+            conn_attendance.execute("""CREATE TABLE IF NOT EXISTS attendance (
+                user_id INTEGER,
+                date TEXT,
+                status TEXT,
+                PRIMARY KEY (user_id, date)
             )""")
 
         print(Fore.GREEN + "All tables checked." + Style.RESET_ALL)
