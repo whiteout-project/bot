@@ -127,6 +127,30 @@ class OtherFeaturesView(discord.ui.View):
             )
 
     @discord.ui.button(
+        label="Attendance System",
+        emoji="📋",
+        style=discord.ButtonStyle.primary,
+        custom_id="attendance_system",
+        row=1
+    )
+    async def attendance_system_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            attendance_cog = self.cog.bot.get_cog("Attendance")
+            if attendance_cog:
+                await attendance_cog.show_attendance_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Attendance System module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Attendance System menu: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while loading Attendance System menu.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
         label="Main Menu",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
