@@ -5,6 +5,48 @@ from discord import app_commands
 import sqlite3
 from datetime import datetime
 import asyncio
+import re
+import os
+
+# FC Level mapping for furnace levels
+FC_LEVEL_MAPPING = {
+    31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
+    35: "FC 1", 36: "FC 1-1", 37: "FC 1-2", 38: "FC 1-3", 39: "FC 1-4",
+    40: "FC 2", 41: "FC 2-1", 42: "FC 2-2", 43: "FC 2-3", 44: "FC 2-4",
+    45: "FC 3", 46: "FC 3-1", 47: "FC 3-2", 48: "FC 3-3", 49: "FC 3-4",
+    50: "FC 4", 51: "FC 4-1", 52: "FC 4-2", 53: "FC 4-3", 54: "FC 4-4",
+    55: "FC 5", 56: "FC 5-1", 57: "FC 5-2", 58: "FC 5-3", 59: "FC 5-4",
+    60: "FC 6", 61: "FC 6-1", 62: "FC 6-2", 63: "FC 6-3", 64: "FC 6-4",
+    65: "FC 7", 66: "FC 7-1", 67: "FC 7-2", 68: "FC 7-3", 69: "FC 7-4",
+    70: "FC 8", 71: "FC 8-1", 72: "FC 8-2", 73: "FC 8-3", 74: "FC 8-4",
+    75: "FC 9", 76: "FC 9-1", 77: "FC 9-2", 78: "FC 9-3", 79: "FC 9-4",
+    80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
+}
+
+def parse_points(points_str):
+    """Parse points string that may contain K/M suffixes"""
+    try:
+        points_str = points_str.strip().upper()
+        
+        # Remove any commas
+        points_str = points_str.replace(',', '')
+        
+        # Check for M suffix (millions)
+        if points_str.endswith('M'):
+            number = float(points_str[:-1])
+            return int(number * 1_000_000)
+        
+        # Check for K suffix (thousands)
+        elif points_str.endswith('K'):
+            number = float(points_str[:-1])
+            return int(number * 1_000)
+        
+        # Regular number
+        else:
+            return int(float(points_str))
+            
+    except (ValueError, TypeError):
+        raise ValueError("Invalid points format")
 
 class AttendanceView(discord.ui.View):
     def __init__(self, cog):
@@ -220,83 +262,239 @@ class AllianceSelectView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
 class PlayerSelectView(discord.ui.View):
-    def __init__(self, players, alliance_name, cog):
+    def __init__(self, players, alliance_name, cog, page=0):
         super().__init__(timeout=300)
         self.players = players
         self.alliance_name = alliance_name
         self.cog = cog
         self.selected_players = {}
-        self.current_player_index = 0
-        self.show_current_player()
+        self.page = page
+        self.max_page = (len(players) - 1) // 25 if players else 0
+        self.current_select = None
+        self.update_select_menu()
 
-    def show_current_player(self):
-        self.clear_items()
+    def update_select_menu(self):
+        # Remove existing select menu
+        for item in self.children[:]:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+
+        start_idx = self.page * 25
+        end_idx = min(start_idx + 25, len(self.players))
+        current_players = self.players[start_idx:end_idx]
+
+        select = discord.ui.Select(
+            placeholder=f"👥 Select a player to mark attendance... (Page {self.page + 1}/{self.max_page + 1})",
+            options=[
+                discord.SelectOption(
+                    label=f"{nickname[:50]}",
+                    value=str(fid),
+                    description=f"FID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}",
+                    emoji="👤"
+                ) for fid, nickname, furnace_lv in current_players
+            ]
+        )
         
-        if self.current_player_index >= len(self.players):
-            # All players processed, show summary
-            self.add_item(discord.ui.Button(
-                label="Finish Attendance",
-                style=discord.ButtonStyle.success,
-                custom_id="finish_attendance"
-            ))
-            return
+        async def select_callback(interaction: discord.Interaction):
+            self.current_select = select
+            selected_fid = int(select.values[0])
+            # Find the selected player
+            selected_player = next((p for p in self.players if p[0] == selected_fid), None)
+            if selected_player:
+                await self.show_player_attendance_options(interaction, selected_player)
+        
+        select.callback = select_callback
+        self.add_item(select)
+        self.current_select = select
 
-        player = self.players[self.current_player_index]
+        # Update navigation button states
+        if hasattr(self, 'prev_button'):
+            self.prev_button.disabled = self.page == 0
+        if hasattr(self, 'next_button'):
+            self.next_button.disabled = self.page == self.max_page
+
+    async def show_player_attendance_options(self, interaction: discord.Interaction, player):
         fid, nickname, furnace_lv = player
-
-        # Add attendance buttons
-        present_button = discord.ui.Button(
-            label="Present",
-            style=discord.ButtonStyle.success,
-            custom_id=f"present_{fid}"
-        )
-        absent_button = discord.ui.Button(
-            label="Absent", 
-            style=discord.ButtonStyle.danger,
-            custom_id=f"absent_{fid}"
+        
+        # Create new view with attendance options for this player
+        attendance_view = PlayerAttendanceView(player, self)
+        
+        embed = discord.Embed(
+            title=f"📋 Mark Attendance - {nickname}",
+            description=(
+                f"**Player:** {nickname}\n"
+                f"**FID:** {fid}\n"
+                f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n\n"
+                "Please select the attendance status for this player:"
+            ),
+            color=discord.Color.blue()
         )
         
-        async def button_callback(interaction: discord.Interaction):
-            button_id = interaction.data["custom_id"]
-            is_present = button_id.startswith("present_")
-            
-            if button_id == "finish_attendance":
-                await self.cog.process_attendance_results(interaction, self.selected_players, self.alliance_name)
-                return
-            
-            # Show points input modal
-            modal = AttendanceModal(fid, nickname, is_present, self)
-            await interaction.response.send_modal(modal)
+        await interaction.response.edit_message(embed=embed, view=attendance_view)
 
-        present_button.callback = button_callback
-        absent_button.callback = button_callback
+    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self.update_select_menu()
+        await self.update_main_embed(interaction)
+
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=1)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.max_page, self.page + 1)
+        self.update_select_menu()
+        await self.update_main_embed(interaction)
+
+    @discord.ui.button(label="📊 View Summary", style=discord.ButtonStyle.primary, row=1)
+    async def view_summary_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_players:
+            await interaction.response.send_message(
+                "❌ No attendance has been marked yet.",
+                ephemeral=True
+            )
+            return
         
-        self.add_item(present_button)
-        self.add_item(absent_button)
+        await self.show_summary(interaction)
 
-    def next_player(self, fid, nickname, is_present, points, last_event_attendance):
+    @discord.ui.button(label="✅ Finish Attendance", style=discord.ButtonStyle.success, row=1)
+    async def finish_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_players:
+            await interaction.response.send_message(
+                "❌ No attendance has been marked yet.",
+                ephemeral=True
+            )
+            return
+        
+        await self.cog.process_attendance_results(interaction, self.selected_players, self.alliance_name)
+
+    async def update_main_embed(self, interaction: discord.Interaction):
+        marked_count = len(self.selected_players)
+        total_count = len(self.players)
+        
+        embed = discord.Embed(
+            title=f"📋 Marking Attendance - {self.alliance_name}",
+            description=(
+                f"**Progress:** {marked_count}/{total_count} players marked\n"
+                f"**Current Page:** {self.page + 1}/{self.max_page + 1}\n\n"
+                "Select a player from the dropdown to mark their attendance.\n"
+                "Use the buttons below to navigate, view summary, or finish."
+            ),
+            color=discord.Color.blue()
+        )
+        
+        if marked_count > 0:
+            present = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'present')
+            absent = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'absent')
+            not_signed = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'not_signed')
+            
+            embed.add_field(
+                name="📊 Current Stats",
+                value=f"Present: {present}\nAbsent: {absent}\nNot Signed: {not_signed}",
+                inline=True
+            )
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def show_summary(self, interaction: discord.Interaction):
+        summary_lines = ["```"]
+        summary_lines.append("PLAYER | STATUS | POINTS")
+        summary_lines.append("-" * 40)
+        
+        for fid, data in self.selected_players.items():
+            status_display = {
+                "present": "Present",
+                "absent": "Absent", 
+                "not_signed": "Not Signed"
+            }.get(data['attendance_type'], data['attendance_type'])
+            
+            line = f"{data['nickname'][:15]:<15} | {status_display:<10} | {data['points']:,}"
+            summary_lines.append(line)
+        
+        summary_lines.append("```")
+        
+        embed = discord.Embed(
+            title=f"📊 Attendance Summary - {self.alliance_name}",
+            description="\n".join(summary_lines),
+            color=discord.Color.green()
+        )
+        
+        # Add back button
+        back_view = discord.ui.View(timeout=180)
+        back_button = discord.ui.Button(
+            label="⬅️ Back to Selection",
+            style=discord.ButtonStyle.secondary
+        )
+        
+        async def back_callback(back_interaction: discord.Interaction):
+            await self.update_main_embed(back_interaction)
+        
+        back_button.callback = back_callback
+        back_view.add_item(back_button)
+        
+        await interaction.response.edit_message(embed=embed, view=back_view)
+
+    def add_player_attendance(self, fid, nickname, attendance_type, points, last_event_attendance):
         self.selected_players[fid] = {
             'nickname': nickname,
-            'present': is_present,
+            'attendance_type': attendance_type,
             'points': points,
             'last_event_attendance': last_event_attendance
         }
-        self.current_player_index += 1
-        self.show_current_player()
+
+class PlayerAttendanceView(discord.ui.View):
+    def __init__(self, player, parent_view):
+        super().__init__(timeout=300)
+        self.player = player
+        self.parent_view = parent_view
+        self.fid, self.nickname, self.furnace_lv = player
+
+    @discord.ui.button(
+        label="Present",
+        style=discord.ButtonStyle.success,
+        custom_id="present"
+    )
+    async def present_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = AttendanceModal(self.fid, self.nickname, "present", self.parent_view)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(
+        label="Absent", 
+        style=discord.ButtonStyle.danger,
+        custom_id="absent"
+    )
+    async def absent_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = AttendanceModal(self.fid, self.nickname, "absent", self.parent_view)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(
+        label="Not Signed",
+        style=discord.ButtonStyle.secondary,
+        custom_id="not_signed"
+    )
+    async def not_signed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = AttendanceModal(self.fid, self.nickname, "not_signed", self.parent_view)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(
+        label="⬅️ Back to List",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_list"
+    )
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.parent_view.update_main_embed(interaction)
 
 class AttendanceModal(discord.ui.Modal):
-    def __init__(self, fid, nickname, is_present, parent_view):
+    def __init__(self, fid, nickname, attendance_type, parent_view):
         super().__init__(title=f"Attendance Details - {nickname}")
         self.fid = fid
         self.nickname = nickname
-        self.is_present = is_present
+        self.attendance_type = attendance_type  # "present", "absent", or "not_signed"
         self.parent_view = parent_view
         
         self.points_input = discord.ui.TextInput(
             label="Points",
-            placeholder="Enter points (e.g., 100)",
+            placeholder="Enter points (e.g., 100, 4.3K, 2.5M)",
             required=True,
-            max_length=10
+            max_length=15
         )
         self.add_item(self.points_input)
         
@@ -310,71 +508,124 @@ class AttendanceModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            points = int(self.points_input.value.strip())
+            # Parse points using the new function
+            try:
+                points = parse_points(self.points_input.value.strip())
+            except ValueError as e:
+                await interaction.response.send_message(
+                    "❌ Invalid points format. Use numbers, K (thousands), or M (millions). Example: 100, 4.3K, 2.5M",
+                    ephemeral=True
+                )
+                return
+                
             last_event_attendance = self.last_event_input.value.strip()
             
-            # Store attendance data
-            with sqlite3.connect('db/users.sqlite') as users_db:
-                cursor = users_db.cursor()
+            # Store attendance data in dedicated attendance database
+            try:
+                with sqlite3.connect('db/attendance.sqlite', timeout=10.0) as attendance_db:
+                    cursor = attendance_db.cursor()
+                    
+                    # Get user alliance info
+                    with sqlite3.connect('db/users.sqlite') as users_db:
+                        user_cursor = users_db.cursor()
+                        user_cursor.execute("SELECT alliance FROM users WHERE fid = ?", (self.fid,))
+                        user_result = user_cursor.fetchone()
+                        
+                        if not user_result:
+                            raise ValueError(f"User with FID {self.fid} not found in database")
+                        
+                        alliance_id = user_result[0]
+                        
+                        # Get alliance name
+                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                            alliance_cursor = alliance_db.cursor()
+                            alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                            alliance_result = alliance_cursor.fetchone()
+                            alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
+                    
+                    # Insert attendance record
+                    cursor.execute("""
+                        INSERT INTO attendance_records 
+                        (fid, nickname, alliance_id, alliance_name, attendance_status, points, 
+                         last_event_attendance, marked_date, marked_by, marked_by_username)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (self.fid, self.nickname, alliance_id, alliance_name, self.attendance_type, 
+                          points, last_event_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
+                          interaction.user.id, interaction.user.name))
+                    
+                    attendance_db.commit()
+                    print(f"✓ Attendance saved for {self.nickname} (FID: {self.fid}) in dedicated database")
                 
-                # Check if attendance table exists, create if not
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS attendance (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        fid INTEGER,
-                        present INTEGER,
-                        points INTEGER,
-                        last_event_attendance TEXT,
-                        marked_date TEXT,
-                        marked_by INTEGER,
-                        FOREIGN KEY (fid) REFERENCES users(fid)
-                    )
-                """)
+                # Add player attendance to parent view
+                self.parent_view.add_player_attendance(self.fid, self.nickname, self.attendance_type, points, last_event_attendance)
                 
-                # Insert attendance record
-                cursor.execute("""
-                    INSERT INTO attendance (fid, present, points, last_event_attendance, marked_date, marked_by)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (self.fid, 1 if self.is_present else 0, points, last_event_attendance, 
-                      datetime.now().strftime('%Y-%m-%d %H:%M:%S'), interaction.user.id))
-                
-                users_db.commit()
-            
-            # Move to next player
-            self.parent_view.next_player(self.fid, self.nickname, self.is_present, points, last_event_attendance)
-            
-            # Update the message with next player
-            if self.parent_view.current_player_index < len(self.parent_view.players):
-                current_player = self.parent_view.players[self.parent_view.current_player_index]
-                embed = discord.Embed(
-                    title=f"📋 Marking Attendance - {self.parent_view.alliance_name}",
+                # Show success message with back button
+                success_embed = discord.Embed(
+                    title="✅ Attendance Marked Successfully",
                     description=(
-                        f"**Current Player:** {current_player[1]} (FID: {current_player[0]})\n"
-                        f"**Progress:** {self.parent_view.current_player_index + 1}/{len(self.parent_view.players)}\n\n"
-                        "Please mark attendance for this player:"
+                        f"**Player:** {self.nickname}\n"
+                        f"**Status:** {self.attendance_type.replace('_', ' ').title()}\n"
+                        f"**Points:** {points:,}\n"
+                        f"**Last Event:** {last_event_attendance}\n\n"
+                        "Click the button below to return to player selection."
                     ),
-                    color=discord.Color.blue()
-                )
-            else:
-                embed = discord.Embed(
-                    title="✅ All Players Processed",
-                    description="Click 'Finish Attendance' to generate the final report.",
                     color=discord.Color.green()
                 )
-            
-            await interaction.response.edit_message(embed=embed, view=self.parent_view)
-            
-        except ValueError:
-            await interaction.response.send_message(
-                "❌ Invalid points value. Please enter a valid number.",
-                ephemeral=True
-            )
+                
+                # Create a view with a back button
+                back_view = discord.ui.View(timeout=180)
+                back_button = discord.ui.Button(
+                    label="⬅️ Back to Player Selection",
+                    style=discord.ButtonStyle.primary
+                )
+                
+                async def back_callback(back_interaction: discord.Interaction):
+                    await self.parent_view.update_main_embed(back_interaction)
+                
+                back_button.callback = back_callback
+                back_view.add_item(back_button)
+                
+                await interaction.response.edit_message(embed=success_embed, view=back_view)
+                
+            except ValueError as val_error:
+                print(f"Validation error in attendance modal: {val_error}")
+                await interaction.response.send_message(
+                    f"❌ {str(val_error)}",
+                    ephemeral=True
+                )
+            except sqlite3.Error as db_error:
+                print(f"Database error in attendance modal: {db_error}")
+                error_msg = "❌ Database error occurred while saving attendance."
+                if "locked" in str(db_error).lower():
+                    error_msg += " Database is busy, please try again in a moment."
+                elif "no such table" in str(db_error).lower():
+                    error_msg += " Database table not found, please contact an administrator."
+                else:
+                    error_msg += " Please try again."
+                
+                await interaction.response.send_message(error_msg, ephemeral=True)
+            except Exception as save_error:
+                print(f"Save error in attendance modal: {save_error}")
+                await interaction.response.send_message(
+                    f"❌ An error occurred while saving attendance: {str(save_error)[:100]}",
+                    ephemeral=True
+                )
+                
         except Exception as e:
-            print(f"Error in attendance modal: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while saving attendance.",
-                ephemeral=True
-            )
+            print(f"General error in attendance modal: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ An error occurred while processing attendance.",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    "❌ An error occurred while processing attendance.",
+                    ephemeral=True
+                )
 
 class Attendance(commands.Cog):
     def __init__(self, bot):
@@ -382,23 +633,62 @@ class Attendance(commands.Cog):
         self.setup_database()
 
     def setup_database(self):
-        """Set up attendance table in users database"""
+        """Set up dedicated attendance database"""
         try:
-            with sqlite3.connect('db/users.sqlite') as users_db:
-                cursor = users_db.cursor()
+            # Create attendance database if it doesn't exist
+            if not os.path.exists("db/attendance.sqlite"):
+                open("db/attendance.sqlite", 'a').close()
+                print("✓ Created new attendance database")
+            
+            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                cursor = attendance_db.cursor()
+                
+                # Create attendance records table
                 cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS attendance (
+                    CREATE TABLE IF NOT EXISTS attendance_records (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         fid INTEGER,
-                        present INTEGER,
+                        nickname TEXT,
+                        alliance_id INTEGER,
+                        alliance_name TEXT,
+                        attendance_status TEXT,
                         points INTEGER,
                         last_event_attendance TEXT,
                         marked_date TEXT,
                         marked_by INTEGER,
-                        FOREIGN KEY (fid) REFERENCES users(fid)
+                        marked_by_username TEXT
                     )
                 """)
-                users_db.commit()
+                
+                # Create attendance sessions table (for grouping records by session)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_sessions (
+                        session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        alliance_id INTEGER,
+                        alliance_name TEXT,
+                        session_date TEXT,
+                        created_by INTEGER,
+                        created_by_username TEXT,
+                        total_players INTEGER,
+                        present_count INTEGER,
+                        absent_count INTEGER,
+                        not_signed_count INTEGER
+                    )
+                """)
+                
+                # Create session_records junction table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS session_records (
+                        session_id INTEGER,
+                        record_id INTEGER,
+                        FOREIGN KEY (session_id) REFERENCES attendance_sessions(session_id),
+                        FOREIGN KEY (record_id) REFERENCES attendance_records(id)
+                    )
+                """)
+                
+                attendance_db.commit()
+                print("✓ Attendance database setup completed")
+                
         except Exception as e:
             print(f"Error setting up attendance database: {e}")
 
@@ -483,14 +773,14 @@ class Attendance(commands.Cog):
                     
                 alliance_name = alliance_result[0]
 
-            # Get alliance members
+            # Get alliance members - sort by FC level (highest to lowest)
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
                 cursor.execute("""
                     SELECT fid, nickname, furnace_lv 
                     FROM users 
                     WHERE alliance = ? 
-                    ORDER BY nickname
+                    ORDER BY furnace_lv DESC, nickname
                 """, (alliance_id,))
                 players = cursor.fetchall()
 
@@ -501,14 +791,20 @@ class Attendance(commands.Cog):
                 )
                 return
 
-            # Start attendance marking process
-            first_player = players[0]
+            # Calculate alliance statistics with proper FC levels
+            max_fl = max(player[2] for player in players)
+            avg_fl = sum(player[2] for player in players) / len(players)
+            
+            # Start attendance marking process with player selection
             embed = discord.Embed(
                 title=f"📋 Marking Attendance - {alliance_name}",
                 description=(
-                    f"**Current Player:** {first_player[1]} (FID: {first_player[0]})\n"
-                    f"**Progress:** 1/{len(players)}\n\n"
-                    "Please mark attendance for this player:"
+                    f"**Total Players:** {len(players)}\n"
+                    f"**Highest FC:** {FC_LEVEL_MAPPING.get(max_fl, str(max_fl))}\n"
+                    f"**Average FC:** {FC_LEVEL_MAPPING.get(int(avg_fl), str(int(avg_fl)))}\n"
+                    f"**Progress:** 0/{len(players)} players marked\n\n"
+                    "Select a player from the dropdown to mark their attendance.\n"
+                    "Players are sorted by FC level (highest to lowest)."
                 ),
                 color=discord.Color.blue()
             )
@@ -526,14 +822,75 @@ class Attendance(commands.Cog):
     async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str):
         """Process and display final attendance results"""
         try:
+            # Count attendance types
+            present_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'present')
+            absent_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'absent')
+            not_signed_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'not_signed')
+            
+            # Create attendance session in database
+            session_id = None
+            try:
+                # Get alliance ID
+                alliance_id = None
+                for fid, data in selected_players.items():
+                    with sqlite3.connect('db/users.sqlite') as users_db:
+                        cursor = users_db.cursor()
+                        cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
+                        result = cursor.fetchone()
+                        if result:
+                            alliance_id = result[0]
+                            break
+                
+                if alliance_id:
+                    with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                        cursor = attendance_db.cursor()
+                        
+                        # Create session
+                        cursor.execute("""
+                            INSERT INTO attendance_sessions 
+                            (alliance_id, alliance_name, session_date, created_by, created_by_username,
+                             total_players, present_count, absent_count, not_signed_count)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (alliance_id, alliance_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                              interaction.user.id, interaction.user.name, len(selected_players),
+                              present_count, absent_count, not_signed_count))
+                        
+                        session_id = cursor.lastrowid
+                        
+                        # Link records to session
+                        for fid in selected_players.keys():
+                            cursor.execute("""
+                                SELECT id FROM attendance_records 
+                                WHERE fid = ? AND marked_by = ? 
+                                ORDER BY marked_date DESC LIMIT 1
+                            """, (fid, interaction.user.id))
+                            
+                            record_result = cursor.fetchone()
+                            if record_result:
+                                cursor.execute("""
+                                    INSERT INTO session_records (session_id, record_id)
+                                    VALUES (?, ?)
+                                """, (session_id, record_result[0]))
+                        
+                        attendance_db.commit()
+                        print(f"✓ Created attendance session {session_id} for {alliance_name}")
+                        
+            except Exception as e:
+                print(f"Warning: Could not create attendance session: {e}")
+            
             # Generate attendance report
             report_lines = ["```"]
             report_lines.append("PLAYER | ATTENDANCE | LAST ATTENDANCE | POINTS")
             report_lines.append("-" * 60)
             
             for fid, data in selected_players.items():
-                attendance_status = "Present" if data['present'] else "Absent"
-                line = f"{data['nickname'][:15]:<15} | {attendance_status:<10} | {data['last_event_attendance'][:15]:<15} | {data['points']}"
+                if data['attendance_type'] == "present":
+                    attendance_status = "Present"
+                elif data['attendance_type'] == "absent":
+                    attendance_status = "Absent"
+                else:  # not_signed
+                    attendance_status = "Not Signed"
+                line = f"{data['nickname'][:15]:<15} | {attendance_status:<10} | {data['last_event_attendance'][:15]:<15} | {data['points']:,}"
                 report_lines.append(line)
             
             report_lines.append("```")
@@ -543,16 +900,18 @@ class Attendance(commands.Cog):
                 title=f"✅ Attendance Report - {alliance_name}",
                 description=(
                     f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"**Session ID:** {session_id if session_id else 'N/A'}\n"
                     f"**Total Players:** {len(selected_players)}\n"
-                    f"**Present:** {sum(1 for p in selected_players.values() if p['present'])}\n"
-                    f"**Absent:** {sum(1 for p in selected_players.values() if not p['present'])}\n\n"
+                    f"**Present:** {present_count}\n"
+                    f"**Absent:** {absent_count}\n"
+                    f"**Not Signed:** {not_signed_count}\n\n"
                     "**Attendance Details:**\n"
                     "\n".join(report_lines)
                 ),
                 color=discord.Color.green()
             )
             
-            embed.set_footer(text=f"Marked by {interaction.user.name}")
+            embed.set_footer(text=f"Marked by {interaction.user.name} | Saved to database")
             
             await interaction.response.edit_message(embed=embed, view=None)
 
@@ -581,15 +940,14 @@ class Attendance(commands.Cog):
                     
                 alliance_name = alliance_result[0]
 
-            # Get recent attendance records
-            with sqlite3.connect('db/users.sqlite') as users_db:
-                cursor = users_db.cursor()
+            # Get recent attendance records from dedicated database
+            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                cursor = attendance_db.cursor()
                 cursor.execute("""
-                    SELECT u.nickname, a.present, a.last_event_attendance, a.points, a.marked_date
-                    FROM attendance a
-                    JOIN users u ON a.fid = u.fid
-                    WHERE u.alliance = ?
-                    ORDER BY a.marked_date DESC
+                    SELECT nickname, attendance_status, last_event_attendance, points, marked_date, marked_by_username
+                    FROM attendance_records
+                    WHERE alliance_id = ?
+                    ORDER BY marked_date DESC
                     LIMIT 50
                 """, (alliance_id,))
                 records = cursor.fetchall()
@@ -603,13 +961,20 @@ class Attendance(commands.Cog):
 
             # Generate report
             report_lines = ["```"]
-            report_lines.append("PLAYER | ATTENDANCE | LAST ATTENDANCE | POINTS | DATE")
-            report_lines.append("-" * 80)
+            report_lines.append("PLAYER | ATTENDANCE | LAST ATTENDANCE | POINTS | DATE | BY")
+            report_lines.append("-" * 90)
             
-            for nickname, present, last_event, points, marked_date in records[:20]:
-                attendance_status = "Present" if present else "Absent"
+            for nickname, attendance_status, last_event, points, marked_date, marked_by_username in records[:20]:
+                if attendance_status == "present":
+                    display_status = "Present"
+                elif attendance_status == "absent":
+                    display_status = "Absent"
+                else:  # not_signed
+                    display_status = "Not Signed"
                 date_str = marked_date.split()[0] if marked_date else "N/A"
-                line = f"{nickname[:12]:<12} | {attendance_status:<10} | {last_event[:10]:<10} | {points:<6} | {date_str}"
+                points_str = f"{points:,}" if points else "0"
+                by_str = marked_by_username[:8] if marked_by_username else "Unknown"
+                line = f"{nickname[:10]:<10} | {display_status:<10} | {last_event[:8]:<8} | {points_str:<6} | {date_str} | {by_str}"
                 report_lines.append(line)
             
             if len(records) > 20:
@@ -657,4 +1022,9 @@ class Attendance(commands.Cog):
         await interaction.response.edit_message(embed=embed, view=view)
 
 async def setup(bot):
-    await bot.add_cog(Attendance(bot))
+    try:
+        cog = Attendance(bot)
+        await bot.add_cog(cog)
+        print("✓ Attendance cog loaded successfully")
+    except Exception as e:
+        print(f"❌ Failed to load Attendance cog: {e}")
