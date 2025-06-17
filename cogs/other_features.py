@@ -5,7 +5,7 @@ import sqlite3
 class OtherFeatures(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
+
     async def show_other_features_menu(self, interaction: discord.Interaction):
         try:
             embed = discord.Embed(
@@ -14,10 +14,10 @@ class OtherFeatures(commands.Cog):
                     "This section was created according to users' requests:\n\n"
                     "**Available Operations**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "📣 **Notification System**\n"
+                    "🐻 **Bear Trap**\n"
                     "└ Time notification system\n"
                     "└ Not just for Bear! Use it for any event:\n"
-                    "   Bear - KE - Frostfire - CJ and everything else\n"
+                    "   Bear - KE - Forst - CJ and everything else\n"
                     "└ Add unlimited notifications\n\n"
                     "🆔 **ID Channel**\n"
                     "└ Create and manage ID channels\n"
@@ -27,18 +27,20 @@ class OtherFeatures(commands.Cog):
                     "└ Automatic database backup\n"
                     "└ Secure backup storage\n"
                     "└ Only for Global Admins\n\n"
+                    "📋 **Attendance System**\n"
+                    "└ Mark and view player attendance records\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.blue()
             )
-            
+
             view = OtherFeaturesView(self)
-            
+
             try:
                 await interaction.response.edit_message(embed=embed, view=view)
             except discord.InteractionResponded:
                 pass
-                
+
         except Exception as e:
             print(f"Error in show_other_features_menu: {e}")
             if not interaction.response.is_done():
@@ -53,8 +55,8 @@ class OtherFeaturesView(discord.ui.View):
         self.cog = cog
 
     @discord.ui.button(
-        label="Notification System",
-        emoji="📣",
+        label="Bear Trap",
+        emoji="🐻",
         style=discord.ButtonStyle.primary,
         custom_id="bear_trap",
         row=0
@@ -144,4 +146,4 @@ class OtherFeaturesView(discord.ui.View):
             )
 
 async def setup(bot):
-    await bot.add_cog(OtherFeatures(bot)) 
+    await bot.add_cog(OtherFeatures(bot))
