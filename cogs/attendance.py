@@ -6,6 +6,9 @@ from datetime import datetime
 import asyncio
 import re
 import os
+import plotly.graph_objects as go
+import pandas as pd
+import uuid
 
 # FC Level mapping for furnace levels
 FC_LEVEL_MAPPING = {
@@ -989,59 +992,59 @@ class Attendance(commands.Cog):
             )
 
     async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
-				    """Show available attendance sessions for an alliance"""
-				    try:
-				        # Get alliance name
-				        alliance_name = "Unknown Alliance"
-				        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-				            cursor = alliance_db.cursor()
-				            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-				            alliance_result = cursor.fetchone()
-				            if alliance_result:
-				                alliance_name = alliance_result[0]
-				
-				        # Get distinct session names from attendance records - FIXED HERE
-				        sessions = []
-				        with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-				            cursor = attendance_db.cursor()
-				            cursor.execute("""
-				                SELECT DISTINCT session_name 
-				                FROM attendance_records
-				                WHERE alliance_id = ? 
-				                AND session_name IS NOT NULL  -- Ensure we don't get NULL values
-				                AND TRIM(session_name) <> ''  -- Ensure we don't get empty strings
-				                ORDER BY marked_date DESC
-				            """, (alliance_id,))
-				            sessions = [row[0] for row in cursor.fetchall() if row[0]]  # Filter out empty values
-				
-				        if not sessions:
-				            await interaction.response.edit_message(
-				                content=f"❌ No attendance sessions found for {alliance_name}.",
-				                embed=None,
-				                view=None
-				            )
-				            return
-				
-				        # Create session selection view
-				        view = SessionSelectView(sessions, alliance_id, self)
-				        
-				        embed = discord.Embed(
-				            title=f"📋 Attendance Sessions - {alliance_name}",
-				            description="Please select a session to view attendance records:",
-				            color=discord.Color.blue()
-				        )
-				        
-				        await interaction.response.edit_message(embed=embed, view=view)
-				
-				    except Exception as e:
-				        print(f"Error showing session selection: {e}")
-				        await interaction.response.send_message(
-				            "❌ An error occurred while loading sessions.",
-				            ephemeral=True
-				        )
+        """Show available attendance sessions for an alliance"""
+        try:
+            # Get alliance name
+            alliance_name = "Unknown Alliance"
+            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                cursor = alliance_db.cursor()
+                cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                alliance_result = cursor.fetchone()
+                if alliance_result:
+                    alliance_name = alliance_result[0]
+        
+            # Get distinct session names from attendance records
+            sessions = []
+            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                cursor = attendance_db.cursor()
+                cursor.execute("""
+                    SELECT DISTINCT session_name 
+                    FROM attendance_records
+                    WHERE alliance_id = ? 
+                    AND session_name IS NOT NULL
+                    AND TRIM(session_name) <> ''
+                    ORDER BY marked_date DESC
+                """, (alliance_id,))
+                sessions = [row[0] for row in cursor.fetchall() if row[0]]
+
+            if not sessions:
+                await interaction.response.edit_message(
+                    content=f"❌ No attendance sessions found for {alliance_name}.",
+                    embed=None,
+                    view=None
+                )
+                return
+        
+            # Create session selection view
+            view = SessionSelectView(sessions, alliance_id, self)
             
+            embed = discord.Embed(
+                title=f"📋 Attendance Sessions - {alliance_name}",
+                description="Please select a session to view attendance records:",
+                color=discord.Color.blue()
+            )
+            
+            await interaction.response.edit_message(embed=embed, view=view)
+    
+        except Exception as e:
+            print(f"Error showing session selection: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while loading sessions.",
+                ephemeral=True
+            )
+
     async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        """Show attendance records for a specific session with optimized display"""
+        """Show attendance records for a specific session as a Plotly table image"""
         try:
             # Get alliance name
             alliance_name = "Unknown Alliance"
@@ -1052,7 +1055,7 @@ class Attendance(commands.Cog):
                 if alliance_result:
                     alliance_name = alliance_result[0]
 
-            # Get attendance records for this session
+            # Get attendance records
             records = []
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                 cursor = attendance_db.cursor()
@@ -1065,76 +1068,149 @@ class Attendance(commands.Cog):
                 records = cursor.fetchall()
 
             if not records:
-                await interaction.response.send_message(
-                    f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
-                    ephemeral=True
+                await interaction.response.edit_message(
+                    content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
+                    embed=None,
+                    view=None
                 )
                 return
 
-            # Generate report with optimized formatting
-            report_lines = ["```"]
-            report_lines.append("PLAYER         | STATUS      | LAST EVENT  | POINTS      | DATE       | BY")
-            report_lines.append("-" * 70)
-            
-            for row in records:
-                nickname = row[0] or "Unknown"
-                attendance_status = row[1] or "unknown"
-                last_event = row[2] or "N/A"
-                points = row[3] or 0
-                marked_date = row[4] or "N/A"
-                marked_by_username = row[5] or "Unknown"
-                
-                # Format data for cleaner display
-                display_status = attendance_status.replace('_', ' ').title()[:10]
-                last_event_display = last_event[:10]
-                points_str = f"{points:,}"
-                date_str = marked_date.split()[0] if marked_date else "N/A"
-                by_str = marked_by_username[:10]
-                
-                # Add player line with consistent spacing
-                line = f"{nickname[:12]:<14} | {display_status:<11} | {last_event_display:<11} | {points_str:<11} | {date_str} | {by_str}"
-                report_lines.append(line)
-            
-            report_lines.append("```")
-
-            # Create embed
-            embed = discord.Embed(
-                title=f"📊 Attendance Report - {alliance_name}",
-                description=(
-                    f"**Session:** {session_name}\n"
-                    f"**Total Players:** {len(records)}\n\n"
-                    "\n".join(report_lines)
-                ),
-                color=discord.Color.blue()
-            )
-
-            # Add footer with session ID if available
-            session_id = None
+            # Generate Plotly table
             try:
-                with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                    cursor = attendance_db.cursor()
-                    cursor.execute("""
-                        SELECT session_id FROM attendance_sessions
-                        WHERE session_name = ? AND alliance_id = ?
-                        LIMIT 1
-                    """, (session_name, alliance_id))
-                    result = cursor.fetchone()
-                    if result:
-                        session_id = result[0]
-            except:
-                pass
-            
-            if session_id:
-                embed.set_footer(text=f"Session ID: {session_id}")
-
-            await interaction.response.edit_message(embed=embed, view=None)
+                # Prepare data
+                players = []
+                statuses = []
+                points = []
+                last_events = []
+                marked_dates = []
+                marked_bys = []
+                
+                for row in records:
+                    players.append(row[0] or "Unknown")
+                    statuses.append(row[1].replace('_', ' ').title())
+                    last_events.append(row[2] or "N/A")
+                    points.append(f"{row[3]:,}" if row[3] else "0")
+                    marked_dates.append(row[4].split()[0] if row[4] else "N/A")
+                    marked_bys.append(row[5] or "Unknown")
+                
+                # Create Plotly table
+                fig = go.Figure(data=[go.Table(
+                    header=dict(
+                        values=['<b>Player</b>', '<b>Status</b>', '<b>Last Event</b>', '<b>Points</b>', '<b>Date</b>', '<b>Marked By</b>'],
+                        fill_color='#1f77b4',  # Discord blue
+                        font=dict(color='white', size=14),
+                        align='left'
+                    ),
+                    cells=dict(
+                        values=[players, statuses, last_events, points, marked_dates, marked_bys],
+                        fill_color='#f0f8ff',  # Light blue
+                        align='left',
+                        font=dict(size=12)
+                    )
+                )])
+                
+                # Update layout
+                fig.update_layout(
+                    title=f'Attendance Report - {alliance_name} | Session: {session_name}',
+                    title_font_size=20,
+                    margin=dict(l=20, r=20, t=80, b=20),
+                    height=600 + len(records) * 30  # Dynamic height based on rows
+                )
+                
+                # Generate unique filename
+                filename = f"attendance_{uuid.uuid4().hex}.png"
+                fig.write_image(filename, scale=2)
+                
+                # Create Discord file
+                file = discord.File(filename, filename="attendance_report.png")
+                
+                # Create embed
+                embed = discord.Embed(
+                    title=f"📊 Attendance Report - {alliance_name}",
+                    description=f"**Session:** {session_name}\n**Total Players:** {len(records)}",
+                    color=discord.Color.blue()
+                )
+                embed.set_image(url="attachment://attendance_report.png")
+                
+                # Add session ID if available
+                session_id = None
+                try:
+                    with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                        cursor = attendance_db.cursor()
+                        cursor.execute("""
+                            SELECT session_id FROM attendance_sessions
+                            WHERE session_name = ? AND alliance_id = ?
+                            LIMIT 1
+                        """, (session_name, alliance_id))
+                        result = cursor.fetchone()
+                        if result:
+                            session_id = result[0]
+                except:
+                    pass
+                
+                if session_id:
+                    embed.set_footer(text=f"Session ID: {session_id}")
+                
+                # Send response with image
+                await interaction.response.edit_message(
+                    content=None,
+                    embed=embed,
+                    view=None,
+                    attachments=[file]
+                )
+                
+                # Clean up temporary file
+                os.remove(filename)
+                
+            except ImportError:
+                # Fallback to text if Plotly not installed
+                await self.fallback_text_report(interaction, records, alliance_name, session_name)
+            except Exception as e:
+                print(f"Plotly error: {e}")
+                await self.fallback_text_report(interaction, records, alliance_name, session_name)
 
         except Exception as e:
             print(f"Error showing attendance report: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while loading attendance records.",
+                "❌ An error occurred while generating attendance report.",
                 ephemeral=True
             )
+
+    async def fallback_text_report(self, interaction, records, alliance_name, session_name):
+        """Fallback to text-based report if Plotly fails"""
+        report_lines = ["```"]
+        report_lines.append("PLAYER         | STATUS      | LAST EVENT  | POINTS      | DATE       | BY")
+        report_lines.append("-" * 70)
+        
+        for row in records:
+            nickname = row[0] or "Unknown"
+            attendance_status = row[1] or "unknown"
+            last_event = row[2] or "N/A"
+            points = row[3] or 0
+            marked_date = row[4] or "N/A"
+            marked_by_username = row[5] or "Unknown"
+            
+            display_status = attendance_status.replace('_', ' ').title()[:10]
+            last_event_display = last_event[:10]
+            points_str = f"{points:,}"
+            date_str = marked_date.split()[0] if marked_date else "N/A"
+            by_str = marked_by_username[:10]
+            
+            line = f"{nickname[:12]:<14} | {display_status:<11} | {last_event_display:<11} | {points_str:<11} | {date_str} | {by_str}"
+            report_lines.append(line)
+        
+        report_lines.append("```")
+
+        embed = discord.Embed(
+            title=f"📊 Attendance Report - {alliance_name}",
+            description=(
+                f"**Session:** {session_name}\n"
+                f"**Total Players:** {len(records)}\n\n"
+                "\n".join(report_lines)
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
 
     async def show_attendance_menu(self, interaction: discord.Interaction):
         """Show the main attendance menu"""
@@ -1154,7 +1230,7 @@ class Attendance(commands.Cog):
         )
         
         view = AttendanceView(self)
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot):
     try:
