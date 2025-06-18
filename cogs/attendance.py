@@ -1,4 +1,3 @@
-
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -113,13 +112,8 @@ class AttendanceView(discord.ui.View):
                     member_count = cursor.fetchone()[0]
                     alliances_with_counts.append((alliance_id, name, member_count))
 
-            view = AllianceSelectView(alliances_with_counts, self.cog)
+            view = AllianceSelectView(alliances_with_counts, self.cog, is_marking=True)
             
-            async def select_callback(select_interaction: discord.Interaction):
-                alliance_id = int(view.current_select.values[0])
-                await self.cog.show_attendance_marking(select_interaction, alliance_id)
-
-            view.callback = select_callback
             await interaction.response.send_message(
                 embed=select_embed,
                 view=view,
@@ -176,13 +170,7 @@ class AttendanceView(discord.ui.View):
                     member_count = cursor.fetchone()[0]
                     alliances_with_counts.append((alliance_id, name, member_count))
 
-            view = AllianceSelectView(alliances_with_counts, self.cog)
-            
-            async def select_callback(select_interaction: discord.Interaction):
-                alliance_id = int(view.current_select.values[0])
-                await self.cog.show_attendance_report(select_interaction, alliance_id)
-
-            view.callback = select_callback
+            view = AllianceSelectView(alliances_with_counts, self.cog, is_marking=False)
             
             select_embed = discord.Embed(
                 title="👀 View Attendance - Alliance Selection",
@@ -203,15 +191,44 @@ class AttendanceView(discord.ui.View):
                 ephemeral=True
             )
 
+class SessionNameModal(discord.ui.Modal, title="Attendance Session"):
+    def __init__(self, alliance_id, cog):
+        super().__init__()
+        self.alliance_id = alliance_id
+        self.cog = cog
+        
+        self.session_name = discord.ui.TextInput(
+            label="Session Name",
+            placeholder="Enter a name for this attendance session",
+            required=True,
+            max_length=50
+        )
+        self.add_item(self.session_name)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        session_name = self.session_name.value.strip()
+        if not session_name:
+            await interaction.response.send_message(
+                "❌ Session name cannot be empty.",
+                ephemeral=True
+            )
+            return
+            
+        await self.cog.show_attendance_marking(
+            interaction, 
+            self.alliance_id,
+            session_name
+        )
+
 class AllianceSelectView(discord.ui.View):
-    def __init__(self, alliances_with_counts, cog, page=0):
+    def __init__(self, alliances_with_counts, cog, page=0, is_marking=False):
         super().__init__(timeout=180)
         self.alliances = alliances_with_counts
         self.cog = cog
         self.page = page
         self.max_page = (len(alliances_with_counts) - 1) // 25 if alliances_with_counts else 0
         self.current_select = None
-        self.callback = None
+        self.is_marking = is_marking
         self.update_select_menu()
 
     def update_select_menu(self):
@@ -237,9 +254,16 @@ class AllianceSelectView(discord.ui.View):
         
         async def select_callback(interaction: discord.Interaction):
             self.current_select = select
-            if self.callback:
-                await self.callback(interaction)
-        
+            alliance_id = int(select.values[0])
+            
+            if self.is_marking:
+                # For marking: ask for session name
+                modal = SessionNameModal(alliance_id, self.cog)
+                await interaction.response.send_modal(modal)
+            else:
+                # For viewing: show session selection
+                await self.cog.show_session_selection(interaction, alliance_id)
+
         select.callback = select_callback
         self.add_item(select)
         self.current_select = select
@@ -262,10 +286,11 @@ class AllianceSelectView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
 class PlayerSelectView(discord.ui.View):
-    def __init__(self, players, alliance_name, cog, page=0):
+    def __init__(self, players, alliance_name, session_name, cog, page=0):
         super().__init__(timeout=300)
         self.players = players
         self.alliance_name = alliance_name
+        self.session_name = session_name
         self.cog = cog
         self.selected_players = {}
         self.page = page
@@ -324,7 +349,8 @@ class PlayerSelectView(discord.ui.View):
             description=(
                 f"**Player:** {nickname}\n"
                 f"**FID:** {fid}\n"
-                f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n\n"
+                f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
+                f"**Session:** {self.session_name}\n\n"
                 "Please select the attendance status for this player:"
             ),
             color=discord.Color.blue()
@@ -364,7 +390,7 @@ class PlayerSelectView(discord.ui.View):
             )
             return
         
-        await self.cog.process_attendance_results(interaction, self.selected_players, self.alliance_name)
+        await self.cog.process_attendance_results(interaction, self.selected_players, self.alliance_name, self.session_name)
 
     async def update_main_embed(self, interaction: discord.Interaction):
         marked_count = len(self.selected_players)
@@ -373,6 +399,7 @@ class PlayerSelectView(discord.ui.View):
         embed = discord.Embed(
             title=f"📋 Marking Attendance - {self.alliance_name}",
             description=(
+                f"**Session:** {self.session_name}\n"
                 f"**Progress:** {marked_count}/{total_count} players marked\n"
                 f"**Current Page:** {self.page + 1}/{self.max_page + 1}\n\n"
                 "Select a player from the dropdown to mark their attendance.\n"
@@ -413,7 +440,7 @@ class PlayerSelectView(discord.ui.View):
         
         embed = discord.Embed(
             title=f"📊 Attendance Summary - {self.alliance_name}",
-            description="\n".join(summary_lines),
+            description=f"**Session:** {self.session_name}\n\n" + "\n".join(summary_lines),
             color=discord.Color.green()
         )
         
@@ -543,15 +570,15 @@ class AttendanceModal(discord.ui.Modal):
                             alliance_result = alliance_cursor.fetchone()
                             alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
                     
-                    # Insert attendance record
+                    # Insert attendance record with session name
                     cursor.execute("""
                         INSERT INTO attendance_records 
                         (fid, nickname, alliance_id, alliance_name, attendance_status, points, 
-                         last_event_attendance, marked_date, marked_by, marked_by_username)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         last_event_attendance, marked_date, marked_by, marked_by_username, session_name)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (self.fid, self.nickname, alliance_id, alliance_name, self.attendance_type, 
                           points, last_event_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 
-                          interaction.user.id, interaction.user.name))
+                          interaction.user.id, interaction.user.name, self.parent_view.session_name))
                     
                     attendance_db.commit()
                     print(f"✓ Attendance saved for {self.nickname} (FID: {self.fid}) in dedicated database")
@@ -566,7 +593,8 @@ class AttendanceModal(discord.ui.Modal):
                         f"**Player:** {self.nickname}\n"
                         f"**Status:** {self.attendance_type.replace('_', ' ').title()}\n"
                         f"**Points:** {points:,}\n"
-                        f"**Last Event:** {last_event_attendance}\n\n"
+                        f"**Last Event:** {last_event_attendance}\n"
+                        f"**Session:** {self.parent_view.session_name}\n\n"
                         "Click the button below to return to player selection."
                     ),
                     color=discord.Color.green()
@@ -627,6 +655,30 @@ class AttendanceModal(discord.ui.Modal):
                     ephemeral=True
                 )
 
+class SessionSelectView(discord.ui.View):
+    def __init__(self, sessions, alliance_id, cog):
+        super().__init__(timeout=180)
+        self.sessions = sessions
+        self.alliance_id = alliance_id
+        self.cog = cog
+        
+        select = discord.ui.Select(
+            placeholder="📋 Select a session...",
+            options=[
+                discord.SelectOption(
+                    label=session[:100],
+                    value=session,
+                    description=f"Session: {session}"
+                ) for session in sessions
+            ]
+        )
+        select.callback = self.on_select
+        self.add_item(select)
+        
+    async def on_select(self, interaction: discord.Interaction):
+        session_name = interaction.data['values'][0]
+        await self.cog.show_attendance_report(interaction, self.alliance_id, session_name)
+
 class Attendance(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -656,11 +708,19 @@ class Attendance(commands.Cog):
                         last_event_attendance TEXT,
                         marked_date TEXT,
                         marked_by INTEGER,
-                        marked_by_username TEXT
+                        marked_by_username TEXT,
+                        session_name TEXT
                     )
                 """)
                 
-                # Create attendance sessions table (for grouping records by session)
+                # Check and add session_name column if missing
+                cursor.execute("PRAGMA table_info(attendance_records)")
+                columns = [col[1] for col in cursor.fetchall()]
+                if 'session_name' not in columns:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN session_name TEXT")
+                    print("✓ Added session_name column to attendance_records")
+                
+                # Create attendance sessions table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS attendance_sessions (
                         session_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -672,9 +732,17 @@ class Attendance(commands.Cog):
                         total_players INTEGER,
                         present_count INTEGER,
                         absent_count INTEGER,
-                        not_signed_count INTEGER
+                        not_signed_count INTEGER,
+                        session_name TEXT
                     )
                 """)
+                
+                # Check and add session_name column to sessions table
+                cursor.execute("PRAGMA table_info(attendance_sessions)")
+                columns = [col[1] for col in cursor.fetchall()]
+                if 'session_name' not in columns:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN session_name TEXT")
+                    print("✓ Added session_name column to attendance_sessions")
                 
                 # Create session_records junction table
                 cursor.execute("""
@@ -755,25 +823,20 @@ class Attendance(commands.Cog):
             print(f"Error getting admin alliances: {e}")
             return [], [], False
 
-    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int):
+    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
         """Show the attendance marking interface for selected alliance"""
         try:
             # Get alliance name
+            alliance_name = "Unknown Alliance"
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                 cursor = alliance_db.cursor()
                 cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                 alliance_result = cursor.fetchone()
-                
-                if not alliance_result:
-                    await interaction.response.send_message(
-                        "❌ Alliance not found.",
-                        ephemeral=True
-                    )
-                    return
-                    
-                alliance_name = alliance_result[0]
+                if alliance_result:
+                    alliance_name = alliance_result[0]
 
             # Get alliance members - sort by FC level (highest to lowest)
+            players = []
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
                 cursor.execute("""
@@ -792,13 +855,14 @@ class Attendance(commands.Cog):
                 return
 
             # Calculate alliance statistics with proper FC levels
-            max_fl = max(player[2] for player in players)
-            avg_fl = sum(player[2] for player in players) / len(players)
+            max_fl = max(player[2] for player in players) if players else 0
+            avg_fl = sum(player[2] for player in players) / len(players) if players else 0
             
             # Start attendance marking process with player selection
             embed = discord.Embed(
                 title=f"📋 Marking Attendance - {alliance_name}",
                 description=(
+                    f"**Session:** {session_name}\n"
                     f"**Total Players:** {len(players)}\n"
                     f"**Highest FC:** {FC_LEVEL_MAPPING.get(max_fl, str(max_fl))}\n"
                     f"**Average FC:** {FC_LEVEL_MAPPING.get(int(avg_fl), str(int(avg_fl)))}\n"
@@ -809,7 +873,7 @@ class Attendance(commands.Cog):
                 color=discord.Color.blue()
             )
 
-            view = PlayerSelectView(players, alliance_name, self)
+            view = PlayerSelectView(players, alliance_name, session_name, self)
             await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
@@ -819,7 +883,7 @@ class Attendance(commands.Cog):
                 ephemeral=True
             )
 
-    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str):
+    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str):
         """Process and display final attendance results"""
         try:
             # Count attendance types
@@ -845,15 +909,15 @@ class Attendance(commands.Cog):
                     with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                         cursor = attendance_db.cursor()
                         
-                        # Create session
+                        # Create session with session name
                         cursor.execute("""
                             INSERT INTO attendance_sessions 
                             (alliance_id, alliance_name, session_date, created_by, created_by_username,
-                             total_players, present_count, absent_count, not_signed_count)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             total_players, present_count, absent_count, not_signed_count, session_name)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (alliance_id, alliance_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                               interaction.user.id, interaction.user.name, len(selected_players),
-                              present_count, absent_count, not_signed_count))
+                              present_count, absent_count, not_signed_count, session_name))
                         
                         session_id = cursor.lastrowid
                         
@@ -861,9 +925,9 @@ class Attendance(commands.Cog):
                         for fid in selected_players.keys():
                             cursor.execute("""
                                 SELECT id FROM attendance_records 
-                                WHERE fid = ? AND marked_by = ? 
+                                WHERE fid = ? AND marked_by = ? AND session_name = ?
                                 ORDER BY marked_date DESC LIMIT 1
-                            """, (fid, interaction.user.id))
+                            """, (fid, interaction.user.id, session_name))
                             
                             record_result = cursor.fetchone()
                             if record_result:
@@ -873,14 +937,14 @@ class Attendance(commands.Cog):
                                 """, (session_id, record_result[0]))
                         
                         attendance_db.commit()
-                        print(f"✓ Created attendance session {session_id} for {alliance_name}")
+                        print(f"✓ Created attendance session {session_id} for {alliance_name} - {session_name}")
                         
             except Exception as e:
                 print(f"Warning: Could not create attendance session: {e}")
             
             # Generate attendance report
             report_lines = ["```"]
-            report_lines.append("PLAYER | ATTENDANCE | LAST ATTENDANCE | POINTS")
+            report_lines.append("PLAYER         | ATTENDANCE   | LAST ATTENDANCE | POINTS")
             report_lines.append("-" * 60)
             
             for fid, data in selected_players.items():
@@ -890,7 +954,8 @@ class Attendance(commands.Cog):
                     attendance_status = "Absent"
                 else:  # not_signed
                     attendance_status = "Not Signed"
-                line = f"{data['nickname'][:15]:<15} | {attendance_status:<10} | {data['last_event_attendance'][:15]:<15} | {data['points']:,}"
+                    
+                line = f"{data['nickname'][:12]:<14} | {attendance_status:<12} | {data['last_event_attendance'][:15]:<15} | {data['points']:,}"
                 report_lines.append(line)
             
             report_lines.append("```")
@@ -899,6 +964,7 @@ class Attendance(commands.Cog):
             embed = discord.Embed(
                 title=f"✅ Attendance Report - {alliance_name}",
                 description=(
+                    f"**Session:** {session_name}\n"
                     f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
                     f"**Session ID:** {session_id if session_id else 'N/A'}\n"
                     f"**Total Players:** {len(selected_players)}\n"
@@ -922,75 +988,144 @@ class Attendance(commands.Cog):
                 ephemeral=True
             )
 
-    async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int):
-        """Show attendance records for an alliance"""
+    async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
+				    """Show available attendance sessions for an alliance"""
+				    try:
+				        # Get alliance name
+				        alliance_name = "Unknown Alliance"
+				        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+				            cursor = alliance_db.cursor()
+				            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+				            alliance_result = cursor.fetchone()
+				            if alliance_result:
+				                alliance_name = alliance_result[0]
+				
+				        # Get distinct session names from attendance records - FIXED HERE
+				        sessions = []
+				        with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+				            cursor = attendance_db.cursor()
+				            cursor.execute("""
+				                SELECT DISTINCT session_name 
+				                FROM attendance_records
+				                WHERE alliance_id = ? 
+				                AND session_name IS NOT NULL  -- Ensure we don't get NULL values
+				                AND TRIM(session_name) <> ''  -- Ensure we don't get empty strings
+				                ORDER BY marked_date DESC
+				            """, (alliance_id,))
+				            sessions = [row[0] for row in cursor.fetchall() if row[0]]  # Filter out empty values
+				
+				        if not sessions:
+				            await interaction.response.edit_message(
+				                content=f"❌ No attendance sessions found for {alliance_name}.",
+				                embed=None,
+				                view=None
+				            )
+				            return
+				
+				        # Create session selection view
+				        view = SessionSelectView(sessions, alliance_id, self)
+				        
+				        embed = discord.Embed(
+				            title=f"📋 Attendance Sessions - {alliance_name}",
+				            description="Please select a session to view attendance records:",
+				            color=discord.Color.blue()
+				        )
+				        
+				        await interaction.response.edit_message(embed=embed, view=view)
+				
+				    except Exception as e:
+				        print(f"Error showing session selection: {e}")
+				        await interaction.response.send_message(
+				            "❌ An error occurred while loading sessions.",
+				            ephemeral=True
+				        )
+            
+    async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
+        """Show attendance records for a specific session with optimized display"""
         try:
             # Get alliance name
+            alliance_name = "Unknown Alliance"
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                 cursor = alliance_db.cursor()
                 cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                 alliance_result = cursor.fetchone()
-                
-                if not alliance_result:
-                    await interaction.response.send_message(
-                        "❌ Alliance not found.",
-                        ephemeral=True
-                    )
-                    return
-                    
-                alliance_name = alliance_result[0]
+                if alliance_result:
+                    alliance_name = alliance_result[0]
 
-            # Get recent attendance records from dedicated database
+            # Get attendance records for this session
+            records = []
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                 cursor = attendance_db.cursor()
                 cursor.execute("""
                     SELECT nickname, attendance_status, last_event_attendance, points, marked_date, marked_by_username
                     FROM attendance_records
-                    WHERE alliance_id = ?
+                    WHERE alliance_id = ? AND session_name = ?
                     ORDER BY marked_date DESC
-                    LIMIT 50
-                """, (alliance_id,))
+                """, (alliance_id, session_name))
                 records = cursor.fetchall()
 
             if not records:
                 await interaction.response.send_message(
-                    f"❌ No attendance records found for alliance {alliance_name}.",
+                    f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
                     ephemeral=True
                 )
                 return
 
-            # Generate report
+            # Generate report with optimized formatting
             report_lines = ["```"]
-            report_lines.append("PLAYER | ATTENDANCE | LAST ATTENDANCE | POINTS | DATE | BY")
-            report_lines.append("-" * 90)
+            report_lines.append("PLAYER         | STATUS      | LAST EVENT  | POINTS      | DATE       | BY")
+            report_lines.append("-" * 70)
             
-            for nickname, attendance_status, last_event, points, marked_date, marked_by_username in records[:20]:
-                if attendance_status == "present":
-                    display_status = "Present"
-                elif attendance_status == "absent":
-                    display_status = "Absent"
-                else:  # not_signed
-                    display_status = "Not Signed"
+            for row in records:
+                nickname = row[0] or "Unknown"
+                attendance_status = row[1] or "unknown"
+                last_event = row[2] or "N/A"
+                points = row[3] or 0
+                marked_date = row[4] or "N/A"
+                marked_by_username = row[5] or "Unknown"
+                
+                # Format data for cleaner display
+                display_status = attendance_status.replace('_', ' ').title()[:10]
+                last_event_display = last_event[:10]
+                points_str = f"{points:,}"
                 date_str = marked_date.split()[0] if marked_date else "N/A"
-                points_str = f"{points:,}" if points else "0"
-                by_str = marked_by_username[:8] if marked_by_username else "Unknown"
-                line = f"{nickname[:10]:<10} | {display_status:<10} | {last_event[:8]:<8} | {points_str:<6} | {date_str} | {by_str}"
+                by_str = marked_by_username[:10]
+                
+                # Add player line with consistent spacing
+                line = f"{nickname[:12]:<14} | {display_status:<11} | {last_event_display:<11} | {points_str:<11} | {date_str} | {by_str}"
                 report_lines.append(line)
-            
-            if len(records) > 20:
-                report_lines.append(f"... and {len(records) - 20} more records")
             
             report_lines.append("```")
 
+            # Create embed
             embed = discord.Embed(
-                title=f"📊 Attendance History - {alliance_name}",
+                title=f"📊 Attendance Report - {alliance_name}",
                 description=(
-                    f"**Recent Attendance Records**\n"
-                    f"**Total Records:** {len(records)}\n\n"
+                    f"**Session:** {session_name}\n"
+                    f"**Total Players:** {len(records)}\n\n"
                     "\n".join(report_lines)
                 ),
                 color=discord.Color.blue()
             )
+
+            # Add footer with session ID if available
+            session_id = None
+            try:
+                with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                    cursor = attendance_db.cursor()
+                    cursor.execute("""
+                        SELECT session_id FROM attendance_sessions
+                        WHERE session_name = ? AND alliance_id = ?
+                        LIMIT 1
+                    """, (session_name, alliance_id))
+                    result = cursor.fetchone()
+                    if result:
+                        session_id = result[0]
+            except:
+                pass
+            
+            if session_id:
+                embed.set_footer(text=f"Session ID: {session_id}")
 
             await interaction.response.edit_message(embed=embed, view=None)
 
