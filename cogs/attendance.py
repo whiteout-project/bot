@@ -9,6 +9,7 @@ import os
 import plotly.graph_objects as go
 import pandas as pd
 import uuid
+from io import BytesIO
 
 # FC Level mapping for furnace levels
 FC_LEVEL_MAPPING = {
@@ -425,11 +426,18 @@ class PlayerSelectView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def show_summary(self, interaction: discord.Interaction):
+        # Sort players by points (highest to lowest)
+        sorted_players = sorted(
+            self.selected_players.items(),
+            key=lambda x: x[1]['points'],
+            reverse=True
+        )
+        
         summary_lines = ["```"]
         summary_lines.append("PLAYER | STATUS | POINTS")
         summary_lines.append("-" * 40)
         
-        for fid, data in self.selected_players.items():
+        for fid, data in sorted_players:
             status_display = {
                 "present": "Present",
                 "absent": "Absent", 
@@ -945,12 +953,18 @@ class Attendance(commands.Cog):
             except Exception as e:
                 print(f"Warning: Could not create attendance session: {e}")
             
-            # Generate attendance report
+            # Generate attendance report - sort players by points (highest to lowest)
+            sorted_players = sorted(
+                selected_players.items(),
+                key=lambda x: x[1]['points'],
+                reverse=True
+            )
+            
             report_lines = ["```"]
             report_lines.append("PLAYER         | ATTENDANCE   | LAST ATTENDANCE | POINTS")
             report_lines.append("-" * 60)
             
-            for fid, data in selected_players.items():
+            for fid, data in sorted_players:
                 if data['attendance_type'] == "present":
                     attendance_status = "Present"
                 elif data['attendance_type'] == "absent":
@@ -974,7 +988,7 @@ class Attendance(commands.Cog):
                     f"**Present:** {present_count}\n"
                     f"**Absent:** {absent_count}\n"
                     f"**Not Signed:** {not_signed_count}\n\n"
-                    "**Attendance Details:**\n"
+                    "**Attendance Details (Sorted by Points):**\n"
                     "\n".join(report_lines)
                 ),
                 color=discord.Color.green()
@@ -1055,7 +1069,7 @@ class Attendance(commands.Cog):
                 if alliance_result:
                     alliance_name = alliance_result[0]
 
-            # Get attendance records
+            # Get attendance records - sorted by points descending
             records = []
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                 cursor = attendance_db.cursor()
@@ -1063,7 +1077,7 @@ class Attendance(commands.Cog):
                     SELECT nickname, attendance_status, last_event_attendance, points, marked_date, marked_by_username
                     FROM attendance_records
                     WHERE alliance_id = ? AND session_name = ?
-                    ORDER BY marked_date DESC
+                    ORDER BY points DESC, marked_date DESC
                 """, (alliance_id, session_name))
                 records = cursor.fetchall()
 
@@ -1117,17 +1131,18 @@ class Attendance(commands.Cog):
                     height=600 + len(records) * 30  # Dynamic height based on rows
                 )
                 
-                # Generate unique filename
-                filename = f"attendance_{uuid.uuid4().hex}.png"
-                fig.write_image(filename, scale=2)
+                # Use BytesIO to avoid file locking issues
+                img_buffer = BytesIO()
+                fig.write_image(img_buffer, format='png', scale=2)
+                img_buffer.seek(0)  # Rewind buffer to beginning
                 
                 # Create Discord file
-                file = discord.File(filename, filename="attendance_report.png")
+                file = discord.File(img_buffer, filename="attendance_report.png")
                 
                 # Create embed
                 embed = discord.Embed(
                     title=f"📊 Attendance Report - {alliance_name}",
-                    description=f"**Session:** {session_name}\n**Total Players:** {len(records)}",
+                    description=f"**Session:** {session_name}\n**Total Players:** {len(records)}\n**Sorted by Points (Highest to Lowest)**",
                     color=discord.Color.blue()
                 )
                 embed.set_image(url="attachment://attendance_report.png")
@@ -1158,9 +1173,6 @@ class Attendance(commands.Cog):
                     view=None,
                     attachments=[file]
                 )
-                
-                # Clean up temporary file
-                os.remove(filename)
                 
             except ImportError:
                 # Fallback to text if Plotly not installed
@@ -1205,7 +1217,8 @@ class Attendance(commands.Cog):
             title=f"📊 Attendance Report - {alliance_name}",
             description=(
                 f"**Session:** {session_name}\n"
-                f"**Total Players:** {len(records)}\n\n"
+                f"**Total Players:** {len(records)}\n"
+                f"**Sorted by Points (Highest to Lowest)**\n\n"
                 "\n".join(report_lines)
             ),
             color=discord.Color.blue()
