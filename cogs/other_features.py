@@ -23,6 +23,10 @@ class OtherFeatures(commands.Cog):
                     "└ Create and manage ID channels\n"
                     "└ Automatic ID verification system\n"
                     "└ Custom channel settings\n\n"
+                    "🧑‍💼 **Minister Channels**\n"
+                    "└ Plan your minister appointments\n"
+                    "└ Schedule Construction, Research, Training days\n"
+                    "└ Configure minister log channels\n\n"
                     "💾 **Backup System**\n"
                     "└ Automatic database backup\n"
                     "└ Secure backup storage\n"
@@ -101,6 +105,30 @@ class OtherFeaturesView(discord.ui.View):
             )
 
     @discord.ui.button(
+        label="Minister Scheduling",
+        emoji="🏛️",
+        style=discord.ButtonStyle.primary,
+        custom_id="minister_channels",
+        row=1
+    )
+    async def minister_channels_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            schedule_cog = self.cog.bot.get_cog("Schedule")
+            if schedule_cog:
+                await schedule_cog.show_minister_channel_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Minister Channels module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Minister Channels menu: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while loading Minister Channels menu.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
         label="Backup System",
         emoji="💾",
         style=discord.ButtonStyle.primary,
@@ -144,4 +172,4 @@ class OtherFeaturesView(discord.ui.View):
             )
 
 async def setup(bot):
-    await bot.add_cog(OtherFeatures(bot)) 
+    await bot.add_cog(OtherFeatures(bot))
