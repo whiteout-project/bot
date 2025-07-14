@@ -41,131 +41,69 @@ class ChannelSelect(discord.ui.ChannelSelect):
         channel_id = selected_channel.id
 
         try:
-            self.svs_conn = sqlite3.connect("db/svs.sqlite")
-            self.svs_cursor = self.svs_conn.cursor()
-            self.svs_cursor.execute("""
+            svs_conn = sqlite3.connect("db/svs.sqlite")
+            svs_cursor = svs_conn.cursor()
+            svs_cursor.execute("""
                 INSERT INTO reference (context, context_id)
                 VALUES (?, ?)
                 ON CONFLICT(context) DO UPDATE SET context_id = excluded.context_id;
             """, (self.context, channel_id))
-            self.svs_conn.commit()
-            self.svs_conn.close()
+            svs_conn.commit()
+            svs_conn.close()
 
-            if self.context in ["bear channel", "castle channel"]:
-                await self.bot.reload_extension("cogs.bear_track")
+            # Check if this is being called from the minister menu system
+            minister_menu_cog = self.bot.get_cog("MinisterMenu")
+            if minister_menu_cog and self.context.endswith("channel"):
+                # Return to channel configuration menu with confirmation
+                embed = discord.Embed(
+                    title="⚙️ Channel Configuration",
+                    description=(
+                        f"✅ **{self.context}** set to <#{channel_id}>\n\n"
+                        "Configure channels for minister scheduling:\n\n"
+                        "**Channel Types**\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "🔨 **Construction Channel** - Shows available Construction Day slots\n"
+                        "🔬 **Research Channel** - Shows available Research Day slots\n"
+                        "⚔️ **Training Channel** - Shows available Training Day slots\n"
+                        "📄 **Log Channel** - Receives add/remove notifications\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        "Select a channel type to configure:"
+                    ),
+                    color=discord.Color.green()
+                )
+
+                # Get the ChannelConfigurationView from minister_menu
+                import sys
+                minister_menu_module = minister_menu_cog.__class__.__module__
+                ChannelConfigurationView = getattr(sys.modules[minister_menu_module], 'ChannelConfigurationView')
+                
+                view = ChannelConfigurationView(self.bot, minister_menu_cog)
+                
+                await interaction.response.edit_message(
+                    content=None, # Clear the "Select a channel for..." content
+                    embed=embed,
+                    view=view
+                )
+            else:
+                # Fallback for other contexts
+                await interaction.response.edit_message(
+                    content=f"✅ `{self.context}` set to <#{channel_id}>.\n\nChannel configured successfully!",
+                    view=None
+                )
+
+        except Exception as e:
+            try:
                 await interaction.response.send_message(
-                    f"✅ `{self.context}` set to <#{channel_id}> and reloaded `bear_track` cog.",
+                    f"❌ Failed to update:\n```{e}```",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded:
+                await interaction.followup.send(
+                    f"❌ Failed to update:\n```{e}```",
                     ephemeral=True
                 )
 
-            else:
-                try:
-                    await interaction.response.edit_message(
-                        content=f"✅ `{self.context}` set to <#{channel_id}>.\n\nRun the command again",
-                        view=None
-                    )
-                except Exception as e:
-                    print(f"error: {e}")
-
-        except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Failed to update:\n```{e}```",
-                ephemeral=True
-            )
-
-class MinisterChannelView(discord.ui.View):
-    def __init__(self, bot, cog):
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.cog = cog
-
-    @discord.ui.button(label="Construction Day", style=discord.ButtonStyle.primary, emoji="👷")
-    async def construction_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_activity_selection(interaction, "Construction Day")
-
-    @discord.ui.button(label="Research Day", style=discord.ButtonStyle.primary, emoji="🧑‍⚕️")
-    async def research_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_activity_selection(interaction, "Research Day")
-
-    @discord.ui.button(label="Troops Training Day", style=discord.ButtonStyle.primary, emoji="💂")
-    async def troops_training_day(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_activity_selection(interaction, "Troops Training Day")
-
-    async def _handle_activity_selection(self, interaction: discord.Interaction, activity_name: str):
-        log_guild = await self.cog.get_log_guild(interaction.guild)
-
-        if not log_guild:
-            await interaction.response.send_message(
-                "Could not find the minister log server. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other feature --> Minister Channels --> Delete server ID and run the command again in the desired server",
-                ephemeral=True
-            )
-            return
-
-        if interaction.guild.id != log_guild.id:
-            await interaction.response.send_message(
-                f"This menu must be used in the configured server: `{log_guild}`.\n\n"
-                "If you want to change the server, run `/settings` command --> Other Features --> Minister Channels --> Delete server ID and run the `/minister_add` command in the desired server",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(
-            content=f"Select a channel for {activity_name}:", 
-            view=ChannelSelectView(self.bot, f"{activity_name} channel"), 
-            ephemeral=True
-        )
-
-    @discord.ui.button(label="Log Channel", style=discord.ButtonStyle.primary, emoji="📄")
-    async def log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log_guild = await self.cog.get_log_guild(interaction.guild)
-
-        if not log_guild:
-            await interaction.response.send_message(
-                "Could not find the minister log server. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other feature --> Minister Channels --> Delete server ID and run the the command again in the desired server",
-                ephemeral=True
-            )
-            return
-
-        if interaction.guild.id != log_guild.id:
-            await interaction.response.send_message(
-                f"This menu must be used in the configured server: `{log_guild}`.\n\n"
-                "If you want to change the server, run `/settings` command --> Other Features --> Minister Channels --> Delete server ID and run the `/minister_add` command in the desired server",
-                ephemeral=True
-            )
-            return
-
-        await interaction.response.send_message(content="Select a channel for logs:", view=ChannelSelectView(self.bot, "minister log channel"), ephemeral=True)
-
-    @discord.ui.button(label="Delete Server ID", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            self.svs_conn = sqlite3.connect("db/svs.sqlite")
-            self.svs_cursor = self.svs_conn.cursor()
-            self.svs_cursor.execute("DELETE FROM reference WHERE context=?", ("minister guild id",))
-            self.svs_conn.commit()
-            self.svs_conn.close()
-            await interaction.response.send_message("✅ Server ID deleted from the database.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to delete server ID: {e}", ephemeral=True)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️")
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-            if other_features_cog:
-                await other_features_cog.show_other_features_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    "❌ Other Features module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            await interaction.response.send_message(
-                f"❌ An error occurred while returning to Other Features menu: {e}",
-                ephemeral=True
-            )
-
-class Schedule(commands.Cog):
+class MinisterSchedule(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.users_conn = sqlite3.connect('db/users.sqlite')
@@ -231,29 +169,15 @@ class Schedule(commands.Cog):
         return self.settings_cursor.fetchone() is not None
 
     async def show_minister_channel_menu(self, interaction: discord.Interaction):
-
-        embed = discord.Embed(
-            title="🧑‍💼 Minister Channel Management",
-            description=(
-                "Manage your minister ID channels here:\n\n"
-                "**Available Operations**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "👷 Change Construction ID channel\n"
-                "🧑‍⚕️ Change Research ID channel\n"
-                "💂 Change Training ID channel\n"
-                "📄 Change Log ID channel\n"
-                "🗑️ Delete server ID\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.blue()
-        )
-
-        view = MinisterChannelView(self.bot, self)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            pass
+        # Redirect to the MinisterMenu cog
+        minister_cog = self.bot.get_cog("MinisterMenu")
+        if minister_cog:
+            await minister_cog.show_minister_channel_menu(interaction)
+        else:
+            await interaction.response.send_message(
+                "❌ Minister Menu module not found.",
+                ephemeral=True
+            )
 
     # Autocomplete handler for appointment type
     async def appointment_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -450,13 +374,17 @@ class Schedule(commands.Cog):
                             data = await self.fetch_user_data(booked_fid)
                             if isinstance(data, dict) and "data" in data:
                                 fetched_data[booked_fid] = data["data"].get("nickname", "Unknown")
+                                if progress_callback: # Immediate progress update after successful fetch
+                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
                                 break
                             elif data == 429:
                                 if progress_callback:
-                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=True)  # Show waiting
-                                await asyncio.sleep(60)  # Rate limit, wait and retry
+                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=True)
+                                await asyncio.sleep(60) # Rate limit, wait and retry
                             else:
                                 fetched_data[booked_fid] = "Unknown"
+                                if progress_callback: # Immediate progress update even for failed fetch
+                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
                                 break
 
                     booked_nickname = fetched_data.get(booked_fid, "Unknown")
@@ -519,6 +447,31 @@ class Schedule(commands.Cog):
                     time_list.append(f"`{time_slot}` - ")
 
         return time_list
+    
+    # handler for looping through unavailable times
+    def generate_booked_time_list(self, booked_times):
+        """
+        Generates a list of only booked time slots with their details.
+        """
+        time_list = []
+        for hour in range(24):
+            for minute in (0, 30):
+                time_slot = f"{hour:02}:{minute:02}"
+                if time_slot in booked_times:
+                    booked_fid, booked_alliance = booked_times[time_slot]
+                    booked_nickname = ""
+                    if booked_fid:
+                        self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (booked_fid,))
+                        user = self.users_cursor.fetchone()
+                        booked_nickname = user[0] if user else f"ID: {booked_fid}"
+
+                        self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (booked_alliance,))
+                        alliance_data = self.alliance_cursor.fetchone()
+                        booked_alliance_name = alliance_data[0] if alliance_data else "Unknown"
+
+                        time_list.append(f"`{time_slot}` - [{booked_alliance_name}]`{booked_nickname}` - `{booked_fid}`")
+
+        return time_list
 
     # handler to get minister channel
     async def get_channel_id(self, context: str):
@@ -556,12 +509,15 @@ class Schedule(commands.Cog):
 
         if not row:
             # Save the current guild as main guild if not found
-            self.svs_cursor.execute(
-                "INSERT INTO reference (context, context_id) VALUES (?, ?)",
-                ("minister guild id", log_guild.id)
-            )
-            self.svs_conn.commit()
-            return log_guild
+            if log_guild:
+                self.svs_cursor.execute(
+                    "INSERT INTO reference (context, context_id) VALUES (?, ?)",
+                    ("minister guild id", log_guild.id)
+                )
+                self.svs_conn.commit()
+                return log_guild
+            else:
+                return None
         else:
             guild_id = int(row[0])
             guild = self.bot.get_guild(guild_id)
@@ -584,7 +540,7 @@ class Schedule(commands.Cog):
 
             if not log_guild:
                 await interaction.followup.send(
-                    "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other feature --> Minister Channels --> Delete server ID and run the the command again in the desired server")
+                    "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server")
                 return
 
             # Check minister and log channels
@@ -601,7 +557,7 @@ class Schedule(commands.Cog):
             if (not channel or not log_channel) and interaction.guild.id != log_guild.id:
                 await interaction.followup.send(
                     f"Minister channels or log channel are missing. This command must be run in the server:`{log_guild}` to configure missing channels.\n\n"
-                    f"If you want to change that to another server, run `/settings`--> Other feature --> Minister Channels --> Delete server ID and run the `/minister_add` command again in the desired server"
+                    f"If you want to change that to another server, run `/settings` --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server"
                 )
                 return
 
@@ -742,7 +698,7 @@ class Schedule(commands.Cog):
 
             if not log_guild:
                 await interaction.followup.send(
-                    "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other feature --> Minister Channels --> Delete server ID and run the the command again in the desired server")
+                    "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server")
                 return
 
             # Check minister and log channels
@@ -759,7 +715,7 @@ class Schedule(commands.Cog):
             if (not channel or not log_channel) and interaction.guild.id != log_guild.id:
                 await interaction.followup.send(
                     f"Minister channels or log channel are missing. This command must be run in the server:`{log_guild}` to configure missing channels.\n\n"
-                    f"If you want to change that to another server, run `/settings`--> Other feature --> Minister Channels --> Delete server ID and run the `/minister_add` command again in the desired server"
+                    f"If you want to change that to another server, run `/settings` --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server"
                 )
                 return
 
@@ -856,13 +812,12 @@ class Schedule(commands.Cog):
         try:
             # Send a confirmation prompt
             embed = discord.Embed(
-                title=f"Confirm clearing {appointment_type} list.",
+                title=f"⚠️ Confirm clearing {appointment_type} list.",
                 description=f"Are you sure you want to remove all minister appointment slots for: {appointment_type}?\n"
                             f"**🚨This action cannot be undone and all names will be removed🚨**.\n"
                             f"You have 10 seconds to reply with 'Yes' to confirm or 'No' to cancel.",
                 color=discord.Color.orange()
             )
-            embed.set_thumbnail(url="https://cdn.discordapp.com/attachments/1300529864901791847/1324532210380046408/c16de0e154342a74e9637bb17bd54ea9.png")
             confirmation_message = await interaction.followup.send(embed=embed)
 
             # Wait for user confirmation
@@ -934,9 +889,9 @@ class Schedule(commands.Cog):
     @discord.app_commands.command(name='minister_list', description='View the schedule for an appointment type.')
     @app_commands.autocomplete(appointment_type=appointment_autocomplete, all_or_available=choice_autocomplete)
     @app_commands.describe(
-    appointment_type="The type of minister appointment to view.",
-    all_or_available="Show full schedule or only available slots.", 
-    update="Default: False. Whether to update names via API or not. Will take some time if enabled."
+        appointment_type="The type of minister appointment to view.",
+        all_or_available="Show full schedule or only available slots.", 
+        update="Default: False. Whether to update names via API or not. Will take some time if enabled."
     )
     async def minister_list(self, interaction: discord.Interaction, appointment_type: str, all_or_available: str, update: bool = False):
         try:
@@ -995,4 +950,4 @@ class Schedule(commands.Cog):
             await interaction.followup.send(f"An error occurred while fetching the schedule: {e}")
 
 async def setup(bot):
-    await bot.add_cog(Schedule(bot))
+    await bot.add_cog(MinisterSchedule(bot))

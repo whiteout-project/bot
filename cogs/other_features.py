@@ -23,8 +23,8 @@ class OtherFeatures(commands.Cog):
                     "└ Create and manage ID channels\n"
                     "└ Automatic ID verification system\n"
                     "└ Custom channel settings\n\n"
-                    "🧑‍💼 **Minister Channels**\n"
-                    "└ Plan your minister appointments\n"
+                    "🏛️ **Minister Scheduling**\n"
+                    "└ Manage your state minister appointments\n"
                     "└ Schedule Construction, Research, Training days\n"
                     "└ Configure minister log channels\n\n"
                     "💾 **Backup System**\n"
@@ -113,18 +113,18 @@ class OtherFeaturesView(discord.ui.View):
     )
     async def minister_channels_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            schedule_cog = self.cog.bot.get_cog("Schedule")
-            if schedule_cog:
-                await schedule_cog.show_minister_channel_menu(interaction)
+            minister_menu_cog = self.cog.bot.get_cog("MinisterMenu")
+            if minister_menu_cog:
+                await minister_menu_cog.show_minister_channel_menu(interaction)
             else:
                 await interaction.response.send_message(
-                    "❌ Minister Channels module not found.",
+                    "❌ Minister Scheduling module not found.",
                     ephemeral=True
                 )
         except Exception as e:
-            print(f"Error loading Minister Channels menu: {e}")
+            print(f"Error loading Minister Scheduling menu: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while loading Minister Channels menu.",
+                "❌ An error occurred while loading Minister Scheduling menu.",
                 ephemeral=True
             )
 
