@@ -1179,15 +1179,18 @@ class MinisterMenu(commands.Cog):
 
     async def execute_clear_all(self, interaction: discord.Interaction, activity_name: str):
         try:
+            # Send ephemeral success message immediately
+            await interaction.response.send_message(
+                f"✅ Successfully cleared all appointments for **{activity_name}**!",
+                ephemeral=True
+            )
+            
             # Get current schedule before clearing
             self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
             booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
 
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if minister_schedule_cog:
-                time_list, _ = minister_schedule_cog.generate_time_list(booked_times)
-                previous_schedule = "\n".join(time_list)
-
                 # Clear all appointments
                 self.svs_cursor.execute("DELETE FROM appointments WHERE appointment_type=?", (activity_name,))
                 self.svs_conn.commit()
@@ -1202,15 +1205,20 @@ class MinisterMenu(commands.Cog):
                 await minister_schedule_cog.send_embed_to_channel(embed)
                 await self.update_channel_message(activity_name)
 
-            # Return to activity menu with success message
-            success_msg = f"Successfully cleared all appointments for {activity_name}"
-            await self.show_minister_activity_menu_edit(interaction, activity_name, success_msg)
+            # Return to activity menu (update the original settings message)
+            await self.update_original_settings_message(activity_name)
 
         except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error clearing appointments: {e}",
-                ephemeral=True
-            )
+            try:
+                await interaction.response.send_message(
+                    f"❌ Error clearing appointments: {e}",
+                    ephemeral=True
+                )
+            except discord.InteractionResponded:
+                await interaction.followup.send(
+                    f"❌ Error clearing appointments: {e}",
+                    ephemeral=True
+                )
 
     async def update_minister_names(self, interaction: discord.Interaction, activity_name: str):
         try:
