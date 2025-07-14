@@ -527,7 +527,10 @@ class AttendanceModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            points = parse_points(self.points_input.value.strip())
+            if self.attendance_type == "absent":
+                points = 0
+            else:
+                points = parse_points(self.points_input.value.strip())
             with sqlite3.connect('db/attendance.sqlite', timeout=10.0) as attendance_db:
                 cursor = attendance_db.cursor()
                 with sqlite3.connect('db/users.sqlite') as users_db:
@@ -542,14 +545,35 @@ class AttendanceModal(discord.ui.Modal):
                     alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                     alliance_result = alliance_cursor.fetchone()
                     alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
+
+                # Check if a record already exists for this user, session, and marked_by
                 cursor.execute("""
-                    INSERT INTO attendance_records
-                    (fid, nickname, alliance_id, alliance_name, attendance_status, points,
-                    last_event_attendance, marked_date, marked_by, marked_by_username, session_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (self.fid, self.nickname, alliance_id, alliance_name, self.attendance_type,
-                    points, self.last_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    interaction.user.id, interaction.user.name, self.parent_view.session_name))
+                    SELECT id FROM attendance_records
+                    WHERE fid = ? AND session_name = ? AND marked_by = ?
+                """, (self.fid, self.parent_view.session_name, interaction.user.id))
+                existing = cursor.fetchone()
+                if existing:
+                    # Update the existing record
+                    cursor.execute("""
+                        UPDATE attendance_records
+                        SET nickname = ?, alliance_id = ?, alliance_name = ?, attendance_status = ?, points = ?,
+                            last_event_attendance = ?, marked_date = ?, marked_by_username = ?
+                        WHERE id = ?
+                    """, (
+                        self.nickname, alliance_id, alliance_name, self.attendance_type, points,
+                        self.last_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        interaction.user.name, existing[0]
+                    ))
+                else:
+                    # Insert new record
+                    cursor.execute("""
+                        INSERT INTO attendance_records
+                        (fid, nickname, alliance_id, alliance_name, attendance_status, points,
+                        last_event_attendance, marked_date, marked_by, marked_by_username, session_name)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (self.fid, self.nickname, alliance_id, alliance_name, self.attendance_type,
+                        points, self.last_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                        interaction.user.id, interaction.user.name, self.parent_view.session_name))
                 attendance_db.commit()
             self.parent_view.add_player_attendance(self.fid, self.nickname, self.attendance_type, points, self.last_attendance)
             success_embed = discord.Embed(
