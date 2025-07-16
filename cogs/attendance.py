@@ -6,25 +6,7 @@ from datetime import datetime
 import asyncio
 import re
 import os
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-
-
-# Use Noto Sans and Noto Sans Arabic from fonts/ if available
-
-# Use Roboto and Roboto Arabic from fonts/ if available
-def get_best_unicode_font():
-    font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts")
-    roboto_arabic_path = os.path.join(font_dir, "RobotoArabic-Regular.ttf")
-    roboto_path = os.path.join(font_dir, "Roboto-Regular.ttf")
-    if os.path.exists(roboto_arabic_path):
-        return fm.FontProperties(fname=roboto_arabic_path)
-    if os.path.exists(roboto_path):
-        return fm.FontProperties(fname=roboto_path)
-    return fm.FontProperties(family='DejaVu Sans')
-import arabic_reshaper
-from bidi.algorithm import get_display
-import matplotlib.table as mtable
+import plotly.graph_objects as go
 import pandas as pd
 import uuid
 from io import BytesIO
@@ -807,10 +789,6 @@ class Attendance(commands.Cog):
     async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
         """Show the attendance marking interface for selected alliance"""
         try:
-            # Defer response immediately to avoid timeout
-            if not interaction.response.is_done():
-                await interaction.response.defer(thinking=True)
-
             # Get alliance name
             alliance_name = "Unknown Alliance"
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
@@ -833,7 +811,7 @@ class Attendance(commands.Cog):
                 players = cursor.fetchall()
 
             if not players:
-                await interaction.followup.send(
+                await interaction.response.send_message(
                     f"❌ No players found in alliance {alliance_name}.",
                     ephemeral=True
                 )
@@ -842,7 +820,7 @@ class Attendance(commands.Cog):
             # Calculate alliance statistics with proper FC levels
             max_fl = max(player[2] for player in players) if players else 0
             avg_fl = sum(player[2] for player in players) / len(players) if players else 0
-
+            
             # Start attendance marking process with player selection
             embed = discord.Embed(
                 title=f"📋 Marking Attendance - {alliance_name}",
@@ -859,20 +837,14 @@ class Attendance(commands.Cog):
             )
 
             view = PlayerSelectView(players, alliance_name, session_name, self)
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
             print(f"Error showing attendance marking: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ An error occurred while loading attendance marking.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "❌ An error occurred while loading attendance marking.",
-                    ephemeral=True
-                )
+            await interaction.response.send_message(
+                "❌ An error occurred while loading attendance marking.",
+                ephemeral=True
+            )
 
     async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str):
         """Process and display final attendance results"""
@@ -988,10 +960,6 @@ class Attendance(commands.Cog):
     async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
         """Show available attendance sessions for an alliance"""
         try:
-            # Defer response immediately to avoid timeout
-            if not interaction.response.is_done():
-                await interaction.response.defer(thinking=True)
-
             # Get alliance name
             alliance_name = "Unknown Alliance"
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
@@ -1000,7 +968,7 @@ class Attendance(commands.Cog):
                 alliance_result = cursor.fetchone()
                 if alliance_result:
                     alliance_name = alliance_result[0]
-
+        
             # Get distinct session names from attendance records
             sessions = []
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
@@ -1016,45 +984,34 @@ class Attendance(commands.Cog):
                 sessions = [row[0] for row in cursor.fetchall() if row[0]]
 
             if not sessions:
-                await interaction.followup.send(
+                await interaction.response.edit_message(
                     content=f"❌ No attendance sessions found for {alliance_name}.",
-                    ephemeral=True
+                    embed=None,
+                    view=None
                 )
                 return
-
+        
             # Create session selection view
             view = SessionSelectView(sessions, alliance_id, self)
-
+            
             embed = discord.Embed(
                 title=f"📋 Attendance Sessions - {alliance_name}",
                 description="Please select a session to view attendance records:",
                 color=discord.Color.blue()
             )
-
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
+            
+            await interaction.response.edit_message(embed=embed, view=view)
+    
         except Exception as e:
             print(f"Error showing session selection: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ An error occurred while loading sessions.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "❌ An error occurred while loading sessions.",
-                    ephemeral=True
-                )
+            await interaction.response.send_message(
+                "❌ An error occurred while loading sessions.",
+                ephemeral=True
+            )
 
     async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        # Use Roboto Arabic, Roboto, or DejaVu Sans for Unicode/Arabic support
-        font_prop = get_best_unicode_font()
-        """Show attendance records for a specific session as a Matplotlib table image"""
+        """Show attendance records for a specific session as a Plotly table image"""
         try:
-            # Defer response immediately to avoid timeout
-            if not interaction.response.is_done():
-                await interaction.response.defer(thinking=True)
-
             # Get alliance name
             alliance_name = "Unknown Alliance"
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
@@ -1077,89 +1034,71 @@ class Attendance(commands.Cog):
                 records = cursor.fetchall()
 
             if not records:
-                await interaction.followup.send(
+                await interaction.response.edit_message(
                     content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
-                    ephemeral=True
+                    embed=None,
+                    view=None
                 )
                 return
 
-            # Generate Matplotlib table image
+            # Generate Plotly table
             try:
                 # Prepare data
-                headers = ["Player", "Status", "Last Event", "Points", "Date", "Marked By"]
-                table_data = []
-                def fix_arabic(text):
-                    if text and re.search(r'[\u0600-\u06FF]', text):
-                        try:
-                            reshaped = arabic_reshaper.reshape(text)
-                            return get_display(reshaped)
-                        except Exception:
-                            return text
-                    return text
-                def wrap_text(text, width=20):
-                    # Split text into lines of max 'width' characters
-                    if not text:
-                        return ""
-                    lines = []
-                    for part in str(text).split('\n'):
-                        while len(part) > width:
-                            lines.append(part[:width])
-                            part = part[width:]
-                        lines.append(part)
-                    return '\n'.join(lines)
-
+                players = []
+                statuses = []
+                points = []
+                last_events = []
+                marked_dates = []
+                marked_bys = []
+                
                 for row in records:
-                    table_data.append([
-                        wrap_text(fix_arabic(row[0] or "Unknown")),
-                        wrap_text(fix_arabic(row[1].replace('_', ' ').title())),
-                        wrap_text(fix_arabic(row[2] if row[2] else "N/A"), width=40),  # wider wrap for last event
-                        wrap_text(f"{row[3]:,}" if row[3] else "0"),
-                        wrap_text(fix_arabic(row[4].split()[0] if row[4] else "N/A")),
-                        wrap_text(fix_arabic(row[5] or "Unknown"))
-                    ])
-
-                fig, ax = plt.subplots(figsize=(13, min(1 + len(table_data) * 0.5, 20)))  # wider figure
-                ax.axis('off')
-                table = ax.table(
-                    cellText=table_data,
-                    colLabels=headers,
-                    cellLoc='left',
-                    loc='center',
-                    colColours=['#1f77b4']*len(headers)
+                    players.append(row[0] or "Unknown")
+                    statuses.append(row[1].replace('_', ' ').title())
+                    last_events.append(row[2] or "N/A")
+                    points.append(f"{row[3]:,}" if row[3] else "0")
+                    marked_dates.append(row[4].split()[0] if row[4] else "N/A")
+                    marked_bys.append(row[5] or "Unknown")
+                
+                # Create Plotly table
+                fig = go.Figure(data=[go.Table(
+                    header=dict(
+                        values=['<b>Player</b>', '<b>Status</b>', '<b>Last Event</b>', '<b>Points</b>', '<b>Date</b>', '<b>Marked By</b>'],
+                        fill_color='#1f77b4',  # Discord blue
+                        font=dict(color='white', size=14),
+                        align='left'
+                    ),
+                    cells=dict(
+                        values=[players, statuses, last_events, points, marked_dates, marked_bys],
+                        fill_color='#f0f8ff',  # Light blue
+                        align='left',
+                        font=dict(size=12)
+                    )
+                )])
+                
+                # Update layout
+                fig.update_layout(
+                    title=f'Attendance Report - {alliance_name} | Session: {session_name}',
+                    title_font_size=20,
+                    margin=dict(l=20, r=20, t=80, b=20),
+                    height=600 + len(records) * 30  # Dynamic height based on rows
                 )
-                table.auto_set_font_size(False)
-                table.set_fontsize(12)
-                table.scale(1, 1.5)
-                # Set a larger width for the 'Last Event' column (index 2)
-                # Set a larger width for the 'Last Event' column (index 2)
-                nrows = len(table_data) + 1  # +1 for header
-                for row in range(nrows):
-                    cell = table[(row, 2)]
-                    cell.set_width(0.35)
-
-                # Set font for all cells (try both set_fontproperties and set_font_properties for compatibility)
-                for key, cell in table.get_celld().items():
-                    if hasattr(cell, 'set_fontproperties'):
-                        cell.set_fontproperties(font_prop)
-                    elif hasattr(cell, 'set_font_properties'):
-                        cell.set_font_properties(font_prop)
-
-                plt.title(f'Attendance Report - {alliance_name} | Session: {session_name}', fontsize=16, color='#1f77b4', pad=20, fontproperties=font_prop)
-
+                
+                # Use BytesIO to avoid file locking issues
                 img_buffer = BytesIO()
-                plt.savefig(img_buffer, format='png', bbox_inches='tight')
-                plt.close(fig)
-                img_buffer.seek(0)
-
+                fig.write_image(img_buffer, format='png', scale=2)
+                img_buffer.seek(0)  # Rewind buffer to beginning
+                
+                # Create Discord file
                 file = discord.File(img_buffer, filename="attendance_report.png")
-
+                
+                # Create embed
                 embed = discord.Embed(
                     title=f"📊 Attendance Report - {alliance_name}",
                     description=f"**Session:** {session_name}\n**Total Players:** {len(records)}\n**Sorted by Points (Highest to Lowest)**",
                     color=discord.Color.blue()
                 )
                 embed.set_image(url="attachment://attendance_report.png")
-
+                
                 # Add session ID if available
                 session_id = None
                 try:
@@ -1175,17 +1114,18 @@ class Attendance(commands.Cog):
                             session_id = result[0]
                 except:
                     pass
-
+                
                 if session_id:
                     embed.set_footer(text=f"Session ID: {session_id}")
-
+                
                 # Send response with image
-                await interaction.followup.send(
+                await interaction.response.edit_message(
+                    content=None,
                     embed=embed,
-                    files=[file],
-                    ephemeral=False
+                    view=None,
+                    attachments=[file]
                 )
-
+                
             except ImportError:
                 # Fallback to text if Plotly not installed
                 await self.fallback_text_report(interaction, records, alliance_name, session_name)
@@ -1195,16 +1135,10 @@ class Attendance(commands.Cog):
 
         except Exception as e:
             print(f"Error showing attendance report: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ An error occurred while generating attendance report.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    "❌ An error occurred while generating attendance report.",
-                    ephemeral=True
-                )
+            await interaction.response.send_message(
+                "❌ An error occurred while generating attendance report.",
+                ephemeral=True
+            )
 
     async def fallback_text_report(self, interaction, records, alliance_name, session_name):
         """Fallback to text-based report if Plotly fails"""
