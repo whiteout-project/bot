@@ -2,6 +2,11 @@ import subprocess
 import sys
 import os
 
+
+import matplotlib
+import matplotlib.font_manager as fm
+import urllib.request
+
 def is_container() -> bool:
     return os.path.exists("/.dockerenv") or os.path.exists("/var/run/secrets/kubernetes.io")
 
@@ -16,6 +21,44 @@ def is_ci_environment() -> bool:
 def should_skip_venv() -> bool:
     """Check if venv should be skipped"""
     return '--no-venv' in sys.argv or is_container() or is_ci_environment()
+
+# --- Font Setup: Download and use Noto Sans and Noto Sans Arabic for Matplotlib ---
+# --- Font Setup: Download and use Roboto and Roboto Arabic for Matplotlib ---
+# --- Font Setup: Download and use Roboto (variable) and Noto Sans Arabic for Matplotlib ---
+def setup_fonts():
+    font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    os.makedirs(font_dir, exist_ok=True)
+    unifontex_url = "https://stgiga.github.io/UnifontEX/UnifontExMono.ttf"
+    unifontex_path = os.path.join(font_dir, "UnifontExMono.ttf")
+
+    # Download fonts if not present
+    if not os.path.exists(unifontex_path):
+        try:
+            print(f"Downloading UnifontEX font to {unifontex_path}...")
+            urllib.request.urlretrieve(unifontex_url, unifontex_path)
+            print("✓ UnifontEX font downloaded.")
+        except Exception as e:
+            print(f"✗ Failed to download UnifontEX: {e}")
+
+    # Register fonts with Matplotlib
+    font_family_name = None
+    if os.path.exists(unifontex_path):
+        try:
+            fm.fontManager.addfont(unifontex_path)
+            # Get the actual family name from the font file
+            prop = fm.FontProperties(fname=unifontex_path)
+            font_family_name = prop.get_name()
+            matplotlib.rcParams['font.family'] = [font_family_name]
+            print(f"✓ Using font family '{font_family_name}' for Matplotlib.")
+        except Exception as e:
+            print(f"Warning: Could not register UnifontExMono: {e}")
+            matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+            print("Using DejaVu Sans as fallback font for Matplotlib.")
+    else:
+        matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+        print("Using DejaVu Sans as fallback font for Matplotlib.")
+
+setup_fonts()
 
 # Handle venv setup
 if sys.prefix == sys.base_prefix and not should_skip_venv():
@@ -330,23 +373,24 @@ def check_ocr_dependencies():
 def setup_dependencies():
     """Main function to set up all dependencies."""
     print("Starting dependency check...")
-    
+
     # Ensure requirements.txt exists
     if not ensure_requirements_file():
         print("Failed to obtain requirements.txt")
         return False
-    
+
     # Check and install basic requirements
     if not check_and_install_requirements():
         print("Failed to install basic requirements")
         return False
-    
+
     # Check and install OCR dependencies
     ocr_success = check_ocr_dependencies()
     if not ocr_success:
         print("OCR setup failed, but continuing with basic functionality")
-    
+
     print("Dependency check completed...")
+    print("Note: For attendance image generation, Matplotlib is recommended as it does not require Chrome or Kaleido.")
     return True
 
 if not setup_dependencies():

@@ -10,7 +10,9 @@ pytz==2025.2
 aiohttp-socks==0.10.1
 python-dotenv==1.1.0
 opencv-python-headless==4.11.0.86
-plotly
-kaleido
 pandas
+matplotlib
+urllib3
+python-bidi
+arabic-reshaper
 uuid
