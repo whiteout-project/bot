@@ -233,6 +233,10 @@ def check_and_install_requirements():
                 import aiohttp_socks
             elif package_name == "python-dotenv":
                 import dotenv
+            elif package_name == "python-bidi":
+                import bidi
+            elif package_name == "arabic-reshaper":
+                import arabic_reshaper
             else:
                 __import__(package_name)
                         
