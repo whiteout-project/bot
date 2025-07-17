@@ -223,7 +223,7 @@ def check_and_install_requirements():
         package_name = requirement.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
         
         # Skip OCR-related packages for now
-        if package_name.lower() in ["ddddocr", "opencv-python-headless", "numpy", "pillow", "onnxruntime"]:
+        if package_name.lower() in ["numpy", "pillow", "onnxruntime"]:
             continue
             
         try:
@@ -247,9 +247,6 @@ def check_and_install_requirements():
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
                 
-                # Special handling for ddddocr on Python 3.13+
-                if package.startswith("ddddocr") and sys.version_info >= (3, 13):
-                    cmd.append("--ignore-requires-python")
                 
                 subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"✓ {package} installed successfully")
@@ -292,11 +289,6 @@ def check_ocr_dependencies():
         print("✗ onnxruntime - MISSING")
         missing_ocr.append("onnxruntime")
     
-    try:
-        import ddddocr
-    except ImportError:
-        print("✗ ddddocr - MISSING")
-        missing_ocr.append("ddddocr==1.5.6")
     
     # Install missing OCR packages
     if missing_ocr:
@@ -306,8 +298,6 @@ def check_ocr_dependencies():
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
                 
-                if package.startswith("ddddocr") and sys.version_info >= (3, 13):
-                    cmd.append("--ignore-requires-python")
                 
                 subprocess.check_call(cmd, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"✓ {package} installed successfully")
@@ -315,16 +305,13 @@ def check_ocr_dependencies():
             except Exception as e:
                 print(f"✗ Failed to install {package}: {e}")
     
-    # Test OCR object creation
+    # Test ONNX Runtime availability
     try:
-        import ddddocr
-        ocr = ddddocr.DdddOcr(show_ad=False)
+        import onnxruntime
+        print("✓ ONNX Runtime ready for captcha solving")
         return True
     except Exception as e:
-        print(f"✗ OCR object creation failed: {e}")
-        if "DLL" in str(e):
-            print("Visual C++ Redistributable may be missing or outdated.")
-            print("Please install latest 64-bit from: https://aka.ms/vs/17/release/vc_redist.x64.exe")
+        print(f"✗ ONNX Runtime test failed: {e}")
         return False
 
 def setup_dependencies():
@@ -476,8 +463,6 @@ if __name__ == "__main__":
         for dependency in lines:
             full_command = [sys.executable, "-m", "pip", "install", dependency, "--no-cache-dir"]
             
-            if dependency.startswith("ddddocr") and (sys.version_info.major == 3 and sys.version_info.minor >= 13):
-                full_command = full_command + ["--ignore-requires-python"]
         
             try:
                 if debug:

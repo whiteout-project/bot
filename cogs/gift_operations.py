@@ -161,13 +161,13 @@ class GiftOperations(commands.Cog):
             if ocr_settings:
                 enabled, save_images = ocr_settings
                 if enabled == 1:
-                    self.logger.info("GiftOps __init__: OCR is enabled. Initializing ddddocr solver...")
+                    self.logger.info("GiftOps __init__: OCR is enabled. Initializing ONNX solver...")
                     self.captcha_solver = GiftCaptchaSolver(save_images=save_images)
                     if not self.captcha_solver.is_initialized:
-                        self.logger.error("GiftOps __init__: DdddOcr solver FAILED to initialize.")
+                        self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
                         self.captcha_solver = None
                     else:
-                        self.logger.info("GiftOps __init__: DdddOcr solver initialized successfully.")
+                        self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
                 else:
                     self.logger.info("GiftOps __init__: OCR is disabled in settings.")
             else:
@@ -179,13 +179,13 @@ class GiftOperations(commands.Cog):
                 self.logger.info("GiftOps __init__: Attempting initialization with default settings...")
                 self.captcha_solver = GiftCaptchaSolver(save_images=0)
                 if not self.captcha_solver.is_initialized:
-                    self.logger.error("GiftOps __init__: DdddOcr solver FAILED to initialize with defaults.")
+                    self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize with defaults.")
                     self.captcha_solver = None
                 else: # Ensure success is logged here for the CI
-                    self.logger.info("GiftOps __init__: DdddOcr solver initialized successfully.")
+                    self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
 
         except ImportError as lib_err:
-            self.logger.exception(f"GiftOps __init__: ERROR - Missing required library for OCR (likely ddddocr): {lib_err}. Captcha solving disabled.")
+            self.logger.exception(f"GiftOps __init__: ERROR - Missing required library for OCR (likely onnxruntime): {lib_err}. Captcha solving disabled.")
             self.captcha_solver = None
         except Exception as e:
             self.logger.exception(f"GiftOps __init__: Unexpected error during Captcha solver setup: {e}")
@@ -290,11 +290,11 @@ class GiftOperations(commands.Cog):
                     enabled, save_images_setting = ocr_settings
                     self.logger.info(f"on_ready loaded settings: Enabled={enabled}, SaveImages={save_images_setting}")
                     if enabled == 1:
-                        self.logger.info("OCR is enabled, attempting ddddocr initialization...")
+                        self.logger.info("OCR is enabled, attempting ONNX initialization...")
                         try:
                             self.captcha_solver = GiftCaptchaSolver(save_images=save_images_setting)
                             if not self.captcha_solver.is_initialized:
-                                self.logger.error("DdddOcr solver FAILED to initialize in on_ready.")
+                                self.logger.error("ONNX solver FAILED to initialize in on_ready.")
                                 self.captcha_solver = None
                         except Exception as e:
                             self.logger.exception("Failed to initialize Captcha Solver in on_ready.")
@@ -1119,25 +1119,25 @@ class GiftOperations(commands.Cog):
                 enabled, save_images_setting = ocr_settings
                 current_test_fid = self.get_test_fid()
 
-                ddddocr_available = False
+                onnx_available = False
                 solver_status_msg = "N/A"
                 if self.captcha_solver:
                     if self.captcha_solver.is_initialized:
-                        ddddocr_available = True
+                        onnx_available = True
                         solver_status_msg = "Initialized & Ready"
                     elif hasattr(self.captcha_solver, 'is_initialized'):
-                        ddddocr_available = True
+                        onnx_available = True
                         solver_status_msg = "Initialization Failed (Check Logs)"
                     else:
                         solver_status_msg = "Error (Instance missing flags)"
                 else:
                     try:
-                        import ddddocr
-                        ddddocr_available = True
+                        import onnxruntime
+                        onnx_available = True
                         solver_status_msg = "Disabled or Init Failed"
                     except ImportError:
-                        ddddocr_available = False
-                        solver_status_msg = "ddddocr library missing"
+                        onnx_available = False
+                        solver_status_msg = "onnxruntime library missing"
 
                 save_options_text = {
                     0: "❌ None", 1: "⚠️ Failed Only", 2: "✅ Success Only", 3: "💾 All"
@@ -1145,7 +1145,7 @@ class GiftOperations(commands.Cog):
                 save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
 
                 embed = discord.Embed(
-                    title="🔍 CAPTCHA Solver Settings (ddddocr)",
+                    title="🔍 CAPTCHA Solver Settings (ONNX)",
                     description=(
                         f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
                         f"**Current Settings**\n"
@@ -1153,23 +1153,21 @@ class GiftOperations(commands.Cog):
                         f"🤖 **OCR Enabled:** {'✅ Yes' if enabled == 1 else '❌ No'}\n"
                         f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
                         f"🆔 **Test FID:** `{current_test_fid}`\n"
-                        f"📦 **ddddocr Library:** {'✅ Found' if ddddocr_available else '❌ Missing'}\n"
+                        f"📦 **ONNX Runtime:** {'✅ Found' if onnx_available else '❌ Missing'}\n"
                         f"⚙️ **Solver Status:** `{solver_status_msg}`\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     ),
                     color=discord.Color.blue()
                 )
 
-                if not ddddocr_available:
+                if not onnx_available:
                     embed.add_field(
                         name="⚠️ Missing Library",
                         value=(
-                            "The `ddddocr` library is required for CAPTCHA solving.\n"
-                            "It did not initialize. The bot owner needs to fix this.\n"
-                            "Try the following sequence of commands on the bot command line:\n"
-                            "```pip uninstall ddddocr opencv-python opencv-python-headless onnxruntime numpy -y\n"
-                            "pip install numpy Pillow opencv-python-headless onnxruntime --no-cache-dir --force-reinstall\n"
-                            "pip install ddddocr==1.5.6 --no-cache-dir --force-reinstall --ignore-requires-python\n"
+                            "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
+                            "The model files must be in the bot/models/ directory.\n"
+                            "Try installing dependencies:\n"
+                            "```pip install onnxruntime pillow numpy\n"
                         ), inline=False
                     )
 
@@ -1209,7 +1207,7 @@ class GiftOperations(commands.Cog):
                     inline=False
                 )
 
-                view = OCRSettingsView(self, ocr_settings, ddddocr_available)
+                view = OCRSettingsView(self, ocr_settings, onnx_available)
 
                 if interaction.response.is_done():
                     try:
@@ -1280,10 +1278,10 @@ class GiftOperations(commands.Cog):
                     try:
                         self.captcha_solver = GiftCaptchaSolver(save_images=target_save_images)
                         if self.captcha_solver.is_initialized:
-                            self.logger.info("GiftOps: DdddOcr solver reinitialized successfully.")
+                            self.logger.info("GiftOps: ONNX solver reinitialized successfully.")
                             message_suffix += " Solver reinitialized."
                         else:
-                            self.logger.error("GiftOps: DdddOcr solver FAILED to reinitialize.")
+                            self.logger.error("GiftOps: ONNX solver FAILED to reinitialize.")
                             message_suffix += " Solver reinitialization failed."
                             self.captcha_solver = None
                             return False, f"CAPTCHA solver settings updated. {message_suffix}"
@@ -3283,13 +3281,13 @@ class GiftView(discord.ui.View):
             pass
 
 class OCRSettingsView(discord.ui.View):
-    def __init__(self, cog, ocr_settings, ddddocr_available):
+    def __init__(self, cog, ocr_settings, onnx_available):
         super().__init__(timeout=None)
         self.cog = cog
         self.enabled = ocr_settings[0]
         self.save_images_setting = ocr_settings[1]
-        self.ddddocr_available = ddddocr_available
-        self.disable_controls = not ddddocr_available
+        self.onnx_available = onnx_available
+        self.disable_controls = not onnx_available
 
         # Row 0: Enable/Disable Button, Test Button
         self.enable_ocr_button_item = discord.ui.Button(
@@ -3319,10 +3317,19 @@ class OCRSettingsView(discord.ui.View):
         self.change_test_fid_button_item.callback = self.change_test_fid_button
         self.add_item(self.change_test_fid_button_item)
 
+        # Add the Clear Redemption Cache Button
+        self.clear_cache_button_item = discord.ui.Button(
+            label="Clear Redemption Cache", style=discord.ButtonStyle.danger, emoji="🗑️",
+            custom_id="clear_redemption_cache", row=1,
+            disabled=self.disable_controls
+        )
+        self.clear_cache_button_item.callback = self.clear_redemption_cache_button
+        self.add_item(self.clear_cache_button_item)
+
         # Row 2: Image Save Select Menu
         self.image_save_select_item = discord.ui.Select(
             placeholder="Select Captcha Image Saving Option",
-            min_values=1, max_values=1, row=1, custom_id="image_save_select",
+            min_values=1, max_values=1, row=2, custom_id="image_save_select",
             options=[
                 discord.SelectOption(label="Don't Save Any Images", value="0", description="Fastest, no disk usage"),
                 discord.SelectOption(label="Save Only Failed Captchas", value="1", description="For debugging server rejects"),
@@ -3338,14 +3345,14 @@ class OCRSettingsView(discord.ui.View):
 
     async def change_test_fid_button(self, interaction: discord.Interaction):
         """Handle the change test FID button click."""
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         await interaction.response.send_modal(TestFIDModal(self.cog))
 
     async def enable_ocr_button(self, interaction: discord.Interaction):
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -3358,8 +3365,8 @@ class OCRSettingsView(discord.ui.View):
         user_id = interaction.user.id
         current_time = time.time()
 
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         if not self.cog.captcha_solver or not self.cog.captcha_solver.is_initialized:
             await interaction.response.send_message("❌ CAPTCHA solver is not initialized. Ensure OCR is enabled.", ephemeral=True)
@@ -3442,7 +3449,7 @@ class OCRSettingsView(discord.ui.View):
 
             confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
             embed = discord.Embed(
-                title="🧪 CAPTCHA Solver Test Results (ddddocr)",
+                title="🧪 CAPTCHA Solver Test Results (ONNX)",
                 description=(
                     f"**Test Summary**\n━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"🤖 **OCR Success:** {'✅ Yes' if success else '❌ No'}\n"
@@ -3518,9 +3525,91 @@ class OCRSettingsView(discord.ui.View):
             except Exception as followup_err:
                 logger.error(f"[Test Button] Failed to send final error followup to user {user_id}: {followup_err}")
 
+    async def clear_redemption_cache_button(self, interaction: discord.Interaction):
+        """Handle the clear redemption cache button click."""
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            return
+
+        # Create confirmation embed
+        embed = discord.Embed(
+            title="⚠️ Clear Redemption Cache",
+            description=(
+                "This will **permanently delete** all gift code redemption records from the database.\n\n"
+                "**What this does:**\n"
+                "• Removes all entries from the `user_giftcodes` table\n"
+                "• Allows users to attempt redeeming gift codes again\n"
+                "• Useful for development testing and image collection\n\n"
+                "**Warning:** This action cannot be undone!"
+            ),
+            color=discord.Color.orange()
+        )
+
+        # Get current count for display
+        try:
+            self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
+            current_count = self.cog.cursor.fetchone()[0]
+            embed.add_field(
+                name="📊 Current Records",
+                value=f"{current_count:,} redemption records will be deleted",
+                inline=False
+            )
+        except Exception as e:
+            self.cog.logger.error(f"Error getting user_giftcodes count: {e}")
+            embed.add_field(
+                name="📊 Current Records", 
+                value="Unable to count records",
+                inline=False
+            )
+
+        # Create confirmation view
+        class ClearCacheConfirmView(discord.ui.View):
+            def __init__(self, parent_cog):
+                super().__init__(timeout=30)
+                self.parent_cog = parent_cog
+
+            @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger, emoji="✅")
+            async def confirm_clear(self, button_interaction: discord.Interaction):
+                try:
+                    # Clear the user_giftcodes table
+                    self.parent_cog.cursor.execute("DELETE FROM user_giftcodes")
+                    deleted_count = self.parent_cog.cursor.rowcount
+                    self.parent_cog.conn.commit()
+                    
+                    success_embed = discord.Embed(
+                        title="✅ Redemption Cache Cleared",
+                        description=f"Successfully deleted {deleted_count:,} redemption records.\n\nUsers can now attempt to redeem gift codes again.",
+                        color=discord.Color.green()
+                    )
+                    
+                    self.parent_cog.logger.info(f"Redemption cache cleared by user {button_interaction.user.id}: {deleted_count} records deleted")
+                    
+                    await button_interaction.response.edit_message(embed=success_embed, view=None)
+                    
+                except Exception as e:
+                    self.parent_cog.logger.exception(f"Error clearing redemption cache: {e}")
+                    error_embed = discord.Embed(
+                        title="❌ Error",
+                        description=f"Failed to clear redemption cache: {str(e)}",
+                        color=discord.Color.red()
+                    )
+                    await button_interaction.response.edit_message(embed=error_embed, view=None)
+
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+            async def cancel_clear(self, button_interaction: discord.Interaction):
+                cancel_embed = discord.Embed(
+                    title="❌ Operation Cancelled",
+                    description="Redemption cache was not cleared.",
+                    color=discord.Color.blue()
+                )
+                await button_interaction.response.edit_message(embed=cancel_embed, view=None)
+
+        confirm_view = ClearCacheConfirmView(self.cog)
+        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+
     async def image_save_select_callback(self, interaction: discord.Interaction):
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True) 
