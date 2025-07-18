@@ -222,10 +222,6 @@ def check_and_install_requirements():
     for requirement in requirements:
         package_name = requirement.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
         
-        # Skip OCR-related packages for now
-        if package_name.lower() in ["numpy", "pillow", "onnxruntime"]:
-            continue
-            
         try:
             if package_name == "discord.py":
                 import discord
@@ -233,6 +229,12 @@ def check_and_install_requirements():
                 import aiohttp_socks
             elif package_name == "python-dotenv":
                 import dotenv
+            elif package_name.lower() == "pillow":
+                import PIL
+            elif package_name.lower() == "numpy":
+                import numpy
+            elif package_name.lower() == "onnxruntime":
+                import onnxruntime
             else:
                 __import__(package_name)
                         
@@ -255,57 +257,8 @@ def check_and_install_requirements():
                 print(f"✗ Failed to install {package}: {e}")
                 return False
     
-    print("✓ All basic requirements satisfied")
+    print("✓ All requirements satisfied")
     return True
-
-def check_ocr_dependencies():
-    """Check and install OCR-specific dependencies."""
-    print("Checking OCR dependencies...")
-        
-    missing_ocr = []
-    
-    # Test OCR imports
-    try:
-        import numpy
-    except ImportError:
-        print("✗ numpy - MISSING")
-        missing_ocr.append("numpy")
-    
-    try:
-        import PIL
-    except ImportError:
-        print("✗ Pillow - MISSING")
-        missing_ocr.append("Pillow")
-    try:
-        import onnxruntime
-    except ImportError:
-        print("✗ onnxruntime - MISSING")
-        missing_ocr.append("onnxruntime")
-    
-    
-    # Install missing OCR packages
-    if missing_ocr:
-        print(f"Installing {len(missing_ocr)} missing OCR packages...")
-        
-        for package in missing_ocr:
-            try:
-                cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
-                
-                
-                subprocess.check_call(cmd, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print(f"✓ {package} installed successfully")
-                
-            except Exception as e:
-                print(f"✗ Failed to install {package}: {e}")
-    
-    # Test ONNX Runtime availability
-    try:
-        import onnxruntime
-        print("✓ ONNX Runtime ready for captcha solving")
-        return True
-    except Exception as e:
-        print(f"✗ ONNX Runtime test failed: {e}")
-        return False
 
 def setup_dependencies():
     """Main function to set up all dependencies."""
@@ -316,15 +269,10 @@ def setup_dependencies():
         print("Failed to obtain requirements.txt")
         return False
     
-    # Check and install basic requirements
+    # Check and install all requirements
     if not check_and_install_requirements():
-        print("Failed to install basic requirements")
+        print("Failed to install requirements")
         return False
-    
-    # Check and install OCR dependencies
-    ocr_success = check_ocr_dependencies()
-    if not ocr_success:
-        print("OCR setup failed, but continuing with basic functionality")
     
     print("Dependency check completed...")
     return True
