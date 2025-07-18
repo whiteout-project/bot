@@ -276,13 +276,6 @@ def check_ocr_dependencies():
     except ImportError:
         print("✗ Pillow - MISSING")
         missing_ocr.append("Pillow")
-    
-    try:
-        import cv2
-    except ImportError:
-        print("✗ opencv-python-headless - MISSING")
-        missing_ocr.append("opencv-python-headless")
-    
     try:
         import onnxruntime
     except ImportError:
@@ -353,6 +346,32 @@ import warnings
 import shutil
 
 print("Removing unnecessary files...")
+
+try: # Clean up old ddddocr dependency if present
+    try: # Try importlib.metadata approach first
+        import importlib.metadata
+        installed_packages = [dist.metadata['Name'].lower() for dist in importlib.metadata.distributions()]
+    except ImportError:
+        try: # Fallback to pkg_resources if importlib.metadata not available
+            import pkg_resources
+            installed_packages = [pkg.key for pkg in pkg_resources.working_set]
+        except ImportError: # Neither available, skip cleanup
+            installed_packages = []
+    
+    obsolete_packages = ['ddddocr', 'opencv-python-headless']
+    
+    for package in obsolete_packages:
+        if package in installed_packages:
+            print(f"Found old {package} dependency, removing...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "uninstall", package, "-y"], 
+                                    timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"✓ Successfully removed {package}")
+            except Exception as e:
+                print(f"Warning: Failed to uninstall {package}: {e}")
+                print(f"You may want to manually uninstall it with: pip uninstall {package}")
+except Exception as e:
+    print(f"Warning: Error checking for ddddocr: {e}")
 
 v1_path = "V1oldbot"
 if os.path.exists(v1_path) and os.path.isdir(v1_path):
@@ -620,6 +639,34 @@ if __name__ == "__main__":
                             f.write(latest_tag)
                         
                         print(Fore.GREEN + f"Update completed successfully from {source_name}." + Style.RESET_ALL)
+                        
+                        try: # Clean up removed dependencies after update
+                            print(Fore.YELLOW + "Checking for obsolete dependencies..." + Style.RESET_ALL)
+                            try: # Try importlib.metadata approach first
+                                import importlib.metadata
+                                installed_packages = {dist.metadata['Name'].lower(): dist for dist in importlib.metadata.distributions()}
+                            except ImportError:
+                                
+                                try: # Fallback to pkg_resources if importlib.metadata not available
+                                    import pkg_resources
+                                    installed_packages = {pkg.key: pkg for pkg in pkg_resources.working_set}
+                                except ImportError:
+                                    installed_packages = {}
+                            
+                            obsolete_packages = ['ddddocr', 'opencv-python-headless']
+                            
+                            for package in obsolete_packages:
+                                if package in installed_packages:
+                                    print(f"Found obsolete package: {package}")
+                                    try:
+                                        subprocess.check_call([sys.executable, "-m", "pip", "uninstall", package, "-y"], 
+                                                            timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                        print(Fore.GREEN + f"✓ Removed {package}" + Style.RESET_ALL)
+                                    except Exception as e:
+                                        print(Fore.YELLOW + f"Warning: Could not remove {package}: {e}" + Style.RESET_ALL)
+                        except Exception as e:
+                            print(Fore.YELLOW + f"Could not check for obsolete packages: {e}" + Style.RESET_ALL)
+                        
                         restart_bot()
                     else:
                         print(Fore.RED + f"Failed to download the update from {source_name}. HTTP status: {download_resp.status_code}" + Style.RESET_ALL)

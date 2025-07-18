@@ -3,11 +3,8 @@
 # Version 3 - now with ONNX model
 
 import os
-import warnings
-import base64
 import io
 import time
-import traceback
 import logging
 import logging.handlers
 import json
