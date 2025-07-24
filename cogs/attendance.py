@@ -189,15 +189,24 @@ class ReportTypeSelectView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=None)
 
 class AttendanceView(discord.ui.View):
-    def __init__(self, cog):
+    def __init__(self, cog, user_id, guild_id):
         super().__init__(timeout=1800)
         self.cog = cog
+        self.user_id = user_id
+        self.guild_id = guild_id
+        self.admin_result = None
+        self.alliances = None
+    
+    async def initialize_permissions_and_alliances(self):
+        """Initialize permissions and alliances at the view level."""
+        self.admin_result = await self.cog._check_admin_permissions(self.user_id)
+        
+        if self.admin_result:
+            self.alliances, _, _ = await self.cog.get_admin_alliances(self.user_id, self.guild_id)
 
     async def _handle_permission_check(self, interaction):
-        """Consolidated permission checking"""
-        admin_result = await self.cog._check_admin_permissions(interaction.user.id)
-        
-        if not admin_result:
+        """Consolidated permission checking using cached results."""
+        if not self.admin_result:
             error_embed = self.cog._create_error_embed(
                 "❌ Access Denied", 
                 "You do not have permission to use this command."
@@ -206,12 +215,7 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=back_view)
             return None
             
-        # Get available alliances
-        alliances, _, is_global = await self.cog.get_admin_alliances(
-            interaction.user.id, interaction.guild_id
-        )
-        
-        if not alliances:
+        if not self.alliances:
             error_embed = self.cog._create_error_embed(
                 "❌ No Alliances Found",
                 "No alliances found for your permissions."
@@ -220,12 +224,16 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=back_view)
             return None
             
-        return alliances, admin_result[0]
+        return self.alliances, self.admin_result[0]
 
     def _get_alliances_with_counts(self, alliances):
         """Get alliance member counts with optimized single query"""
         alliance_ids = [aid for aid, _ in alliances]
         alliances_with_counts = []
+        
+        # Validate that all alliance IDs are integers to prevent SQL injection
+        if alliance_ids and not all(isinstance(aid, int) for aid in alliance_ids):
+            raise ValueError("Invalid alliance IDs detected - all IDs must be integers")
         
         if alliance_ids:
             with sqlite3.connect('db/users.sqlite') as db:
@@ -1180,8 +1188,8 @@ class Attendance(commands.Cog):
         try:
             # Create attendance database if it doesn't exist
             if not os.path.exists("db/attendance.sqlite"):
-                open("db/attendance.sqlite", 'a').close()
-                print("✓ Created new attendance database")
+                sqlite3.connect("db/attendance.sqlite").close()
+                print("✓ Created and initialized new attendance database")
             
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                 cursor = attendance_db.cursor()
@@ -1562,7 +1570,8 @@ class Attendance(commands.Cog):
             color=discord.Color.blue()
         )
         
-        view = AttendanceView(self)
+        view = AttendanceView(self, interaction.user.id, interaction.guild_id)
+        await view.initialize_permissions_and_alliances()
         
         try:
             await interaction.response.edit_message(embed=embed, view=view, attachments=[])
@@ -1614,15 +1623,24 @@ class Attendance(commands.Cog):
                 special_alliance_ids = cursor.fetchall()
                 
             if special_alliance_ids:
-                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                    cursor = alliance_db.cursor()
-                    placeholders = ','.join('?' * len(special_alliance_ids))
-                    cursor.execute(f"""
-                        SELECT DISTINCT alliance_id, name
-                        FROM alliance_list
-                        WHERE alliance_id IN ({placeholders})
-                        ORDER BY name
-                    """, [aid[0] for aid in special_alliance_ids])
+                # Validate that all special alliance IDs are integers to prevent SQL injection
+                validated_ids = []
+                for aid_tuple in special_alliance_ids:
+                    if isinstance(aid_tuple[0], int):
+                        validated_ids.append(aid_tuple[0])
+                    else:
+                        print(f"Warning: Skipping invalid alliance ID: {aid_tuple[0]}")
+                
+                if validated_ids:
+                    with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                        cursor = alliance_db.cursor()
+                        placeholders = ','.join('?' * len(validated_ids))
+                        cursor.execute(f"""
+                            SELECT DISTINCT alliance_id, name
+                            FROM alliance_list
+                            WHERE alliance_id IN ({placeholders})
+                            ORDER BY name
+                        """, validated_ids)
                     special_alliances = cursor.fetchall()
             
             all_alliances = list({(aid, name) for aid, name in (server_alliances + special_alliances)})
@@ -2011,7 +2029,8 @@ class Attendance(commands.Cog):
             color=discord.Color.blue()
         )
         
-        view = AttendanceView(self)
+        view = AttendanceView(self, interaction.user.id, interaction.guild_id)
+        await view.initialize_permissions_and_alliances()
         await interaction.edit_original_response(embed=embed, view=view)
 
     async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
@@ -2104,7 +2123,8 @@ class Attendance(commands.Cog):
             color=discord.Color.blue()
         )
         
-        view = AttendanceView(self)
+        view = AttendanceView(self, interaction.user.id, interaction.guild_id)
+        await view.initialize_permissions_and_alliances()
         
         try:
             await interaction.response.edit_message(embed=embed, view=view, attachments=[])
