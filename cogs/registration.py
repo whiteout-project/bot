@@ -96,6 +96,11 @@ class Register(commands.Cog):
             
             return not (not result or result[0] == 1)
         
+    def is_already_in_users(self, fid: int) -> bool:
+        """Check if a user with the given fid is already registered."""
+        self.c_users.execute("SELECT 1 FROM users WHERE fid = ?", (fid,))
+        return self.c_users.fetchone() is not None
+        
     def is_registration_enabled(self) -> bool:
         """Check if registration is enabled in the settings database."""
         try:
@@ -167,6 +172,13 @@ class Register(commands.Cog):
         if not self.is_registration_enabled():
             await interaction.response.send_message(
                 "❌ Registration is currently disabled.",
+                ephemeral=True
+            )
+            return
+        
+        if self.is_already_in_users(fid):
+            await interaction.response.send_message(
+                "❌ You are already registered in the bot's database.",
                 ephemeral=True
             )
             return
