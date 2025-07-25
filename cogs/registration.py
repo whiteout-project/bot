@@ -178,7 +178,7 @@ class Register(commands.Cog):
         
         self.conn_users.commit()    
         
-        await interaction.response.send_message("Regristration successful! You are now in the bot's database.", ephemeral=True)
+        await interaction.response.send_message("Registration successful! You are now in the bot's database.", ephemeral=True)
         
 async def setup(bot):
     await bot.add_cog(Register(bot))
