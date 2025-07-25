@@ -73,6 +73,13 @@ class Register(commands.Cog):
         self.conn_users.close()
 
     async def show_settings_menu(self, interaction: discord.Interaction):
+        if not self.is_global_admin(interaction.user.id):
+            await interaction.response.send_message(
+                "❌ You do not have permission to access this command.",
+                ephemeral=True
+            )
+            return
+        
         view = RegisterSettingsView(self)
         
         await interaction.response.send_message(
@@ -80,6 +87,14 @@ class Register(commands.Cog):
             view=view,
             ephemeral=True
         )
+        
+    def is_global_admin(self, user_id: int) -> bool:
+        with sqlite3.connect("db/settings.sqlite") as settings_db:
+            cursor = settings_db.cursor()
+            cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (user_id,))
+            result = cursor.fetchone()
+            
+            return not (not result or result[0] == 1)
         
     def is_registration_enabled(self) -> bool:
         """Check if registration is enabled in the settings database."""
