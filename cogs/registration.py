@@ -119,8 +119,6 @@ class Register(commands.Cog):
         HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
         
         ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
         session = aiohttp.ClientSession()
         
         data_nosign = f"fid={fid}&time={time.time_ns()}"
