@@ -125,18 +125,19 @@ class Register(commands.Cog):
         sign = hashlib.md5((data_nosign + "tB87#kPtkxqOS2").encode()).hexdigest()
         data = f"sign={sign}&{data_nosign}"
 
-        async with session.post(
-            url=URL,
-            data=data,
-            headers=HEADERS,
-            ssl=ssl_context
-        ) as response:
+        try:
+            async with session.post(
+                url=URL,
+                data=data,
+                headers=HEADERS,
+                ssl=ssl_context
+            ) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    raise Exception(f"Failed to fetch user data: {response.status}")
+        finally:
             await session.close()
-            
-            if response.status == 200:
-                return await response.json()
-            else:
-                raise Exception(f"Failed to fetch user data: {response.status}")
          
     @discord.app_commands.command(
         name="register",
