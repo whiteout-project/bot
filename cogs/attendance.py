@@ -466,7 +466,9 @@ class AllianceSelectView(discord.ui.View):
                 await interaction.response.send_modal(modal)
             else:
                 # For viewing: show session selection
-                await self.cog.show_session_selection(interaction, alliance_id)
+                report_cog = self.cog.bot.get_cog("AttendanceReport")
+                if report_cog:
+                    await report_cog.show_session_selection(interaction, alliance_id)
 
         select.callback = select_callback
         self.add_item(select)
@@ -1072,37 +1074,6 @@ class PlayerAttendanceView(discord.ui.View):
             )
             await interaction.edit_original_response(embed=error_embed, view=None)
 
-class SessionSelectView(discord.ui.View):
-    def __init__(self, sessions, alliance_id, cog):
-        super().__init__(timeout=1800)
-        self.sessions = sessions
-        self.alliance_id = alliance_id
-        self.cog = cog
- 
-        select = discord.ui.Select(
-            placeholder="📋 Select a session...",
-            options=[
-                discord.SelectOption(
-                    label=session[:100],
-                    value=session,
-                    description=f"Session: {session}"
-                ) for session in sessions
-            ]
-        )
-        select.callback = self.on_select
-        self.add_item(select)
-
-    @discord.ui.button(
-        label="⬅️ Back",
-        style=discord.ButtonStyle.secondary,
-        row=1
-    )
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_attendance_menu(interaction)
- 
-    async def on_select(self, interaction: discord.Interaction):
-        session_name = interaction.data['values'][0]
-        await self.cog.show_attendance_report(interaction, self.alliance_id, session_name)
 
 class Attendance(commands.Cog):
     def __init__(self, bot):
@@ -1266,290 +1237,6 @@ class Attendance(commands.Cog):
         except Exception as e:
             print(f"Error setting up attendance database: {e}")
 
-    async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        """Show attendance records with user's preferred format"""
-        try:
-            # Get user's report preference
-            report_type = await self.get_user_report_preference(interaction.user.id)
-            
-            # If matplotlib is not available, force text mode
-            if report_type == "matplotlib" and not MATPLOTLIB_AVAILABLE:
-                report_type = "text"
-                
-            if report_type == "matplotlib":
-                await self.show_matplotlib_report(interaction, alliance_id, session_name)
-            else:
-                await self.show_text_report(interaction, alliance_id, session_name)
-                
-        except Exception as e:
-            print(f"Error showing attendance report: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while generating attendance report.",
-                ephemeral=True
-            )
-
-    async def show_matplotlib_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        """Show attendance records as a Matplotlib table image"""
-        try:
-            font_prop = get_best_unicode_font()
-            
-            # Get alliance name
-            alliance_name = await self._get_alliance_name(alliance_id)
-
-            # Get attendance records - sorted by points descending
-            records = []
-            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                cursor = attendance_db.cursor()
-                cursor.execute("""
-                    SELECT nickname, attendance_status, last_event_attendance, points, marked_date, marked_by_username
-                    FROM attendance_records
-                    WHERE alliance_id = ? AND session_name = ?
-                    ORDER BY points DESC, marked_date DESC
-                """, (alliance_id, session_name))
-                records = cursor.fetchall()
-
-            if not records:
-                await interaction.response.edit_message(
-                    content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
-                    embed=None,
-                    view=None
-                )
-                return
-
-            # Generate Matplotlib table image
-            headers = ["Player", "Status", "Last Event", "Points", "Date", "Marked By"]
-            table_data = []
-            
-            def fix_arabic(text):
-                if text and re.search(r'[\u0600-\u06FF]', text):
-                    try:
-                        reshaped = arabic_reshaper.reshape(text)
-                        return get_display(reshaped)
-                    except Exception:
-                        return text
-                return text
-                
-            def wrap_text(text, width=20):
-                if not text:
-                    return ""
-                lines = []
-                for part in str(text).split('\n'):
-                    while len(part) > width:
-                        lines.append(part[:width])
-                        part = part[width:]
-                    lines.append(part)
-                return '\n'.join(lines)
-
-            for row in records:
-                table_data.append([
-                    wrap_text(fix_arabic(row[0] or "Unknown")),
-                    wrap_text(fix_arabic(row[1].replace('_', ' ').title())),
-                    wrap_text(fix_arabic(row[2] if row[2] else "N/A"), width=40),
-                    wrap_text(f"{row[3]:,}" if row[3] else "0"),
-                    wrap_text(fix_arabic(row[4].split()[0] if row[4] else "N/A")),
-                    wrap_text(fix_arabic(row[5] or "Unknown"))
-                ])
-
-            fig, ax = plt.subplots(figsize=(13, min(1 + len(table_data) * 0.5, 20)))
-            ax.axis('off')
-            table = ax.table(
-                cellText=table_data,
-                colLabels=headers,
-                cellLoc='left',
-                loc='center',
-                colColours=['#1f77b4']*len(headers)
-            )
-            table.auto_set_font_size(False)
-            table.set_fontsize(12)
-            table.scale(1, 1.5)
-            
-            # Set larger width for the 'Last Event' column (index 2)
-            nrows = len(table_data) + 1
-            for row in range(nrows):
-                cell = table[(row, 2)]
-                cell.set_width(0.35)
-
-            # Set font for all cells
-            for key, cell in table.get_celld().items():
-                if hasattr(cell, 'set_fontproperties'):
-                    cell.set_fontproperties(font_prop)
-                elif hasattr(cell, 'set_font_properties'):
-                    cell.set_font_properties(font_prop)
-
-            plt.title(f'Attendance Report - {alliance_name} | Session: {session_name}', 
-                     fontsize=16, color='#1f77b4', pad=20, fontproperties=font_prop)
-
-            img_buffer = BytesIO()
-            plt.savefig(img_buffer, format='png', bbox_inches='tight')
-            plt.close(fig)
-            img_buffer.seek(0)
-
-            file = discord.File(img_buffer, filename="attendance_report.png")
-
-            embed = discord.Embed(
-                title=f"📊 Attendance Report - {alliance_name}",
-                description=f"**Session:** {session_name}\n**Total Players:** {len(records)}\n**Sorted by Points (Highest to Lowest)**",
-                color=discord.Color.blue()
-            )
-            embed.set_image(url="attachment://attendance_report.png")
-
-            # Add back button
-            back_view = discord.ui.View(timeout=1800)
-            back_button = discord.ui.Button(
-                label="⬅️ Back to Sessions",
-                style=discord.ButtonStyle.secondary
-            )
-            
-            async def back_callback(back_interaction: discord.Interaction):
-                await self.show_session_selection(back_interaction, alliance_id)
-            
-            back_button.callback = back_callback
-            back_view.add_item(back_button)
-
-            await interaction.response.edit_message(embed=embed, view=back_view, attachments=[file])
-
-        except Exception as e:
-            print(f"Matplotlib error: {e}")
-            # Fallback to text report
-            await self.show_text_report(interaction, alliance_id, session_name)
-
-    async def show_text_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        """Show attendance records for a specific session with emoji-based formatting (your original implementation)"""
-        try:
-            # Get alliance name
-            alliance_name = await self._get_alliance_name(alliance_id)
-
-            # Get attendance records - sorted by points descending
-            records = []
-            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                cursor = attendance_db.cursor()
-                cursor.execute("""
-                    SELECT nickname, attendance_status, last_event_attendance, points, marked_date, marked_by_username
-                    FROM attendance_records
-                    WHERE alliance_id = ? AND session_name = ?
-                    ORDER BY points DESC, marked_date DESC
-                """, (alliance_id, session_name))
-                records = cursor.fetchall()
-
-            if not records:
-                await interaction.response.edit_message(
-                    content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
-                    embed=None,
-                    view=None
-                )
-                return
-
-            # Count attendance types
-            present_count = sum(1 for r in records if r[1] == 'present')
-            absent_count = sum(1 for r in records if r[1] == 'absent')
-            not_signed_count = sum(1 for r in records if r[1] == 'not_signed')
-
-            # Get session ID if available
-            session_id = None
-            try:
-                with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                    cursor = attendance_db.cursor()
-                    cursor.execute("""
-                        SELECT session_id FROM attendance_sessions
-                        WHERE session_name = ? AND alliance_id = ?
-                        LIMIT 1
-                    """, (session_name, alliance_id))
-                    result = cursor.fetchone()
-                    if result:
-                        session_id = result[0]
-            except:
-                pass
-
-            # Build the report sections
-            report_sections = []
-            
-            # Summary section
-            report_sections.append("📊 **SUMMARY**")
-            report_sections.append(f"**Session:** {session_name}")
-            report_sections.append(f"**Alliance:** {alliance_name}")
-            report_sections.append(f"**Date:** {records[0][4].split()[0] if records else 'N/A'}")
-            report_sections.append(f"**Total Players:** {len(records)}")
-            report_sections.append(f"**Present:** {present_count} | **Absent:** {absent_count} | **Not Signed:** {not_signed_count}")
-            if session_id:
-                report_sections.append(f"**Session ID:** {session_id}")
-            report_sections.append("")
-            
-            # Player details section
-            report_sections.append("👥 **PLAYER DETAILS**")
-            report_sections.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            
-            # Sort: Present (by points desc) → Absent → Not Signed
-            def sort_key(record):
-                attendance_type = record[1]
-                points = record[3] or 0
-                
-                type_priority = {
-                    "present": 1,
-                    "absent": 2, 
-                    "not_signed": 3
-                }.get(attendance_type, 4)
-                
-                return (type_priority, -points)
-            
-            sorted_records = sorted(records, key=sort_key)
-            
-            for record in sorted_records:
-                nickname = record[0] or "Unknown"
-                attendance_status = record[1]
-                last_event_attendance = record[2] or "N/A"
-                points = record[3] or 0
-                
-                # Get status emoji
-                status_emoji = self._get_status_emoji(attendance_status)
-                
-                # Convert last attendance status to relevant emoji
-                last_event_display = self._format_last_attendance(last_event_attendance)
-                
-                points_display = f"{points:,}" if points > 0 else "0"
-                
-                player_line = f"{status_emoji} **{nickname}**"
-                if points > 0:
-                    player_line += f" | **{points_display}** points"
-                if last_event_attendance != "N/A":
-                    player_line += f" | Last: {last_event_display}"
-                
-                report_sections.append(player_line)
-
-            # Join all sections and create final embed
-            report_description = "\n".join(report_sections)
-            
-            embed = discord.Embed(
-                title=f"📊 Attendance Report - {alliance_name}",
-                description=report_description,
-                color=discord.Color.blue()
-            )
-            
-            if session_id:
-                embed.set_footer(text=f"Session ID: {session_id} | Sorted by Points (Highest to Lowest)")
-            else:
-                embed.set_footer(text="Sorted by Points (Highest to Lowest)")
-            
-            # Add back button
-            back_view = discord.ui.View(timeout=1800)
-            back_button = discord.ui.Button(
-                label="⬅️ Back to Sessions",
-                style=discord.ButtonStyle.secondary
-            )
-            
-            async def back_callback(back_interaction: discord.Interaction):
-                await self.show_session_selection(back_interaction, alliance_id)
-            
-            back_button.callback = back_callback
-            back_view.add_item(back_button)
-            
-            await interaction.response.edit_message(embed=embed, view=back_view)
-
-        except Exception as e:
-            print(f"Error showing text attendance report: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while generating attendance report.",
-                ephemeral=True
-            )
 
     async def show_attendance_menu(self, interaction: discord.Interaction):
         """Show the main attendance menu"""
@@ -1915,13 +1602,58 @@ class Attendance(commands.Cog):
             embed.set_image(url="attachment://attendance_completion_report.png")
             embed.set_footer(text=f"Marked by {interaction.user.name} | Saved to database")
             
+            # Create view with export button for ephemeral message
+            export_view = discord.ui.View(timeout=300)
+            export_button = discord.ui.Button(
+                label="Export",
+                emoji="📥",
+                style=discord.ButtonStyle.primary
+            )
+            
+            async def export_callback(export_interaction: discord.Interaction):
+                # Prepare records for export - need to fetch with FID
+                records = []
+                with sqlite3.connect('db/attendance.sqlite') as db:
+                    cursor = db.cursor()
+                    cursor.execute("""
+                        SELECT fid, nickname, attendance_status, points, 
+                               last_event_attendance, marked_date, marked_by_username
+                        FROM attendance_records
+                        WHERE session_name = ? AND marked_by = ?
+                        ORDER BY points DESC, marked_date DESC
+                    """, (session_name, interaction.user.id))
+                    records = cursor.fetchall()
+                
+                session_info = {
+                    'session_name': session_name,
+                    'alliance_name': alliance_name,
+                    'total_players': len(selected_players),
+                    'present_count': present_count,
+                    'absent_count': absent_count,
+                    'not_signed_count': not_signed_count
+                }
+                
+                report_cog = self.bot.get_cog("AttendanceReport")
+                if report_cog:
+                    from .attendance_report import ExportFormatSelectView
+                    export_select_view = ExportFormatSelectView(report_cog, records, session_info)
+                    await export_interaction.response.send_message(
+                        "Select export format:",
+                        view=export_select_view,
+                        ephemeral=True
+                    )
+            
+            export_button.callback = export_callback
+            export_view.add_item(export_button)
+            
             # Return to the attendance menu in the main message
             await self.show_attendance_menu_from_defer(interaction)
             
-            # Send the detailed report as an ephemeral follow-up
+            # Send the detailed report as an ephemeral follow-up with export button
             await interaction.followup.send(
                 embed=embed,
                 files=[file],
+                view=export_view,
                 ephemeral=True
             )
 
@@ -2003,12 +1735,57 @@ class Attendance(commands.Cog):
         
         report_embed.set_footer(text=f"Marked by {interaction.user.name} | Saved to database")
         
+        # Create view with export button for ephemeral message
+        export_view = discord.ui.View(timeout=300)
+        export_button = discord.ui.Button(
+            label="Export",
+            emoji="📥",
+            style=discord.ButtonStyle.primary
+        )
+        
+        async def export_callback(export_interaction: discord.Interaction):
+            # Prepare records for export - need to fetch with FID
+            records = []
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT fid, nickname, attendance_status, points, 
+                           last_event_attendance, marked_date, marked_by_username
+                    FROM attendance_records
+                    WHERE session_name = ? AND marked_by = ?
+                    ORDER BY points DESC, marked_date DESC
+                """, (session_name, interaction.user.id))
+                records = cursor.fetchall()
+            
+            session_info = {
+                'session_name': session_name,
+                'alliance_name': alliance_name,
+                'total_players': len(selected_players),
+                'present_count': present_count,
+                'absent_count': absent_count,
+                'not_signed_count': not_signed_count
+            }
+            
+            report_cog = self.bot.get_cog("AttendanceReport")
+            if report_cog:
+                from .attendance_report import ExportFormatSelectView
+                export_select_view = ExportFormatSelectView(report_cog, records, session_info)
+                await export_interaction.response.send_message(
+                    "Select export format:",
+                    view=export_select_view,
+                    ephemeral=True
+                )
+        
+        export_button.callback = export_callback
+        export_view.add_item(export_button)
+        
         # Return to the attendance menu in the main message
         await self.show_attendance_menu_from_defer(interaction)
         
-        # Send the detailed report as an ephemeral follow-up
+        # Send the detailed report as an ephemeral follow-up with export button
         await interaction.followup.send(
             embed=report_embed,
+            view=export_view,
             ephemeral=True
         )
 
@@ -2032,104 +1809,6 @@ class Attendance(commands.Cog):
         view = AttendanceView(self, interaction.user.id, interaction.guild_id)
         await view.initialize_permissions_and_alliances()
         await interaction.edit_original_response(embed=embed, view=view)
-
-    async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
-        """Show available attendance sessions for an alliance"""
-        try:
-            # Get alliance name
-            alliance_name = "Unknown Alliance"
-            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                cursor = alliance_db.cursor()
-                cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                alliance_result = cursor.fetchone()
-                if alliance_result:
-                    alliance_name = alliance_result[0]
-        
-            # Get distinct session names from attendance records
-            sessions = []
-            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                cursor = attendance_db.cursor()
-                cursor.execute("""
-                    SELECT DISTINCT session_name 
-                    FROM attendance_records
-                    WHERE alliance_id = ? 
-                    AND session_name IS NOT NULL
-                    AND TRIM(session_name) <> ''
-                    ORDER BY marked_date DESC
-                """, (alliance_id,))
-                sessions = [row[0] for row in cursor.fetchall() if row[0]]
-
-            if not sessions:
-                # Create embed for no sessions found
-                embed = discord.Embed(
-                    title=f"📋 Attendance Sessions - {alliance_name}",
-                    description=f"❌ **No attendance sessions found for {alliance_name}.**\n\nTo create attendance records, use the 'Mark Attendance' option from the main menu.",
-                    color=discord.Color.orange()
-                )
-                
-                # Add back button
-                back_view = discord.ui.View(timeout=1800)
-                back_button = discord.ui.Button(
-                    label="⬅️ Back to Alliance Selection",
-                    style=discord.ButtonStyle.secondary
-                )
-                
-                async def back_callback(back_interaction: discord.Interaction):
-                    await self.show_attendance_menu(back_interaction)
-                
-                back_button.callback = back_callback
-                back_view.add_item(back_button)
-                
-                await interaction.response.edit_message(
-                    content=None,
-                    embed=embed,
-                    view=back_view,
-                    attachments=[]
-                )
-                return
-        
-            # Create session selection view
-            view = SessionSelectView(sessions, alliance_id, self)
-            
-            embed = discord.Embed(
-                title=f"📋 Attendance Sessions - {alliance_name}",
-                description="Please select a session to view attendance records:",
-                color=discord.Color.blue()
-            )
-            
-            await interaction.response.edit_message(embed=embed, view=view, attachments=[])
-    
-        except Exception as e:
-            print(f"Error showing session selection: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while loading sessions.",
-                ephemeral=True
-            )
-
-    async def show_attendance_menu(self, interaction: discord.Interaction):
-        """Show the main attendance menu"""
-        embed = discord.Embed(
-            title="📋 Attendance System",
-            description=(
-                "Please select an operation:\n\n"
-                "**Available Operations**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "📋 **Mark Attendance**\n"
-                "└ Mark attendance for alliance members\n\n"
-                "👀 **View Attendance**\n"
-                "└ View attendance records and reports\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.blue()
-        )
-        
-        view = AttendanceView(self, interaction.user.id, interaction.guild_id)
-        await view.initialize_permissions_and_alliances()
-        
-        try:
-            await interaction.response.edit_message(embed=embed, view=view, attachments=[])
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view, attachments=[])
 
 async def setup(bot):
     try:
