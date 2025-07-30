@@ -96,6 +96,7 @@ class SessionSelectView(discord.ui.View):
             await attendance_cog.show_attendance_menu(interaction)
  
     async def on_select(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         session_name = interaction.data['values'][0]
         await self.cog.show_attendance_report(interaction, self.alliance_id, session_name)
 
@@ -419,9 +420,10 @@ class AttendanceReport(commands.Cog):
                 
         except Exception as e:
             print(f"Error showing attendance report: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while generating attendance report.",
-                ephemeral=True
+            await interaction.edit_original_response(
+                content="❌ An error occurred while generating attendance report.",
+                embed=None,
+                view=None
             )
 
     async def show_matplotlib_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
@@ -575,7 +577,7 @@ class AttendanceReport(commands.Cog):
             export_button.callback = export_callback
             view.add_item(export_button)
 
-            await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
+            await interaction.edit_original_response(embed=embed, view=view, attachments=[file])
 
         except Exception as e:
             print(f"Matplotlib error: {e}")
@@ -601,7 +603,7 @@ class AttendanceReport(commands.Cog):
                 records = cursor.fetchall()
 
             if not records:
-                await interaction.response.edit_message(
+                await interaction.edit_original_response(
                     content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
                     embed=None,
                     view=None
@@ -740,13 +742,14 @@ class AttendanceReport(commands.Cog):
             export_button.callback = export_callback
             view.add_item(export_button)
             
-            await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.edit_original_response(embed=embed, view=view)
 
         except Exception as e:
             print(f"Error showing text attendance report: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while generating attendance report.",
-                ephemeral=True
+            await interaction.edit_original_response(
+                content="❌ An error occurred while generating attendance report.",
+                embed=None,
+                view=None
             )
 
     async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
@@ -798,12 +801,20 @@ class AttendanceReport(commands.Cog):
                 back_button.callback = back_callback
                 back_view.add_item(back_button)
                 
-                await interaction.response.edit_message(
-                    content=None,
-                    embed=embed,
-                    view=back_view,
-                    attachments=[]
-                )
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(
+                        content=None,
+                        embed=embed,
+                        view=back_view,
+                        attachments=[]
+                    )
+                else:
+                    await interaction.response.edit_message(
+                        content=None,
+                        embed=embed,
+                        view=back_view,
+                        attachments=[]
+                    )
                 return
         
             # Create session selection view
@@ -815,14 +826,24 @@ class AttendanceReport(commands.Cog):
                 color=discord.Color.blue()
             )
             
-            await interaction.response.edit_message(embed=embed, view=view, attachments=[])
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view, attachments=[])
+            else:
+                await interaction.response.edit_message(embed=embed, view=view, attachments=[])
     
         except Exception as e:
             print(f"Error showing session selection: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while loading sessions.",
-                ephemeral=True
-            )
+            if interaction.response.is_done():
+                await interaction.edit_original_response(
+                    content="❌ An error occurred while loading sessions.",
+                    embed=None,
+                    view=None
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ An error occurred while loading sessions.",
+                    ephemeral=True
+                )
 
 async def setup(bot):
     try:

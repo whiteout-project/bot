@@ -459,13 +459,14 @@ class AllianceSelectView(discord.ui.View):
         async def select_callback(interaction: discord.Interaction):
             self.current_select = select
             alliance_id = int(select.values[0])
-            
+
             if self.is_marking:
                 # For marking: ask for session name
                 modal = SessionNameModal(alliance_id, self.cog)
                 await interaction.response.send_modal(modal)
             else:
                 # For viewing: show session selection
+                await interaction.response.defer()
                 report_cog = self.cog.bot.get_cog("AttendanceReport")
                 if report_cog:
                     await report_cog.show_session_selection(interaction, alliance_id)
