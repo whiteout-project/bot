@@ -7,11 +7,22 @@ import os
 import re
 from io import BytesIO
 
-try: # Matplotlib imports (optional - fallback to text if not available)
+try:
     import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
     import arabic_reshaper
     from bidi.algorithm import get_display
+    
+    # Load Unifont if available
+    font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts")
+    unifont_path = os.path.join(font_dir, "unifont-16.0.04.otf")
+    if os.path.exists(unifont_path):
+        fm.fontManager.addfont(unifont_path)
+    
+    # Simple font configuration
+    plt.rcParams['font.sans-serif'] = ['Unifont', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
@@ -30,21 +41,6 @@ FC_LEVEL_MAPPING = {
     75: "FC 9", 76: "FC 9-1", 77: "FC 9-2", 78: "FC 9-3", 79: "FC 9-4",
     80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
 }
-
-def get_best_unicode_font():
-    """Get the best available font for Unicode/Arabic text"""
-    if not MATPLOTLIB_AVAILABLE:
-        return None
-        
-    font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts")
-    roboto_arabic_path = os.path.join(font_dir, "RobotoArabic-Regular.ttf")
-    roboto_path = os.path.join(font_dir, "Roboto-Regular.ttf")
-    
-    if os.path.exists(roboto_arabic_path):
-        return fm.FontProperties(fname=roboto_arabic_path)
-    if os.path.exists(roboto_path):
-        return fm.FontProperties(fname=roboto_path)
-    return fm.FontProperties(family='DejaVu Sans')
 
 def parse_points(points_str):
     try:
@@ -688,8 +684,6 @@ class PlayerSelectView(discord.ui.View):
             if not self.selected_players:
                 await self.show_text_summary(interaction)
                 return
-                
-            font_prop = get_best_unicode_font()
             
             # Sort by points (highest to lowest)
             sorted_players = sorted(
@@ -749,15 +743,8 @@ class PlayerSelectView(discord.ui.View):
             table.set_fontsize(11)
             table.scale(1, 1.3)
 
-            # Set font for all cells
-            for key, cell in table.get_celld().items():
-                if hasattr(cell, 'set_fontproperties'):
-                    cell.set_fontproperties(font_prop)
-                elif hasattr(cell, 'set_font_properties'):
-                    cell.set_font_properties(font_prop)
-
             plt.title(f'Attendance Summary - {self.alliance_name} | Session: {self.session_name}', 
-                    fontsize=14, color='#28a745', pad=15, fontproperties=font_prop)
+                    fontsize=14, color='#28a745', pad=15)
 
             img_buffer = BytesIO()
             plt.savefig(img_buffer, format='png', bbox_inches='tight')
@@ -1484,8 +1471,6 @@ class Attendance(commands.Cog):
     async def show_matplotlib_completion_report(self, interaction, selected_players, alliance_name, session_name, session_id, present_count, absent_count, not_signed_count):
         """Show completion report using matplotlib"""
         try:
-            font_prop = get_best_unicode_font()
-            
             # Sort: Present (by points desc) → Absent → Not Signed
             def sort_key(item):
                 fid, data = item
@@ -1570,15 +1555,8 @@ class Attendance(commands.Cog):
                 cell = table[(row, 3)]
                 cell.set_width(0.3)
 
-            # Set font for all cells
-            for key, cell in table.get_celld().items():
-                if hasattr(cell, 'set_fontproperties'):
-                    cell.set_fontproperties(font_prop)
-                elif hasattr(cell, 'set_font_properties'):
-                    cell.set_font_properties(font_prop)
-
             plt.title(f'Attendance Report Completed - {alliance_name} | Session: {session_name}', 
-                    fontsize=16, color='#28a745', pad=20, fontproperties=font_prop)
+                    fontsize=16, color='#28a745', pad=20)
 
             img_buffer = BytesIO()
             plt.savefig(img_buffer, format='png', bbox_inches='tight')

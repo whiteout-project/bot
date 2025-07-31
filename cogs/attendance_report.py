@@ -2,21 +2,32 @@ import discord
 from discord.ext import commands
 import sqlite3
 from datetime import datetime
-import os
 import re
 import csv
 import io
 from io import BytesIO
+import os
 
-try: # Matplotlib imports (optional - fallback to text if not available)
+try:
     import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
     import arabic_reshaper
     from bidi.algorithm import get_display
+    
+    # Load Unifont if available
+    font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts")
+    unifont_path = os.path.join(font_dir, "unifont-16.0.04.otf")
+    if os.path.exists(unifont_path):
+        fm.fontManager.addfont(unifont_path)
+    
+    # Simple font configuration
+    plt.rcParams['font.sans-serif'] = ['Unifont', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
+    
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
-    print("Matplotlib not available - using text reports only")
+    print("Matplotlib not available - using text attendance reports only")
 
 FC_LEVEL_MAPPING = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -31,21 +42,6 @@ FC_LEVEL_MAPPING = {
     75: "FC 9", 76: "FC 9-1", 77: "FC 9-2", 78: "FC 9-3", 79: "FC 9-4",
     80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
 }
-
-def get_best_unicode_font():
-    """Get the best available font for Unicode/Arabic text"""
-    if not MATPLOTLIB_AVAILABLE:
-        return None
-        
-    font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts")
-    roboto_arabic_path = os.path.join(font_dir, "RobotoArabic-Regular.ttf")
-    roboto_path = os.path.join(font_dir, "Roboto-Regular.ttf")
-    
-    if os.path.exists(roboto_arabic_path):
-        return fm.FontProperties(fname=roboto_arabic_path)
-    if os.path.exists(roboto_path):
-        return fm.FontProperties(fname=roboto_path)
-    return fm.FontProperties(family='DejaVu Sans')
 
 class ExportFormatSelectView(discord.ui.View):
     def __init__(self, cog, records, session_info):
@@ -427,8 +423,6 @@ class AttendanceReport(commands.Cog):
     async def show_matplotlib_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
         """Show attendance records as a Matplotlib table image"""
         try:
-            font_prop = get_best_unicode_font()
-            
             # Get alliance name
             alliance_name = await self._get_alliance_name(alliance_id)
 
@@ -510,15 +504,8 @@ class AttendanceReport(commands.Cog):
                 cell = table[(row, 2)]
                 cell.set_width(0.35)
 
-            # Set font for all cells
-            for key, cell in table.get_celld().items():
-                if hasattr(cell, 'set_fontproperties'):
-                    cell.set_fontproperties(font_prop)
-                elif hasattr(cell, 'set_font_properties'):
-                    cell.set_font_properties(font_prop)
-
             plt.title(f'Attendance Report - {alliance_name} | Session: {session_name}', 
-                     fontsize=16, color='#1f77b4', pad=20, fontproperties=font_prop)
+                     fontsize=16, color='#1f77b4', pad=20)
 
             img_buffer = BytesIO()
             plt.savefig(img_buffer, format='png', bbox_inches='tight')
