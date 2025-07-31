@@ -5,5 +5,4 @@ log
 bot_token.txt
 version
 .python-version
-*venv
 .vscode
