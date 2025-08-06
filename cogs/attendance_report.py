@@ -7,6 +7,7 @@ import csv
 import io
 from io import BytesIO
 import os
+from .attendance import SessionSelectView
 
 try:
     import matplotlib.pyplot as plt
@@ -70,87 +71,6 @@ class ExportFormatSelectView(discord.ui.View):
     )
     async def format_select(self, interaction: discord.Interaction, select: discord.ui.Select):
         await self.cog.process_export(interaction, select.values[0], self.records, self.session_info)
-
-class SessionSelectView(discord.ui.View):
-    def __init__(self, sessions, alliance_id, cog, is_marking=False):
-        super().__init__(timeout=7200)
-        self.sessions = sessions
-        self.alliance_id = alliance_id
-        self.cog = cog
-        self.is_marking = is_marking
- 
-        # Add dropdown for session selection only if there are sessions
-        if sessions:
-            # Handle both dict format (from marking) and tuple format (from viewing)
-            options = []
-            for idx, session in enumerate(sessions[:25]):  # Discord limit
-                if isinstance(session, dict):
-                    # Use index as unique identifier for viewing flow
-                    if self.is_marking and session.get('session_id'):
-                        # For marking flow, use session_id
-                        unique_value = str(session['session_id'])
-                    else:
-                        # For viewing flow, use index
-                        unique_value = str(idx)
-                    
-                    # Add date to label if sessions have same names
-                    session_label = session['name'][:80]
-                    if session.get('date') and session.get('date') != 'Unknown':
-                        session_label += f" - {session.get('date')}"
-                    
-                    options.append(discord.SelectOption(
-                        label=session_label[:100],
-                        value=unique_value,
-                        description=f"{session.get('marked_count', 0)} players marked",
-                        emoji="📊"
-                    ))
-                else:
-                    # Fallback for safety
-                    options.append(discord.SelectOption(
-                        label=str(session)[:100],
-                        value=str(idx),
-                        description=f"Session: {session}",
-                        emoji="📊"
-                    ))
-            
-            select = discord.ui.Select(
-                placeholder="📋 Select a session...",
-                options=options
-            )
-            select.callback = self.on_select
-            self.add_item(select)
-
-    @discord.ui.button(
-        label="⬅️ Back",
-        style=discord.ButtonStyle.secondary,
-        row=1
-    )
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        attendance_cog = self.cog.bot.get_cog("Attendance")
-        if attendance_cog:
-            await attendance_cog.show_attendance_menu(interaction)
- 
-    async def on_select(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        selected_value = interaction.data['values'][0]
-        
-        # Get the selected session
-        selected_session = None
-        if selected_value.isdigit():
-            value_int = int(selected_value)
-            if value_int < len(self.sessions):
-                selected_session = self.sessions[value_int]
-        
-        if selected_session and isinstance(selected_session, dict):
-            # Pass both session_id and session_name to the report
-            await self.cog.show_attendance_report(
-                interaction, 
-                self.alliance_id, 
-                selected_session['name'],
-                session_id=selected_session['session_id']
-            )
-        else: # Fallback - old behavior
-            await self.cog.show_attendance_report(interaction, self.alliance_id, selected_value)
 
 class AttendanceReport(commands.Cog):
     def __init__(self, bot):
@@ -1200,7 +1120,7 @@ class AttendanceReport(commands.Cog):
                 return
         
             # Create session selection view
-            view = SessionSelectView(sessions, alliance_id, self)
+            view = SessionSelectView(sessions, alliance_id, self, is_viewing=True)
             
             embed = discord.Embed(
                 title=f"📋 Attendance Sessions - {alliance_name}",

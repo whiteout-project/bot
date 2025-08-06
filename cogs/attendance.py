@@ -1847,7 +1847,7 @@ class Attendance(commands.Cog):
                 color=discord.Color.blue()
             )
 
-            view = SessionSelectViewForMarking(sessions, alliance_id, self)
+            view = SessionSelectView(sessions, alliance_id, self, is_viewing=False)
             await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
@@ -2095,13 +2095,14 @@ class Attendance(commands.Cog):
                 await interaction.response.edit_message(embed=error_embed, view=None)
 
 
-class SessionSelectViewForMarking(discord.ui.View):
-    """Session select view with marking-specific features"""
-    def __init__(self, sessions, alliance_id, cog):
+class SessionSelectView(discord.ui.View):
+    """Unified session select view for both marking and viewing"""
+    def __init__(self, sessions, alliance_id, cog, is_viewing=False):
         super().__init__(timeout=7200)
         self.sessions = sessions
         self.alliance_id = alliance_id
         self.cog = cog
+        self.is_viewing = is_viewing
  
         # Add dropdown for session selection only if there are sessions
         if sessions:
@@ -2116,30 +2117,46 @@ class SessionSelectViewForMarking(discord.ui.View):
                 ))
             
             select = discord.ui.Select(
-                placeholder="📋 Select a session or create new...",
+                placeholder="📋 Select a session...",
                 options=options
             )
             select.callback = lambda interaction: self.on_select(interaction)
             self.add_item(select)
-
-    @discord.ui.button(
-        label="New Session",
-        style=discord.ButtonStyle.primary,
-        emoji="➕",
-        row=1
-    )
-    async def new_session_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        
+        # New Session button (only for marking mode)
+        if not self.is_viewing:
+            new_session_button = discord.ui.Button(
+                label="New Session",
+                style=discord.ButtonStyle.primary,
+                emoji="➕",
+                row=1
+            )
+            new_session_button.callback = self.new_session_callback
+            self.add_item(new_session_button)
+        
+        # Back button (always shown)
+        back_button = discord.ui.Button(
+            label="⬅️ Back",
+            style=discord.ButtonStyle.secondary,
+            row=1
+        )
+        back_button.callback = self.back_button_callback
+        self.add_item(back_button)
+    
+    async def new_session_callback(self, interaction: discord.Interaction):
         """Create a new session"""
         await interaction.response.send_modal(SessionNameModal(self.cog, self.alliance_id))
 
-    @discord.ui.button(
-        label="⬅️ Back",
-        style=discord.ButtonStyle.secondary,
-        row=1
-    )
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Go back to alliance selection"""
-        await self.cog.show_alliance_selection_for_marking(interaction)
+    async def back_button_callback(self, interaction: discord.Interaction):
+        """Go back to appropriate menu"""
+        if self.is_viewing:
+            # For viewing mode, go back to attendance menu
+            attendance_cog = self.cog.bot.get_cog("Attendance")
+            if attendance_cog:
+                await attendance_cog.show_attendance_menu(interaction)
+        else:
+            # For marking mode, go back to alliance selection
+            await self.cog.show_alliance_selection_for_marking(interaction)
  
     async def on_select(self, interaction: discord.Interaction):
         """Handle session selection"""
@@ -2155,14 +2172,26 @@ class SessionSelectViewForMarking(discord.ui.View):
                     break
                     
             if selected_session:
-                await self.cog.show_attendance_marking(
-                    interaction, 
-                    self.alliance_id, 
-                    await self.cog._get_alliance_name(self.alliance_id),
-                    selected_session['name'], 
-                    session_id=session_id,
-                    is_edit=True
-                )
+                if self.is_viewing:
+                    # For viewing mode, show the report
+                    report_cog = self.cog.bot.get_cog("AttendanceReport")
+                    if report_cog:
+                        await report_cog.show_attendance_report(
+                            interaction,
+                            self.alliance_id,
+                            selected_session['name'],
+                            session_id=session_id
+                        )
+                else:
+                    # For marking mode, show attendance marking
+                    await self.cog.show_attendance_marking(
+                        interaction, 
+                        self.alliance_id, 
+                        await self.cog._get_alliance_name(self.alliance_id),
+                        selected_session['name'], 
+                        session_id=session_id,
+                        is_edit=True
+                    )
             else:
                 await interaction.edit_original_response(
                     content="❌ Session not found.",
