@@ -6,6 +6,7 @@ from datetime import datetime
 import os
 import re
 from io import BytesIO
+import uuid
 
 try:
     import matplotlib.pyplot as plt
@@ -26,7 +27,6 @@ try:
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
-    print("Matplotlib not available - using text reports only")
 
 FC_LEVEL_MAPPING = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -40,6 +40,18 @@ FC_LEVEL_MAPPING = {
     70: "FC 8", 71: "FC 8-1", 72: "FC 8-2", 73: "FC 8-3", 74: "FC 8-4",
     75: "FC 9", 76: "FC 9-1", 77: "FC 9-2", 78: "FC 9-3", 79: "FC 9-4",
     80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
+}
+
+EVENT_TYPES = ["Foundry", "Canyon Clash", "Crazy Joe", "Bear Trap", "Castle Battle", "Frostdragon Tyrant", "Other"]
+
+EVENT_TYPE_ICONS = {
+    "Foundry": "🏭",
+    "Canyon Clash": "⚔️",
+    "Crazy Joe": "🤪",
+    "Bear Trap": "🐻",
+    "Castle Battle": "🏰",
+    "Frostdragon Tyrant": "🐉",
+    "Other": "📋"
 }
 
 def parse_points(points_str):
@@ -59,7 +71,7 @@ def parse_points(points_str):
 
 class AttendanceSettingsView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=7200)
         self.cog = cog
 
     @discord.ui.button(
@@ -82,7 +94,7 @@ class AttendanceSettingsView(discord.ui.View):
                 description=(
                     f"**Current Setting:** {current_setting.title()}\n\n"
                     "**Available Options:**\n"
-                    "• **Text** - Traditional text-based reports (faster, always available)\n"
+                    "• **Text** - Text-based reports (faster, no requirements)\n"
                     "• **Matplotlib** - Visual table reports (requires matplotlib)\n\n"
                     f"**Matplotlib Status:** {'✅ Available' if MATPLOTLIB_AVAILABLE else '❌ Not Available'}\n\n"
                     "Select your preferred report type below:"
@@ -93,7 +105,6 @@ class AttendanceSettingsView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=select_view)
             
         except Exception as e:
-            print(f"Error in report type settings: {e}")
             error_embed = self.cog._create_error_embed(
                 "❌ Error", 
                 "An error occurred while loading settings."
@@ -110,7 +121,7 @@ class AttendanceSettingsView(discord.ui.View):
 
 class ReportTypeSelectView(discord.ui.View):
     def __init__(self, cog, current_setting):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.current_setting = current_setting
 
@@ -177,7 +188,6 @@ class ReportTypeSelectView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=back_view)
             
         except Exception as e:
-            print(f"Error setting report preference: {e}")
             error_embed = self.cog._create_error_embed(
                 "❌ Error", 
                 "Failed to update settings."
@@ -186,7 +196,7 @@ class ReportTypeSelectView(discord.ui.View):
 
 class AttendanceView(discord.ui.View):
     def __init__(self, cog, user_id, guild_id):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
@@ -257,41 +267,7 @@ class AttendanceView(discord.ui.View):
         custom_id="mark_attendance"
     )
     async def mark_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            result = await self._handle_permission_check(interaction)
-            if not result:
-                return
-                
-            alliances, is_initial = result
-            
-            # Create alliance selection embed
-            select_embed = discord.Embed(
-                title="📋 Attendance - Alliance Selection",
-                description=(
-                    "Please select an alliance to mark attendance:\n\n"
-                    "**Permission Details**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                    f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
-                    f"📊 **Available Alliances:** `{len(alliances)}`\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
-                ),
-                color=discord.Color.blue()
-            )
-
-            # Get alliance member counts with optimized query
-            alliances_with_counts = self._get_alliances_with_counts(alliances)
-            view = AllianceSelectView(alliances_with_counts, self.cog, is_marking=True)
-            
-            await interaction.response.edit_message(embed=select_embed, view=view)
-
-        except Exception as e:
-            print(f"Error in mark_attendance_button: {e}")
-            error_embed = self.cog._create_error_embed(
-                "❌ Error", 
-                "An error occurred while processing your request."
-            )
-            await interaction.response.edit_message(embed=error_embed, view=None)
+        await self.cog.show_alliance_selection_for_marking(interaction)
 
     @discord.ui.button(
         label="View Attendance",
@@ -320,50 +296,6 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=select_embed, view=view)
 
         except Exception as e:
-            print(f"Error in view_attendance_button: {e}")
-            error_embed = self.cog._create_error_embed(
-                "❌ Error", 
-                "An error occurred while processing your request."
-            )
-            await interaction.response.edit_message(embed=error_embed, view=None)
-
-    @discord.ui.button(
-        label="Edit Session",
-        emoji="✏️",
-        style=discord.ButtonStyle.primary,
-        custom_id="edit_session"
-    )
-    async def edit_session_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            result = await self._handle_permission_check(interaction)
-            if not result:
-                return
-
-            alliances, is_initial = result
-
-            # Create alliance selection embed for editing
-            select_embed = discord.Embed(
-                title="✏️ Edit Attendance Session - Alliance Selection",
-                description=(
-                    "Please select an alliance to view and edit attendance sessions:\n"
-                    "**Permission Details**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                    f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
-                    f"📊 **Available Alliances:** `{len(alliances)}`\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
-                ),
-                color=discord.Color.blue()
-            )
-
-            # Get alliance member counts with optimized query
-            alliances_with_counts = self._get_alliances_with_counts(alliances)
-            view = AllianceSelectView(alliances_with_counts, self.cog, is_marking=False, is_editing=True)
-
-            await interaction.response.edit_message(embed=select_embed, view=view)
-
-        except Exception as e:
-            print(f"Error in edit_session_button: {e}")
             error_embed = self.cog._create_error_embed(
                 "❌ Error", 
                 "An error occurred while processing your request."
@@ -407,7 +339,6 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=settings_view)
 
         except Exception as e:
-            print(f"Error in settings button: {e}")
             error_embed = self.cog._create_error_embed(
                 "❌ Error", 
                 "An error occurred while loading settings."
@@ -425,12 +356,63 @@ class AttendanceView(discord.ui.View):
             if other_features_cog:
                 await other_features_cog.show_other_features_menu(interaction)
         except Exception as e:
-            print(f"Error returning to other features: {e}")
             error_embed = self.cog._create_error_embed(
                 "❌ Error",
                 "An error occurred while returning to other features."
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
+
+class EventTypeSelectView(discord.ui.View):
+    def __init__(self, session_data, cog, alliance_id, alliance_name):
+        super().__init__(timeout=1800)
+        self.session_data = session_data
+        self.cog = cog
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        
+        # Add the dropdown
+        self.add_item(self.create_event_type_select())
+        
+        # Add back button
+        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
+        back_button.callback = self.back_to_sessions
+        self.add_item(back_button)
+    
+    def create_event_type_select(self):
+        select = discord.ui.Select(
+            placeholder="🎯 Select Event Type...",
+            options=[
+                discord.SelectOption(label="Foundry", value="Foundry", emoji="🏭"),
+                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji="⚔️"),
+                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji="🤪"),
+                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji="🐻"),
+                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji="🏰"),
+                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji="🐉"),
+                discord.SelectOption(label="Other", value="Other", emoji="📋", default=True)
+            ]
+        )
+        
+        async def select_callback(interaction: discord.Interaction):
+            event_type = select.values[0]
+            self.session_data['event_type'] = event_type
+            
+            # Proceed to player marking
+            await self.cog.show_attendance_marking(
+                interaction,
+                self.alliance_id,
+                self.alliance_name,
+                self.session_data['name'],
+                session_id=None,
+                is_edit=False,
+                event_type=event_type,
+                event_date=self.session_data.get('event_date')
+            )
+        
+        select.callback = select_callback
+        return select
+    
+    async def back_to_sessions(self, interaction: discord.Interaction):
+        await self.cog.show_session_selection_for_marking(interaction, self.alliance_id)
 
 class SessionNameModal(discord.ui.Modal, title="Attendance Session"):
     def __init__(self, alliance_id, cog):
@@ -445,6 +427,14 @@ class SessionNameModal(discord.ui.Modal, title="Attendance Session"):
             max_length=50
         )
         self.add_item(self.session_name)
+        
+        self.event_date = discord.ui.TextInput(
+            label="Event Date/Time (UTC)",
+            placeholder="YYYY-MM-DD HH:MM (Leave empty for current time)",
+            required=False,
+            max_length=16
+        )
+        self.add_item(self.event_date)
 
     async def on_submit(self, interaction: discord.Interaction):
         session_name = self.session_name.value.strip()
@@ -456,23 +446,48 @@ class SessionNameModal(discord.ui.Modal, title="Attendance Session"):
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
             return
+        
+        # Parse event date if provided
+        event_date = None
+        if self.event_date.value.strip():
+            try:
+                event_date = datetime.strptime(self.event_date.value.strip(), "%Y-%m-%d %H:%M")
+            except ValueError:
+                error_embed = discord.Embed(
+                    title="❌ Invalid Date Format",
+                    description="Please use the format: YYYY-MM-DD HH:MM (e.g., 2024-03-15 14:30)",
+                    color=discord.Color.red()
+                )
+                await interaction.response.edit_message(embed=error_embed, view=None)
+                return
             
-        await self.cog.show_attendance_marking(
-            interaction, 
-            self.alliance_id,
-            session_name
+        # Get alliance name
+        alliance_name = await self.cog._get_alliance_name(self.alliance_id)
+        
+        # Show event type selection
+        session_data = {
+            'name': session_name,
+            'event_date': event_date
+        }
+        
+        event_view = EventTypeSelectView(session_data, self.cog, self.alliance_id, alliance_name)
+        embed = discord.Embed(
+            title="🎯 Select Event Type",
+            description=f"**Session:** {session_name}\n**Alliance:** {alliance_name}\n\nPlease select the event type for this attendance session:",
+            color=discord.Color.blue()
         )
+        
+        await interaction.response.edit_message(embed=embed, view=event_view)
 
 class AllianceSelectView(discord.ui.View):
-    def __init__(self, alliances_with_counts, cog, page=0, is_marking=False, is_editing=False):
-        super().__init__(timeout=1800)
+    def __init__(self, alliances_with_counts, cog, page=0, is_marking=False):
+        super().__init__(timeout=7200)
         self.alliances = alliances_with_counts
         self.cog = cog
         self.page = page
         self.max_page = (len(alliances_with_counts) - 1) // 25 if alliances_with_counts else 0
         self.current_select = None
         self.is_marking = is_marking
-        self.is_editing = is_editing
         self.update_select_menu()
 
     def update_select_menu(self):
@@ -493,7 +508,8 @@ class AllianceSelectView(discord.ui.View):
                     description=f"ID: {alliance_id} | Members: {count}",
                     emoji="🏰"
                 ) for alliance_id, name, count in current_alliances
-            ]
+            ],
+            row=0  # Explicitly set row 0 for dropdown
         )
         
         async def select_callback(interaction: discord.Interaction):
@@ -501,12 +517,8 @@ class AllianceSelectView(discord.ui.View):
             alliance_id = int(select.values[0])
 
             if self.is_marking:
-                # For marking: ask for session name
-                modal = SessionNameModal(alliance_id, self.cog)
-                await interaction.response.send_modal(modal)
-            elif self.is_editing:
-                # For editing: show session selection with edit option - without defer
-                await self.cog.show_edit_session_selection(interaction, alliance_id)
+                # For marking: show session selection
+                await self.cog.show_session_selection_for_marking(interaction, alliance_id)
             else:
                 # For viewing: show session selection without defer
                 report_cog = self.cog.bot.get_cog("AttendanceReport")
@@ -526,13 +538,13 @@ class AllianceSelectView(discord.ui.View):
         if next_button:
             next_button.disabled = self.page == self.max_page
 
-    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
@@ -541,23 +553,313 @@ class AllianceSelectView(discord.ui.View):
     @discord.ui.button(
         label="⬅️ Back",
         style=discord.ButtonStyle.secondary,
-        row=0
+        row=1
     )
     async def back_to_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_attendance_menu(interaction)
 
-class PlayerSelectView(discord.ui.View):
-    def __init__(self, players, alliance_name, session_name, cog, page=0):
+class EditEventDetailsView(discord.ui.View):
+    def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True):
         super().__init__(timeout=1800)
+        self.session_id = session_id
+        self.session_name = session_name
+        self.current_event_type = current_event_type
+        self.current_event_date = current_event_date
+        self.parent_view = parent_view
+        self.selected_event_type = current_event_type
+        self.new_event_date = None
+        self.is_edit = is_edit
+        
+        # Create event type dropdown
+        self.event_type_select = discord.ui.Select(
+            placeholder=f"Event Type: {current_event_type or 'Select...'}",
+            options=[
+                discord.SelectOption(label="Foundry", value="Foundry", emoji="🏭", default=(current_event_type == "Foundry")),
+                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji="⚔️", default=(current_event_type == "Canyon Clash")),
+                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji="🤪", default=(current_event_type == "Crazy Joe")),
+                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji="🐻", default=(current_event_type == "Bear Trap")),
+                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji="🏰", default=(current_event_type == "Castle Battle")),
+                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji="🐉", default=(current_event_type == "Frostdragon Tyrant")),
+                discord.SelectOption(label="Other", value="Other", emoji="📋", default=(current_event_type == "Other" or not current_event_type))
+            ],
+            row=1
+        )
+        self.event_type_select.callback = self.on_event_type_select
+        self.add_item(self.event_type_select)
+        
+        # Remove delete button if not in edit mode
+        if not self.is_edit:
+            for item in self.children:
+                if hasattr(item, 'label') and item.label == "🗑️ Delete Event":
+                    item.disabled = True
+        
+    async def on_event_type_select(self, interaction: discord.Interaction):
+        self.selected_event_type = self.event_type_select.values[0]
+        await interaction.response.defer()
+        
+    @discord.ui.button(label="✏️ Rename Session", style=discord.ButtonStyle.secondary, row=0)
+    async def rename_session_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        rename_modal = RenameSessionModal(self.session_id, self.session_name, self)
+        await interaction.response.send_modal(rename_modal)
+    
+    @discord.ui.button(label="📅 Edit Date", style=discord.ButtonStyle.secondary, row=0)
+    async def edit_date_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        date_modal = EventDateModal(self.current_event_date, self)
+        await interaction.response.send_modal(date_modal)
+
+    @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.primary, row=2)
+    async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Use the selected event type
+            event_type = self.selected_event_type
+            
+            # Use new date if set, otherwise keep current
+            event_date = self.new_event_date if self.new_event_date else self.current_event_date
+            if isinstance(event_date, str):
+                try:
+                    event_date = datetime.fromisoformat(event_date.replace('Z', '+00:00'))
+                except:
+                    event_date = datetime.utcnow()
+            elif event_date is None:
+                # If no date is set, use current datetime
+                event_date = datetime.utcnow()
+            
+            # Update the database
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    UPDATE attendance_records
+                    SET event_type = ?, event_date = ?
+                    WHERE session_id = ?
+                """, (event_type, event_date.isoformat(), self.session_id))
+                db.commit()
+            
+            # Update parent view and refresh
+            self.parent_view.event_type = event_type
+            self.parent_view.event_date = event_date
+            await self.parent_view.update_main_embed(interaction)
+            
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error updating event details: {str(e)}",
+                ephemeral=True
+            )
+            
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=2)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.parent_view.update_main_embed(interaction)
+    
+    @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=3)
+    async def delete_event_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only show for edit mode
+        if not self.is_edit:
+            button.disabled = True
+            return
+            
+        # Confirm deletion
+        confirm_embed = discord.Embed(
+            title="⚠️ Confirm Deletion",
+            description=f"Are you sure you want to delete the session **{self.session_name}**?\n\nThis action cannot be undone.",
+            color=discord.Color.orange()
+        )
+        
+        # Get alliance_id from parent_view (PlayerSelectView)
+        alliance_id = self.parent_view.alliance_id if hasattr(self.parent_view, 'alliance_id') else None
+        confirm_view = ConfirmDeleteView(self.session_id, self.parent_view, alliance_id)
+        await interaction.response.edit_message(embed=confirm_embed, view=confirm_view)
+
+class EventDateModal(discord.ui.Modal, title="Edit Event Date"):
+    def __init__(self, current_event_date, parent_view):
+        super().__init__()
+        self.current_event_date = current_event_date
+        self.parent_view = parent_view
+        
+        # Add event date input
+        current_date_str = ""
+        if current_event_date:
+            if isinstance(current_event_date, str):
+                # Parse ISO format to display format
+                try:
+                    dt = datetime.fromisoformat(current_event_date.replace('Z', '+00:00'))
+                    current_date_str = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    current_date_str = current_event_date
+            elif isinstance(current_event_date, datetime):
+                current_date_str = current_event_date.strftime("%Y-%m-%d %H:%M")
+                
+        self.event_date_input = discord.ui.TextInput(
+            label="Event Date/Time (UTC)",
+            placeholder="YYYY-MM-DD HH:MM (Leave empty to keep current)",
+            default=current_date_str,
+            required=False,
+            max_length=16
+        )
+        self.add_item(self.event_date_input)
+        
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            # Parse event date if provided
+            if self.event_date_input.value.strip():
+                try:
+                    event_date = datetime.strptime(self.event_date_input.value.strip(), "%Y-%m-%d %H:%M")
+                    self.parent_view.new_event_date = event_date
+                    await interaction.response.send_message(
+                        f"✅ Date updated to: {event_date.strftime('%Y-%m-%d %H:%M')} UTC",
+                        ephemeral=True
+                    )
+                except ValueError:
+                    await interaction.response.send_message(
+                        "❌ Invalid date format. Please use: YYYY-MM-DD HH:MM",
+                        ephemeral=True
+                    )
+            else:
+                await interaction.response.send_message(
+                    "ℹ️ Date unchanged.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error: {str(e)}",
+                ephemeral=True
+            )
+
+class RenameSessionModal(discord.ui.Modal, title="Rename Session"):
+    def __init__(self, session_id, current_name, parent_view):
+        super().__init__()
+        self.session_id = session_id
+        self.current_name = current_name
+        self.parent_view = parent_view
+        
+        self.new_name = discord.ui.TextInput(
+            label="New Session Name",
+            placeholder="Enter new name for the session",
+            default=current_name,
+            required=True,
+            max_length=50
+        )
+        self.add_item(self.new_name)
+        
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            new_name = self.new_name.value.strip()
+            if not new_name:
+                await interaction.response.send_message(
+                    "❌ Session name cannot be empty.",
+                    ephemeral=True
+                )
+                return
+                
+            # Update session name in database
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    UPDATE attendance_records 
+                    SET session_name = ? 
+                    WHERE session_id = ?
+                """, (new_name, self.session_id))
+                db.commit()
+                
+            # Update parent views
+            self.parent_view.session_name = new_name
+            if hasattr(self.parent_view, 'parent_view'):
+                self.parent_view.parent_view.session_name = new_name
+                
+            await interaction.response.send_message(
+                f"✅ Session renamed to: **{new_name}**",
+                ephemeral=True
+            )
+            
+            # Refresh the view
+            await self.parent_view.parent_view.update_main_embed(interaction)
+            
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error renaming session: {str(e)}",
+                ephemeral=True
+            )
+
+class ConfirmDeleteView(discord.ui.View):
+    def __init__(self, session_id, parent_view, alliance_id):
+        super().__init__(timeout=300)
+        self.session_id = session_id
+        self.parent_view = parent_view
+        self.alliance_id = alliance_id
+        
+    @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.danger)
+    async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Delete session and all associated records
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
+                # Delete all attendance records for this session
+                cursor.execute("DELETE FROM attendance_records WHERE session_id = ?", (self.session_id,))
+                db.commit()
+                
+            # Show success message
+            success_embed = discord.Embed(
+                title="✅ Session Deleted",
+                description="The attendance session has been permanently deleted.",
+                color=discord.Color.green()
+            )
+            
+            # Create back button to return to session list
+            back_view = discord.ui.View(timeout=7200)
+            back_button = discord.ui.Button(
+                label="⬅️ Back",
+                style=discord.ButtonStyle.secondary
+            )
+            async def back_callback(i: discord.Interaction):
+                # Get cog directly from parent_view (PlayerSelectView)
+                cog = self.parent_view.cog
+                await cog.show_attendance_menu(i)
+            back_button.callback = back_callback
+            back_view.add_item(back_button)
+            
+            await interaction.response.edit_message(embed=success_embed, view=back_view)
+            
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Error deleting session: {str(e)}",
+                ephemeral=True
+            )
+    
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.parent_view.parent_view.update_main_embed(interaction)
+
+class PlayerSelectView(discord.ui.View):
+    def __init__(self, players, alliance_name, session_name, cog, alliance_id=None, session_id=None, is_edit=False, page=0, event_type="Other", event_date=None):
+        super().__init__(timeout=7200)
         self.players = players
         self.alliance_name = alliance_name
         self.session_name = session_name
         self.cog = cog
+        self.alliance_id = alliance_id if alliance_id is not None else 0  # Default for backward compat
+        self.session_id = session_id
+        self.is_edit = is_edit
+        self.event_type = event_type
+        self.event_date = event_date
         self.selected_players = {}
+        
+        # Pre-populate selected_players if in edit mode
+        if is_edit and players:
+            for player in players:
+                if len(player) >= 5:
+                    fid, nickname, furnace_lv, status, points = player[:5]
+                    if status in ['present', 'absent', 'not_recorded']:
+                        self.selected_players[fid] = {
+                            'nickname': nickname,
+                            'attendance_type': status,
+                            'points': points,
+                            'last_event_attendance': 'N/A'  # This will be fetched if needed
+                        }
+        
         self.page = page
         self.max_page = (len(players) - 1) // 25 if players else 0
         self.current_select = None
         self.update_select_menu()
+        
+        # Edit Event Details button is now available for both create and edit modes
 
     def update_select_menu(self):
         # Remove existing select menu
@@ -569,25 +871,98 @@ class PlayerSelectView(discord.ui.View):
         end_idx = min(start_idx + 25, len(self.players))
         current_players = self.players[start_idx:end_idx]
 
+        # Create options with status emojis
+        options = []
+        for player in current_players:
+            if isinstance(player, dict):
+                fid = player['fid']
+                nickname = player['nickname']
+                furnace_lv = player.get('furnace_lv', 0)
+                # Check if we have an updated status in selected_players
+                if fid in self.selected_players:
+                    status = self.selected_players[fid]['attendance_type']
+                else:
+                    status = player.get('status', 'not_recorded')
+                status_emoji = self.cog._get_status_emoji(status)
+                
+                label = f"{status_emoji} {nickname[:40]}"
+                description = f"FID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+            else:
+                # Handle tuple format with 3 or 5 elements
+                if len(player) == 3:
+                    fid, nickname, furnace_lv = player
+                    if fid in self.selected_players:
+                        status = self.selected_players[fid]['attendance_type']
+                    else:
+                        status = 'not_recorded'
+                    status_emoji = self.cog._get_status_emoji(status)
+                elif len(player) >= 5:
+                    fid, nickname, furnace_lv, status, points = player[:5]
+                    if fid in self.selected_players:
+                        status = self.selected_players[fid]['attendance_type']
+                    status_emoji = self.cog._get_status_emoji(status)
+                else:
+                    # Fallback
+                    fid = player[0]
+                    nickname = player[1] if len(player) > 1 else "Unknown"
+                    furnace_lv = player[2] if len(player) > 2 else 0
+                    if fid in self.selected_players:
+                        status = self.selected_players[fid]['attendance_type']
+                    else:
+                        status = 'not_recorded'
+                    status_emoji = self.cog._get_status_emoji(status)
+                
+                label = f"{status_emoji} {nickname[:40]}"
+                description = f"FID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
+                
+            options.append(discord.SelectOption(
+                label=label,
+                value=str(fid),
+                description=description[:100],
+                emoji="👤"
+            ))
+        
         select = discord.ui.Select(
             placeholder=f"👥 Select a player to mark attendance... (Page {self.page + 1}/{self.max_page + 1})",
-            options=[
-                discord.SelectOption(
-                    label=f"{nickname[:50]}",
-                    value=str(fid),
-                    description=f"FID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}",
-                    emoji="👤"
-                ) for fid, nickname, furnace_lv in current_players
-            ]
+            options=options
         )
         
         async def select_callback(interaction: discord.Interaction):
-            self.current_select = select
-            selected_fid = int(select.values[0])
-            # Find the selected player
-            selected_player = next((p for p in self.players if p[0] == selected_fid), None)
-            if selected_player:
-                await self.show_player_attendance_options(interaction, selected_player)
+            try:
+                self.current_select = select
+                selected_fid = int(select.values[0])
+                
+                # Find the selected player with proper error handling
+                selected_player = None
+                
+                # Check if we have players and determine format
+                if self.players:
+                    if isinstance(self.players[0], dict):
+                        selected_player = next((p for p in self.players if p['fid'] == selected_fid), None)
+                    else:
+                        selected_player = next((p for p in self.players if p[0] == selected_fid), None)
+                
+                if selected_player:
+                    await self.show_player_attendance_options(interaction, selected_player)
+                else:
+                    # Handle the case where player is not found
+                    error_embed = discord.Embed(
+                        title="❌ Error",
+                        description="Player not found. Please try again.",
+                        color=discord.Color.red()
+                    )
+                    await interaction.response.edit_message(embed=error_embed, view=self)
+            except Exception as e:
+                error_embed = discord.Embed(
+                    title="❌ Error",
+                    description="An error occurred while selecting the player. Please try again.",
+                    color=discord.Color.red()
+                )
+                try:
+                    await interaction.response.edit_message(embed=error_embed, view=self)
+                except:
+                    # If response already sent, try followup
+                    await interaction.followup.send(embed=error_embed, ephemeral=True)
         
         select.callback = select_callback
         self.add_item(select)
@@ -603,7 +978,17 @@ class PlayerSelectView(discord.ui.View):
             next_button.disabled = self.page == self.max_page
 
     async def show_player_attendance_options(self, interaction: discord.Interaction, player):
-        fid, nickname, furnace_lv = player
+        # Handle both dict and tuple formats
+        if isinstance(player, dict):
+            fid = player['fid']
+            nickname = player['nickname']
+            furnace_lv = player.get('furnace_lv', 0)
+        else:
+            # Handle tuple format - can be 3 or 5 elements
+            if len(player) >= 5:
+                fid, nickname, furnace_lv, status, points = player[:5]
+            else:
+                fid, nickname, furnace_lv = player[:3]
         
         # Create new view with attendance options for this player
         attendance_view = PlayerAttendanceView(player, self)
@@ -643,7 +1028,7 @@ class PlayerSelectView(discord.ui.View):
                 description="No attendance has been marked yet.",
                 color=discord.Color.orange()
             )
-            back_view = discord.ui.View()
+            back_view = discord.ui.View(timeout=7200)
             back_button = discord.ui.Button(
                 label="⬅️ Close",
                 style=discord.ButtonStyle.secondary
@@ -658,33 +1043,69 @@ class PlayerSelectView(discord.ui.View):
 
     @discord.ui.button(label="✅ Finish Attendance", style=discord.ButtonStyle.success, row=1)
     async def finish_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.selected_players:
-            error_embed = discord.Embed(
-                title="❌ No Data",
-                description="No attendance has been marked yet.",
-                color=discord.Color.orange()
-            )
-            back_view = discord.ui.View()
-            back_button = discord.ui.Button(
-                label="⬅️ Close",
-                style=discord.ButtonStyle.secondary
-            )
-            back_button.callback = lambda i: self.update_main_embed(i)
-            back_view.add_item(back_button)
+        try:
+            if not self.selected_players:
+                error_embed = discord.Embed(
+                    title="❌ No Data",
+                    description="No attendance has been marked yet.",
+                    color=discord.Color.orange()
+                )
+                back_view = discord.ui.View(timeout=7200)
+                back_button = discord.ui.Button(
+                    label="⬅️ Close",
+                    style=discord.ButtonStyle.secondary
+                )
+                back_button.callback = lambda i: self.update_main_embed(i)
+                back_view.add_item(back_button)
+                
+                await interaction.response.edit_message(embed=error_embed, view=back_view)
+                return
             
-            await interaction.response.edit_message(embed=error_embed, view=back_view)
-            return
-        
-        # Use defer then call existing method with defer flag
-        await interaction.response.defer()
-        await self.cog.process_attendance_results(interaction, self.selected_players, self.alliance_name, self.session_name, use_defer=True)
+            await interaction.response.defer()
+            await self.cog.process_attendance_results(
+                interaction, 
+                self.selected_players, 
+                self.alliance_name, 
+                self.session_name, 
+                use_defer=True,
+                session_id=self.session_id,
+                is_edit=self.is_edit,
+                event_type=self.event_type,
+                event_date=self.event_date,
+                alliance_id=self.alliance_id
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await interaction.edit_original_response(
+                content=f"❌ An error occurred while processing attendance: {str(e)}",
+                embed=None,
+                view=None
+            )
 
     @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=2)
     async def back_to_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_attendance_menu(interaction)
+    
+    @discord.ui.button(label="⚙️ Edit Event Details", style=discord.ButtonStyle.secondary, row=2)
+    async def edit_event_details_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Show view to edit event type and date
+        view = EditEventDetailsView(self.session_id, self.session_name, self.event_type, self.event_date, self, is_edit=self.is_edit)
+        embed = discord.Embed(
+            title="⚙️ Edit Event Details",
+            description=(
+                f"**Session:** {self.session_name}\n"
+                f"**Current Event Type:** {self.event_type}\n"
+                f"**Current Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
+                "Select a new event type from the dropdown and/or edit the date."
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
 
     async def update_main_embed(self, interaction: discord.Interaction):
-        marked_count = len(self.selected_players)
+        marked_count = sum(1 for p in self.selected_players.values() 
+                          if p['attendance_type'] in ['present', 'absent'])
         total_count = len(self.players)
         
         embed = discord.Embed(
@@ -699,157 +1120,48 @@ class PlayerSelectView(discord.ui.View):
             color=discord.Color.blue()
         )
         
-        if marked_count > 0:
+        if total_count > 0:
             present = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'present')
             absent = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'absent')
-            not_signed = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'not_signed')
+            not_recorded = total_count - present - absent
             
             embed.add_field(
                 name="📊 Current Stats",
-                value=f"Present: {present}\nAbsent: {absent}\nNot Signed: {not_signed}",
+                value=f"Present: {present}\nAbsent: {absent}\nNot Recorded: {not_recorded}",
                 inline=True
             )
         
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(embed=embed, view=self, attachments=[])
 
     async def show_summary(self, interaction: discord.Interaction):
-        # Check user's report preference
-        report_type = await self.cog.get_user_report_preference(interaction.user.id)
-        
-        # If matplotlib is not available, force text mode
-        if report_type == "matplotlib" and not MATPLOTLIB_AVAILABLE:
-            report_type = "text"
-            
-        if report_type == "matplotlib":
-            await self.show_matplotlib_summary(interaction)
-        else:
-            await self.show_text_summary(interaction)
-
-    async def show_matplotlib_summary(self, interaction: discord.Interaction):
-        """Show summary using matplotlib"""
+        """Show attendance summary using unified report function"""
         try:
-            if not self.selected_players:
-                await self.show_text_summary(interaction)
-                return
-            
-            # Sort by points (highest to lowest)
-            sorted_players = sorted(
-                self.selected_players.items(),
-                key=lambda x: x[1]['points'],
-                reverse=True
-            )
-            
-            # Prepare data for matplotlib table
-            headers = ["Player", "Status", "Points"]
-            table_data = []
-            
-            def fix_arabic(text):
-                if text and re.search(r'[\u0600-\u06FF]', text):
-                    try:
-                        reshaped = arabic_reshaper.reshape(text)
-                        return get_display(reshaped)
-                    except Exception:
-                        return text
-                return text
-                
-            def wrap_text(text, width=25):
-                if not text:
-                    return ""
-                lines = []
-                for part in str(text).split('\n'):
-                    while len(part) > width:
-                        lines.append(part[:width])
-                        part = part[width:]
-                    lines.append(part)
-                return '\n'.join(lines)
-
-            for fid, data in sorted_players:
-                status_display = {
-                    "present": "Present",
-                    "absent": "Absent",
-                    "not_signed": "Not Signed"
-                }.get(data['attendance_type'], data['attendance_type'])
-                
-                table_data.append([
-                    wrap_text(fix_arabic(data['nickname'])),
-                    wrap_text(fix_arabic(status_display)),
-                    wrap_text(f"{data['points']:,}" if data['points'] > 0 else "0")
-                ])
-
-            fig, ax = plt.subplots(figsize=(10, min(1 + len(table_data) * 0.4, 15)))
-            ax.axis('off')
-            
-            table = ax.table(
-                cellText=table_data,
-                colLabels=headers,
-                cellLoc='left',
-                loc='center',
-                colColours=['#28a745']*len(headers)  # Green color for summary
-            )
-            table.auto_set_font_size(False)
-            table.set_fontsize(11)
-            table.scale(1, 1.3)
-
-            plt.title(f'Attendance Summary - {self.alliance_name} | Session: {self.session_name}', 
-                    fontsize=14, color='#28a745', pad=15)
-
-            img_buffer = BytesIO()
-            plt.savefig(img_buffer, format='png', bbox_inches='tight')
-            plt.close(fig)
-            img_buffer.seek(0)
-
-            file = discord.File(img_buffer, filename="attendance_summary.png")
-
-            embed = discord.Embed(
-                title=f"📊 Attendance Summary - {self.alliance_name}",
-                description=f"**Session:** {self.session_name}\n**Total Marked:** {len(self.selected_players)} players",
-                color=discord.Color.green()
-            )
-            embed.set_image(url="attachment://attendance_summary.png")
-            
-            back_view = self.cog._create_back_view(lambda i: self.update_main_embed(i))
-            await interaction.response.edit_message(embed=embed, view=back_view, attachments=[file])
-
+            report_cog = self.cog.bot.get_cog("AttendanceReport")
+            if report_cog:
+                await report_cog.show_attendance_report(
+                    interaction=interaction,
+                    alliance_id=self.alliance_id,
+                    session_name=self.session_name,
+                    session_id=self.session_id,
+                    is_preview=True,
+                    selected_players=self.selected_players,
+                    marking_view=self
+                )
+            else:
+                await interaction.response.send_message(
+                    "❌ Attendance Report module not loaded.",
+                    ephemeral=True
+                )
         except Exception as e:
-            print(f"Matplotlib summary error: {e}")
-            # Fallback to text summary
-            await self.show_text_summary(interaction)
+            print(f"ERROR in show_summary: {e}")
+            import traceback
+            traceback.print_exc()
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"❌ An error occurred while generating the summary: {str(e)}",
+                    ephemeral=True
+                )
 
-    async def show_text_summary(self, interaction: discord.Interaction):
-        """Show summary using text format"""
-        report_sections = []
-        report_sections.append("📊 **SUMMARY**")
-        report_sections.append(f"**Session:** {self.session_name}")
-        report_sections.append(f"**Alliance:** {self.alliance_name}")
-        report_sections.append("")
-        report_sections.append("👥 **PLAYER DETAILS**")
-        report_sections.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        
-        # Sort by points (highest to lowest)
-        sorted_players = sorted(
-            self.selected_players.items(),
-            key=lambda x: x[1]['points'],
-            reverse=True
-        )
-        
-        for fid, data in sorted_players:
-            status_emoji = self.cog._get_status_emoji(data['attendance_type'])
-            points_display = f"{data['points']:,}" if data['points'] > 0 else "0"
-            
-            player_line = f"{status_emoji} **{data['nickname']}**"
-            if data['points'] > 0:
-                player_line += f" | **{points_display}** points"
-            
-            report_sections.append(player_line)
-        
-        embed = discord.Embed(
-            title=f"📊 Attendance Summary - {self.alliance_name}",
-            description="\n".join(report_sections),
-            color=discord.Color.green()
-        )
-        
-        back_view = self.cog._create_back_view(lambda i: self.update_main_embed(i))
-        await interaction.response.edit_message(embed=embed, view=back_view)
 
     def add_player_attendance(self, fid, nickname, attendance_type, points, last_event_attendance):
         self.selected_players[fid] = {
@@ -905,21 +1217,12 @@ class AttendanceModal(discord.ui.Modal):
                 alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                 alliance_result = alliance_cursor.fetchone()
                 alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
-
-                # We use INSERT OR REPLACE to handle existing records automatically
-                attendance_cursor = attendance_db.cursor()
-                attendance_cursor.execute("""
-                    INSERT OR REPLACE INTO attendance_records
-                    (fid, nickname, alliance_id, alliance_name, attendance_status, points,
-                    last_event_attendance, marked_date, marked_by, marked_by_username, session_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (self.fid, self.nickname, alliance_id, alliance_name, self.attendance_type,
-                    points, self.last_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    interaction.user.id, interaction.user.name, self.parent_view.session_name))
-                
-                attendance_db.commit()
             
             self.parent_view.add_player_attendance(self.fid, self.nickname, self.attendance_type, points, self.last_attendance)
+            
+            # Update the select menu to reflect the new status
+            self.parent_view.update_select_menu()
+            
             await self.update_main_embed_with_confirmation(interaction)
             
         except Exception as e:
@@ -932,14 +1235,16 @@ class AttendanceModal(discord.ui.Modal):
 
     async def update_main_embed_with_confirmation(self, interaction: discord.Interaction):
         """Update main embed with confirmation message instead of showing success page"""
-        marked_count = len(self.parent_view.selected_players)
+        # Only count present and absent as "marked", not "not_recorded"
+        marked_count = sum(1 for p in self.parent_view.selected_players.values() 
+                          if p['attendance_type'] in ['present', 'absent'])
         total_count = len(self.parent_view.players)
         
         # Create status display
         status_display = {
             "present": "Present",
             "absent": "Absent",
-            "not_signed": "Not Signed"
+            "not_recorded": "Not Recorded"
         }.get(self.attendance_type, self.attendance_type)
         
         # Get the points for display
@@ -959,14 +1264,15 @@ class AttendanceModal(discord.ui.Modal):
             color=discord.Color.green()
         )
         
-        if marked_count > 0:
+        total_count = len(self.parent_view.players)
+        if total_count > 0:
             present = sum(1 for p in self.parent_view.selected_players.values() if p['attendance_type'] == 'present')
             absent = sum(1 for p in self.parent_view.selected_players.values() if p['attendance_type'] == 'absent')
-            not_signed = sum(1 for p in self.parent_view.selected_players.values() if p['attendance_type'] == 'not_signed')
+            not_recorded = total_count - present - absent
             
             embed.add_field(
                 name="📊 Current Stats",
-                value=f"Present: {present}\nAbsent: {absent}\nNot Signed: {not_signed}",
+                value=f"Present: {present}\nAbsent: {absent}\nNot Recorded: {not_recorded}",
                 inline=True
             )
         
@@ -976,23 +1282,65 @@ class AttendanceModal(discord.ui.Modal):
 
 class PlayerAttendanceView(discord.ui.View):
     def __init__(self, player, parent_view):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=7200)
         self.player = player
         self.parent_view = parent_view
-        self.fid, self.nickname, self.furnace_lv = player
+        self.event_type = parent_view.event_type if hasattr(parent_view, 'event_type') else "Other"
+        
+        # Handle both dict and tuple formats
+        if isinstance(player, dict):
+            self.fid = player['fid']
+            self.nickname = player['nickname']
+            self.furnace_lv = player.get('furnace_lv', 0)
+        else:
+            # Handle tuple format - can be 3 or 5 elements
+            if len(player) >= 5:
+                self.fid, self.nickname, self.furnace_lv, status, points = player[:5]
+            else:
+                self.fid, self.nickname, self.furnace_lv = player[:3]
 
     async def fetch_last_attendance(self, fid):
         def query():
             with sqlite3.connect('db/attendance.sqlite') as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT attendance_status, marked_date FROM attendance_records "
-                    "WHERE fid = ? "
-                    "ORDER BY marked_date DESC LIMIT 1",
-                    (fid,)
-                )
+                # Check which schema we have
+                cursor.execute("PRAGMA table_info(attendance_records)")
+                columns = {col[1] for col in cursor.fetchall()}
+                
+                if 'player_id' in columns:
+                    # New schema - filter by event type and exclude current session
+                    cursor.execute(
+                        "SELECT status, event_date FROM attendance_records "
+                        "WHERE player_id = ? AND event_type = ? "
+                        "AND event_date < ? AND session_id != ? "
+                        "ORDER BY event_date DESC LIMIT 1",
+                        (str(fid), self.event_type, self.parent_view.event_date, self.parent_view.session_id)
+                    )
+                else:
+                    # Old schema
+                    cursor.execute(
+                        "SELECT attendance_status, marked_date FROM attendance_records "
+                        "WHERE fid = ? "
+                        "ORDER BY marked_date DESC LIMIT 1",
+                        (fid,)
+                    )
                 result = cursor.fetchone()
-                return f"{result[0]} ({result[1][:10]})" if result else "N/A"
+                if result:
+                    status, date_str = result
+                    # Format the date
+                    try:
+                        if 'T' in date_str:
+                            date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                            formatted_date = date_obj.strftime("%m/%d")
+                        else:
+                            formatted_date = date_str[:10]
+                    except:
+                        formatted_date = date_str[:10] if len(date_str) >= 10 else date_str
+                    
+                    status_display = status.replace('_', ' ').title() if status else status
+                    return f"{status_display} ({formatted_date})"
+                else:
+                    return "N/A"
         try:
             return await self.parent_view.cog.bot.loop.run_in_executor(None, query)
         except:
@@ -1006,9 +1354,9 @@ class PlayerAttendanceView(discord.ui.View):
     async def absent_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._mark_attendance(interaction, "absent")
 
-    @discord.ui.button(label="Not Signed", style=discord.ButtonStyle.secondary, custom_id="not_signed")
-    async def not_signed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._mark_attendance(interaction, "not_signed")
+    @discord.ui.button(label="Not Recorded", style=discord.ButtonStyle.secondary, custom_id="not_recorded")
+    async def not_recorded_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._mark_attendance(interaction, "not_recorded")
 
     @discord.ui.button(label="⬅️ Back to List", style=discord.ButtonStyle.secondary, custom_id="back_to_list")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1026,7 +1374,7 @@ class PlayerAttendanceView(discord.ui.View):
             await self.mark_attendance_direct_deferred(interaction, attendance_type, 0, last_attendance)
 
     async def mark_attendance_direct_deferred(self, interaction: discord.Interaction, attendance_type: str, points: int, last_attendance: str):
-        """Mark attendance directly with deferred interaction for absent/not_signed"""
+        """Mark attendance directly with deferred interaction for absent/not_recorded"""
         try:
             # Single transaction for all database operations
             with sqlite3.connect('db/attendance.sqlite', timeout=10.0) as attendance_db, \
@@ -1047,31 +1395,30 @@ class PlayerAttendanceView(discord.ui.View):
                 alliance_result = alliance_cursor.fetchone()
                 alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
 
-                # Use INSERT OR REPLACE to handle existing records automatically
-                attendance_cursor = attendance_db.cursor()
-                attendance_cursor.execute("""
-                    INSERT OR REPLACE INTO attendance_records
-                    (fid, nickname, alliance_id, alliance_name, attendance_status, points,
-                    last_event_attendance, marked_date, marked_by, marked_by_username, session_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (self.fid, self.nickname, alliance_id, alliance_name, attendance_type,
-                    points, last_attendance, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    interaction.user.id, interaction.user.name, self.parent_view.session_name))
-                
-                attendance_db.commit()
+                pass
             
-            # Add to parent view's selected players
-            self.parent_view.add_player_attendance(self.fid, self.nickname, attendance_type, points, last_attendance)
+            # Add to parent view's selected players (or remove if not_recorded)
+            if attendance_type == 'not_recorded':
+                # Remove from selected players if marking as not_recorded
+                if self.fid in self.parent_view.selected_players:
+                    del self.parent_view.selected_players[self.fid]
+            else:
+                # Add to selected players for present/absent
+                self.parent_view.add_player_attendance(self.fid, self.nickname, attendance_type, points, last_attendance)
+            
+            # Update the select menu to reflect the new status
+            self.parent_view.update_select_menu()
             
             # Update the main embed with confirmation message
-            marked_count = len(self.parent_view.selected_players)
+            marked_count = sum(1 for p in self.parent_view.selected_players.values() 
+                              if p['attendance_type'] in ['present', 'absent'])
             total_count = len(self.parent_view.players)
             
             # Create status display
             status_display = {
                 "present": "Present",
                 "absent": "Absent", 
-                "not_signed": "Not Signed"
+                "not_recorded": "Not Recorded"
             }.get(attendance_type, attendance_type)
             
             embed = discord.Embed(
@@ -1087,14 +1434,15 @@ class PlayerAttendanceView(discord.ui.View):
                 color=discord.Color.green()
             )
             
-            if marked_count > 0:
+            total_count = len(self.parent_view.players)
+            if total_count > 0:
                 present = sum(1 for p in self.parent_view.selected_players.values() if p['attendance_type'] == 'present')
                 absent = sum(1 for p in self.parent_view.selected_players.values() if p['attendance_type'] == 'absent')
-                not_signed = sum(1 for p in self.parent_view.selected_players.values() if p['attendance_type'] == 'not_signed')
+                not_recorded = total_count - present - absent
                 
                 embed.add_field(
                     name="📊 Current Stats",
-                    value=f"Present: {present}\nAbsent: {absent}\nNot Signed: {not_signed}",
+                    value=f"Present: {present}\nAbsent: {absent}\nNot Recorded: {not_recorded}",
                     inline=True
                 )
             
@@ -1115,7 +1463,7 @@ class Attendance(commands.Cog):
 
     def _get_status_emoji(self, status):
         """Helper to get status emoji"""
-        return {"present": "✅", "absent": "❌", "not_signed": "⚪"}.get(status, "❓")
+        return {"present": "✅", "absent": "❌", "not_recorded": "⚪"}.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -1125,7 +1473,7 @@ class Attendance(commands.Cog):
         replacements = [
             ("present", "✅"), ("Present", "✅"),
             ("absent", "❌"), ("Absent", "❌"),
-            ("not_signed", "⚪"), ("Not Signed", "⚪"), ("not signed", "⚪")
+            ("not_recorded", "⚪"), ("Not Recorded", "⚪"), ("not recorded", "⚪")
         ]
         
         for old, new in replacements:
@@ -1138,7 +1486,7 @@ class Attendance(commands.Cog):
 
     def _create_back_view(self, callback):
         """Helper to create back button view"""
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=7200)
         back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
         back_button.callback = callback
         view.add_item(back_button)
@@ -1184,78 +1532,47 @@ class Attendance(commands.Cog):
                 """, (user_id, preference))
                 db.commit()
         except Exception as e:
-            print(f"Error setting user preference: {e}")
             raise
 
     def setup_database(self):
-        """Set up dedicated attendance database"""
+        """Set up simplified attendance database with single table"""
         try:
             # Create attendance database if it doesn't exist
             if not os.path.exists("db/attendance.sqlite"):
+                os.makedirs("db", exist_ok=True)
                 sqlite3.connect("db/attendance.sqlite").close()
-                print("✓ Created and initialized new attendance database")
             
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                 cursor = attendance_db.cursor()
                 
-                # Create attendance records table
+                # Create unified attendance records table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS attendance_records (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        fid INTEGER,
-                        nickname TEXT,
-                        alliance_id INTEGER,
-                        alliance_name TEXT,
-                        attendance_status TEXT,
-                        points INTEGER,
-                        last_event_attendance TEXT,
-                        marked_date TEXT,
-                        marked_by INTEGER,
+                        record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        session_name TEXT NOT NULL,
+                        event_type TEXT NOT NULL DEFAULT 'Other',
+                        event_date TIMESTAMP,
+                        player_id TEXT NOT NULL,
+                        player_name TEXT NOT NULL,
+                        alliance_id TEXT NOT NULL,
+                        alliance_name TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        points INTEGER DEFAULT 0,
+                        marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        marked_by TEXT,
                         marked_by_username TEXT,
-                        session_name TEXT
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(session_id, player_id)
                     )
                 """)
                 
-                # Check and add session_name column if missing
-                cursor.execute("PRAGMA table_info(attendance_records)")
-                columns = [col[1] for col in cursor.fetchall()]
-                if 'session_name' not in columns:
-                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN session_name TEXT")
-                    print("✓ Added session_name column to attendance_records")
-                
-                # Create attendance sessions table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS attendance_sessions (
-                        session_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        alliance_id INTEGER,
-                        alliance_name TEXT,
-                        session_date TEXT,
-                        created_by INTEGER,
-                        created_by_username TEXT,
-                        total_players INTEGER,
-                        present_count INTEGER,
-                        absent_count INTEGER,
-                        not_signed_count INTEGER,
-                        session_name TEXT
-                    )
-                """)
-                
-                # Check and add session_name column to sessions table
-                cursor.execute("PRAGMA table_info(attendance_sessions)")
-                columns = [col[1] for col in cursor.fetchall()]
-                if 'session_name' not in columns:
-                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN session_name TEXT")
-                    print("✓ Added session_name column to attendance_sessions")
-                
-                # Create session_records junction table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS session_records (
-                        session_id INTEGER,
-                        record_id INTEGER,
-                        FOREIGN KEY (session_id) REFERENCES attendance_sessions(session_id),
-                        FOREIGN KEY (record_id) REFERENCES attendance_records(id)
-                    )
-                """)
+                # Create indices for performance
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance_records(session_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_alliance ON attendance_records(alliance_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_created ON attendance_records(created_at)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_player ON attendance_records(player_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_type ON attendance_records(event_type)")
 
                 # Create user preferences table
                 cursor.execute("""
@@ -1264,11 +1581,11 @@ class Attendance(commands.Cog):
                         report_type TEXT DEFAULT 'text'
                     )
                 """)
-
+                
                 attendance_db.commit()
                 
         except Exception as e:
-            print(f"Error setting up attendance database: {e}")
+            pass
 
     async def show_attendance_menu(self, interaction: discord.Interaction):
         """Show the main attendance menu"""
@@ -1279,11 +1596,9 @@ class Attendance(commands.Cog):
                 "**Available Operations**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "📋 **Mark Attendance**\n"
-                "└ Mark attendance for alliance members\n\n"
+                "└ Create or modify attendance records\n\n"
                 "👀 **View Attendance**\n"
-                "└ View attendance records and reports\n\n"
-                "✏️ **Edit Attendance**\n"
-                "└ Edit attendance records\n\n"
+                "└ View attendance records and export reports\n\n"
                 "⚙️ **Settings**\n"
                 "└ Configure attendance preferences\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
@@ -1294,10 +1609,11 @@ class Attendance(commands.Cog):
         view = AttendanceView(self, interaction.user.id, interaction.guild_id)
         await view.initialize_permissions_and_alliances()
         
-        try:
-            await interaction.response.edit_message(embed=embed, view=view, attachments=[])
-        except discord.InteractionResponded:
+        # Handle both regular and deferred interactions
+        if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view, attachments=[])
+        else:
+            await interaction.response.edit_message(embed=embed, view=view, attachments=[])
 
     async def get_admin_alliances(self, user_id: int, guild_id: int):
         """Get alliances that the user has admin access to"""
@@ -1316,7 +1632,7 @@ class Attendance(commands.Cog):
                 # Global admin - can access all alliances
                 with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                     cursor = alliance_db.cursor()
-                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY name")
+                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
                     alliances = cursor.fetchall()
                     return alliances, [], True
             
@@ -1350,7 +1666,7 @@ class Attendance(commands.Cog):
                     if isinstance(aid_tuple[0], int):
                         validated_ids.append(aid_tuple[0])
                     else:
-                        print(f"Warning: Skipping invalid alliance ID: {aid_tuple[0]}")
+                        pass
                 
                 if validated_ids:
                     with sqlite3.connect('db/alliance.sqlite') as alliance_db:
@@ -1368,145 +1684,408 @@ class Attendance(commands.Cog):
             return all_alliances, special_alliances, False
                 
         except Exception as e:
-            print(f"Error getting admin alliances: {e}")
             return [], [], False
 
-    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        """Show the attendance marking interface for selected alliance"""
+    async def show_alliance_selection_for_marking(self, interaction: discord.Interaction):
+        """Show alliance selection specifically for marking attendance"""
+        try:
+            # Get admin permissions
+            admin_result = await self._check_admin_permissions(interaction.user.id)
+            if not admin_result:
+                error_embed = self._create_error_embed(
+                    "❌ Access Denied", 
+                    "You do not have permission to use this command."
+                )
+                back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+                await interaction.response.edit_message(embed=error_embed, view=back_view)
+                return
+            
+            is_initial = admin_result[0]
+            
+            # Get alliances based on permissions
+            if is_initial == 1:
+                # Global admin - get all alliances
+                with sqlite3.connect('db/alliance.sqlite') as db:
+                    cursor = db.cursor()
+                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
+                    alliances = cursor.fetchall()
+            else:
+                # Server admin - get server alliances + special permissions
+                with sqlite3.connect('db/users.sqlite') as users_db:
+                    cursor = users_db.cursor()
+                    cursor.execute("SELECT DISTINCT alliance FROM users WHERE server_id = ?", (interaction.guild_id,))
+                    server_alliances = set(row[0] for row in cursor.fetchall())
+                
+                with sqlite3.connect('db/settings.sqlite') as settings_db:
+                    cursor = settings_db.cursor()
+                    cursor.execute("SELECT alliance_id FROM admin_permissions WHERE admin_id = ?", (interaction.user.id,))
+                    special_permissions = set(row[0] for row in cursor.fetchall())
+                
+                allowed_alliances = server_alliances.union(special_permissions)
+                
+                if allowed_alliances:
+                    with sqlite3.connect('db/alliance.sqlite') as db:
+                        cursor = db.cursor()
+                        placeholders = ','.join('?' * len(allowed_alliances))
+                        cursor.execute(f"SELECT alliance_id, name FROM alliance_list WHERE alliance_id IN ({placeholders}) ORDER BY alliance_id", 
+                                     list(allowed_alliances))
+                        alliances = cursor.fetchall()
+                else:
+                    alliances = []
+            
+            if not alliances:
+                error_embed = self._create_error_embed(
+                    "❌ No Alliances Found",
+                    "No alliances found for your permissions."
+                )
+                back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+                await interaction.response.edit_message(embed=error_embed, view=back_view)
+                return
+            
+            # Create alliance selection embed
+            select_embed = discord.Embed(
+                title="📋 Attendance - Alliance Selection",
+                description=(
+                    "Please select an alliance to mark attendance:\n\n"
+                    "**Permission Details**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
+                    f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                    f"📊 **Available Alliances:** `{len(alliances)}`\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━"
+                ),
+                color=discord.Color.blue()
+            )
+
+            # Get alliance member counts
+            alliance_ids = [a[0] for a in alliances]
+            alliances_with_counts = []
+            
+            if alliance_ids:
+                with sqlite3.connect('db/users.sqlite') as db:
+                    cursor = db.cursor()
+                    placeholders = ','.join('?' * len(alliance_ids))
+                    cursor.execute(f"""
+                        SELECT alliance, COUNT(*) 
+                        FROM users 
+                        WHERE alliance IN ({placeholders}) 
+                        GROUP BY alliance
+                    """, [str(aid) for aid in alliance_ids])
+                    counts = dict(cursor.fetchall())
+                
+                alliances_with_counts = [
+                    (aid, name, counts.get(str(aid), 0))
+                    for aid, name in alliances
+                ]
+            
+            view = AllianceSelectView(alliances_with_counts, self, is_marking=True)
+            await interaction.response.edit_message(embed=select_embed, view=view)
+            
+        except Exception as e:
+            error_embed = self._create_error_embed(
+                "❌ Error", 
+                "An error occurred while showing alliance selection."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+    async def show_session_selection_for_marking(self, interaction: discord.Interaction, alliance_id: int):
+        """Show available sessions for marking/editing attendance"""
         try:
             # Get alliance name
-            alliance_name = "Unknown Alliance"
-            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                cursor = alliance_db.cursor()
-                cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                alliance_result = cursor.fetchone()
-                if alliance_result:
-                    alliance_name = alliance_result[0]
+            alliance_name = await self._get_alliance_name(alliance_id)
 
-            # Get alliance members - sort by FC level (highest to lowest)
+            # Query database for sessions of this alliance from single table
+            sessions = []
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT 
+                        session_id,
+                        session_name,
+                        event_type,
+                        MIN(event_date) as session_date,
+                        COUNT(DISTINCT player_id) as player_count,
+                        SUM(CASE WHEN status != 'not_recorded' THEN 1 ELSE 0 END) as marked_count
+                    FROM attendance_records
+                    WHERE alliance_id = ?
+                    GROUP BY session_id
+                    ORDER BY session_date DESC
+                """, (str(alliance_id),))
+                raw_sessions = cursor.fetchall()
+                
+                # Convert tuples to dictionaries for SessionSelectView
+                sessions = [
+                    {
+                        'session_id': row[0],
+                        'name': row[1],
+                        'event_type': row[2],
+                        'date': row[3].split('T')[0] if row[3] else "Unknown",
+                        'player_count': row[4],
+                        'marked_count': row[5]
+                    }
+                    for row in raw_sessions
+                ]
+
+            # Create session selection view with new session option
+            if sessions:
+                description = (
+                    "Please select an existing session or create a new one:\n\n"
+                    f"**Alliance:** {alliance_name}\n"
+                    f"**Available Sessions:** {len(sessions)}\n\n"
+                    "Sessions are sorted by date (newest first)."
+                )
+            else:
+                description = (
+                    f"**Alliance:** {alliance_name}\n"
+                    f"**Available Sessions:** No sessions found\n\n"
+                    "Click the **New Session** button below to create your first attendance session for this alliance."
+                )
+            
+            embed = discord.Embed(
+                title=f"📋 Mark Attendance - {alliance_name}",
+                description=description,
+                color=discord.Color.blue()
+            )
+
+            view = SessionSelectViewForMarking(sessions, alliance_id, self)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+        except Exception as e:
+            error_embed = self._create_error_embed(
+                "❌ Error",
+                "An error occurred while loading sessions."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, alliance_name: str, session_name: str, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None):
+        """Show attendance marking interface with status display"""
+        try:
+            # Get all alliance members
             players = []
-            with sqlite3.connect('db/users.sqlite') as users_db:
-                cursor = users_db.cursor()
+            attendance_records = {}
+            
+            with sqlite3.connect('db/users.sqlite') as db:
+                cursor = db.cursor()
                 cursor.execute("""
                     SELECT fid, nickname, furnace_lv 
                     FROM users 
                     WHERE alliance = ? 
                     ORDER BY furnace_lv DESC, nickname
                 """, (alliance_id,))
-                players = cursor.fetchall()
-
-            if not players:
-                await interaction.response.send_message(
-                    f"❌ No players found in alliance {alliance_name}.",
-                    ephemeral=True
-                )
-                return
-
-            # Calculate alliance statistics with proper FC levels
-            max_fl = max(player[2] for player in players) if players else 0
-            avg_fl = sum(player[2] for player in players) / len(players) if players else 0
+                alliance_members = cursor.fetchall()
             
-            # Start attendance marking process with player selection
+            # If editing existing session, get attendance records
+            if is_edit and session_id:
+                with sqlite3.connect('db/attendance.sqlite') as db:
+                    cursor = db.cursor()
+                    cursor.execute("""
+                        SELECT player_id, status, points, event_type, event_date
+                        FROM attendance_records
+                        WHERE session_id = ?
+                    """, (session_id,))
+                    
+                    for record in cursor.fetchall():
+                        attendance_records[int(record[0])] = {
+                            'status': record[1],
+                            'points': record[2]
+                        }
+                        # Get event type and date from first record
+                        if not event_type or event_type == "Other":
+                            event_type = record[3]
+                        if not event_date and record[4]:
+                            try:
+                                event_date = datetime.fromisoformat(record[4])
+                            except:
+                                pass
+            
+            # Combine member data with attendance status
+            for fid, nickname, furnace_lv in alliance_members:
+                status = 'not_recorded'
+                points = 0
+                
+                if fid in attendance_records:
+                    status = attendance_records[fid]['status']
+                    points = attendance_records[fid]['points']
+                
+                players.append((fid, nickname, furnace_lv, status, points))
+            
+            if not players:
+                error_embed = discord.Embed(
+                    title="❌ No Members Found",
+                    description="This alliance has no members.",
+                    color=discord.Color.red()
+                )
+                back_view = self._create_back_view(lambda i: self.show_session_selection_for_marking(i, alliance_id))
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(embed=error_embed, view=back_view)
+                else:
+                    await interaction.response.edit_message(embed=error_embed, view=back_view)
+                return
+            
+            # Calculate counts
+            present_count = sum(1 for p in players if p[3] == 'present')
+            absent_count = sum(1 for p in players if p[3] == 'absent')
+            not_recorded_count = sum(1 for p in players if p[3] == 'not_recorded')
+            
+            event_icon = EVENT_TYPE_ICONS.get(event_type, "📋")
             embed = discord.Embed(
-                title=f"📋 Marking Attendance - {alliance_name}",
+                title=f"📋 Mark Attendance - {alliance_name}",
                 description=(
                     f"**Session:** {session_name}\n"
-                    f"**Total Players:** {len(players)}\n"
-                    f"**Highest FC:** {FC_LEVEL_MAPPING.get(max_fl, str(max_fl))}\n"
-                    f"**Average FC:** {FC_LEVEL_MAPPING.get(int(avg_fl), str(int(avg_fl)))}\n"
-                    f"**Progress:** 0/{len(players)} players marked\n\n"
-                    "Select a player from the dropdown to mark their attendance.\n"
-                    "Players are sorted by FC level (highest to lowest)."
+                    f"**Event Type:** {event_icon} {event_type}\n"
+                    f"**Mode:** {'Edit Existing' if is_edit else 'New Session'}\n"
+                    f"**Total Members:** {len(players)}\n"
+                    f"**Status:** ✅ Present: {present_count} | ❌ Absent: {absent_count} | ❓ Not Recorded: {not_recorded_count}\n\n"
+                    "Select players to mark their attendance:"
                 ),
                 color=discord.Color.blue()
             )
-
-            view = PlayerSelectView(players, alliance_name, session_name, self)
-            await interaction.response.edit_message(embed=embed, view=view)
-
+            
+            view = PlayerSelectView(players, alliance_name, session_name, self, alliance_id, session_id, is_edit, event_type=event_type, event_date=event_date)
+            
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
+            
         except Exception as e:
-            print(f"Error showing attendance marking: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while loading attendance marking.",
-                ephemeral=True
+            error_embed = self._create_error_embed(
+                "❌ Error",
+                "An error occurred while loading the attendance interface."
             )
+            await interaction.response.edit_message(embed=error_embed, view=None)
 
-    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str, use_defer: bool = True):
+    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str, use_defer: bool = True, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, alliance_id: int = None):
         """Process and display final attendance results"""
         try:
             # Count attendance types
             present_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'present')
             absent_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'absent')
-            not_signed_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'not_signed')
-            
-            # Create attendance session in database
-            session_id = None
-            try:
-                # Get alliance ID
-                alliance_id = None
-                for fid, data in selected_players.items():
-                    with sqlite3.connect('db/users.sqlite') as users_db:
-                        cursor = users_db.cursor()
-                        cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
-                        result = cursor.fetchone()
-                        if result:
-                            alliance_id = result[0]
-                            break
-                
-                if alliance_id:
-                    with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                        cursor = attendance_db.cursor()
-                        
-                        # Create session with session name
-                        cursor.execute("""
-                            INSERT INTO attendance_sessions 
-                            (alliance_id, alliance_name, session_date, created_by, created_by_username,
-                            total_players, present_count, absent_count, not_signed_count, session_name)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (alliance_id, alliance_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            interaction.user.id, interaction.user.name, len(selected_players),
-                            present_count, absent_count, not_signed_count, session_name))
-                        
-                        session_id = cursor.lastrowid
-                        
-                        # Link records to session
-                        for fid in selected_players.keys():
-                            cursor.execute("""
-                                SELECT id FROM attendance_records 
-                                WHERE fid = ? AND marked_by = ? AND session_name = ?
-                                ORDER BY marked_date DESC LIMIT 1
-                            """, (fid, interaction.user.id, session_name))
-                            
-                            record_result = cursor.fetchone()
-                            if record_result:
-                                cursor.execute("""
-                                    INSERT INTO session_records (session_id, record_id)
-                                    VALUES (?, ?)
-                                """, (session_id, record_result[0]))
-                        
-                        attendance_db.commit()
-                        print(f"✓ Created attendance session {session_id} for {alliance_name} - {session_name}")
-                        
-            except Exception as e:
-                print(f"Warning: Could not create attendance session: {e}")
+            not_recorded_count = sum(1 for p in selected_players.values() if p['attendance_type'] == 'not_recorded')
 
-            # Check user's report preference
-            report_type = await self.get_user_report_preference(interaction.user.id)
-            
-            # If matplotlib is not available, force text mode
-            if report_type == "matplotlib" and not MATPLOTLIB_AVAILABLE:
-                report_type = "text"
+            # Create new session ID if not editing
+            if not is_edit:
+                # Create new session
+                session_id = str(uuid.uuid4())
+
+            # Save attendance records
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
                 
-            if report_type == "matplotlib":
-                await self.show_matplotlib_completion_report(interaction, selected_players, alliance_name, session_name, session_id, present_count, absent_count, not_signed_count)
+                # First, if creating new session, insert all players as not_recorded
+                if not is_edit:
+                    # Get all alliance members
+                    with sqlite3.connect('db/users.sqlite') as users_db:
+                        users_cursor = users_db.cursor()
+                        users_cursor.execute("""
+                            SELECT fid, nickname, furnace_lv 
+                            FROM users 
+                            WHERE alliance = ? 
+                            ORDER BY nickname
+                        """, (alliance_id,))
+                        all_members = users_cursor.fetchall()
+                    
+                    # Insert all members as not_recorded initially
+                    for member in all_members:
+                        member_fid, member_nickname, member_furnace_lv = member
+                        cursor.execute("""
+                            INSERT INTO attendance_records 
+                            (player_id, player_name, session_id, session_name, alliance_id, alliance_name,
+                             status, points, event_type, event_date, 
+                             marked_at, marked_by, marked_by_username)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            str(member_fid), member_nickname, session_id, session_name, 
+                            str(alliance_id), alliance_name,
+                            'not_recorded', 0, 
+                            event_type, 
+                            event_date.isoformat() if event_date else datetime.utcnow().isoformat(),
+                            datetime.utcnow().isoformat(), 
+                            str(interaction.user.id), interaction.user.name
+                        ))
+                
+                # Now update with actual attendance data
+                for fid, player_data in selected_players.items():
+                    if player_data['attendance_type'] != 'not_recorded':
+                        # Update the record with actual attendance
+                        cursor.execute("""
+                            UPDATE attendance_records 
+                            SET status = ?, points = ?, marked_at = ?
+                            WHERE player_id = ? AND session_id = ?
+                        """, (
+                            player_data['attendance_type'], 
+                            player_data['points'],
+                            datetime.utcnow().isoformat(),
+                            fid, 
+                            session_id
+                        ))
+                
+                db.commit()
+            
+            # Show completion report based on user preference
+            if hasattr(interaction, 'guild') and interaction.guild:
+                pass
+
+            # Calculate total players
+            if not is_edit:
+                total_players = len(all_members)
             else:
-                await self.show_text_completion_report(interaction, selected_players, alliance_name, session_name, session_id, present_count, absent_count, not_signed_count)
+                # For edit mode, get total count from the database
+                with sqlite3.connect('db/users.sqlite') as users_db:
+                    users_cursor = users_db.cursor()
+                    users_cursor.execute("""
+                        SELECT COUNT(*) FROM users WHERE alliance = ?
+                    """, (alliance_id,))
+                    total_players = users_cursor.fetchone()[0]
+            
+            actual_not_recorded = total_players - present_count - absent_count
+            
+            # Format event date
+            event_date_str = "Not set"
+            if event_date:
+                try:
+                    if isinstance(event_date, str):
+                        event_date_obj = datetime.fromisoformat(event_date.replace('Z', '+00:00'))
+                    else:
+                        event_date_obj = event_date
+                    event_date_str = event_date_obj.strftime('%Y-%m-%d %H:%M')
+                except:
+                    event_date_str = str(event_date)
+            
+            # Show simple success message
+            success_embed = discord.Embed(
+                title="✅ Attendance Saved Successfully",
+                description=(
+                    f"**Session:** {session_name}\n"
+                    f"**Alliance:** {alliance_name}\n"
+                    f"**Event Type:** {event_type}\n"
+                    f"**Event Date:** {event_date_str}\n\n"
+                    f"**Summary:**\n"
+                    f"✅ Present: {present_count}\n"
+                    f"❌ Absent: {absent_count}\n"
+                    f"⚪ Not Recorded: {actual_not_recorded}\n"
+                    f"**Total Players:** {total_players}"
+                ),
+                color=discord.Color.green()
+            )
+            success_embed.set_footer(text=f"Marked by {interaction.user.name}")
+            
+            # Create a simple back button
+            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+            
+            # Update the original message
+            if use_defer:
+                await interaction.edit_original_response(embed=success_embed, view=back_view)
+            else:
+                await interaction.response.edit_message(embed=success_embed, view=back_view)
 
         except Exception as e:
-            print(f"Error processing attendance results: {e}")
+            print(f"ERROR in process_attendance_results: {e}")
+            import traceback
+            traceback.print_exc()
             error_embed = discord.Embed(
                 title="❌ Error",
-                description="An error occurred while generating the attendance report.",
+                description=f"An error occurred while generating the attendance report: {str(e)}",
                 color=discord.Color.red()
             )
             
@@ -1515,817 +2094,43 @@ class Attendance(commands.Cog):
             else:
                 await interaction.response.edit_message(embed=error_embed, view=None)
 
-    async def show_matplotlib_completion_report(self, interaction, selected_players, alliance_name, session_name, session_id, present_count, absent_count, not_signed_count):
-        """Show completion report using matplotlib"""
-        try:
-            # Sort: Present (by points desc) → Absent → Not Signed
-            def sort_key(item):
-                fid, data = item
-                attendance_type = data['attendance_type']
-                points = data['points']
-                
-                type_priority = {
-                    "present": 1,
-                    "absent": 2, 
-                    "not_signed": 3
-                }.get(attendance_type, 4)
-                
-                return (type_priority, -points)
-            
-            sorted_players = sorted(selected_players.items(), key=sort_key)
-            
-            # Prepare data for matplotlib table
-            headers = ["Player", "Status", "Points", "Last Event"]
-            table_data = []
-            
-            def fix_arabic(text):
-                if text and re.search(r'[\u0600-\u06FF]', text):
-                    try:
-                        reshaped = arabic_reshaper.reshape(text)
-                        return get_display(reshaped)
-                    except Exception:
-                        return text
-                return text
-                
-            def wrap_text(text, width=20):
-                if not text:
-                    return ""
-                lines = []
-                for part in str(text).split('\n'):
-                    while len(part) > width:
-                        lines.append(part[:width])
-                        part = part[width:]
-                    lines.append(part)
-                return '\n'.join(lines)
 
-            for fid, data in sorted_players:
-                status_display = {
-                    "present": "Present",
-                    "absent": "Absent",
-                    "not_signed": "Not Signed"
-                }.get(data['attendance_type'], data['attendance_type'])
-                
-                # Format last event attendance
-                last_event_display = data['last_event_attendance']
-                if last_event_display != "N/A" and "(" in last_event_display:
-                    if "present" in last_event_display.lower():
-                        last_event_display = last_event_display.replace("present", "✅").replace("Present", "✅")
-                    elif "absent" in last_event_display.lower():
-                        last_event_display = last_event_display.replace("absent", "❌").replace("Absent", "❌")
-                    elif "not_signed" in last_event_display.lower() or "not signed" in last_event_display.lower():
-                        last_event_display = last_event_display.replace("not_signed", "⚪").replace("Not Signed", "⚪").replace("not signed", "⚪")
-                
-                table_data.append([
-                    wrap_text(fix_arabic(data['nickname'])),
-                    wrap_text(fix_arabic(status_display)),
-                    wrap_text(f"{data['points']:,}" if data['points'] > 0 else "0"),
-                    wrap_text(fix_arabic(last_event_display), width=30)
-                ])
-
-            fig, ax = plt.subplots(figsize=(14, min(2 + len(table_data) * 0.5, 20)))
-            ax.axis('off')
-            
-            table = ax.table(
-                cellText=table_data,
-                colLabels=headers,
-                cellLoc='left',
-                loc='center',
-                colColours=['#28a745']*len(headers)  # Green color for completion
-            )
-            table.auto_set_font_size(False)
-            table.set_fontsize(11)
-            table.scale(1, 1.4)
-            
-            # Set larger width for the 'Last Event' column (index 3)
-            nrows = len(table_data) + 1
-            for row in range(nrows):
-                cell = table[(row, 3)]
-                cell.set_width(0.3)
-
-            plt.title(f'Attendance Report Completed - {alliance_name} | Session: {session_name}', 
-                    fontsize=16, color='#28a745', pad=20)
-
-            img_buffer = BytesIO()
-            plt.savefig(img_buffer, format='png', bbox_inches='tight')
-            plt.close(fig)
-            img_buffer.seek(0)
-
-            file = discord.File(img_buffer, filename="attendance_completion_report.png")
-
-            embed = discord.Embed(
-                title=f"✅ Attendance Report Completed",
-                description=(
-                    f"**Session:** {session_name}\n"
-                    f"**Alliance:** {alliance_name}\n"
-                    f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"**Total Players:** {len(selected_players)}\n"
-                    f"**Present:** {present_count} | **Absent:** {absent_count} | **Not Signed:** {not_signed_count}\n"
-                    f"**Session ID:** {session_id if session_id else 'N/A'}"
-                ),
-                color=discord.Color.green()
-            )
-            embed.set_image(url="attachment://attendance_completion_report.png")
-            embed.set_footer(text=f"Marked by {interaction.user.name} | Saved to database")
-            
-            # Create view with export button for ephemeral message
-            export_view = discord.ui.View(timeout=300)
-            export_button = discord.ui.Button(
-                label="Export",
-                emoji="📥",
-                style=discord.ButtonStyle.primary
-            )
-            
-            async def export_callback(export_interaction: discord.Interaction):
-                # Prepare records for export - need to fetch with FID
-                records = []
-                with sqlite3.connect('db/attendance.sqlite') as db:
-                    cursor = db.cursor()
-                    cursor.execute("""
-                        SELECT fid, nickname, attendance_status, points, 
-                               last_event_attendance, marked_date, marked_by_username
-                        FROM attendance_records
-                        WHERE session_name = ? AND marked_by = ?
-                        ORDER BY points DESC, marked_date DESC
-                    """, (session_name, interaction.user.id))
-                    records = cursor.fetchall()
-                
-                session_info = {
-                    'session_name': session_name,
-                    'alliance_name': alliance_name,
-                    'total_players': len(selected_players),
-                    'present_count': present_count,
-                    'absent_count': absent_count,
-                    'not_signed_count': not_signed_count
-                }
-                
-                report_cog = self.bot.get_cog("AttendanceReport")
-                if report_cog:
-                    from .attendance_report import ExportFormatSelectView
-                    export_select_view = ExportFormatSelectView(report_cog, records, session_info)
-                    await export_interaction.response.send_message(
-                        "Select export format:",
-                        view=export_select_view,
-                        ephemeral=True
-                    )
-            
-            export_button.callback = export_callback
-            export_view.add_item(export_button)
-            
-            # Return to the attendance menu in the main message
-            await self.show_attendance_menu_from_defer(interaction)
-            
-            # Send the detailed report as an ephemeral follow-up with export button
-            await interaction.followup.send(
-                embed=embed,
-                files=[file],
-                view=export_view,
-                ephemeral=True
-            )
-
-        except Exception as e:
-            print(f"Matplotlib completion report error: {e}")
-            # Fallback to text report
-            await self.show_text_completion_report(interaction, selected_players, alliance_name, session_name, session_id, present_count, absent_count, not_signed_count)
-
-    async def show_text_completion_report(self, interaction, selected_players, alliance_name, session_name, session_id, present_count, absent_count, not_signed_count):
-        """Show completion report using text format"""
-        # Sort: Present (by points desc) → Absent → Not Signed
-        def sort_key(item):
-            fid, data = item
-            attendance_type = data['attendance_type']
-            points = data['points']
-            
-            type_priority = {
-                "present": 1,
-                "absent": 2, 
-                "not_signed": 3
-            }.get(attendance_type, 4)
-            
-            # Sort by type priority first, then by points descending
-            return (type_priority, -points)
-        
-        sorted_players = sorted(selected_players.items(), key=sort_key)
-        
-        report_sections = []
-        
-        # Report summary section
-        report_sections.append("📊 **SUMMARY**")
-        report_sections.append(f"**Session:** {session_name}")
-        report_sections.append(f"**Alliance:** {alliance_name}")
-        report_sections.append(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        report_sections.append(f"**Total Players:** {len(selected_players)}")
-        report_sections.append(f"**Present:** {present_count} | **Absent:** {absent_count} | **Not Signed:** {not_signed_count}")
-        if session_id:
-            report_sections.append(f"**Session ID:** {session_id}")
-        report_sections.append("")
-        
-        # Player details section
-        report_sections.append("👥 **PLAYER DETAILS**")
-        report_sections.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        
-        for fid, data in sorted_players:
-            status_emoji = {
-                "present": "✅",
-                "absent": "❌", 
-                "not_signed": "⚪"
-            }.get(data['attendance_type'], "❓")
-            
-            # Convert last attendance status to relevant emoji
-            last_event_display = data['last_event_attendance']
-            if last_event_display != "N/A" and "(" in last_event_display:
-                if "present" in last_event_display.lower():
-                    last_event_display = last_event_display.replace("present", "✅").replace("Present", "✅")
-                elif "absent" in last_event_display.lower():
-                    last_event_display = last_event_display.replace("absent", "❌").replace("Absent", "❌")
-                elif "not_signed" in last_event_display.lower() or "not signed" in last_event_display.lower():
-                    last_event_display = last_event_display.replace("not_signed", "⚪").replace("Not Signed", "⚪").replace("not signed", "⚪")
-            
-            points_display = f"{data['points']:,}" if data['points'] > 0 else "0"
-            
-            player_line = f"{status_emoji} **{data['nickname']}**"
-            if data['points'] > 0:
-                player_line += f" | **{points_display}** points"
-            if data['last_event_attendance'] != "N/A":
-                player_line += f" | Last: {last_event_display}"
-            
-            report_sections.append(player_line)
-        
-        # Join all sections and create final embed for the ephemeral report
-        report_description = "\n".join(report_sections)
-        report_embed = discord.Embed(
-            title=f"✅ Attendance Report Completed",
-            description=report_description,
-            color=discord.Color.green()
-        )
-        
-        report_embed.set_footer(text=f"Marked by {interaction.user.name} | Saved to database")
-        
-        # Create view with export button for ephemeral message
-        export_view = discord.ui.View(timeout=300)
-        export_button = discord.ui.Button(
-            label="Export",
-            emoji="📥",
-            style=discord.ButtonStyle.primary
-        )
-        
-        async def export_callback(export_interaction: discord.Interaction):
-            # Prepare records for export - need to fetch with FID
-            records = []
-            with sqlite3.connect('db/attendance.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("""
-                    SELECT fid, nickname, attendance_status, points, 
-                           last_event_attendance, marked_date, marked_by_username
-                    FROM attendance_records
-                    WHERE session_name = ? AND marked_by = ?
-                    ORDER BY points DESC, marked_date DESC
-                """, (session_name, interaction.user.id))
-                records = cursor.fetchall()
-            
-            session_info = {
-                'session_name': session_name,
-                'alliance_name': alliance_name,
-                'total_players': len(selected_players),
-                'present_count': present_count,
-                'absent_count': absent_count,
-                'not_signed_count': not_signed_count
-            }
-            
-            report_cog = self.bot.get_cog("AttendanceReport")
-            if report_cog:
-                from .attendance_report import ExportFormatSelectView
-                export_select_view = ExportFormatSelectView(report_cog, records, session_info)
-                await export_interaction.response.send_message(
-                    "Select export format:",
-                    view=export_select_view,
-                    ephemeral=True
-                )
-        
-        export_button.callback = export_callback
-        export_view.add_item(export_button)
-        
-        # Return to the attendance menu in the main message
-        await self.show_attendance_menu_from_defer(interaction)
-        
-        # Send the detailed report as an ephemeral follow-up with export button
-        await interaction.followup.send(
-            embed=report_embed,
-            view=export_view,
-            ephemeral=True
-        )
-
-    async def show_attendance_menu_from_defer(self, interaction: discord.Interaction):
-        """Show the main attendance menu using edit_original_response (for deferred interactions)"""
-        embed = discord.Embed(
-            title="📋 Attendance System",
-            description=(
-                "Please select an operation:\n\n"
-                "**Available Operations**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "📋 **Mark Attendance**\n"
-                "└ Mark attendance for alliance members\n\n"
-                "👀 **View Attendance**\n"
-                "└ View attendance records and reports\n\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.blue()
-        )
-        
-        view = AttendanceView(self, interaction.user.id, interaction.guild_id)
-        await view.initialize_permissions_and_alliances()
-        await interaction.edit_original_response(embed=embed, view=view)
-
-    async def show_edit_session_selection(self, interaction: discord.Interaction, alliance_id: int):
-        """Show available sessions for editing using followup instead of edit"""
-        try:
-            # Send a thinking response first to handle the interaction
-            await interaction.response.defer(ephemeral=True)
-
-            # Get alliance name
-            alliance_name = await self._get_alliance_name(alliance_id)
-
-            # Query database for sessions of this alliance
-            sessions = []
-            with sqlite3.connect('db/attendance.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("""
-                    SELECT * FROM attendance_sessions 
-                    WHERE alliance_id = ? 
-                    ORDER BY session_date DESC
-                """, (alliance_id,))
-                sessions = cursor.fetchall()
-
-            if not sessions:
-                error_embed = discord.Embed(
-                    title="❌ No Sessions Found",
-                    description=f"No attendance sessions found for alliance {alliance_name}.",
-                    color=discord.Color.orange()
-                )
-                back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-                await interaction.followup.send(embed=error_embed, view=back_view)
-                return
-
-            # Create session selection view
-            embed = discord.Embed(
-                title=f"✏️ Edit Attendance - {alliance_name}",
-                description=(
-                    "Please select an attendance session to edit:\n\n"
-                    f"**Alliance:** {alliance_name}\n"
-                    f"**Available Sessions:** {len(sessions)}\n\n"
-                    "Sessions are sorted by date (newest first)."
-                ),
-                color=discord.Color.blue()
-            )
-
-            view = SessionSelectView(sessions, self, alliance_id, alliance_name)
-            await interaction.followup.send(embed=embed, view=view)
-
-        except Exception as e:
-            print(f"Error in show_edit_session_selection: {e}")
-            error_embed = self._create_error_embed(
-                "❌ Error",
-                "An error occurred while loading sessions."
-            )
-            try:
-                await interaction.followup.send(embed=error_embed)
-            except:
-                try:
-                    await interaction.response.send_message(embed=error_embed, ephemeral=True)
-                except Exception as inner_e:
-                    print(f"Critical error in show_edit_session_selection: {inner_e}")
-
-    async def show_session_editing(self, interaction: discord.Interaction, session, alliance_id: int, alliance_name: str):
-        """Show session editing interface with player list"""
-        try:
-            session_id = session[0]
-            session_name = session[10] if len(session) > 10 and session[10] else f"Session {session_id}"
-
-            # Get all alliance members first - this ensures we have a complete list
-            alliance_members = {}
-            with sqlite3.connect('db/users.sqlite') as users_db:
-                cursor = users_db.cursor()
-                cursor.execute("""
-                    SELECT fid, nickname FROM users 
-                    WHERE alliance = ?
-                """, (alliance_id,))
-                for row in cursor.fetchall():
-                    alliance_members[row[0]] = row[1]  # Store as {fid: nickname}
-
-            # Get players with recorded attendance
-            attendance_records = {}
-            with sqlite3.connect('db/attendance.sqlite') as db:
-                cursor = db.cursor()
-
-                # First try with session ID
-                cursor.execute("""
-                    SELECT ar.fid, ar.nickname, ar.attendance_status, ar.points
-                    FROM attendance_records ar
-                    JOIN session_records sr ON ar.id = sr.record_id
-                    WHERE sr.session_id = ?
-                """, (session_id,))
-                records = cursor.fetchall()
-
-                # If no records found, try with session name
-                if not records:
-                    cursor.execute("""
-                        SELECT fid, nickname, attendance_status, points
-                        FROM attendance_records
-                        WHERE alliance_id = ? AND session_name = ?
-                    """, (alliance_id, session_name))
-                    records = cursor.fetchall()
-
-                # Store records in dictionary for quick lookup
-                for record in records:
-                    # Make sure we're using the actual record's status, not overriding with "not_recorded"
-                    # This ensures consistency with the viewing functionality
-                    fid, nickname, status, points = record
-                    attendance_records[fid] = record
-
-            # Combine data: use existing records where available, default values for others
-            players = []
-            for fid, nickname in alliance_members.items():
-                if fid in attendance_records:
-                    players.append(attendance_records[fid])
-                else:
-                    players.append((fid, nickname, 'not_recorded', 0))
-
-            # Sort by status (present first) then by points
-            def sort_key(player):
-                fid, nickname, status, points = player
-                status_priority = {'present': 0, 'absent': 1, 'not_signed': 2, 'not_recorded': 3}.get(status, 4)
-                return (status_priority, -int(points if points else 0))
-
-            players = sorted(players, key=sort_key)
-
-            if not players:
-                error_embed = discord.Embed(
-                    title="❌ No Players Found",
-                    description=f"No player records found for this session.",
-                    color=discord.Color.orange()
-                )
-                back_view = self._create_back_view(lambda i: self.show_edit_session_selection(i, alliance_id))
-                await interaction.edit_original_response(embed=error_embed, view=back_view)
-                return
-
-            # Create player editing view
-            embed = discord.Embed(
-                title=f"✏️ Edit Attendance - {alliance_name}",
-                description=(
-                    f"**Session:** {session_name}\n"
-                    f"**Total Players:** {len(players)}\n"
-                    f"**Players Changed:** 0\n\n"
-                    "Select a player from the dropdown to edit their attendance status or points.\n"
-                    "You can also add new players to the session."
-                ),
-                color=discord.Color.blue()
-            )
-
-            view = EditPlayerSelectView(players, alliance_name, session_name, session_id, self)
-            await interaction.edit_original_response(embed=embed, view=view)
-
-        except Exception as e:
-            print(f"Error in show_session_editing: {e}")
-            error_embed = self._create_error_embed(
-                "❌ Error",
-                "An error occurred while loading session data."
-            )
-            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-            await interaction.edit_original_response(embed=error_embed, view=back_view)
-
-    async def show_add_player_interface(self, interaction: discord.Interaction, alliance_name: str, session_name: str, session_id: int, existing_fids: list):
-        """Show interface to add new players to session"""
-        try:
-            # Get alliance ID from name
-            alliance_id = None
-            with sqlite3.connect('db/alliance.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("SELECT alliance_id FROM alliance_list WHERE name = ?", (alliance_name,))
-                result = cursor.fetchone()
-                if result:
-                    alliance_id = result[0]
-
-            if not alliance_id:
-                await interaction.response.send_message(
-                    "❌ Could not determine alliance ID.",
-                    ephemeral=True
-                )
-                return
-
-            # Get alliance members who aren't in the session
-            players = []
-            with sqlite3.connect('db/users.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("""
-                    SELECT fid, nickname, furnace_lv
-                    FROM users
-                    WHERE alliance = ? AND fid NOT IN ({})
-                    ORDER BY furnace_lv DESC, nickname
-                """.format(','.join('?' * len(existing_fids)) if existing_fids else '0'),
-                    [str(alliance_id)] + [str(fid) for fid in existing_fids])
-                players = cursor.fetchall()
-
-            if not players:
-                await interaction.response.send_message(
-                    "❌ No additional players available in this alliance.",
-                    ephemeral=True
-                )
-                return
-
-            # Show player selection interface
-            embed = discord.Embed(
-                title=f"➕ Add Players - {alliance_name}",
-                description=(
-                    f"**Session:** {session_name}\n"
-                    f"**Available Players:** {len(players)}\n\n"
-                    "Select players to add to this attendance session."
-                ),
-                color=discord.Color.green()
-            )
-
-            view = PlayerSelectView(players, alliance_name, session_name, self, page=0)
-            view.session_id = session_id  # Add session_id to view for reference
-
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-        except Exception as e:
-            print(f"Error in show_add_player_interface: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while loading available players.",
-                ephemeral=True
-            )
-
-    async def save_edited_session(self, interaction: discord.Interaction, edited_players: dict, session_id: int, session_name: str, alliance_name: str):
-        """Save all edited player records to the database"""
-        try:
-            if not edited_players:
-                await interaction.response.send_message(
-                    "❌ No changes to save.",
-                    ephemeral=True
-                )
-                return
-
-            # Get alliance ID
-            alliance_id = None
-            with sqlite3.connect('db/alliance.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("SELECT alliance_id FROM alliance_list WHERE name = ?", (alliance_name,))
-                result = cursor.fetchone()
-                if result:
-                    alliance_id = result[0]
-
-            if not alliance_id:
-                await interaction.response.send_message(
-                    "❌ Could not determine alliance ID.",
-                    ephemeral=True
-                )
-                return
-
-            # Update all records in a single transaction
-            with sqlite3.connect('db/attendance.sqlite', timeout=10.0) as db:
-                cursor = db.cursor()
-
-                # Count attendance types
-                present_count = sum(1 for p in edited_players.values() if p['attendance_type'] == 'present')
-                absent_count = sum(1 for p in edited_players.values() if p['attendance_type'] == 'absent')
-                not_signed_count = sum(1 for p in edited_players.values() if p['attendance_type'] == 'not_signed')
-
-                # For each edited player
-                for fid, data in edited_players.items():
-                    # Get current record for this player in this session
-                    cursor.execute("""
-                        SELECT ar.id FROM attendance_records ar
-                        JOIN session_records sr ON ar.id = sr.record_id
-                        WHERE sr.session_id = ? AND ar.fid = ?
-                    """, (session_id, fid))
-                    record = cursor.fetchone()
-
-                    if record:
-                        # Update existing record
-                        cursor.execute("""
-                            UPDATE attendance_records
-                            SET attendance_status = ?, points = ?, marked_date = ?,
-                                marked_by = ?, marked_by_username = ?
-                            WHERE id = ?
-                        """, (data['attendance_type'], data['points'], 
-                              datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                              interaction.user.id, interaction.user.name, record[0]))
-                    else:
-                        # Insert new record
-                        cursor.execute("""
-                            INSERT INTO attendance_records
-                            (fid, nickname, alliance_id, alliance_name, attendance_status, points,
-                             marked_date, marked_by, marked_by_username, session_name)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (fid, data['nickname'], alliance_id, alliance_name, data['attendance_type'],
-                              data['points'], datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                              interaction.user.id, interaction.user.name, session_name))
-
-                        # Link the new record to the session
-                        record_id = cursor.lastrowid
-                        cursor.execute("""
-                            INSERT INTO session_records (session_id, record_id)
-                            VALUES (?, ?)
-                        """, (session_id, record_id))
-
-                # Update session statistics
-                cursor.execute("""
-                    UPDATE attendance_sessions
-                    SET present_count = ?, absent_count = ?, not_signed_count = ?,
-                        total_players = (SELECT COUNT(record_id) FROM session_records WHERE session_id = ?)
-                    WHERE session_id = ?
-                """, (present_count, absent_count, not_signed_count, session_id, session_id))
-
-                db.commit()
-
-            success_embed = discord.Embed(
-                title="✅ Changes Saved",
-                description=(
-                    f"Successfully updated attendance for {len(edited_players)} players in session '{session_name}'.\n\n"
-                    f"**Present:** {present_count} | **Absent:** {absent_count} | **Not Signed:** {not_signed_count}"
-                ),
-                color=discord.Color.green()
-            )
-
-            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-            await interaction.response.edit_message(embed=success_embed, view=back_view)
-
-        except Exception as e:
-            print(f"Error saving edited session: {e}")
-            await interaction.response.send_message(
-                f"❌ An error occurred while saving changes: {str(e)[:100]}",
-                ephemeral=True
-            )
-
-# Add additional classes for session editing
-class SessionSelectView(discord.ui.View):
-    def __init__(self, sessions, cog, alliance_id, alliance_name, page=0):
-        super().__init__(timeout=1800)
+class SessionSelectViewForMarking(discord.ui.View):
+    """Session select view with marking-specific features"""
+    def __init__(self, sessions, alliance_id, cog):
+        super().__init__(timeout=7200)
         self.sessions = sessions
-        self.cog = cog
         self.alliance_id = alliance_id
-        self.alliance_name = alliance_name
-        self.page = page
-        self.max_page = (len(sessions) - 1) // 25 if sessions else 0
-        self.current_select = None
-        self.update_select_menu()
+        self.cog = cog
+ 
+        # Add dropdown for session selection only if there are sessions
+        if sessions:
+            options = []
+            for session in sessions[:25]:  # Discord limit
+                event_icon = EVENT_TYPE_ICONS.get(session.get('event_type', 'Other'), '📋')
+                options.append(discord.SelectOption(
+                    label=f"{session['name'][:90]} [{session.get('event_type', 'Other')}]",
+                    value=str(session['session_id']),
+                    description=f"{session.get('date', 'Unknown date')} - {session.get('marked_count', 0)}/{session.get('player_count', 0)} marked",
+                    emoji=event_icon
+                ))
+            
+            select = discord.ui.Select(
+                placeholder="📋 Select a session or create new...",
+                options=options
+            )
+            select.callback = lambda interaction: self.on_select(interaction)
+            self.add_item(select)
 
-    def update_select_menu(self):
-        # Remove existing select menu
-        for item in self.children[:]:
-            if isinstance(item, discord.ui.Select):
-                self.remove_item(item)
-
-        start_idx = self.page * 25
-        end_idx = min(start_idx + 25, len(self.sessions))
-        current_sessions = self.sessions[start_idx:end_idx]
-
-        select = discord.ui.Select(
-            placeholder=f"📝 Select a session to edit... (Page {self.page + 1}/{self.max_page + 1})",
-            options=[
-                discord.SelectOption(
-                    label=f"{session[10][:40] if session[10] else f'Session {session[0]}'}", 
-                    value=str(session[0]),
-                    description=f"Date: {session[3][:10]} | Players: {session[6]}",
-                    emoji="📝"
-                ) for session in current_sessions
-            ]
-        )
-
-        async def select_callback(interaction: discord.Interaction):
-            # Acknowledge the interaction with a deferral
-            await interaction.response.defer(ephemeral=False, thinking=False)
-
-            # Get the selected session
-            self.current_select = select
-            session_id = int(select.values[0])
-            selected_session = next((s for s in self.sessions if s[0] == session_id), None)
-
-            if selected_session:
-                # Create a new message instead of editing the current one
-                try:
-                    # Get session details
-                    session_name = selected_session[10] if len(selected_session) > 10 and selected_session[10] else f"Session {session_id}"
-
-                    # Query players directly here with complete alliance membership query
-                    players = []
-                    alliance_members = []
-
-                    # First, get all alliance members to ensure we have the complete list
-                    with sqlite3.connect('db/users.sqlite') as users_db:
-                        cursor = users_db.cursor()
-                        cursor.execute("""
-                            SELECT fid, nickname FROM users 
-                            WHERE alliance = ? 
-                            ORDER BY furnace_lv DESC, nickname
-                        """, (self.alliance_id,))
-                        alliance_members = cursor.fetchall()
-
-                    # Then get attendance records for this session
-                    attendance_records = {}
-                    with sqlite3.connect('db/attendance.sqlite') as db:
-                        cursor = db.cursor()
-                        # Use the same query approach as the viewing functionality
-                        cursor.execute("""
-                            SELECT fid, nickname, attendance_status, points
-                            FROM attendance_records
-                            WHERE alliance_id = ? AND session_name = ?
-                            ORDER BY points DESC, nickname
-                        """, (self.alliance_id, session_name))
-
-                        # Get all records
-                        records = cursor.fetchall()
-
-                        # If that doesn't work, try with session name and alliance ID
-                        if not records:
-                            # Fallback to trying with session name directly
-                            cursor.execute("""
-                                SELECT fid, nickname, attendance_status, points
-                                FROM attendance_records
-                                WHERE alliance_id = ? AND session_name = ?
-                            """, (self.alliance_id, session_name))
-                            records = cursor.fetchall()
-
-                        # Convert to dictionary for faster lookup
-                        for record in records:
-                            # Store record for lookup
-                            attendance_records[record[0]] = record
-
-                    # Combine the data: use attendance record if exists, otherwise default values
-                    for member in alliance_members:
-                        fid, nickname = member
-                        if fid in attendance_records:
-                            # Use existing attendance record
-                            status = attendance_records[fid][2]
-                            points = attendance_records[fid][3]
-                            # Debug print to see which players have records
-                            print(f"Player {nickname} (FID: {fid}) has status: {status} with points: {points}")
-                            players.append(attendance_records[fid])
-                        else:
-                            # Default values for members without records
-                            # No record found, use default status
-                            players.append((fid, nickname, 'not_recorded', 0))
-
-                    # Sort by attendance status (present first) then by points
-                    def sort_key(player):
-                        fid, nickname, status, points = player
-                        status_priority = {'present': 0, 'absent': 1, 'not_signed': 2, 'not_recorded': 3}.get(status, 4)
-                        return (status_priority, -points)
-
-                    players = sorted(players, key=sort_key)
-
-                    if players:
-                        # Count status types for debugging
-                        present_count = sum(1 for p in players if p[2] == 'present')
-                        absent_count = sum(1 for p in players if p[2] == 'absent')
-                        not_signed_count = sum(1 for p in players if p[2] == 'not_signed')
-                        not_recorded_count = sum(1 for p in players if p[2] == 'not_recorded')
-
-                        # Create player editing view with detailed stats
-                        embed = discord.Embed(
-                            title=f"✏️ Edit Attendance - {self.alliance_name}",
-                            description=(
-                                f"**Session:** {session_name}\n"
-                                f"**Total Players:** {len(players)}\n"
-                                f"**Status Breakdown:** ✅Present: {present_count} | ❌Absent: {absent_count} | ⚪Not Signed: {not_signed_count} | ❓Not Recorded: {not_recorded_count}\n"
-                                f"**Players Changed:** 0\n\n"
-                                "Select a player from the dropdown to edit their attendance status or points.\n"
-                                "You can also add new players to the session."
-                            ),
-                            color=discord.Color.blue()
-                        )
-
-                        view = EditPlayerSelectView(players, self.alliance_name, session_name, session_id, self.cog)
-                        await interaction.followup.send(embed=embed, view=view)
-                    else:
-                        await interaction.followup.send(f"No player records found for session {session_name}.")
-                except Exception as e:
-                    print(f"Session selection error: {e}")
-                    await interaction.followup.send(f"Error loading session {session_id}. Please try again.")
-
-        select.callback = select_callback
-        self.add_item(select)
-        self.current_select = select
-
-        # Update navigation button states
-        prev_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "◀️"), None)
-        next_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "▶️"), None)
-
-        if prev_button:
-            prev_button.disabled = self.page == 0
-        if next_button:
-            next_button.disabled = self.page == self.max_page
-
-    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = max(0, self.page - 1)
-        self.update_select_menu()
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=1)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = min(self.max_page, self.page + 1)
-        self.update_select_menu()
-        await interaction.response.edit_message(view=self)
+    @discord.ui.button(
+        label="New Session",
+        style=discord.ButtonStyle.primary,
+        emoji="➕",
+        row=1
+    )
+    async def new_session_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Create a new session"""
+        await interaction.response.send_modal(SessionNameModal(self.cog, self.alliance_id))
 
     @discord.ui.button(
         label="⬅️ Back",
@@ -2333,8 +2138,70 @@ class SessionSelectView(discord.ui.View):
         row=1
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_attendance_menu(interaction)
+        """Go back to alliance selection"""
+        await self.cog.show_alliance_selection_for_marking(interaction)
+ 
+    async def on_select(self, interaction: discord.Interaction):
+        """Handle session selection"""
+        try:
+            await interaction.response.defer()
+            
+            session_id = interaction.data['values'][0]
+            # Find the selected session
+            selected_session = None
+            for session in self.sessions:
+                if session['session_id'] == session_id:
+                    selected_session = session
+                    break
+                    
+            if selected_session:
+                await self.cog.show_attendance_marking(
+                    interaction, 
+                    self.alliance_id, 
+                    await self.cog._get_alliance_name(self.alliance_id),
+                    selected_session['name'], 
+                    session_id=session_id,
+                    is_edit=True
+                )
+            else:
+                await interaction.edit_original_response(
+                    content="❌ Session not found.",
+                    embed=None,
+                    view=None
+                )
+        except Exception as e:
+            await interaction.edit_original_response(
+                content="❌ An error occurred while loading the session.",
+                embed=None,
+                view=None
+            )
 
+class SessionNameModal(discord.ui.Modal):
+    def __init__(self, cog, alliance_id):
+        super().__init__(title="Create New Session")
+        self.cog = cog
+        self.alliance_id = alliance_id
+        
+        self.session_name = discord.ui.TextInput(
+            label="Session Name",
+            placeholder="Enter session name (e.g., 'Bear Tuesday', 'Canyon Sunday')",
+            min_length=1,
+            max_length=100,
+            required=True
+        )
+        self.add_item(self.session_name)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        session_name = self.session_name.value.strip()
+        alliance_name = await self.cog._get_alliance_name(self.alliance_id)
+        
+        await self.cog.show_attendance_marking(
+            interaction,
+            self.alliance_id,
+            alliance_name,
+            session_name,
+            is_edit=False
+        )
 class AttendanceEditModal(discord.ui.Modal, title="Edit Attendance Details"):
     def __init__(self, fid, nickname, attendance_type, parent_view, current_points):
         super().__init__()
@@ -2366,7 +2233,7 @@ class AttendanceEditModal(discord.ui.Modal, title="Edit Attendance Details"):
             status_display = {
                 "present": "Present",
                 "absent": "Absent",
-                "not_signed": "Not Signed"
+                "not_recorded": "Not Recorded"
             }.get(self.attendance_type, self.attendance_type)
 
             embed = discord.Embed(
@@ -2389,7 +2256,7 @@ class AttendanceEditModal(discord.ui.Modal, title="Edit Attendance Details"):
 
 class EditPlayerSelectView(discord.ui.View):
     def __init__(self, players, alliance_name, session_name, session_id, cog, page=0):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=7200)
         self.players = players
         self.alliance_name = alliance_name
         self.session_name = session_name
@@ -2402,7 +2269,7 @@ class EditPlayerSelectView(discord.ui.View):
 
     def _get_status_emoji(self, status):
         """Helper to get status emoji"""
-        return {"present": "✅", "absent": "❌", "not_signed": "⚪", "not_recorded": "❓"}.get(status, "👤")
+        return {"present": "✅", "absent": "❌", "not_recorded": "⚪"}.get(status, "👤")
 
     def update_select_menu(self):
         # Remove existing select menu
@@ -2522,7 +2389,7 @@ class EditPlayerSelectView(discord.ui.View):
 
 class PlayerEditView(discord.ui.View):
     def __init__(self, player, parent_view):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=7200)
         self.player = player
         self.parent_view = parent_view
         self.fid, self.nickname, self.current_status, self.current_points = player
@@ -2535,9 +2402,9 @@ class PlayerEditView(discord.ui.View):
     async def absent_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._edit_attendance(interaction, "absent")
 
-    @discord.ui.button(label="Not Signed", style=discord.ButtonStyle.secondary, custom_id="not_signed_edit")
-    async def not_signed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._edit_attendance(interaction, "not_signed")
+    @discord.ui.button(label="Not Recorded", style=discord.ButtonStyle.secondary, custom_id="not_recorded_edit")
+    async def not_recorded_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._edit_attendance(interaction, "not_recorded")
 
     @discord.ui.button(label="⬅️ Back to List", style=discord.ButtonStyle.secondary, custom_id="back_to_list_edit")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2549,14 +2416,14 @@ class PlayerEditView(discord.ui.View):
             modal = AttendanceEditModal(self.fid, self.nickname, attendance_type, self.parent_view, self.current_points)
             await interaction.response.send_modal(modal)
         else:
-            # For absent/not signed, set points to 0
+            # For absent/not recorded, set points to 0
             self.parent_view.add_edited_player(self.fid, self.nickname, attendance_type, 0)
 
             # Show confirmation message
             status_display = {
                 "present": "Present",
                 "absent": "Absent",
-                "not_signed": "Not Signed"
+                "not_recorded": "Not Recorded"
             }.get(attendance_type, attendance_type)
 
             embed = discord.Embed(

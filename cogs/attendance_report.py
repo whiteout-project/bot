@@ -43,9 +43,19 @@ FC_LEVEL_MAPPING = {
     80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
 }
 
+EVENT_TYPE_ICONS = {
+    "Foundry": "🏭",
+    "Canyon Clash": "⚔️",
+    "Crazy Joe": "🤪",
+    "Bear Trap": "🐻",
+    "Castle Battle": "🏰",
+    "Frostdragon Tyrant": "🐉",
+    "Other": "📋"
+}
+
 class ExportFormatSelectView(discord.ui.View):
     def __init__(self, cog, records, session_info):
-        super().__init__(timeout=60)
+        super().__init__(timeout=300)
         self.cog = cog
         self.records = records
         self.session_info = session_info
@@ -62,24 +72,53 @@ class ExportFormatSelectView(discord.ui.View):
         await self.cog.process_export(interaction, select.values[0], self.records, self.session_info)
 
 class SessionSelectView(discord.ui.View):
-    def __init__(self, sessions, alliance_id, cog):
-        super().__init__(timeout=1800)
+    def __init__(self, sessions, alliance_id, cog, is_marking=False):
+        super().__init__(timeout=7200)
         self.sessions = sessions
         self.alliance_id = alliance_id
         self.cog = cog
+        self.is_marking = is_marking
  
-        select = discord.ui.Select(
-            placeholder="📋 Select a session...",
-            options=[
-                discord.SelectOption(
-                    label=session[:100],
-                    value=session,
-                    description=f"Session: {session}"
-                ) for session in sessions
-            ]
-        )
-        select.callback = self.on_select
-        self.add_item(select)
+        # Add dropdown for session selection only if there are sessions
+        if sessions:
+            # Handle both dict format (from marking) and tuple format (from viewing)
+            options = []
+            for idx, session in enumerate(sessions[:25]):  # Discord limit
+                if isinstance(session, dict):
+                    # Use index as unique identifier for viewing flow
+                    if self.is_marking and session.get('session_id'):
+                        # For marking flow, use session_id
+                        unique_value = str(session['session_id'])
+                    else:
+                        # For viewing flow, use index
+                        unique_value = str(idx)
+                    
+                    # Add date to label if sessions have same names
+                    session_label = session['name'][:80]
+                    if session.get('date') and session.get('date') != 'Unknown':
+                        session_label += f" - {session.get('date')}"
+                    
+                    options.append(discord.SelectOption(
+                        label=session_label[:100],
+                        value=unique_value,
+                        description=f"{session.get('marked_count', 0)} players marked",
+                        emoji="📊"
+                    ))
+                else:
+                    # Fallback for safety
+                    options.append(discord.SelectOption(
+                        label=str(session)[:100],
+                        value=str(idx),
+                        description=f"Session: {session}",
+                        emoji="📊"
+                    ))
+            
+            select = discord.ui.Select(
+                placeholder="📋 Select a session...",
+                options=options
+            )
+            select.callback = self.on_select
+            self.add_item(select)
 
     @discord.ui.button(
         label="⬅️ Back",
@@ -93,8 +132,25 @@ class SessionSelectView(discord.ui.View):
  
     async def on_select(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        session_name = interaction.data['values'][0]
-        await self.cog.show_attendance_report(interaction, self.alliance_id, session_name)
+        selected_value = interaction.data['values'][0]
+        
+        # Get the selected session
+        selected_session = None
+        if selected_value.isdigit():
+            value_int = int(selected_value)
+            if value_int < len(self.sessions):
+                selected_session = self.sessions[value_int]
+        
+        if selected_session and isinstance(selected_session, dict):
+            # Pass both session_id and session_name to the report
+            await self.cog.show_attendance_report(
+                interaction, 
+                self.alliance_id, 
+                selected_session['name'],
+                session_id=selected_session['session_id']
+            )
+        else: # Fallback - old behavior
+            await self.cog.show_attendance_report(interaction, self.alliance_id, selected_value)
 
 class AttendanceReport(commands.Cog):
     def __init__(self, bot):
@@ -102,7 +158,7 @@ class AttendanceReport(commands.Cog):
 
     def _get_status_emoji(self, status):
         """Helper to get status emoji"""
-        return {"present": "✅", "absent": "❌", "not_signed": "⚪"}.get(status, "❓")
+        return {"present": "✅", "absent": "❌", "not_recorded": "⚪"}.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -112,12 +168,25 @@ class AttendanceReport(commands.Cog):
         replacements = [
             ("present", "✅"), ("Present", "✅"),
             ("absent", "❌"), ("Absent", "❌"),
-            ("not_signed", "⚪"), ("Not Signed", "⚪"), ("not signed", "⚪")
+            ("not_recorded", "⚪"), ("Not Recorded", "⚪"), ("not recorded", "⚪")
         ]
         
         for old, new in replacements:
             last_attendance = last_attendance.replace(old, new)
         return last_attendance
+    
+    def _format_date_for_table(self, date_str: str) -> str:
+        """Format date string for table display"""
+        try:
+            if 'T' in date_str:
+                # Parse ISO format and convert to desired format
+                date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                return date_obj.strftime("%Y-%m-%d %H:%M UTC")
+            else: # Already formatted or partial date
+                return date_str
+        except:
+            # Fallback to original if parsing fails
+            return date_str.split()[0] if date_str else "N/A"
 
     def _create_error_embed(self, title, description, color=discord.Color.red()):
         """Helper to create error embeds"""
@@ -161,13 +230,16 @@ class AttendanceReport(commands.Cog):
         # Write metadata
         writer.writerow(['Session Name:', session_info['session_name']])
         writer.writerow(['Alliance:', session_info['alliance_name']])
+        writer.writerow(['Event Type:', session_info.get('event_type', 'Other')])
+        if session_info.get('event_date'):
+            writer.writerow(['Event Date:', session_info['event_date'].split('T')[0] if isinstance(session_info['event_date'], str) else session_info['event_date']])
         writer.writerow(['Export Date:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
         writer.writerow(['Total Players:', session_info['total_players']])
-        writer.writerow(['Present:', session_info['present_count'], 'Absent:', session_info['absent_count'], 'Not Signed:', session_info['not_signed_count']])
-        writer.writerow([])  # Empty row
+        writer.writerow(['Present:', session_info['present_count'], 'Absent:', session_info['absent_count']])
+        writer.writerow([])
         
         # Write headers
-        writer.writerow(['FID', 'Nickname', 'Status', 'Points', 'Last Event Attendance', 'Marked Date', 'Marked By'])
+        writer.writerow(['FID', 'Nickname', 'Status', 'Points', 'Last Event Attendance', 'Marked By'])
         
         # Write data
         for record in records:
@@ -177,7 +249,6 @@ class AttendanceReport(commands.Cog):
                 record[2].replace('_', ' ').title(),  # Status
                 record[3] if record[3] else 0,  # Points
                 record[4] if record[4] else 'N/A',  # Last Event
-                record[5],  # Marked Date
                 record[6]   # Marked By
             ])
         
@@ -193,13 +264,16 @@ class AttendanceReport(commands.Cog):
         # Write metadata
         writer.writerow(['Session Name:', session_info['session_name']])
         writer.writerow(['Alliance:', session_info['alliance_name']])
+        writer.writerow(['Event Type:', session_info.get('event_type', 'Other')])
+        if session_info.get('event_date'):
+            writer.writerow(['Event Date:', session_info['event_date'].split('T')[0] if isinstance(session_info['event_date'], str) else session_info['event_date']])
         writer.writerow(['Export Date:', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
         writer.writerow(['Total Players:', session_info['total_players']])
-        writer.writerow(['Present:', session_info['present_count'], 'Absent:', session_info['absent_count'], 'Not Signed:', session_info['not_signed_count']])
+        writer.writerow(['Present:', session_info['present_count'], 'Absent:', session_info['absent_count']])
         writer.writerow([])  # Empty row
         
         # Write headers
-        writer.writerow(['FID', 'Nickname', 'Status', 'Points', 'Last Event Attendance', 'Marked Date', 'Marked By'])
+        writer.writerow(['FID', 'Nickname', 'Status', 'Points', 'Last Event Attendance', 'Marked By'])
         
         # Write data
         for record in records:
@@ -209,7 +283,6 @@ class AttendanceReport(commands.Cog):
                 record[2].replace('_', ' ').title(),  # Status
                 record[3] if record[3] else 0,  # Points
                 record[4] if record[4] else 'N/A',  # Last Event
-                record[5],  # Marked Date
                 record[6]   # Marked By
             ])
         
@@ -268,7 +341,7 @@ class AttendanceReport(commands.Cog):
         }}
         .present {{ color: #4CAF50; font-weight: bold; }}
         .absent {{ color: #f44336; font-weight: bold; }}
-        .not-signed {{ color: #9e9e9e; font-weight: bold; }}
+        .not-recorded {{ color: #9e9e9e; font-weight: bold; }}
         .footer {{
             text-align: center;
             margin-top: 20px;
@@ -285,12 +358,13 @@ class AttendanceReport(commands.Cog):
     
     <div class="stats">
         <h3>Summary</h3>
+        <p><strong>Event Type:</strong> {session_info.get('event_type', 'Other')}</p>
+        {'<p><strong>Event Date:</strong> ' + (session_info['event_date'].split('T')[0] if isinstance(session_info.get('event_date'), str) else str(session_info.get('event_date', ''))) + '</p>' if session_info.get('event_date') else ''}
         <p><strong>Export Date:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         <p><strong>Total Players:</strong> {session_info['total_players']}</p>
         <p>
             <span class="present">Present: {session_info['present_count']}</span> | 
-            <span class="absent">Absent: {session_info['absent_count']}</span> | 
-            <span class="not-signed">Not Signed: {session_info['not_signed_count']}</span>
+            <span class="absent">Absent: {session_info['absent_count']}</span>
         </p>
     </div>
     
@@ -302,7 +376,6 @@ class AttendanceReport(commands.Cog):
                 <th>Status</th>
                 <th>Points</th>
                 <th>Last Event Attendance</th>
-                <th>Marked Date</th>
                 <th>Marked By</th>
             </tr>
         </thead>
@@ -321,7 +394,6 @@ class AttendanceReport(commands.Cog):
                 <td class="{status_class}">{status_display}</td>
                 <td>{record[3] if record[3] else 0:,}</td>
                 <td>{record[4] if record[4] else 'N/A'}</td>
-                <td>{record[5]}</td>
                 <td>{record[6]}</td>
             </tr>
 """
@@ -368,6 +440,7 @@ class AttendanceReport(commands.Cog):
                     f"**Format:** {format_name}\n"
                     f"**Alliance:** {session_info['alliance_name']}\n"
                     f"**Session:** {session_info['session_name']}\n"
+                    f"**Event Type:** {session_info.get('event_type', 'Other')}\n"
                     f"**Total Records:** {session_info['total_players']}",
                     file=file
                 )
@@ -399,9 +472,15 @@ class AttendanceReport(commands.Cog):
                 ephemeral=True
             )
 
-    async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
-        """Show attendance records with user's preferred format"""
-        try:
+    async def show_attendance_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str, 
+                                   is_preview=False, selected_players=None, session_id=None, marking_view=None):
+        """
+        Show attendance records with user's preferred format
+        - is_preview=True: 3-column format for marking attendance preview
+        - is_preview=False: 6-column format for full report viewing
+        - selected_players: Used only for preview mode from marking flow
+        """
+        try:            
             # Get user's report preference
             report_type = await self.get_user_report_preference(interaction.user.id)
             
@@ -410,51 +489,143 @@ class AttendanceReport(commands.Cog):
                 report_type = "text"
                 
             if report_type == "matplotlib":
-                await self.show_matplotlib_report(interaction, alliance_id, session_name)
+                await self.show_matplotlib_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
             else:
-                await self.show_text_report(interaction, alliance_id, session_name)
+                await self.show_text_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
                 
         except Exception as e:
             print(f"Error showing attendance report: {e}")
+            import traceback
+            traceback.print_exc()
             await interaction.edit_original_response(
                 content="❌ An error occurred while generating attendance report.",
                 embed=None,
                 view=None
             )
 
-    async def show_matplotlib_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
+    async def show_matplotlib_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str,
+                                   is_preview=False, selected_players=None, session_id=None, marking_view=None):
         """Show attendance records as a Matplotlib table image"""
         try:
             # Get alliance name
             alliance_name = await self._get_alliance_name(alliance_id)
 
-            # Get attendance records - sorted by points descending
-            records = []
-            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                cursor = attendance_db.cursor()
-                cursor.execute("""
-                    SELECT fid, nickname, attendance_status, points, last_event_attendance, marked_date, marked_by_username
-                    FROM attendance_records
-                    WHERE alliance_id = ? AND session_name = ?
-                    ORDER BY points DESC, marked_date DESC
-                """, (alliance_id, session_name))
-                records = cursor.fetchall()
+            # Handle preview mode vs full report mode
+            if is_preview and selected_players:
+                # Preview mode - use selected_players data
+                filtered_players = {
+                    fid: data for fid, data in selected_players.items()
+                    if data['attendance_type'] != 'not_recorded'
+                }
+                
+                # Get event info from marking view if available
+                event_type = marking_view.event_type if marking_view and hasattr(marking_view, 'event_type') else None
+                event_date = marking_view.event_date if marking_view and hasattr(marking_view, 'event_date') else None
+                
+                # Convert to records format for consistency
+                records = []
+                for fid, data in sorted(filtered_players.items(), key=lambda x: x[1]['points'], reverse=True):
+                    records.append((
+                        fid,
+                        data['nickname'],
+                        data['attendance_type'],
+                        data['points'],
+                        data.get('last_event_attendance', 'N/A'),
+                        None,  # No date in preview
+                        None   # No marked_by in preview
+                    ))
+                
+                if not records:
+                    await interaction.response.edit_message(
+                        content=f"❌ No attendance has been marked yet.",
+                        embed=None,
+                        view=None
+                    )
+                    return
+                    
+                present_count = sum(1 for r in records if r[2] == 'present')
+                absent_count = sum(1 for r in records if r[2] == 'absent')
+                
+            else:
+                # Full report mode - fetch from database
+                records = []
+                event_type = None
+                event_date = None
+                with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                    cursor = attendance_db.cursor()
+                    if session_id:
+                        # Use session_id if provided (more specific)
+                        cursor.execute("""
+                            SELECT player_id, player_name, status, points, event_type, event_date, marked_by_username
+                            FROM attendance_records
+                            WHERE session_id = ? AND status != 'not_recorded'
+                            ORDER BY points DESC, marked_at DESC
+                        """, (session_id,))
+                    else:
+                        # Fallback to session_name (less specific, may include multiple sessions)
+                        cursor.execute("""
+                            SELECT player_id, player_name, status, points, event_type, event_date, marked_by_username
+                            FROM attendance_records
+                            WHERE alliance_id = ? AND session_name = ? AND status != 'not_recorded'
+                            ORDER BY points DESC, marked_at DESC
+                        """, (str(alliance_id), session_name))
+                    db_records = cursor.fetchall()
+                    
+                    # Get session_id if not provided (needed for last event lookup)
+                    if not session_id and db_records:
+                        cursor.execute("""
+                            SELECT DISTINCT session_id FROM attendance_records
+                            WHERE alliance_id = ? AND session_name = ?
+                            LIMIT 1
+                        """, (str(alliance_id), session_name))
+                        result = cursor.fetchone()
+                        if result:
+                            session_id = result[0]
+                    
+                    # Convert to expected format and get event info
+                    for record in db_records:
+                        if event_type is None:
+                            event_type = record[4]
+                        if event_date is None:
+                            event_date = record[5]
+                        
+                        # Fetch last event attendance for this player
+                        last_event_attendance = await self.fetch_last_event_attendance(
+                            record[0], event_type, event_date, session_id
+                        ) if event_type and event_date and session_id else "N/A"
+                        
+                        # Format: (fid, nickname, status, points, last_event_attendance, marked_date, marked_by)
+                        records.append((
+                            record[0],  # player_id
+                            record[1],  # player_name
+                            record[2],  # status
+                            record[3],  # points
+                            last_event_attendance,
+                            event_date, # use event_date
+                            record[6]   # marked_by_username
+                        ))
 
-            if not records:
-                await interaction.response.edit_message(
-                    content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
-                    embed=None,
-                    view=None
-                )
-                return
+                if not records:
+                    await interaction.response.edit_message(
+                        content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
+                        embed=None,
+                        view=None
+                    )
+                    return
 
-            # Count attendance types
-            present_count = sum(1 for r in records if r[2] == 'present')
-            absent_count = sum(1 for r in records if r[2] == 'absent')
-            not_signed_count = sum(1 for r in records if r[2] == 'not_signed')
+                # Count attendance types
+                present_count = sum(1 for r in records if r[2] == 'present')
+                absent_count = sum(1 for r in records if r[2] == 'absent')
 
-            # Generate Matplotlib table image
-            headers = ["Player", "Status", "Last Event", "Points", "Date", "Marked By"]
+            not_recorded_count = 0  # We're not showing not_recorded in reports
+
+            # Generate Matplotlib table image - different headers for preview vs full
+            if is_preview:
+                headers = ["Player", "Status", "Points"]
+                table_color = '#28a745'  # Green for preview
+            else:
+                headers = ["Player", "Status", "Last Event", "Points", "Marked By"]
+                table_color = '#1f77b4'  # Blue for full report
             table_data = []
             
             def fix_arabic(text):
@@ -478,36 +649,73 @@ class AttendanceReport(commands.Cog):
                 return '\n'.join(lines)
 
             for row in records:
-                table_data.append([
-                    wrap_text(fix_arabic(row[1] or "Unknown")),  # Nickname
-                    wrap_text(fix_arabic(row[2].replace('_', ' ').title())),
-                    wrap_text(fix_arabic(row[4] if row[4] else "N/A"), width=40),
-                    wrap_text(f"{row[3]:,}" if row[3] else "0"),
-                    wrap_text(fix_arabic(row[5].split()[0] if row[5] else "N/A")),
-                    wrap_text(fix_arabic(row[6] or "Unknown"))
-                ])
+                if is_preview:
+                    # Preview mode - 3 columns
+                    status_display = {
+                        "present": "Present",
+                        "absent": "Absent"
+                    }.get(row[2], row[2])
+                    
+                    table_data.append([
+                        wrap_text(fix_arabic(row[1] or "Unknown")),
+                        wrap_text(fix_arabic(status_display)),
+                        wrap_text(f"{row[3]:,}" if row[3] else "0")
+                    ])
+                else:
+                    # Full report - 5 columns (Date column removed)
+                    table_data.append([
+                        wrap_text(fix_arabic(row[1] or "Unknown")),
+                        wrap_text(fix_arabic(row[2].replace('_', ' ').title())),
+                        wrap_text(fix_arabic(row[4] if row[4] else "N/A"), width=40),
+                        wrap_text(f"{row[3]:,}" if row[3] else "0"),
+                        wrap_text(fix_arabic(row[6] or "Unknown"))
+                    ])
 
-            fig, ax = plt.subplots(figsize=(13, min(1 + len(table_data) * 0.5, 20)))
+            # Calculate figure height based on number of rows
+            row_height = 0.6 if not is_preview else 0.5
+            header_height = 2
+            fig_height = min(header_height + len(table_data) * row_height, 25 if not is_preview else 20)
+            
+            # Adjust figure width for preview mode
+            fig_width = 10 if is_preview else 13
+            
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
             ax.axis('off')
+            
+            # Format title with event type and date
+            title_text = f'Attendance Report - {alliance_name} | {session_name}'
+            if event_type:
+                title_text += f' [{event_type}]'
+            if event_date:
+                # Extract just the date part if it's a datetime string
+                date_str = event_date.split('T')[0] if 'T' in str(event_date) else str(event_date).split()[0]
+                title_text += f' | Date: {date_str}'
+            
+            ax.text(0.5, 0.98, title_text, 
+                   transform=ax.transAxes, fontsize=16 if not is_preview else 14, color=table_color, 
+                   ha='center', va='top', weight='bold')
+            
+            # Create table with adjusted position to avoid title overlap
             table = ax.table(
                 cellText=table_data,
                 colLabels=headers,
                 cellLoc='left',
-                loc='center',
-                colColours=['#1f77b4']*len(headers)
+                loc='upper center',
+                bbox=[0, -0.05, 1, 0.90],  # Move down and reduce height to avoid title
+                colColours=[table_color]*len(headers)
             )
             table.auto_set_font_size(False)
             table.set_fontsize(12)
             table.scale(1, 1.5)
             
-            # Set larger width for the 'Last Event' column (index 2)
-            nrows = len(table_data) + 1
-            for row in range(nrows):
-                cell = table[(row, 2)]
-                cell.set_width(0.35)
-
-            plt.title(f'Attendance Report - {alliance_name} | Session: {session_name}', 
-                     fontsize=16, color='#1f77b4', pad=20)
+            # Set larger width for columns - only for full report
+            if not is_preview:
+                nrows = len(table_data) + 1
+                for row in range(nrows):
+                    cell = table[(row, 2)]
+                    cell.set_width(0.35)
+                    cell = table[(row, 4)]
+                    cell.set_width(0.25)
 
             img_buffer = BytesIO()
             plt.savefig(img_buffer, format='png', bbox_inches='tight')
@@ -516,78 +724,242 @@ class AttendanceReport(commands.Cog):
 
             file = discord.File(img_buffer, filename="attendance_report.png")
 
+            # Format embed title with event type
+            embed_title = f"📊 Attendance Report - {alliance_name}"
+            description_text = f"**Session:** {session_name}"
+            if event_type:
+                description_text += f" [{event_type}]"
+            description_text += f"\n**Total Marked:** {len(records)} players"
+            
             embed = discord.Embed(
-                title=f"📊 Attendance Report - {alliance_name}",
-                description=f"**Session:** {session_name}\n**Total Players:** {len(records)}\n**Sorted by Points (Highest to Lowest)**",
-                color=discord.Color.blue()
+                title=embed_title,
+                description=description_text,
+                color=discord.Color.green() if is_preview else discord.Color.blue()
             )
             embed.set_image(url="attachment://attendance_report.png")
 
-            # Create view with back and export buttons
-            view = discord.ui.View(timeout=1800)
-            
-            # Back button
-            back_button = discord.ui.Button(
-                label="⬅️ Back to Sessions",
-                style=discord.ButtonStyle.secondary
-            )
-            
-            async def back_callback(back_interaction: discord.Interaction):
-                await self.show_session_selection(back_interaction, alliance_id)
-            
-            back_button.callback = back_callback
-            view.add_item(back_button)
-            
-            # Export button
-            export_button = discord.ui.Button(
-                label="Export",
-                emoji="📥",
-                style=discord.ButtonStyle.primary
-            )
-            
-            async def export_callback(export_interaction: discord.Interaction):
-                session_info = {
-                    'session_name': session_name,
-                    'alliance_name': alliance_name,
-                    'total_players': len(records),
-                    'present_count': present_count,
-                    'absent_count': absent_count,
-                    'not_signed_count': not_signed_count
-                }
-                export_view = ExportFormatSelectView(self, records, session_info)
-                await export_interaction.response.send_message(
-                    "Select export format:",
-                    view=export_view,
-                    ephemeral=True
+            # Create view based on mode
+            if is_preview:
+                # Preview mode - create a simple back button that clears attachments
+                view = discord.ui.View(timeout=7200)
+                back_button = discord.ui.Button(
+                    label="⬅️ Back",
+                    style=discord.ButtonStyle.secondary
                 )
-            
-            export_button.callback = export_callback
-            view.add_item(export_button)
+                
+                async def preview_back_callback(back_interaction: discord.Interaction):
+                    # Check if we have a stored marking view to return to
+                    if marking_view:
+                        await marking_view.update_main_embed(back_interaction)
+                    else:
+                        # Fallback - just remove attachment
+                        await back_interaction.response.edit_message(attachments=[])
+                
+                back_button.callback = preview_back_callback
+                view.add_item(back_button)
+            else:
+                # Full report mode - back and export buttons
+                view = discord.ui.View(timeout=7200)
+                
+                # Back button
+                back_button = discord.ui.Button(
+                    label="⬅️ Back",
+                    style=discord.ButtonStyle.secondary
+                )
+                
+                async def back_callback(back_interaction: discord.Interaction):
+                    await self.show_session_selection(back_interaction, alliance_id)
+                
+                back_button.callback = back_callback
+                view.add_item(back_button)
+                
+                # Export button - only for full reports
+                export_button = discord.ui.Button(
+                    label="Export",
+                    emoji="📥",
+                    style=discord.ButtonStyle.primary
+                )
+                
+                async def export_callback(export_interaction: discord.Interaction):
+                    session_info = {
+                        'session_name': session_name,
+                        'alliance_name': alliance_name,
+                        'event_type': event_type or 'Other',
+                        'event_date': event_date,
+                        'total_players': len(records),
+                        'present_count': present_count,
+                        'absent_count': absent_count,
+                        'not_recorded_count': not_recorded_count
+                    }
+                    export_view = ExportFormatSelectView(self, records, session_info)
+                    await export_interaction.response.send_message(
+                        "Select export format:",
+                        view=export_view,
+                        ephemeral=True
+                    )
+                
+                export_button.callback = export_callback
+                view.add_item(export_button)
 
-            await interaction.edit_original_response(embed=embed, view=view, attachments=[file])
+            # Handle both regular and deferred interactions
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view, attachments=[file])
+            else:
+                await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
 
         except Exception as e:
             print(f"Matplotlib error: {e}")
             # Fallback to text report
-            await self.show_text_report(interaction, alliance_id, session_name)
+            await self.show_text_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
 
-    async def show_text_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str):
+    async def fetch_last_event_attendance(self, player_id: str, event_type: str, event_date: str, session_id: str):
+        """Fetch the last attendance for a player of the same event type before the current event date"""
+        try:
+            with sqlite3.connect('db/attendance.sqlite') as db:
+                cursor = db.cursor()
+                # Get the last attendance of the same event type before the current event date
+                cursor.execute("""
+                    SELECT status, event_date 
+                    FROM attendance_records 
+                    WHERE player_id = ? 
+                    AND event_type = ? 
+                    AND event_date < ?
+                    AND session_id != ?
+                    ORDER BY event_date DESC 
+                    LIMIT 1
+                """, (player_id, event_type, event_date, session_id))
+                
+                result = cursor.fetchone()
+                if result:
+                    status, last_date = result
+                    # Format the date
+                    try:
+                        last_date_obj = datetime.fromisoformat(last_date.replace('Z', '+00:00'))
+                        date_str = last_date_obj.strftime("%m/%d")
+                    except:
+                        date_str = last_date.split('T')[0] if 'T' in last_date else last_date
+                    
+                    status_display = status.replace('_', ' ').title()
+                    return f"{status_display} ({date_str})"
+                else:
+                    # No record found - check if there are ANY previous events of this type
+                    cursor.execute("""
+                        SELECT COUNT(DISTINCT session_id) 
+                        FROM attendance_records 
+                        WHERE event_type = ? 
+                        AND event_date < ?
+                        AND session_id != ?
+                    """, (event_type, event_date, session_id))
+                    
+                    event_count = cursor.fetchone()
+                    if event_count and event_count[0] > 0:
+                        # There were previous events of this type, but player wasn't in them
+                        # This could mean they're new to the alliance
+                        return "New Player"
+                    else:
+                        # This is the first event of this type
+                        return "First Event"
+        except Exception as e:
+            print(f"Error fetching last attendance: {e}")
+            return "N/A"
+
+    async def show_text_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str,
+                             is_preview=False, selected_players=None, session_id=None, marking_view=None):
         """Show attendance records for a specific session with emoji-based formatting"""
         try:
             # Get alliance name
             alliance_name = await self._get_alliance_name(alliance_id)
 
-            # Get attendance records - sorted by points descending
-            records = []
-            with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                cursor = attendance_db.cursor()
-                cursor.execute("""
-                    SELECT fid, nickname, attendance_status, points, last_event_attendance, marked_date, marked_by_username
-                    FROM attendance_records
-                    WHERE alliance_id = ? AND session_name = ?
-                    ORDER BY points DESC, marked_date DESC
-                """, (alliance_id, session_name))
-                records = cursor.fetchall()
+            # Handle preview mode vs full report mode
+            if is_preview and selected_players:
+                # Preview mode - use selected_players data
+                filtered_players = {
+                    fid: data for fid, data in selected_players.items()
+                    if data['attendance_type'] != 'not_recorded'
+                }
+                
+                # Get event info from marking view if available
+                event_type = marking_view.event_type if marking_view and hasattr(marking_view, 'event_type') else None
+                event_date = marking_view.event_date if marking_view and hasattr(marking_view, 'event_date') else None
+                
+                # Convert to records format for consistency
+                records = []
+                for fid, data in sorted(filtered_players.items(), key=lambda x: x[1]['points'], reverse=True):
+                    records.append((
+                        fid,
+                        data['nickname'],
+                        data['attendance_type'],
+                        data['points'],
+                        data.get('last_event_attendance', 'N/A'),
+                        event_date,  # use event_date from marking view
+                        None   # No marked_by in preview
+                    ))
+                
+                if not records:
+                    await interaction.response.edit_message(
+                        content=f"❌ No attendance has been marked yet.",
+                        embed=None,
+                        view=None
+                    )
+                    return
+            else:
+                # Full report mode - fetch from database
+                records = []
+                event_type = None
+                event_date = None
+                with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                    cursor = attendance_db.cursor()
+                    if session_id:
+                        # Use session_id if provided (more specific)
+                        cursor.execute("""
+                            SELECT player_id, player_name, status, points, event_type, event_date, marked_by_username
+                            FROM attendance_records
+                            WHERE session_id = ? AND status != 'not_recorded'
+                            ORDER BY points DESC, marked_at DESC
+                        """, (session_id,))
+                    else:
+                        # Fallback to session_name (less specific, may include multiple sessions)
+                        cursor.execute("""
+                            SELECT player_id, player_name, status, points, event_type, event_date, marked_by_username
+                            FROM attendance_records
+                            WHERE alliance_id = ? AND session_name = ? AND status != 'not_recorded'
+                            ORDER BY points DESC, marked_at DESC
+                        """, (str(alliance_id), session_name))
+                    db_records = cursor.fetchall()
+                    
+                    # Get session_id if not provided (needed for last event lookup)
+                    if not session_id and db_records:
+                        cursor.execute("""
+                            SELECT DISTINCT session_id FROM attendance_records
+                            WHERE alliance_id = ? AND session_name = ?
+                            LIMIT 1
+                        """, (str(alliance_id), session_name))
+                        result = cursor.fetchone()
+                        if result:
+                            session_id = result[0]
+                    
+                    # Convert to expected format and get event info
+                    for record in db_records:
+                        if event_type is None:
+                            event_type = record[4]
+                        if event_date is None:
+                            event_date = record[5]
+                        
+                        # Fetch last event attendance for this player
+                        last_event_attendance = await self.fetch_last_event_attendance(
+                            record[0], event_type, event_date, session_id
+                        ) if event_type and event_date and session_id else "N/A"
+                        
+                        # Format: (fid, nickname, status, points, last_event_attendance, marked_date, marked_by)
+                        records.append((
+                            record[0],  # player_id
+                            record[1],  # player_name
+                            record[2],  # status
+                            record[3],  # points
+                            last_event_attendance,
+                            event_date, # use event_date
+                            record[6]   # marked_by_username
+                        ))
 
             if not records:
                 await interaction.edit_original_response(
@@ -600,34 +972,37 @@ class AttendanceReport(commands.Cog):
             # Count attendance types
             present_count = sum(1 for r in records if r[2] == 'present')
             absent_count = sum(1 for r in records if r[2] == 'absent')
-            not_signed_count = sum(1 for r in records if r[2] == 'not_signed')
+            not_recorded_count = 0  # We're not showing not_recorded in reports anymore
 
-            # Get session ID if available
-            session_id = None
-            try:
-                with sqlite3.connect('db/attendance.sqlite') as attendance_db:
-                    cursor = attendance_db.cursor()
-                    cursor.execute("""
-                        SELECT session_id FROM attendance_sessions
-                        WHERE session_name = ? AND alliance_id = ?
-                        LIMIT 1
-                    """, (session_name, alliance_id))
-                    result = cursor.fetchone()
-                    if result:
-                        session_id = result[0]
-            except:
-                pass
+            # Get session ID from attendance records if not provided
+            if not session_id:
+                try:
+                    with sqlite3.connect('db/attendance.sqlite') as attendance_db:
+                        cursor = attendance_db.cursor()
+                        cursor.execute("""
+                            SELECT DISTINCT session_id FROM attendance_records
+                            WHERE session_name = ? AND alliance_id = ?
+                            LIMIT 1
+                        """, (session_name, str(alliance_id)))
+                        result = cursor.fetchone()
+                        if result:
+                            session_id = result[0]
+                except:
+                    pass
 
             # Build the report sections
             report_sections = []
             
             # Summary section
             report_sections.append("📊 **SUMMARY**")
-            report_sections.append(f"**Session:** {session_name}")
+            session_line = f"**Session:** {session_name}"
+            if event_type:
+                session_line += f" [{event_type}]"
+            report_sections.append(session_line)
             report_sections.append(f"**Alliance:** {alliance_name}")
             report_sections.append(f"**Date:** {records[0][5].split()[0] if records else 'N/A'}")
-            report_sections.append(f"**Total Players:** {len(records)}")
-            report_sections.append(f"**Present:** {present_count} | **Absent:** {absent_count} | **Not Signed:** {not_signed_count}")
+            report_sections.append(f"**Total Marked:** {len(records)} players")
+            report_sections.append(f"**Present:** {present_count} | **Absent:** {absent_count}")
             if session_id:
                 report_sections.append(f"**Session ID:** {session_id}")
             report_sections.append("")
@@ -636,16 +1011,15 @@ class AttendanceReport(commands.Cog):
             report_sections.append("👥 **PLAYER DETAILS**")
             report_sections.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
-            # Sort: Present (by points desc) → Absent → Not Signed
+            # Sort: Present (by points desc) → Absent
             def sort_key(record):
                 attendance_type = record[2]
                 points = record[3] or 0
                 
                 type_priority = {
                     "present": 1,
-                    "absent": 2, 
-                    "not_signed": 3
-                }.get(attendance_type, 4)
+                    "absent": 2
+                }.get(attendance_type, 3)
                 
                 return (type_priority, -points)
             
@@ -689,7 +1063,7 @@ class AttendanceReport(commands.Cog):
                 embed.set_footer(text="Sorted by Points (Highest to Lowest)")
             
             # Create view with back and export buttons
-            view = discord.ui.View(timeout=1800)
+            view = discord.ui.View(timeout=7200)
             
             # Back button
             back_button = discord.ui.Button(
@@ -714,10 +1088,12 @@ class AttendanceReport(commands.Cog):
                 session_info = {
                     'session_name': session_name,
                     'alliance_name': alliance_name,
+                    'event_type': event_type or 'Other',
+                    'event_date': event_date,
                     'total_players': len(records),
                     'present_count': present_count,
                     'absent_count': absent_count,
-                    'not_signed_count': not_signed_count
+                    'not_recorded_count': not_recorded_count
                 }
                 export_view = ExportFormatSelectView(self, records, session_info)
                 await export_interaction.response.send_message(
@@ -729,15 +1105,20 @@ class AttendanceReport(commands.Cog):
             export_button.callback = export_callback
             view.add_item(export_button)
             
-            await interaction.edit_original_response(embed=embed, view=view)
+            # Handle both regular and deferred interactions
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
             print(f"Error showing text attendance report: {e}")
-            await interaction.edit_original_response(
-                content="❌ An error occurred while generating attendance report.",
-                embed=None,
-                view=None
-            )
+            # Try to respond appropriately based on interaction state
+            error_content = "❌ An error occurred while generating attendance report."
+            if interaction.response.is_done():
+                await interaction.edit_original_response(content=error_content, embed=None, view=None)
+            else:
+                await interaction.response.edit_message(content=error_content, embed=None, view=None)
 
     async def show_session_selection(self, interaction: discord.Interaction, alliance_id: int):
         """Show available attendance sessions for an alliance"""
@@ -751,19 +1132,33 @@ class AttendanceReport(commands.Cog):
                 if alliance_result:
                     alliance_name = alliance_result[0]
         
-            # Get distinct session names from attendance records
+            # Get session details from single attendance_records table
             sessions = []
             with sqlite3.connect('db/attendance.sqlite') as attendance_db:
                 cursor = attendance_db.cursor()
                 cursor.execute("""
-                    SELECT DISTINCT session_name 
+                    SELECT 
+                        session_id,
+                        session_name,
+                        event_type,
+                        MIN(event_date) as session_date,
+                        COUNT(DISTINCT player_id) as player_count,
+                        SUM(CASE WHEN status != 'not_recorded' THEN 1 ELSE 0 END) as marked_count
                     FROM attendance_records
-                    WHERE alliance_id = ? 
-                    AND session_name IS NOT NULL
-                    AND TRIM(session_name) <> ''
-                    ORDER BY marked_date DESC
-                """, (alliance_id,))
-                sessions = [row[0] for row in cursor.fetchall() if row[0]]
+                    WHERE alliance_id = ?
+                    GROUP BY session_id
+                    ORDER BY session_date DESC
+                """, (str(alliance_id),))
+                
+                for row in cursor.fetchall():
+                    sessions.append({
+                        'session_id': row[0],
+                        'name': row[1],
+                        'event_type': row[2],
+                        'date': row[3].split('T')[0] if row[3] else "Unknown",
+                        'player_count': row[4],
+                        'marked_count': row[5]
+                    })
 
             if not sessions:
                 # Create embed for no sessions found
@@ -774,7 +1169,7 @@ class AttendanceReport(commands.Cog):
                 )
                 
                 # Add back button
-                back_view = discord.ui.View(timeout=1800)
+                back_view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
                     label="⬅️ Back to Alliance Selection",
                     style=discord.ButtonStyle.secondary
