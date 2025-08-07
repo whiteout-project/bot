@@ -65,7 +65,7 @@ class GNCommands(commands.Cog):
                         name="📌 Community & Support",
                         value=(
                             "**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
-                            "**Discord Community:** [Join our Discord](https://discord.gg/HFnNnQWnbS)\n"
+                            "**Discord Community:** [Join our Discord](https://discord.gg/apYByj6K2m)\n"
                             "**Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
                         ),

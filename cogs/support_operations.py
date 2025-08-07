@@ -33,7 +33,7 @@ class SupportOperations(commands.Cog):
             title="🤖 Bot Support Information",
             description=(
                 "If you need help with the bot or are experiencing any issues, "
-                "please feel free to ask on our [Discord](https://discord.gg/HFnNnQWnbS)\n\n"
+                "please feel free to ask on our [Discord](https://discord.gg/apYByj6K2m)\n\n"
                 "**Additional resources:**\n"
                 "**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
                 "**Issues & Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n\n"
@@ -87,7 +87,7 @@ class SupportView(discord.ui.View):
                 "This is an open source Discord bot for Whiteout Survival.\n"
                 "The project is community-driven and freely available for everyone.\n"
                 "**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
-                "**Community:** [Discord](https://discord.gg/HFnNnQWnbS)\n\n"
+                "**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"
                 "**Features**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "• Alliance member management\n"

@@ -229,6 +229,10 @@ def check_and_install_requirements():
                 import aiohttp_socks
             elif package_name == "python-dotenv":
                 import dotenv
+            elif package_name == "python-bidi":
+                import bidi
+            elif package_name == "arabic-reshaper":
+                import arabic_reshaper
             elif package_name.lower() == "pillow":
                 import PIL
             elif package_name.lower() == "numpy":
@@ -462,7 +466,8 @@ if __name__ == "__main__":
                     current_version = f.read().strip()
             else:
                 current_version = "v0.0.0"
-                        
+            print(Fore.CYAN + f"Current version: {current_version}" + Style.RESET_ALL)
+
             if current_version != latest_tag:
                 print(Fore.YELLOW + f"New version available: {latest_tag} (from {source_name})" + Style.RESET_ALL)
                 print("Update Notes:")
@@ -759,7 +764,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "registration"]
+        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "attendance", "attendance_report", "registration"]
         
         failed_cogs = []
         
