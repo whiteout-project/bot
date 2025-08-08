@@ -154,6 +154,8 @@ class Register(commands.Cog):
             ) as response:
                 if response.status == 200:
                     return await response.json()
+                elif response.status == 429:
+                    raise Exception("RATE_LIMITED")
                 else:
                     raise Exception(f"Failed to fetch user data: {response.status}")
         finally:
@@ -184,12 +186,43 @@ class Register(commands.Cog):
             return
         
         try:
-            user_data = (await self.fetch_user(fid))["data"]
-        except Exception as _:
-            await interaction.response.send_message(
-                "❌ Failed to fetch user data. Please try again later.",
-                ephemeral=True
-            )
+            api_response = await self.fetch_user(fid)
+            
+            if api_response.get("msg") != "success":
+                error_msg = api_response.get("msg", "Unknown error")
+                
+                if "role not exist" in error_msg.lower():
+                    display_msg = "❌ Invalid FID. Please try again."
+                else:
+                    display_msg = f"❌ Invalid FID: {error_msg}"
+                
+                await interaction.response.send_message(
+                    display_msg,
+                    ephemeral=True
+                )
+                return
+            
+            if "data" not in api_response:
+                await interaction.response.send_message(
+                    "❌ Invalid response from server. Please try again later.",
+                    ephemeral=True
+                )
+                return
+                
+            user_data = api_response["data"]
+            
+        except Exception as e:
+            if str(e) == "RATE_LIMITED":
+                await interaction.response.send_message(
+                    "⏳ Rate limit reached. Please wait a minute before trying again.",
+                    ephemeral=True
+                )
+            else:
+                print(f"Error fetching user data for FID {fid}: {e}")
+                await interaction.response.send_message(
+                    "❌ Failed to fetch user data. Please try again later.",
+                    ephemeral=True
+                )
             return
 
         nickname = user_data["nickname"]
