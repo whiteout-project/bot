@@ -94,7 +94,7 @@ class Register(commands.Cog):
             cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (user_id,))
             result = cursor.fetchone()
             
-            return not (not result or result[0] == 1)
+            return result is not None and result[0] == 1
         
     def is_already_in_users(self, fid: int) -> bool:
         """Check if a user with the given fid is already registered."""
