@@ -416,7 +416,7 @@ class Alliance(commands.Cog):
                                         )
                                         channel = select_interaction.channel
                                         msg = await channel.fetch_message(message_id)
-                                        await select_interaction.edit_original_response(embed=queue_status_embed)
+                                        await msg.edit(embed=queue_status_embed)
 
                                         self.c.execute("""
                                             SELECT channel_id FROM alliancesettings WHERE alliance_id = ?
@@ -801,7 +801,7 @@ class Alliance(commands.Cog):
 
         class PaginatedAllianceView(discord.ui.View):
             def __init__(self, pages, original_callback):
-                super().__init__(timeout=300)
+                super().__init__(timeout=7200)
                 self.current_page = 0
                 self.pages = pages
                 self.original_callback = original_callback
@@ -1599,7 +1599,7 @@ class MemberOperationsView(discord.ui.View):
 
 class PaginatedDeleteView(discord.ui.View):
     def __init__(self, pages, original_callback):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.current_page = 0
         self.pages = pages
         self.original_callback = original_callback
@@ -1680,7 +1680,7 @@ class PaginatedDeleteView(discord.ui.View):
 
 class PaginatedChannelView(discord.ui.View):
     def __init__(self, channels, original_callback):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.current_page = 0
         self.channels = channels
         self.original_callback = original_callback
@@ -1695,9 +1695,9 @@ class PaginatedChannelView(discord.ui.View):
         current_channels = self.pages[self.current_page]
         channel_options = [
             discord.SelectOption(
-                label=channel.name[:40],
+                label=f"#{channel.name}"[:100],
                 value=str(channel.id),
-                description=f"Channel ID: {channel.id}" if len(channel.name) > 40 else None,
+                description=f"Channel ID: {channel.id}" if len(f"#{channel.name}") > 40 else None,
                 emoji="📢"
             ) for channel in current_channels
         ]

@@ -349,6 +349,18 @@ class PlainEditorView(discord.ui.View):
         self.notification_type = notification_type
         self.message = None
 
+        if self.repeat == "fixed":
+            try:
+                conn = sqlite3.connect("db/beartime.sqlite")
+                cursor = conn.cursor()
+                cursor.execute("SELECT weekday FROM notification_days WHERE notification_id = ?", (self.notification_id,))
+                weekday_value = cursor.fetchone()
+                if weekday_value:
+                    self.weekdays = row[0]
+                conn.close()
+            except Exception as e:
+                print(f"Failed to load weekdays: {e}")
+
         for child in self.children:
             if isinstance(child, discord.ui.Button) and child.custom_id == "description_button":
                 if "EMBED_MESSAGE" in self.description:

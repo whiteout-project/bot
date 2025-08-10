@@ -34,14 +34,21 @@ class GiftCodeAPI:
             self.conn = bot.conn
             self.cursor = self.conn.cursor()
         else:
-            self.conn = sqlite3.connect('db/giftcode.sqlite')
+            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0)
             self.cursor = self.conn.cursor()
             
-        self.settings_conn = sqlite3.connect('db/settings.sqlite')
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0)
         self.settings_cursor = self.settings_conn.cursor()
         
-        self.users_conn = sqlite3.connect('db/users.sqlite')
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0)
         self.users_cursor = self.users_conn.cursor()
+        
+        # Configure SQLite for better concurrent access, avoid DB locks
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA cache_size=10000")
+        self.conn.execute("PRAGMA temp_store=MEMORY")
+        self.conn.commit()
         
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
@@ -50,6 +57,27 @@ class GiftCodeAPI:
         self.logger = logging.getLogger("gift_operationsapi")
         
         asyncio.create_task(self.start_api_check())
+
+    async def _execute_with_retry(self, operation, *args, max_retries=3, delay=0.1):
+        """Execute a database operation with retry logic for handling locks."""
+        for attempt in range(max_retries):
+            try:
+                return operation(*args)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    self.logger.warning(f"Database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                else:
+                    raise
+
+    async def _safe_commit(self, conn, operation_name="operation"):
+        """Safely commit database changes with retry logic."""
+        try:
+            await self._execute_with_retry(conn.commit)
+        except sqlite3.OperationalError as e:
+            self.logger.error(f"Failed to commit {operation_name}: {e}")
+            raise
 
     async def start_api_check(self):
         """Start periodic API synchronization with exponential backoff on failures."""
@@ -200,23 +228,52 @@ class GiftCodeAPI:
                                 formatted_date = date_obj.strftime("%Y-%m-%d")
                                 if code not in db_codes:
                                     try:
+                                        # First add as pending
                                         self.cursor.execute(
                                             "INSERT OR IGNORE INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)",
-                                            (code, formatted_date, "validated")
+                                            (code, formatted_date, "pending")
                                         )
                                         new_codes.append((code, formatted_date))
                                     except Exception as e:
                                         self.logger.exception(f"Error inserting new code {code}: {e}")
 
                             try:
-                                self.conn.commit()
+                                await self._safe_commit(self.conn, "new codes insertion")
 
                                 if new_codes: # Notify and process new codes
-                                    self.logger.info(f"Added {len(new_codes)} new codes from API")
+                                    self.logger.info(f"Added {len(new_codes)} new codes from API - validating...")
+                                    
+                                    # Validate new codes immediately
+                                    valid_codes_count = 0
+                                    invalid_codes_count = 0
+                                    
                                     for code, formatted_date in new_codes:
                                         try:
-                                            self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
-                                            auto_alliances = self.cursor.fetchall() or []
+                                            # Get GiftOperations cog to validate
+                                            gift_operations = self.bot.get_cog('GiftOperations')
+                                            if gift_operations:
+                                                is_valid, validation_msg = await gift_operations.validate_gift_code_immediately(code, "api")
+                                                
+                                                if is_valid:
+                                                    valid_codes_count += 1
+                                                    self.logger.info(f"API code '{code}' validated successfully")
+                                                    # Check for auto-use
+                                                    self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+                                                    auto_alliances = self.cursor.fetchall() or []
+                                                    validation_status = "✅ Validated"
+                                                elif is_valid is False:
+                                                    invalid_codes_count += 1
+                                                    self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
+                                                    validation_status = f"❌ Invalid: {validation_msg}"
+                                                    auto_alliances = []  # Don't auto-use invalid codes
+                                                else:
+                                                    self.logger.warning(f"API code '{code}' validation inconclusive: {validation_msg}")
+                                                    validation_status = f"⚠️ Pending: {validation_msg}"
+                                                    auto_alliances = []  # Don't auto-use pending codes
+                                            else:
+                                                self.logger.error("GiftOperations cog not found for validation!")
+                                                validation_status = "⚠️ Validation unavailable"
+                                                auto_alliances = []
 
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
                                             admin_ids = self.settings_cursor.fetchall()
@@ -299,7 +356,7 @@ class GiftCodeAPI:
                                                 if "invalid" in response_text.lower(): # Code was rejected as invalid by API, mark it as invalid locally
                                                     self.logger.warning(f"Code {db_code} marked invalid by API, updating local status")
                                                     self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (db_code,))
-                                                    self.conn.commit()
+                                                    await self._safe_commit(self.conn, "mark code invalid")
                                                 
                                                 backoff_time = await self._handle_api_error(post_response, response_text)
                                                 await asyncio.sleep(backoff_time)
@@ -366,7 +423,7 @@ class GiftCodeAPI:
                                         "INSERT OR REPLACE INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)", 
                                         (giftcode, datetime.now().strftime("%Y-%m-%d"), "validated")
                                     )
-                                    self.conn.commit()
+                                    await self._safe_commit(self.conn, "add giftcode")
                                     return True
                                 else:
                                     self.logger.warning(f"API didn't confirm success for code {giftcode}: {response_text[:200]}")
@@ -382,7 +439,7 @@ class GiftCodeAPI:
                             if "invalid" in response_text.lower(): # Code was rejected as invalid by API, mark it as invalid locally
                                 self.logger.warning(f"Code {giftcode} marked invalid by API")
                                 self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
-                                self.conn.commit()
+                                await self._safe_commit(self.conn, "mark code invalid")
                             backoff_time = await self._handle_api_error(response, response_text)
                             await asyncio.sleep(backoff_time)
                             return False
@@ -406,7 +463,7 @@ class GiftCodeAPI:
             if not exists_in_api: # Make sure we don't bother API with DELETE if it's not needed
                 self.logger.info(f"Code {giftcode} not found in API - no need to remove")
                 self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
-                self.conn.commit()
+                await self._safe_commit(self.conn, "mark code invalid")
                 return True
             
             self.logger.info(f"Removing invalid code {giftcode} from API")
@@ -430,7 +487,7 @@ class GiftCodeAPI:
                                 if result.get('success') == True:
                                     self.logger.info(f"Successfully removed code {giftcode} from API")
                                     self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
-                                    self.conn.commit()
+                                    await self._safe_commit(self.conn, "remove giftcode")
                                     return True
                                 else:
                                     self.logger.warning(f"API didn't confirm removal of code {giftcode}: {response_text[:200]}")
@@ -521,7 +578,7 @@ class GiftCodeAPI:
                             else:
                                 self.logger.info(f"Code {code} is invalid (status: {status}) but not in API - only updating local status")
                                 self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (code,))
-                                self.conn.commit()
+                                await self._safe_commit(self.conn, "mark code invalid")
                             invalid_count += 1
                         else:
                             validated_count += 1

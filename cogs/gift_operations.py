@@ -22,6 +22,7 @@ from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
 from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
+from collections import deque
 
 class GiftOperations(commands.Cog):
     def __init__(self, bot):
@@ -101,6 +102,14 @@ class GiftOperations(commands.Cog):
             )
         """)
         self.conn.commit()
+        
+        # Add scan_history column if it doesn't exist (defaults to 0/False)
+        try:
+            self.cursor.execute("ALTER TABLE giftcode_channel ADD COLUMN scan_history INTEGER DEFAULT 0")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
 
         # Add validation_status column to gift_codes table if it doesn't exist
         try:
@@ -130,6 +139,13 @@ class GiftOperations(commands.Cog):
         self._validation_lock = asyncio.Lock()
         self.last_validation_attempt_time = 0
         self.validation_cooldown = 5
+        self._last_cleanup_date = None  # Track when we last ran cleanup (daily)
+        
+        # Gift Code Validation Queue System
+        self.validation_queue = deque()
+        self.validation_in_progress = False
+        self.validation_queue_lock = asyncio.Lock()
+        self.validation_queue_task = None
         self.test_captcha_cooldowns = {} # User ID: last test timestamp for test button
         self.test_captcha_delay = 60
 
@@ -161,13 +177,13 @@ class GiftOperations(commands.Cog):
             if ocr_settings:
                 enabled, save_images = ocr_settings
                 if enabled == 1:
-                    self.logger.info("GiftOps __init__: OCR is enabled. Initializing ddddocr solver...")
+                    self.logger.info("GiftOps __init__: OCR is enabled. Initializing ONNX solver...")
                     self.captcha_solver = GiftCaptchaSolver(save_images=save_images)
                     if not self.captcha_solver.is_initialized:
-                        self.logger.error("GiftOps __init__: DdddOcr solver FAILED to initialize.")
+                        self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
                         self.captcha_solver = None
                     else:
-                        self.logger.info("GiftOps __init__: DdddOcr solver initialized successfully.")
+                        self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
                 else:
                     self.logger.info("GiftOps __init__: OCR is disabled in settings.")
             else:
@@ -179,13 +195,13 @@ class GiftOperations(commands.Cog):
                 self.logger.info("GiftOps __init__: Attempting initialization with default settings...")
                 self.captcha_solver = GiftCaptchaSolver(save_images=0)
                 if not self.captcha_solver.is_initialized:
-                    self.logger.error("GiftOps __init__: DdddOcr solver FAILED to initialize with defaults.")
+                    self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize with defaults.")
                     self.captcha_solver = None
                 else: # Ensure success is logged here for the CI
-                    self.logger.info("GiftOps __init__: DdddOcr solver initialized successfully.")
+                    self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
 
         except ImportError as lib_err:
-            self.logger.exception(f"GiftOps __init__: ERROR - Missing required library for OCR (likely ddddocr): {lib_err}. Captcha solving disabled.")
+            self.logger.exception(f"GiftOps __init__: ERROR - Missing required library for OCR (likely onnxruntime): {lib_err}. Captcha solving disabled.")
             self.captcha_solver = None
         except Exception as e:
             self.logger.exception(f"GiftOps __init__: Unexpected error during Captcha solver setup: {e}")
@@ -216,6 +232,166 @@ class GiftOperations(commands.Cog):
         import unicodedata
         cleaned = ''.join(char for char in giftcode if unicodedata.category(char)[0] != 'C')
         return cleaned.strip()
+    
+    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None):
+        """Add a gift code to the validation queue for processing."""
+        async with self.validation_queue_lock:
+            queue_item = {
+                'giftcode': giftcode,
+                'source': source,
+                'message': message,
+                'channel': channel,
+                'timestamp': datetime.now(),
+                'status': 'queued'
+            }
+            self.validation_queue.append(queue_item)
+            self.logger.info(f"Added gift code '{giftcode}' to validation queue (source: {source}, queue length: {len(self.validation_queue)})")
+            
+            # Start queue processing if not already running
+            if not self.validation_queue_task or self.validation_queue_task.done():
+                self.validation_queue_task = asyncio.create_task(self.process_validation_queue())
+    
+    async def process_validation_queue(self):
+        """Process the validation queue one item at a time."""
+        self.logger.info("Starting validation queue processing")
+        
+        while True:
+            async with self.validation_queue_lock:
+                if not self.validation_queue:
+                    self.logger.info("Validation queue is empty, stopping processing")
+                    break
+                
+                queue_item = self.validation_queue.popleft()
+                self.validation_in_progress = True
+                
+            try:
+                await self._process_queue_item(queue_item)
+            except Exception as e:
+                self.logger.exception(f"Error processing queue item {queue_item['giftcode']}: {e}")
+            finally:
+                self.validation_in_progress = False
+                await asyncio.sleep(0.5)  # Small delay between validations
+        
+        self.logger.info("Validation queue processing completed")
+    
+    async def _process_queue_item(self, queue_item):
+        """Process a single queue item."""
+        giftcode = queue_item['giftcode']
+        source = queue_item['source']
+        message = queue_item['message']
+        channel = queue_item['channel']
+        
+        self.logger.info(f"Processing gift code '{giftcode}' from queue (source: {source})")
+        
+        # Check if code already exists
+        self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
+        if self.cursor.fetchone():
+            self.logger.info(f"Code '{giftcode}' already exists in database.")
+            if message and channel:
+                await self._send_existing_code_response(message, giftcode, channel)
+            return
+        
+        # Show processing message if from channel
+        processing_message = None
+        if message and channel:
+            processing_embed = discord.Embed(
+                title="🔄 Processing Gift Code...",
+                description=f"Validating `{giftcode}` (Position in queue: Processing now)",
+                color=discord.Color.blue()
+            )
+            processing_message = await channel.send(embed=processing_embed)
+        
+        # Perform validation
+        is_valid, validation_msg = await self.validate_gift_code_immediately(giftcode, source)
+        
+        # Handle validation result
+        if message and channel:
+            await self._send_validation_response(message, giftcode, is_valid, validation_msg, processing_message)
+        
+        # Process auto-use if valid
+        if is_valid:
+            await self._process_auto_use(giftcode)
+    
+    async def _send_existing_code_response(self, message, giftcode, channel):
+        """Send response for existing gift code."""
+        reply_embed = discord.Embed(title="ℹ️ Gift Code Already Known", color=discord.Color.blue())
+        reply_embed.description = (
+            f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 **Sender:** {message.author.mention}\n"
+            f"🎁 **Gift Code:** `{giftcode}`\n"
+            f"📝 **Status:** Already in database.\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+        )
+        await channel.send(embed=reply_embed)
+        
+        try:
+            await message.add_reaction("ℹ️")
+        except (discord.Forbidden, discord.NotFound):
+            pass
+    
+    async def _send_validation_response(self, message, giftcode, is_valid, validation_msg, processing_message=None):
+        """Send validation response to channel."""
+        if is_valid:
+            reply_embed = discord.Embed(title="✅ Gift Code Validated", color=discord.Color.green())
+            reply_embed.description = (
+                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 **Sender:** {message.author.mention}\n"
+                f"🎁 **Gift Code:** `{giftcode}`\n"
+                f"✅ **Status:** {validation_msg}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            reaction = "✅"
+        elif is_valid is False:
+            reply_embed = discord.Embed(title="❌ Invalid Gift Code", color=discord.Color.red())
+            reply_embed.description = (
+                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 **Sender:** {message.author.mention}\n"
+                f"🎁 **Gift Code:** `{giftcode}`\n"
+                f"❌ **Status:** {validation_msg}\n"
+                f"📝 **Action:** Code not added to database\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            reaction = "❌"
+        else:
+            reply_embed = discord.Embed(title="⚠️ Gift Code Added (Pending)", color=discord.Color.yellow())
+            reply_embed.description = (
+                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 **Sender:** {message.author.mention}\n"
+                f"🎁 **Gift Code:** `{giftcode}`\n"
+                f"⚠️ **Status:** {validation_msg}\n"
+                f"📝 **Action:** Added for later validation\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            reaction = "⚠️"
+        
+        if processing_message:
+            await processing_message.edit(embed=reply_embed)
+        else:
+            await message.channel.send(embed=reply_embed)
+        
+        try:
+            await message.add_reaction(reaction)
+        except (discord.Forbidden, discord.NotFound):
+            pass
+    
+    async def _process_auto_use(self, giftcode):
+        """Process auto-use for valid gift codes."""
+        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+        auto_alliances = self.cursor.fetchall()
+        
+        if auto_alliances:
+            self.logger.info(f"Triggering auto-use for {len(auto_alliances)} alliances for code '{giftcode}'")
+            for alliance in auto_alliances:
+                await self.use_giftcode_for_alliance(alliance[0], giftcode)
+    
+    async def get_queue_status(self):
+        """Get current queue status."""
+        async with self.validation_queue_lock:
+            return {
+                'queue_length': len(self.validation_queue),
+                'processing': self.validation_in_progress,
+                'items': [{'giftcode': item['giftcode'], 'source': item['source']} for item in self.validation_queue]
+            }
     
     @commands.Cog.listener()
     async def on_ready(self):
@@ -290,11 +466,11 @@ class GiftOperations(commands.Cog):
                     enabled, save_images_setting = ocr_settings
                     self.logger.info(f"on_ready loaded settings: Enabled={enabled}, SaveImages={save_images_setting}")
                     if enabled == 1:
-                        self.logger.info("OCR is enabled, attempting ddddocr initialization...")
+                        self.logger.info("OCR is enabled, attempting ONNX initialization...")
                         try:
                             self.captcha_solver = GiftCaptchaSolver(save_images=save_images_setting)
                             if not self.captcha_solver.is_initialized:
-                                self.logger.error("DdddOcr solver FAILED to initialize in on_ready.")
+                                self.logger.error("ONNX solver FAILED to initialize in on_ready.")
                                 self.captcha_solver = None
                         except Exception as e:
                             self.logger.exception("Failed to initialize Captcha Solver in on_ready.")
@@ -337,14 +513,11 @@ class GiftOperations(commands.Cog):
             else:
                 self.logger.info("All configured gift code channels appear valid.")
 
-            # Start Background Task Loop
-            if not self.check_channels_loop.is_running():
-                self.logger.info("Starting check_channels_loop background task...")
-                self.check_channels_loop.start()
-                self.logger.info("check_channels_loop started.")
-            else:
-                self.logger.info("check_channels_loop is already running.")
-
+            # Start periodic validation loop
+            if not self.periodic_validation_loop.is_running():
+                self.periodic_validation_loop.start()
+                self.logger.info("Started periodic validation loop (15 minute interval)")
+            
             self.logger.info("GiftOps Cog: on_ready setup finished successfully.")
 
         except sqlite3.Error as db_err:
@@ -364,14 +537,6 @@ class GiftOperations(commands.Cog):
             if not channel_info:
                 return
 
-            try:
-                self.logger.info(f"GiftOps: [on_message] Running API sync for channel {message.channel.id}")
-                await self.api.validate_and_clean_giftcode_file()
-                await self.api.sync_with_api()
-                self.logger.info(f"GiftOps: [on_message] API sync complete.")
-            except Exception as e:
-                self.logger.exception(f"Error during API sync triggered by on_message: {str(e)}")
-
             content = message.content.strip()
             if not content:
                 return
@@ -385,74 +550,19 @@ class GiftOperations(commands.Cog):
                 code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
                 if code_match:
                     giftcode = code_match.group(1)
+            
             if giftcode:
                 giftcode = self.clean_gift_code(giftcode)
+            
             if not giftcode:
-                self.logger.debug(f"[on_message] No valid gift code format found in message {message.id}")
+                # No valid gift code format found, skip silently
                 return
 
             log_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             self.logger.info(f"{log_timestamp} GiftOps: [on_message] Detected potential code '{giftcode}' in channel {message.channel.id} (Msg ID: {message.id})")
 
-            # Check if code already exists
-            self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
-            if self.cursor.fetchone():
-                self.logger.info(f"GiftOps: [on_message] Code '{giftcode}' already exists in database.")
-                reply_embed = discord.Embed(title="ℹ️ Gift Code Already Known", color=discord.Color.blue())
-                reply_embed.description=(
-                        f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"👤 **Sender:** {message.author.mention}\n"
-                        f"🎁 **Gift Code:** `{giftcode}`\n"
-                        f"📝 **Status:** Already in database.\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n")
-                reaction_to_add = "ℹ️"
-            else:
-                # Add code without validation
-                self.logger.info(f"GiftOps: [on_message] Adding new code '{giftcode}' to database as pending validation.")
-                self.cursor.execute(
-                    "INSERT INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)",
-                    (giftcode, datetime.now().strftime("%Y-%m-%d"), "pending")
-                )
-                self.conn.commit()
-
-                # Don't send to API until validated
-                self.logger.info(f"GiftOps: [on_message] Code '{giftcode}' added as pending - will send to API after validation.")
-
-                self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
-                auto_alliances = self.cursor.fetchall()
-                if auto_alliances:
-                    self.logger.info(f"GiftOps: [on_message] Triggering auto-use for {len(auto_alliances)} alliances for code '{giftcode}'.")
-                    for alliance in auto_alliances:
-                        await self.use_giftcode_for_alliance(alliance[0], giftcode)
-
-                else:
-                    self.logger.info(f"GiftOps: [on_message] No alliances configured for auto-use.")
-
-                reply_embed = discord.Embed(title="✅ Gift Code Added", color=discord.Color.green())
-                reply_embed.description=(
-                    f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Sender:** {message.author.mention}\n"
-                    f"🎁 **Gift Code:** `{giftcode}`\n"
-                    f"📝 **Status:** Added to database (will be validated on first use).\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n")
-                reaction_to_add = "✅"
-
-            # Add reaction and reply
-            if reaction_to_add:
-                try:
-                    await message.add_reaction(reaction_to_add)
-                except (discord.Forbidden, discord.NotFound):
-                    self.logger.error(f"GiftOps: [on_message] Failed to add reaction '{reaction_to_add}' to message {message.id}")
-                except Exception as react_err:
-                    self.logger.exception(f"GiftOps: [on_message] Unexpected error adding reaction: {react_err}")
-
-            if reply_embed:
-                try:
-                    await message.reply(embed=reply_embed, mention_author=False)
-                except (discord.Forbidden, discord.NotFound):
-                    self.logger.error(f"GiftOps: [on_message] Failed to reply to message {message.id}")
-                except Exception as reply_err:
-                    self.logger.exception(f"GiftOps: [on_message] Unexpected error replying: {reply_err}")
+            # Add to validation queue
+            await self.add_to_validation_queue(giftcode, "channel", message, message.channel)
 
         except Exception as e:
             self.logger.exception(f"GiftOps: UNEXPECTED Error in on_message handler: {str(e)}")
@@ -555,6 +665,130 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Error getting test FID: {e}")
             return "244886619"
+    
+    async def get_validation_fid(self):
+        """Get the best available FID for gift code validation.
+        
+        Hierarchy:
+        1. Configured test FID (if valid)
+        2. Random alliance member FID (if no test FID)
+        3. Relo default FID (244886619) as fallback
+        
+        Returns:
+            tuple: (fid, source) where source is 'test_fid', 'alliance_member', or 'default'
+        """
+        try:
+            # First try: Use configured test FID if it's valid
+            test_fid = self.get_test_fid()
+            
+            # Check if test FID is actually configured (not default)
+            self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
+            result = self.settings_cursor.fetchone()
+            
+            if result and result[0] != "244886619":
+                # Test FID is configured, verify it's valid
+                is_valid, _ = await self.verify_test_fid(test_fid)
+                if is_valid:
+                    self.logger.info(f"Using configured test FID for validation: {test_fid}")
+                    return test_fid, 'test_fid'
+            
+            # Second try: Use a random alliance member
+            with sqlite3.connect('db/users.sqlite') as users_conn:
+                users_cursor = users_conn.cursor()
+                users_cursor.execute("""
+                    SELECT fid, nickname FROM users 
+                    WHERE alliance IS NOT NULL AND alliance != '' 
+                    ORDER BY RANDOM() 
+                    LIMIT 1
+                """)
+                member = users_cursor.fetchone()
+                
+                if member:
+                    fid, nickname = member
+                    self.logger.info(f"Using alliance member FID for validation: {fid} ({nickname})")
+                    return fid, 'alliance_member'
+            
+            # Third try: Fall back to default FID
+            self.logger.info("No alliance members found, using default FID for validation: 244886619")
+            return "244886619", 'default'
+            
+        except Exception as e:
+            self.logger.exception(f"Error in get_validation_fid: {e}")
+            return "244886619", 'default'
+    
+    async def validate_gift_code_immediately(self, giftcode, source="unknown"):
+        """Immediately validate a gift code when it's added from any source.
+        
+        Args:
+            giftcode: The gift code to validate
+            source: Where the code came from ('api', 'button', 'channel')
+            
+        Returns:
+            tuple: (is_valid, status_message)
+        """
+        try:
+            # Clean the gift code
+            giftcode = self.clean_gift_code(giftcode)
+            
+            # Get the best FID for validation
+            validation_fid, fid_source = await self.get_validation_fid()
+            
+            self.logger.info(f"Validating gift code '{giftcode}' from {source} using {fid_source} FID: {validation_fid}")
+            
+            # Check if already validated
+            self.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
+            existing = self.cursor.fetchone()
+            
+            if existing:
+                status = existing[0]
+                if status == 'invalid':
+                    self.logger.info(f"Gift code '{giftcode}' already marked as invalid")
+                    return False, "Code already marked as invalid"
+                elif status == 'validated':
+                    self.logger.info(f"Gift code '{giftcode}' already validated")
+                    return True, "Code already validated"
+            
+            # Perform validation using the selected FID
+            status = await self.claim_giftcode_rewards_wos(validation_fid, giftcode)
+            
+            # Handle validation results
+            if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
+                # Valid code - mark as validated
+                self.cursor.execute("""
+                    INSERT OR REPLACE INTO gift_codes (giftcode, date, validation_status) 
+                    VALUES (?, date('now'), 'validated')
+                """, (giftcode,))
+                self.conn.commit()
+                
+                self.logger.info(f"Gift code '{giftcode}' validated successfully using {fid_source} FID")
+                return True, f"Code validated successfully ({status})"
+                
+            elif status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
+                # Invalid code - mark as invalid
+                self.mark_code_invalid(giftcode)
+                
+                reason_map = {
+                    "TIME_ERROR": "Code has expired",
+                    "CDK_NOT_FOUND": "Code not found or incorrect",
+                    "USAGE_LIMIT": "Usage limit reached"
+                }
+                reason = reason_map.get(status, f"Invalid ({status})")
+                
+                self.logger.warning(f"Gift code '{giftcode}' is invalid: {reason}")
+                
+                # Remove from API if needed
+                if hasattr(self, 'api') and self.api:
+                    asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
+                
+                return False, reason
+                
+            else: # Other statuses - don't mark as invalid yet
+                self.logger.warning(f"Gift code '{giftcode}' validation returned: {status}")
+                return None, f"Validation inconclusive ({status})"
+                
+        except Exception as e:
+            self.logger.exception(f"Error validating gift code '{giftcode}': {e}")
+            return None, f"Validation error: {str(e)}"
 
     def encode_data(self, data, debug_sign_error=False):
         secret = self.wos_encrypt_key
@@ -577,6 +811,111 @@ class GiftOperations(commands.Cog):
         
         return {"sign": sign, **data}
 
+    def batch_insert_user_giftcodes(self, user_giftcode_data):
+        """Batch insert/update user giftcode records for better performance."""
+        if not user_giftcode_data:
+            return
+        
+        try: # Executemany for batch operations - much faster than individual inserts
+            self.cursor.executemany("""
+                INSERT OR REPLACE INTO user_giftcodes (fid, giftcode, status)
+                VALUES (?, ?, ?)
+            """, user_giftcode_data)
+            
+            self.conn.commit()
+            self.logger.info(f"GiftOps: Batch inserted/updated {len(user_giftcode_data)} user giftcode records")
+            
+        except Exception as e:
+            self.logger.exception(f"GiftOps: Error in batch_insert_user_giftcodes: {e}")
+            self.conn.rollback()
+            
+    def batch_update_gift_codes_validation(self, giftcodes_to_validate):
+        """Batch update gift codes validation status."""
+        if not giftcodes_to_validate:
+            return
+            
+        try:
+            validation_data = [(giftcode,) for giftcode in giftcodes_to_validate]
+            self.cursor.executemany("""
+                UPDATE gift_codes 
+                SET validation_status = 'validated' 
+                WHERE giftcode = ? AND validation_status = 'pending'
+            """, validation_data)
+            
+            self.conn.commit()
+            updated_count = self.cursor.rowcount
+            if updated_count > 0:
+                self.logger.info(f"GiftOps: Batch validated {updated_count} gift codes")
+            
+        except Exception as e:
+            self.logger.exception(f"GiftOps: Error in batch_update_gift_codes_validation: {e}")
+            self.conn.rollback()
+            
+    def batch_get_user_giftcode_status(self, giftcode, fids):
+        """Batch retrieve user giftcode status for multiple FIDs."""
+        if not fids:
+            return {}
+            
+        try:
+            placeholders = ','.join('?' * len(fids))
+            self.cursor.execute(f"""
+                SELECT fid, status FROM user_giftcodes 
+                WHERE giftcode = ? AND fid IN ({placeholders})
+            """, (giftcode, *fids))
+            
+            results = dict(self.cursor.fetchall())
+            self.logger.debug(f"GiftOps: Batch retrieved {len(results)} user giftcode statuses")
+            return results
+            
+        except Exception as e:
+            self.logger.exception(f"GiftOps: Error in batch_get_user_giftcode_status: {e}")
+            return {}
+
+    def mark_code_invalid(self, giftcode):
+        """Mark a single gift code as invalid."""
+        try:
+            self.cursor.execute("""
+                UPDATE gift_codes 
+                SET validation_status = 'invalid' 
+                WHERE giftcode = ? AND validation_status != 'invalid'
+            """, (giftcode,))
+            
+            self.conn.commit()
+            if self.cursor.rowcount > 0:
+                self.logger.info(f"GiftOps: Marked gift code '{giftcode}' as invalid")
+                
+        except Exception as e:
+            self.logger.exception(f"GiftOps: Error marking code '{giftcode}' as invalid: {e}")
+            self.conn.rollback()
+
+    def batch_process_alliance_results(self, results_batch):
+        """Process a batch of alliance redemption results efficiently."""
+        if not results_batch:
+            return
+        
+        try:
+            # Separate successful results
+            successful_records = []
+            codes_to_validate = set()
+            
+            for fid, giftcode, status in results_batch:
+                if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
+                    successful_records.append((fid, giftcode, status))
+                    codes_to_validate.add(giftcode)
+            
+            # Batch insert successful records
+            if successful_records:
+                self.batch_insert_user_giftcodes(successful_records)
+                
+            # Batch validate codes
+            if codes_to_validate:
+                self.batch_update_gift_codes_validation(list(codes_to_validate))
+                
+            self.logger.info(f"GiftOps: Batch processed {len(successful_records)} successful, {len(codes_to_validate)} validated")
+            
+        except Exception as e:
+            self.logger.exception(f"GiftOps: Error in batch_process_alliance_results: {e}")
+
     def get_stove_info_wos(self, player_id):
         session = requests.Session()
         session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
@@ -592,13 +931,135 @@ class GiftOperations(commands.Cog):
             "time": f"{int(datetime.now().timestamp())}",
         }
         data = self.encode_data(data_to_encode)
-
+        
         response_stove_info = session.post(
             self.wos_player_info_url,
             headers=headers,
             data=data,
         )
         return session, response_stove_info
+
+    async def attempt_gift_code_with_api(self, player_id, giftcode, session):
+        """Attempt to redeem a gift code."""
+        max_ocr_attempts = 4
+        
+        for attempt in range(max_ocr_attempts):
+            self.logger.info(f"GiftOps: Attempt {attempt + 1}/{max_ocr_attempts} to fetch/solve captcha for FID {player_id}")
+            
+            # Fetch captcha
+            captcha_image_base64, error = await self.fetch_captcha(player_id, session)
+            
+            if error:
+                if error == "CAPTCHA_TOO_FREQUENT":
+                    self.logger.info(f"GiftOps: API returned CAPTCHA_TOO_FREQUENT for FID {player_id}")
+                    return "CAPTCHA_TOO_FREQUENT", None, None, None
+                else:
+                    self.logger.error(f"GiftOps: Captcha fetch error for FID {player_id}: {error}")
+                    return "CAPTCHA_FETCH_ERROR", None, None, None
+            
+            if not captcha_image_base64:
+                self.logger.warning(f"GiftOps: No captcha image returned for FID {player_id}")
+                return "CAPTCHA_FETCH_ERROR", None, None, None
+            
+            # Decode captcha image
+            try:
+                if captcha_image_base64.startswith("data:image"):
+                    img_b64_data = captcha_image_base64.split(",", 1)[1]
+                else:
+                    img_b64_data = captcha_image_base64
+                image_bytes = base64.b64decode(img_b64_data)
+            except Exception as decode_err:
+                self.logger.error(f"Failed to decode base64 image for FID {player_id}: {decode_err}")
+                return "CAPTCHA_FETCH_ERROR", None, None, None
+            
+            # Solve captcha
+            self.processing_stats["ocr_solver_calls"] += 1
+            captcha_code, success, method, confidence, _ = await self.captcha_solver.solve_captcha(
+                image_bytes, fid=player_id, attempt=attempt)
+            
+            if not success:
+                self.logger.info(f"GiftOps: OCR failed for FID {player_id} on attempt {attempt + 1}")
+                if attempt == max_ocr_attempts - 1:
+                    return "MAX_CAPTCHA_ATTEMPTS_REACHED", None, None, None
+                continue
+            
+            self.processing_stats["ocr_valid_format"] += 1
+            self.logger.info(f"GiftOps: OCR solved for {player_id}: {captcha_code} (method:{method}, conf:{confidence:.2f}, attempt:{attempt+1})")
+            
+            # Submit gift code with solved captcha
+            data_to_encode = {
+                "fid": f"{player_id}",
+                "cdk": giftcode,
+                "captcha_code": captcha_code,
+                "time": f"{int(datetime.now().timestamp()*1000)}"
+            }
+            data = self.encode_data(data_to_encode)
+            self.processing_stats["captcha_submissions"] += 1
+            
+            # Submit to gift code API
+            response_giftcode = session.post(self.wos_giftcode_url, data=data)
+            
+            # Log the redemption attempt
+            log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
+            try:
+                response_json_redeem = response_giftcode.json()
+                log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
+            except json.JSONDecodeError:
+                response_json_redeem = {}
+                log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse Text (Not JSON): {response_giftcode.text[:500]}...\n"
+            log_entry_redeem += "-" * 50 + "\n"
+            self.giftlog.info(log_entry_redeem.strip())
+            
+            # Parse response
+            msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
+            err_code = response_json_redeem.get("err_code")
+            
+            # Handle response status
+            is_captcha_error = (msg == "CAPTCHA CHECK ERROR" and err_code == 40103)
+            is_captcha_rate_limit = (msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101)
+            
+            if is_captcha_error:
+                self.processing_stats["server_validation_failure"] += 1
+                if attempt == max_ocr_attempts - 1:
+                    return "CAPTCHA_INVALID", image_bytes, captcha_code, method
+                else:
+                    self.logger.info(f"GiftOps: CAPTCHA_INVALID for FID {player_id} on attempt {attempt + 1}. Retrying...")
+                    await asyncio.sleep(random.uniform(1.5, 2.5))
+                    continue
+            elif is_captcha_rate_limit:
+                self.logger.info(f"GiftOps: API returned CAPTCHA_TOO_FREQUENT during redemption for FID {player_id}")
+                return "CAPTCHA_TOO_FREQUENT", image_bytes, captcha_code, method
+            else:
+                self.processing_stats["server_validation_success"] += 1
+            
+            # Determine final status
+            if msg == "SUCCESS":
+                status = "SUCCESS"
+            elif msg == "RECEIVED" and err_code == 40008:
+                status = "RECEIVED"
+            elif msg == "SAME TYPE EXCHANGE" and err_code == 40011:
+                status = "SAME TYPE EXCHANGE"
+            elif msg == "TIME ERROR" and err_code == 40007:
+                status = "TIME_ERROR"
+            elif msg == "CDK NOT FOUND" and err_code == 40014:
+                status = "CDK_NOT_FOUND"
+            elif msg == "USED" and err_code == 40005:
+                status = "USAGE_LIMIT"
+            elif msg == "TIMEOUT RETRY" and err_code == 40004:
+                status = "TIMEOUT_RETRY"
+            elif msg == "NOT LOGIN":
+                status = "LOGIN_EXPIRED_MID_PROCESS"
+            elif "sign error" in msg.lower():
+                status = "SIGN_ERROR"
+                self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
+                self.logger.error(f"[SIGN ERROR] Response: {response_json_redeem}")
+            else:
+                status = "UNKNOWN_API_RESPONSE"
+                self.logger.info(f"Unknown API response for {player_id}: msg='{msg}', err_code={err_code}")
+            
+            return status, image_bytes, captcha_code, method
+        
+        return "MAX_CAPTCHA_ATTEMPTS_REACHED", None, None, None
 
     async def claim_giftcode_rewards_wos(self, player_id, giftcode):
 
@@ -620,7 +1081,22 @@ class GiftOperations(commands.Cog):
                         self.logger.info(f"CACHE HIT - User {player_id} code '{giftcode}' status: {existing_record[0]}")
                         return existing_record[0]
 
-            # Get Player Info
+            # Check if OCR Enabled and Solver Ready
+            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
+            ocr_settings_row = self.settings_cursor.fetchone()
+            ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
+
+            if not (ocr_enabled == 1 and self.captcha_solver):
+                status = "OCR_DISABLED" if ocr_enabled == 0 else "SOLVER_ERROR"
+                log_msg = f"{datetime.now()} Skipping captcha: OCR disabled (Enabled={ocr_enabled}) or Solver not ready ({self.captcha_solver is None}) for FID {player_id}.\n"
+                self.logger.info(log_msg.strip())
+                return status
+
+            # Initialize captcha solver stats
+            self.logger.info(f"GiftOps: OCR enabled and solver initialized for FID {player_id}.")
+            self.captcha_solver.reset_run_stats()
+            
+            # Get player session
             session, response_stove_info = self.get_stove_info_wos(player_id=player_id)
             log_entry_player = f"\n{datetime.now()} API REQUEST - Player Info\nPlayer ID: {player_id}\n"
             try:
@@ -643,162 +1119,40 @@ class GiftOperations(commands.Cog):
                 self.giftlog.info(log_message.strip())
                 return status
 
-            # Check if OCR Enabled and Solver Ready
-            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings_row = self.settings_cursor.fetchone()
-            ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
+            # Try gift code redemption
+            self.logger.info(f"GiftOps: Starting gift code redemption for FID {player_id}")
+            
+            status, image_bytes, captcha_code, method = await self.attempt_gift_code_with_api(
+                player_id, giftcode, session
+            )
 
-            if not (ocr_enabled == 1 and self.captcha_solver):
-                status = "OCR_DISABLED" if ocr_enabled == 0 else "SOLVER_ERROR"
-                log_msg = f"{datetime.now()} Skipping captcha: OCR disabled (Enabled={ocr_enabled}) or Solver not ready ({self.captcha_solver is None}) for FID {player_id}.\n"
-                self.logger.info(log_msg.strip())
-                return status
-
-            # Captcha Fetching and Solving Loop
-            self.logger.info(f"GiftOps: OCR enabled and solver initialized for FID {player_id}.")
-            self.captcha_solver.reset_run_stats()
-            max_ocr_attempts = 4
-
-            for attempt in range(max_ocr_attempts):
-                self.logger.info(f"GiftOps: Attempt {attempt + 1}/{max_ocr_attempts} to fetch/solve captcha for FID {player_id}")
-                captcha_image_base64, error = await self.fetch_captcha(player_id, session)
-                
-                if error:
-                    status = "TIMEOUT_RETRY" if error == "CAPTCHA_TOO_FREQUENT" else "CAPTCHA_FETCH_ERROR"
-                    self.giftlog.info(f"{datetime.now()} Captcha fetch error for {player_id}: {error}\n")
-                    break
-                
-                if captcha_image_base64 and not error:
-                    try:
-                        if captcha_image_base64.startswith("data:image"):
-                            img_b64_data = captcha_image_base64.split(",", 1)[1]
-                        else:
-                            img_b64_data = captcha_image_base64
-                        image_bytes = base64.b64decode(img_b64_data)
-                    except Exception as decode_err:
-                        self.logger.error(f"Failed to decode base64 image for FID {player_id}: {decode_err}")
-                        status = "CAPTCHA_FETCH_ERROR"
-                        break
-                else:
-                    image_bytes = None
-
-                if image_bytes:
-                    self.processing_stats["ocr_solver_calls"] += 1
-                    captcha_code, success, method, confidence, _ = await self.captcha_solver.solve_captcha(
-                    image_bytes, fid=player_id, attempt=attempt)
-                    if success:
-                        self.processing_stats["ocr_valid_format"] += 1
-                else:
-                    self.logger.warning(f"Skipping OCR attempt for FID {player_id} as image_bytes is None.")
-                    status = "CAPTCHA_FETCH_ERROR"
-                    break
-
-                if not success:
-                    self.giftlog.info(f"{datetime.now()} OCR failed for FID {player_id} on attempt {attempt + 1}\n")
-                    status = "OCR_FAILED_ATTEMPT"
-                    if attempt == max_ocr_attempts - 1:
-                        status = "MAX_CAPTCHA_ATTEMPTS_REACHED"
-                    else:
-                        status = "OCR_FAILED_ATTEMPT"
-                    if status == "MAX_CAPTCHA_ATTEMPTS_REACHED": break
-                    else: continue
-
-                self.giftlog.info(f"{datetime.now()} OCR solved for {player_id}: {captcha_code} (meth:{method}, conf:{confidence:.2f}, att:{attempt+1})\n")
-
-                data_to_encode = {"fid": f"{player_id}", "cdk": giftcode, "captcha_code": captcha_code, "time": f"{int(datetime.now().timestamp()*1000)}"}
-                data = self.encode_data(data_to_encode)
-                self.processing_stats["captcha_submissions"] += 1
-                response_giftcode = session.post(self.wos_giftcode_url, data=data)
-
-                log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nFID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
+            # Handle database updates for successful redemptions
+            if player_id != self.get_test_fid() and status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
                 try:
-                    response_json_redeem = response_giftcode.json()
-                    log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse JSON:\n{json.dumps(response_json_redeem, indent=2)}\n"
-                except json.JSONDecodeError:
-                    response_json_redeem = {}
-                    log_entry_redeem += f"Resp Code: {response_giftcode.status_code}\nResponse Text (Not JSON): {response_giftcode.text[:500]}...\n"
-                log_entry_redeem += "-" * 50 + "\n"
-                self.giftlog.info(log_entry_redeem.strip())
-
-                msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
-                err_code = response_json_redeem.get("err_code")
-
-                is_captcha_error = (msg == "CAPTCHA CHECK ERROR" and err_code == 40103)
-                is_captcha_rate_limit = (msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101)
-                if is_captcha_error:
-                    self.processing_stats["server_validation_failure"] += 1
-                    status = "CAPTCHA_INVALID"
-                elif not is_captcha_rate_limit:
-                    self.processing_stats["server_validation_success"] += 1
-                
-                if msg == "CAPTCHA CHECK ERROR" and err_code == 40103:
-                    status = "CAPTCHA_INVALID"
-                elif msg == "CAPTCHA CHECK TOO FREQUENT" and err_code == 40101:
-                    status = "TIMEOUT_RETRY"
-                elif msg == "NOT LOGIN":
-                    status = "LOGIN_EXPIRED_MID_PROCESS"
-                elif msg == "SUCCESS":
-                    status = "SUCCESS"
-                elif msg == "RECEIVED" and err_code == 40008:
-                    status = "RECEIVED"
-                elif msg == "SAME TYPE EXCHANGE" and err_code == 40011:
-                    status = "SAME TYPE EXCHANGE"
-                elif msg == "TIME ERROR" and err_code == 40007:
-                    status = "TIME_ERROR"
-                elif msg == "CDK NOT FOUND" and err_code == 40014:
-                    status = "CDK_NOT_FOUND"
-                elif msg == "USED" and err_code == 40005:
-                    status = "USAGE_LIMIT"
-                elif msg == "TIMEOUT RETRY" and err_code == 40004:
-                    status = "TIMEOUT_RETRY"
-                elif "sign error" in msg.lower():
-                    status = "SIGN_ERROR"
-                    # Log the request that caused the sign error for debugging purposes
-                    self.logger.error(f"[SIGN ERROR] Sign error detected for FID {player_id}, code {giftcode}")
-                    self.logger.error(f"[SIGN ERROR] Original request data: fid={player_id}, cdk={giftcode}, captcha_code={captcha_code}, time={int(datetime.now().timestamp()*1000)}")
-                    debug_data_to_encode = {"fid": f"{player_id}", "cdk": giftcode, "captcha_code": captcha_code, "time": f"{int(datetime.now().timestamp()*1000)}"}
-                    self.encode_data(debug_data_to_encode, debug_sign_error=True)
-                    self.logger.error(f"[SIGN ERROR] Response that caused sign error: {response_json_redeem}")
-                else:
-                    status = "UNKNOWN_API_RESPONSE"
-                    self.giftlog.info(f"Unknown API response for {player_id}: msg='{msg}', err_code={err_code}\n")
-
-                if player_id != self.get_test_fid() and status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
-                    try:
-                        self.cursor.execute("""
-                            INSERT OR REPLACE INTO user_giftcodes (fid, giftcode, status)
-                            VALUES (?, ?, ?)
-                        """, (player_id, giftcode, status))
+                    user_giftcode_data = [(player_id, giftcode, status)]
+                    self.batch_insert_user_giftcodes(user_giftcode_data)
+                    
+                    # Check if code needs validation
+                    self.cursor.execute("""
+                        SELECT validation_status FROM gift_codes 
+                        WHERE giftcode = ? AND validation_status = 'pending'
+                    """, (giftcode,))
+                    
+                    if self.cursor.fetchone():
+                        giftcodes_to_validate = [giftcode]
+                        self.batch_update_gift_codes_validation(giftcodes_to_validate)
                         
-                        self.cursor.execute("""
-                            UPDATE gift_codes 
-                            SET validation_status = 'validated' 
-                            WHERE giftcode = ? AND validation_status = 'pending'
-                        """, (giftcode,))
-                        
-                        if self.cursor.rowcount > 0: # If this code was just validated for the first time, send to API
-                            self.logger.info(f"Code '{giftcode}' validated for the first time - sending to API")
-                            try:
-                                asyncio.create_task(self.api.add_giftcode(giftcode))
-                            except Exception as api_err:
-                                self.logger.exception(f"Error sending validated code '{giftcode}' to API: {api_err}")
-                        
-                        self.conn.commit()
-                        self.giftlog.info(f"DATABASE - Saved/Updated status for User {player_id}, Code '{giftcode}', Status {status}\n")
-                    except Exception as db_err:
-                        self.giftlog.exception(f"DATABASE ERROR saving/replacing status for {player_id}/{giftcode}: {db_err}\n")
-                        self.giftlog.exception(f"STACK TRACE: {traceback.format_exc()}\n")
-
-                if status == "CAPTCHA_INVALID":
-                    if attempt == max_ocr_attempts - 1:
-                        self.logger.warning(f"GiftOps: Max OCR attempts reached after CAPTCHA_INVALID for FID {player_id}.")
-                        break
-                    else:
-                        self.logger.info(f"GiftOps: CAPTCHA_INVALID for FID {player_id} on attempt {attempt + 1}. Retrying fetch/solve...")
-                        await asyncio.sleep(random.uniform(1.5, 2.5))
-                        continue
-                else:
-                    break
+                        # If this code was just validated for the first time, send to API
+                        self.logger.info(f"Code '{giftcode}' validated for the first time - sending to API")
+                        try:
+                            asyncio.create_task(self.api.add_giftcode(giftcode))
+                        except Exception as api_err:
+                            self.logger.exception(f"Error sending validated code '{giftcode}' to API: {api_err}")
+                    
+                    self.giftlog.info(f"DATABASE - Saved/Updated status for User {player_id}, Code '{giftcode}', Status {status}\n")
+                except Exception as db_err:
+                    self.giftlog.exception(f"DATABASE ERROR saving/replacing status for {player_id}/{giftcode}: {db_err}\n")
+                    self.giftlog.exception(f"STACK TRACE: {traceback.format_exc()}\n")
                 
         except Exception as e:
             error_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -865,94 +1219,58 @@ class GiftOperations(commands.Cog):
 
         self.logger.info(f"GiftOps: Final status for FID {player_id} / Code '{giftcode}': {status}")
         return status
-
-    @tasks.loop(seconds=1800)
-    async def check_channels_loop(self):
-        log_file_path = os.path.join(self.log_directory, 'giftlog.txt')
-        loop_start_time = datetime.now()
-        self.logger.info(f"\nGiftOps: check_channels_loop running at {loop_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-
+    
+    async def scan_historical_messages(self, channel: discord.TextChannel, alliance_id: int) -> dict:
+        """Scan historical messages in a channel for gift codes with consolidated results.
+        
+        Args:
+            channel: The Discord channel to scan
+            alliance_id: The alliance ID for this channel
+            
+        Returns:
+            dict: Scan results with detailed breakdown
+        """
         try:
-            # Step 1: Get Valid Channels
-            self.cursor.execute("SELECT channel_id, alliance_id FROM giftcode_channel")
-            channel_configs = self.cursor.fetchall()
-            if not channel_configs: return
-
-            valid_channels = []
-            invalid_channel_ids_to_remove = []
-            self.logger.info(f"GiftOps: [Loop] Validating {len(channel_configs)} configured channels...")
-            for channel_id, alliance_id in channel_configs:
-                channel = self.bot.get_channel(channel_id)
-                if isinstance(channel, discord.TextChannel):
-                    perms = channel.permissions_for(channel.guild.me)
-                    if perms.read_message_history and perms.add_reactions and perms.send_messages:
-                        valid_channels.append(channel)
-                    else:
-                        self.logger.warning(f"GiftOps: [Loop] WARNING - Missing permissions in channel {channel_id}. Skipping.")
-                else:
-                    self.logger.warning(f"GiftOps: [Loop] WARNING - Channel ID {channel_id} (Alliance: {alliance_id}) invalid. Marking for removal.")
-                    invalid_channel_ids_to_remove.append(channel_id)
-
-            if invalid_channel_ids_to_remove:
-                unique_invalid_ids = list(set(invalid_channel_ids_to_remove))
-                self.logger.info(f"GiftOps: [Loop] Removing {len(unique_invalid_ids)} invalid channel configs: {unique_invalid_ids}")
-                placeholders = ','.join('?' * len(unique_invalid_ids))
-                try:
-                    self.cursor.execute(f"DELETE FROM giftcode_channel WHERE channel_id IN ({placeholders})", unique_invalid_ids)
-                    self.conn.commit()
-                except sqlite3.Error as db_err:
-                    self.logger.exception(f"GiftOps: [Loop] DB ERROR removing invalid channels: {db_err}")
-
-            if not valid_channels:
-                self.logger.info("GiftOps: [Loop] No valid gift code channels found.")
-                return
-
-            # Step 2: Collect Processable Messages and Unique Codes
-            all_processable_messages = []
-            fetch_limit = 75
-
-            for channel in valid_channels:
-                self.logger.info(f"GiftOps: [Loop] Scanning channel {channel.id} ({channel.name})...")
-                try:
-                    # Find last definitive reaction timestamp
-                    last_definitive_reaction_time = None
-                    async for msg_hist in channel.history(limit=fetch_limit, oldest_first=False):
-                        if msg_hist.reactions:
-                            if any(reaction.me and str(reaction.emoji) in ["✅", "❌", "⚠️", "❓", "ℹ️"] for reaction in msg_hist.reactions):
-                                last_definitive_reaction_time = msg_hist.created_at
-                                break
-
-                    # Determine messages needing potential processing
-                    channel_messages = []
-                    if last_definitive_reaction_time:
-                        channel_messages = [msg async for msg in channel.history(limit=fetch_limit, after=last_definitive_reaction_time, oldest_first=True)]
-                    else:
-                        channel_messages = [msg async for msg in channel.history(limit=fetch_limit, oldest_first=True)]
-
-                    all_processable_messages.extend(channel_messages)
-
-                except discord.Forbidden as forbidden_err:
-                    self.logger.exception(f"GiftOps: [Loop] ERROR - Perms error in channel {channel.id}: {forbidden_err}.")
-                except Exception as channel_err:
-                    self.logger.exception(f"GiftOps: [Loop] ERROR - scanning channel {channel.id}: {channel_err}")
-                    traceback.print_exc()
-
-            # Step 3: Filter Messages and Extract Unique Codes
-            unique_codes_to_validate = set()
-            processed_code_statuses = {}
-            code_message_map = {}
-
-            self.logger.info(f"GiftOps: [Loop] Processing {len(all_processable_messages)} potential messages across all channels.")
-            for message in all_processable_messages:
+            fetch_limit = 75  # Limit to prevent excessive scanning
+            
+            self.logger.info(f"Scanning historical messages in channel {channel.id} for alliance {alliance_id}")
+            
+            # Collect messages to process
+            messages_to_process = []
+            async for message in channel.history(limit=fetch_limit, oldest_first=False):
+                # Skip bot messages and empty messages
                 if message.author == self.bot.user or not message.content:
                     continue
-
+                
+                # Check if we've already reacted to this message
                 bot_reactions = {str(reaction.emoji) for reaction in message.reactions if reaction.me}
                 if bot_reactions.intersection(["✅", "❌", "⚠️", "❓", "ℹ️"]):
                     continue
-
+                
+                messages_to_process.append(message)
+            
+            self.logger.info(f"Found {len(messages_to_process)} messages to process")
+            
+            # Results tracking
+            scan_results = {
+                'total_codes_found': 0,
+                'new_codes': [],
+                'existing_valid': [],
+                'existing_invalid': [],
+                'existing_pending': [],
+                'validation_results': {},
+                'messages_scanned': len(messages_to_process)
+            }
+            
+            # Process each message and collect codes
+            codes_to_validate = []
+            message_code_map = {}
+            
+            for message in messages_to_process:
                 content = message.content.strip()
                 giftcode = None
+                
+                # Check for gift code patterns
                 if len(content.split()) == 1:
                     if re.match(r'^[a-zA-Z0-9]+$', content):
                         giftcode = content
@@ -962,97 +1280,350 @@ class GiftOperations(commands.Cog):
                         potential_code = code_match.group(1)
                         if re.match(r'^[a-zA-Z0-9]+$', potential_code):
                             giftcode = potential_code
-
+                
                 if giftcode:
                     giftcode = self.clean_gift_code(giftcode)
-                if not giftcode:
-                    continue
-
-                if giftcode not in code_message_map:
-                    code_message_map[giftcode] = []
-                code_message_map[giftcode].append(message)
-
-                if giftcode not in processed_code_statuses:
-                    unique_codes_to_validate.add(giftcode)
-
-            self.logger.info(f"GiftOps: [Loop] Processing {len(unique_codes_to_validate)} unique codes...")
-            codes_added_this_run = set()
-
-            for code in unique_codes_to_validate:
-                # Check if already in main gift_codes DB
-                self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (code,))
-                if self.cursor.fetchone():
-                    self.logger.info(f"GiftOps: [Loop] Code {code} already in gift_codes DB.")
-                    processed_code_statuses[code] = "SUCCESS"
-                    continue
+                    scan_results['total_codes_found'] += 1
+                    message_code_map[giftcode] = message
+                    
+                    # Check if code already exists
+                    self.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
+                    result = self.cursor.fetchone()
+                    
+                    if result:
+                        # Code exists, categorize by status
+                        status = result[0]
+                        if status == 'validated':
+                            scan_results['existing_valid'].append(giftcode)
+                        elif status == 'invalid':
+                            scan_results['existing_invalid'].append(giftcode)
+                        else:
+                            scan_results['existing_pending'].append(giftcode)
+                    else:
+                        # New code found - will need validation
+                        scan_results['new_codes'].append(giftcode)
+                        codes_to_validate.append(giftcode)
+            
+            # Validate new codes in batch without individual messages
+            if codes_to_validate:
+                self.logger.info(f"Validating {len(codes_to_validate)} new codes from history scan")
                 
-                # Add new code without validation
-                self.logger.info(f"GiftOps: [Loop] Adding new code '{code}' to database as pending validation.")
-                try:
-                    self.cursor.execute("INSERT INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)", 
-                                    (code, datetime.now().strftime("%Y-%m-%d"), "pending"))
+                for giftcode in codes_to_validate:
+                    # Add to database first
+                    self.cursor.execute("""
+                        INSERT OR IGNORE INTO gift_codes (giftcode, alliance_id, validation_status, created_at)
+                        VALUES (?, ?, 'pending', ?)
+                    """, (giftcode, alliance_id, datetime.now().isoformat()))
                     self.conn.commit()
-                    codes_added_this_run.add(code)
-                    processed_code_statuses[code] = "PENDING"
+                    
+                    # Validate the code silently (no individual messages)
+                    is_valid = await self._validate_gift_code_silent(giftcode)
+                    
+                    # Update database with result
+                    new_status = 'validated' if is_valid else 'invalid'
+                    self.cursor.execute("""
+                        UPDATE gift_codes 
+                        SET validation_status = ?, validated_at = ?
+                        WHERE giftcode = ?
+                    """, (new_status, datetime.now().isoformat(), giftcode))
+                    self.conn.commit()
+                    
+                    # Store validation result
+                    scan_results['validation_results'][giftcode] = is_valid
+                    
+                    # Add appropriate reaction to message
+                    if giftcode in message_code_map:
+                        message = message_code_map[giftcode]
+                        emoji = "✅" if is_valid else "❌"
+                        await message.add_reaction(emoji)
+                    
+                    # Small delay between validations
+                    await asyncio.sleep(1.0)
+            
+            # Add reactions to existing codes
+            for giftcode in scan_results['existing_valid']:
+                if giftcode in message_code_map:
+                    await message_code_map[giftcode].add_reaction("✅")
+            
+            for giftcode in scan_results['existing_invalid']:
+                if giftcode in message_code_map:
+                    await message_code_map[giftcode].add_reaction("❌")
+                    
+            for giftcode in scan_results['existing_pending']:
+                if giftcode in message_code_map:
+                    await message_code_map[giftcode].add_reaction("⚠️")
+            
+            # Send consolidated results message
+            await self._send_scan_results_message(channel, scan_results, alliance_id)
+            
+            self.logger.info(f"History scan complete. Results: {scan_results}")
+            return scan_results
+            
+        except Exception as e:
+            self.logger.exception(f"Error scanning historical messages: {e}")
+            return {'total_codes_found': 0, 'messages_scanned': 0}
 
-                    self.logger.info(f"GiftOps: [Loop] Code '{code}' added as pending - will send to API after validation.")
+    async def _validate_gift_code_silent(self, giftcode: str) -> bool:
+        """Validate a gift code silently without sending Discord messages.
+        
+        Args:
+            giftcode: The gift code to validate
+            
+        Returns:
+            bool: True if valid, False if invalid
+        """
+        try:
+            # Use the existing validate_gift_code_immediately method
+            is_valid, validation_msg = await self.validate_gift_code_immediately(giftcode, "historical_scan")
+            return is_valid
+        except Exception as e:
+            self.logger.exception(f"Error in silent validation for {giftcode}: {e}")
+            return False
 
-                    self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
-                    auto_alliances = self.cursor.fetchall()
-                    if auto_alliances:
-                        self.logger.info(f"GiftOps: [Loop] Triggering auto-use for {len(auto_alliances)} alliances for '{code}'.")
-                        for alliance in auto_alliances:
-                            await self.use_giftcode_for_alliance(alliance[0], code)
-                except sqlite3.Error as db_ins_err:
-                    self.logger.exception(f"GiftOps: [Loop] DB ERROR inserting code '{code}': {db_ins_err}")
-                    processed_code_statuses[code] = "ERROR"
-
-            # Step 5: Apply reactions based on status
-            self.logger.info(f"GiftOps: [Loop] Applying reactions to messages...")
-            for code, status in processed_code_statuses.items():
-                if code not in code_message_map: 
-                    continue
-
-                reaction_to_add = "✅" if status == "SUCCESS" else "⚠️"
+    async def _send_scan_results_message(self, channel: discord.TextChannel, results: dict, alliance_id: int):
+        """Send a consolidated scan results message to the channel.
+        
+        Args:
+            channel: The Discord channel to send the message to
+            results: The scan results dictionary
+            alliance_id: The alliance ID
+        """
+        try:
+            # Get alliance name
+            self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+            alliance_result = self.alliance_cursor.fetchone()
+            alliance_name = alliance_result[0] if alliance_result else f"Alliance {alliance_id}"
+            
+            # Build results embed
+            embed = discord.Embed(
+                title="🔍 History Scan Results",
+                description=f"**Alliance:** {alliance_name}\n**Channel:** #{channel.name}",
+                color=discord.Color.blue()
+            )
+            
+            # Summary stats
+            total_found = results['total_codes_found']
+            messages_scanned = results['messages_scanned']
+            
+            embed.add_field(
+                name="📊 Scan Summary",
+                value=f"**Messages Scanned:** {messages_scanned}\n**Total Codes Found:** {total_found}",
+                inline=False
+            )
+            
+            # New codes validation results
+            if results['new_codes']:
+                new_valid = [code for code, is_valid in results['validation_results'].items() if is_valid]
+                new_invalid = [code for code, is_valid in results['validation_results'].items() if not is_valid]
                 
-                for message in code_message_map[code]:
-                    if message.reactions:
-                        for reaction in message.reactions:
-                            if reaction.me:
+                validation_text = ""
+                if new_valid:
+                    validation_text += f"✅ **Valid Codes ({len(new_valid)}):**\n"
+                    for code in new_valid[:5]: # Limit display to avoid message length issues
+                        validation_text += f"  • `{code}`\n"
+                    if len(new_valid) > 5:
+                        validation_text += f"  • ... and {len(new_valid) - 5} more\n"
+                    validation_text += "\n"
+                
+                if new_invalid:
+                    validation_text += f"❌ **Invalid Codes ({len(new_invalid)}):**\n"
+                    for code in new_invalid[:5]:
+                        validation_text += f"  • `{code}`\n"
+                    if len(new_invalid) > 5:
+                        validation_text += f"  • ... and {len(new_invalid) - 5} more\n"
+                
+                if validation_text:
+                    embed.add_field(
+                        name="🆕 New Codes Validated",
+                        value=validation_text,
+                        inline=False
+                    )
+            
+            # Existing codes summary
+            existing_summary = ""
+            if results['existing_valid']:
+                existing_summary += f"✅ Previously Valid: {len(results['existing_valid'])}\n"
+            if results['existing_invalid']:
+                existing_summary += f"❌ Previously Invalid: {len(results['existing_invalid'])}\n"
+            if results['existing_pending']:
+                existing_summary += f"⚠️ Pending Validation: {len(results['existing_pending'])}\n"
+            
+            if existing_summary:
+                embed.add_field(
+                    name="📋 Previously Found Codes",
+                    value=existing_summary,
+                    inline=False
+                )
+            
+            # Add footer
+            embed.set_footer(text="History scan complete. Check message reactions for individual code status.")
+            
+            # Send the message
+            await channel.send(embed=embed)
+            
+        except Exception as e:
+            self.logger.exception(f"Error sending scan results message: {e}")
+
+    async def cleanup_old_invalid_codes(self):
+        """Remove invalid gift codes older than 7 days from the database."""
+        try:
+            # Calculate the cutoff date (7 days ago)
+            from datetime import datetime, timedelta
+            cutoff_date = (datetime.now() - timedelta(days=7)).isoformat()
+            
+            # Get count of codes that will be deleted for logging
+            self.cursor.execute("""
+                SELECT COUNT(*) FROM gift_codes 
+                WHERE validation_status = 'invalid' 
+                AND (validated_at IS NOT NULL AND validated_at < ?)
+                OR (validated_at IS NULL AND created_at < ?)
+            """, (cutoff_date, cutoff_date))
+            delete_count = self.cursor.fetchone()[0]
+            
+            if delete_count > 0:
+                # Delete old invalid codes
+                self.cursor.execute("""
+                    DELETE FROM gift_codes 
+                    WHERE validation_status = 'invalid' 
+                    AND (validated_at IS NOT NULL AND validated_at < ?)
+                    OR (validated_at IS NULL AND created_at < ?)
+                """, (cutoff_date, cutoff_date))
+                
+                # Also clean up any related user_giftcodes entries for deleted codes
+                self.cursor.execute("""
+                    DELETE FROM user_giftcodes 
+                    WHERE giftcode NOT IN (SELECT giftcode FROM gift_codes)
+                """)
+                
+                self.conn.commit()
+                self.logger.info(f"Cleaned up {delete_count} invalid gift codes older than 7 days")
+            else:
+                self.logger.info("No old invalid gift codes found for cleanup")
+                
+        except Exception as e:
+            self.logger.exception(f"Error during invalid codes cleanup: {e}")
+
+    @tasks.loop(seconds=900)
+    async def periodic_validation_loop(self):
+        """Periodically validate existing codes that are marked as 'valid' or 'pending'."""
+        loop_start_time = datetime.now()
+        self.logger.info(f"\nGiftOps: periodic_validation_loop running at {loop_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        try:
+            # Check if we need to run daily cleanup (once per day)
+            current_date = loop_start_time.date()
+            if self._last_cleanup_date != current_date:
+                self.logger.info("Running daily cleanup of old invalid gift codes...")
+                await self.cleanup_old_invalid_codes()
+                self._last_cleanup_date = current_date
+            
+            # Check if validation is already in progress to avoid conflicts
+            async with self._validation_lock:
+                # Get codes that need validation (pending or validated)
+                self.cursor.execute("""
+                    SELECT giftcode, validation_status 
+                    FROM gift_codes 
+                    WHERE validation_status IN ('pending', 'validated')
+                """)
+                codes_to_check = self.cursor.fetchall()
+                
+                if not codes_to_check:
+                    self.logger.info("GiftOps: No codes need periodic validation.")
+                    return
+                
+                self.logger.info(f"GiftOps: Found {len(codes_to_check)} codes to validate periodically.")
+                
+                # Get test FID for validation
+                test_fid = self.get_test_fid()
+                self.logger.info(f"GiftOps: Using test FID {test_fid} for periodic validation.")
+                
+                codes_checked = 0
+                codes_invalidated = 0
+                codes_still_valid = 0
+                
+                for giftcode, current_status in codes_to_check:
+                    # Skip if we've checked too many codes (to prevent long-running loops)
+                    if codes_checked >= 20:
+                        self.logger.info("GiftOps: Reached periodic validation limit of 20 codes per run.")
+                        break
+                    
+                    try:
+                        self.logger.info(f"GiftOps: Periodically validating code '{giftcode}' (current status: {current_status})")
+                        
+                        # Check the code with test FID
+                        status = await self.claim_giftcode_rewards_wos(test_fid, giftcode)
+                        codes_checked += 1
+                        
+                        if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]: # Code is now invalid
+                            self.logger.info(f"GiftOps: Code '{giftcode}' is now invalid (status: {status}). Updating database.")
+                            
+                            self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
+                            # Clear redemption status for the test fid
+                            self.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ? AND fid = ?", (giftcode, test_fid))
+                            self.conn.commit()
+                            
+                            codes_invalidated += 1
+                            
+                            # Remove from API if present
+                            if hasattr(self, 'api') and self.api:
+                                asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
+                            
+                            # Notify admins about invalidated code
+                            self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
+                            admin_ids = [row[0] for row in self.settings_cursor.fetchall()]
+                            
+                            for admin_id in admin_ids:
                                 try:
-                                    await message.remove_reaction(reaction.emoji, self.bot.user)
-                                except (discord.Forbidden, discord.NotFound): 
-                                    pass
-
-                    if reaction_to_add:
-                        try:
-                            await message.add_reaction(reaction_to_add)
-                        except (discord.Forbidden, discord.NotFound):
-                            self.logger.exception(f"GiftOps: [Loop] Failed to add reaction '{reaction_to_add}' to msg {message.id}")
-
+                                    admin_user = await self.bot.fetch_user(admin_id)
+                                    if admin_user:
+                                        embed = discord.Embed(
+                                            title="❌ Gift Code Invalidated",
+                                            description=f"Code `{giftcode}` has been invalidated during periodic validation.\nStatus: {status}",
+                                            color=discord.Color.red(),
+                                            timestamp=datetime.now()
+                                        )
+                                        await admin_user.send(embed=embed)
+                                except Exception as e:
+                                    self.logger.exception(f"Error notifying admin {admin_id}: {e}")
+                        
+                        elif status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]: # Code is still valid
+                            codes_still_valid += 1
+                            
+                            # Update to validated if it was pending
+                            if current_status == 'pending':
+                                self.logger.info(f"GiftOps: Code '{giftcode}' confirmed valid. Updating status to 'validated'.")
+                                self.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
+                                self.conn.commit()
+                                
+                                # Send to API if newly validated
+                                if hasattr(self, 'api') and self.api:
+                                    asyncio.create_task(self.api.add_giftcode(giftcode))
+                        
+                        else:
+                            self.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
+                        
+                        # Wait between validations to avoid rate limiting
+                        await asyncio.sleep(random.uniform(2.0, 4.0))
+                        
+                    except Exception as e:
+                        self.logger.exception(f"Error validating code '{giftcode}' during periodic check: {e}")
+                        await asyncio.sleep(5) # Longer wait on error
+                
+                self.logger.info(f"GiftOps: Periodic validation complete. Checked: {codes_checked}, Invalidated: {codes_invalidated}, Still valid: {codes_still_valid}")
+            
             loop_end_time = datetime.now()
-            self.logger.info(f"GiftOps: check_channels_loop finished at {loop_end_time.strftime('%Y-%m-%d %H:%M:%S')}. Duration: {loop_end_time - loop_start_time}\n")
+            self.logger.info(f"GiftOps: periodic_validation_loop finished at {loop_end_time.strftime('%Y-%m-%d %H:%M:%S')}. Duration: {loop_end_time - loop_start_time}\n")
 
         except Exception as e:
-            self.logger.exception(f"GiftOps: [Loop] FATAL ERROR in check_channels_loop: {str(e)}")
-            self.logger.exception(f"Traceback: {traceback.format_exc()}")
-            error_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            error_details = traceback.format_exc()
-            log_message_loop = (
-                f"\n--- FATAL ERROR in check_channels_loop ({error_timestamp}) ---\n"
-                f"Error: {str(e)}\nTraceback:\n{error_details}\n"
-                f"------------------------------------------------------------\n"
-            )
-            try:
-                self.giftlog.info(log_message_loop.strip())
-            except Exception as log_e:
-                self.logger.exception(f"GiftOps: CRITICAL - Failed to write loop error log: {log_e}")
+            self.logger.exception(f"GiftOps: Error in periodic_validation_loop: {str(e)}")
+            # Wait before next attempt to avoid rapid error loops
+            await asyncio.sleep(60)
 
-    @check_channels_loop.before_loop
-    async def before_check_channels_loop(self):
-        self.logger.info("GiftOps: Waiting for bot to be ready before starting check_channels_loop...")
+    @periodic_validation_loop.before_loop
+    async def before_periodic_validation_loop(self):
+        self.logger.info("GiftOps: Waiting for bot to be ready before starting periodic_validation_loop...")
         await self.bot.wait_until_ready()
-        self.logger.info("GiftOps: Bot is ready, check_channels_loop starting.")
+        self.logger.info("GiftOps: Bot is ready, periodic_validation_loop will start.")
 
     async def fetch_captcha(self, player_id, session=None):
         """Fetch a captcha image for a player ID."""
@@ -1119,25 +1690,25 @@ class GiftOperations(commands.Cog):
                 enabled, save_images_setting = ocr_settings
                 current_test_fid = self.get_test_fid()
 
-                ddddocr_available = False
+                onnx_available = False
                 solver_status_msg = "N/A"
                 if self.captcha_solver:
                     if self.captcha_solver.is_initialized:
-                        ddddocr_available = True
+                        onnx_available = True
                         solver_status_msg = "Initialized & Ready"
                     elif hasattr(self.captcha_solver, 'is_initialized'):
-                        ddddocr_available = True
+                        onnx_available = True
                         solver_status_msg = "Initialization Failed (Check Logs)"
                     else:
                         solver_status_msg = "Error (Instance missing flags)"
                 else:
                     try:
-                        import ddddocr
-                        ddddocr_available = True
+                        import onnxruntime
+                        onnx_available = True
                         solver_status_msg = "Disabled or Init Failed"
                     except ImportError:
-                        ddddocr_available = False
-                        solver_status_msg = "ddddocr library missing"
+                        onnx_available = False
+                        solver_status_msg = "onnxruntime library missing"
 
                 save_options_text = {
                     0: "❌ None", 1: "⚠️ Failed Only", 2: "✅ Success Only", 3: "💾 All"
@@ -1145,7 +1716,7 @@ class GiftOperations(commands.Cog):
                 save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
 
                 embed = discord.Embed(
-                    title="🔍 CAPTCHA Solver Settings (ddddocr)",
+                    title="🔍 CAPTCHA Solver Settings (ONNX)",
                     description=(
                         f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
                         f"**Current Settings**\n"
@@ -1153,23 +1724,21 @@ class GiftOperations(commands.Cog):
                         f"🤖 **OCR Enabled:** {'✅ Yes' if enabled == 1 else '❌ No'}\n"
                         f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
                         f"🆔 **Test FID:** `{current_test_fid}`\n"
-                        f"📦 **ddddocr Library:** {'✅ Found' if ddddocr_available else '❌ Missing'}\n"
+                        f"📦 **ONNX Runtime:** {'✅ Found' if onnx_available else '❌ Missing'}\n"
                         f"⚙️ **Solver Status:** `{solver_status_msg}`\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     ),
                     color=discord.Color.blue()
                 )
 
-                if not ddddocr_available:
+                if not onnx_available:
                     embed.add_field(
                         name="⚠️ Missing Library",
                         value=(
-                            "The `ddddocr` library is required for CAPTCHA solving.\n"
-                            "It did not initialize. The bot owner needs to fix this.\n"
-                            "Try the following sequence of commands on the bot command line:\n"
-                            "```pip uninstall ddddocr opencv-python opencv-python-headless onnxruntime numpy -y\n"
-                            "pip install numpy Pillow opencv-python-headless onnxruntime --no-cache-dir --force-reinstall\n"
-                            "pip install ddddocr==1.5.6 --no-cache-dir --force-reinstall --ignore-requires-python\n"
+                            "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
+                            "The model files must be in the bot/models/ directory.\n"
+                            "Try installing dependencies:\n"
+                            "```pip install onnxruntime pillow numpy\n"
                         ), inline=False
                     )
 
@@ -1209,7 +1778,7 @@ class GiftOperations(commands.Cog):
                     inline=False
                 )
 
-                view = OCRSettingsView(self, ocr_settings, ddddocr_available)
+                view = OCRSettingsView(self, ocr_settings, onnx_available)
 
                 if interaction.response.is_done():
                     try:
@@ -1280,10 +1849,10 @@ class GiftOperations(commands.Cog):
                     try:
                         self.captcha_solver = GiftCaptchaSolver(save_images=target_save_images)
                         if self.captcha_solver.is_initialized:
-                            self.logger.info("GiftOps: DdddOcr solver reinitialized successfully.")
+                            self.logger.info("GiftOps: ONNX solver reinitialized successfully.")
                             message_suffix += " Solver reinitialized."
                         else:
-                            self.logger.error("GiftOps: DdddOcr solver FAILED to reinitialize.")
+                            self.logger.error("GiftOps: ONNX solver FAILED to reinitialize.")
                             message_suffix += " Solver reinitialization failed."
                             self.captcha_solver = None
                             return False, f"CAPTCHA solver settings updated. {message_suffix}"
@@ -1591,7 +2160,10 @@ class GiftOperations(commands.Cog):
                             description=(
                                 f"Successfully set gift code channel:\n\n"
                                 f"🏰 **Alliance:** {alliance_name}\n"
-                                f"📝 **Channel:** <#{channel_id}>\n"
+                                f"📝 **Channel:** <#{channel_id}>\n\n"
+                                f"✅ Channel has been configured for gift code monitoring.\n"
+                                f"Use **Channel History Scan** in Gift Code Settings to scan historical messages on-demand.\n"
+                                f"**Tip:** Follow the official WOS #giftcodes channel in your gift code channel to easily find new codes."
                             ),
                             color=discord.Color.green()
                         )
@@ -1650,22 +2222,16 @@ class GiftOperations(commands.Cog):
                 "Please select an operation:\n\n"
                 "**Available Operations**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "🎫 **Create Gift Code**\n"
+                "🎫 **Add Gift Code**\n"
                 "└ Input a new gift code\n\n"
-                "🔍 **CAPTCHA Settings**\n"
-                "└ Configure OCR and image saving options\n\n"
                 "📋 **List Gift Codes**\n"
                 "└ View all active, valid codes\n\n"
                 "❌ **Delete Gift Code**\n"
                 "└ Remove existing codes\n\n"
-                "📢 **Gift Code Channel**\n"
-                "└ Set the channel to monitor for gift codes\n\n"
-                "⚙️ **Auto Gift Settings**\n"
-                "└ Configure automatic gift code usage\n\n"
-                "🗑️ **Delete Gift Channel**\n"
-                "└ Clear the configured gift code channel\n\n"
                 "🎯 **Use Gift Code for Alliance**\n"
-                "└ Redeem a gift code for one or more alliances\n"
+                "└ Redeem a gift code for one or more alliances\n\n"
+                "⚙️ **Gift Code Settings**\n"
+                "└ Configure automatic gift code usage\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.gold()
@@ -1707,7 +2273,7 @@ class GiftOperations(commands.Cog):
                 COUNT(DISTINCT ugc.fid) as used_count
             FROM gift_codes gc
             LEFT JOIN user_giftcodes ugc ON gc.giftcode = ugc.giftcode
-            WHERE gc.validation_status != 'invalid'
+            WHERE gc.validation_status = 'validated'
             GROUP BY gc.giftcode
             ORDER BY gc.date DESC
         """)
@@ -1723,7 +2289,7 @@ class GiftOperations(commands.Cog):
 
         embed = discord.Embed(
             title="🎁 Active Gift Codes",
-            description="Gift codes that are pending validation or have been validated.",
+            description="Currently active and valid gift codes.",
             color=discord.Color.blue()
         )
 
@@ -1765,10 +2331,11 @@ class GiftOperations(commands.Cog):
                 SELECT 
                     gc.giftcode,
                     gc.date,
+                    gc.validation_status,
                     COUNT(DISTINCT ugc.fid) as used_count
                 FROM gift_codes gc
                 LEFT JOIN user_giftcodes ugc ON gc.giftcode = ugc.giftcode
-                GROUP BY gc.giftcode
+                GROUP BY gc.giftcode, gc.date, gc.validation_status
                 ORDER BY gc.date DESC
             """)
             
@@ -1785,15 +2352,29 @@ class GiftOperations(commands.Cog):
                 )
                 return
 
-            select = discord.ui.Select(
-                placeholder="Select a gift code to delete",
-                options=[
+            select_options = []
+            for code, date, validation_status, used_count in codes:
+                # Format status for display
+                if validation_status == 'validated':
+                    status_display = "✅ Valid"
+                elif validation_status == 'invalid':
+                    status_display = "❌ Invalid"
+                elif validation_status == 'pending':
+                    status_display = "⚠️ Pending"
+                else:
+                    status_display = "❓ Unknown"
+                
+                select_options.append(
                     discord.SelectOption(
                         label=f"Code: {code}",
-                        description=f"Created: {date} | Used by: {used_count} users",
+                        description=f"{status_display} | Created: {date} | Used: {used_count}",
                         value=code
-                    ) for code, date, used_count in codes
-                ]
+                    )
+                )
+            
+            select = discord.ui.Select(
+                placeholder="Select a gift code to delete",
+                options=select_options
             )
 
             async def select_callback(select_interaction):
@@ -2087,6 +2668,690 @@ class GiftOperations(commands.Cog):
             view=view,
             ephemeral=True
         )
+    
+    async def delete_gift_channel_for_alliance(self, interaction: discord.Interaction, alliance_id: int):
+        """Remove gift code channel setting for a specific alliance"""
+        try:
+            # Check if channel exists for this alliance
+            self.cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+            result = self.cursor.fetchone()
+            
+            if not result:
+                await interaction.response.send_message(
+                    "❌ No gift code channel is set for this alliance.",
+                    ephemeral=True
+                )
+                return
+            
+            channel_id = result[0]
+            
+            # Get alliance name
+            available_alliances = await self.get_available_alliances(interaction)
+            alliance_name = next((name for aid, name in available_alliances if aid == alliance_id), "Unknown Alliance")
+            
+            # Create confirmation embed
+            confirm_embed = discord.Embed(
+                title="⚠️ Confirm Channel Removal",
+                description=(
+                    f"Are you sure you want to remove the gift code channel setting?\n\n"
+                    f"🏰 **Alliance:** {alliance_name}\n"
+                    f"📝 **Current Channel:** <#{channel_id}>\n\n"
+                    "This action cannot be undone!"
+                ),
+                color=discord.Color.yellow()
+            )
+            
+            # Create confirmation buttons
+            confirm_view = discord.ui.View()
+            
+            async def confirm_removal(button_interaction: discord.Interaction):
+                try:
+                    self.cursor.execute("DELETE FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+                    self.conn.commit()
+                    
+                    success_embed = discord.Embed(
+                        title="✅ Channel Setting Removed",
+                        description=(
+                            f"Successfully removed gift code channel setting:\n\n"
+                            f"🏰 **Alliance:** {alliance_name}\n"
+                            f"📝 **Channel:** <#{channel_id}>\n\n"
+                            "You can set a new channel anytime by selecting a channel from the list above."
+                        ),
+                        color=discord.Color.green()
+                    )
+                    
+                    await button_interaction.response.edit_message(
+                        embed=success_embed,
+                        view=None
+                    )
+                    
+                except Exception as e:
+                    self.logger.exception(f"Error removing gift code channel for alliance {alliance_id}: {e}")
+                    await button_interaction.response.send_message(
+                        "❌ An error occurred while removing the channel setting.",
+                        ephemeral=True
+                    )
+            
+            async def cancel_removal(button_interaction: discord.Interaction):
+                cancel_embed = discord.Embed(
+                    title="❌ Removal Cancelled",
+                    description="The channel setting removal has been cancelled.",
+                    color=discord.Color.red()
+                )
+                await button_interaction.response.edit_message(
+                    embed=cancel_embed,
+                    view=None
+                )
+            
+            confirm_button = discord.ui.Button(
+                label="Remove Setting",
+                emoji="🗑️",
+                style=discord.ButtonStyle.danger
+            )
+            confirm_button.callback = confirm_removal
+            
+            cancel_button = discord.ui.Button(
+                label="Cancel",
+                emoji="❌",
+                style=discord.ButtonStyle.secondary
+            )
+            cancel_button.callback = cancel_removal
+            
+            confirm_view.add_item(confirm_button)
+            confirm_view.add_item(cancel_button)
+            
+            await interaction.response.send_message(
+                embed=confirm_embed,
+                view=confirm_view,
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            self.logger.exception(f"Error in delete_gift_channel_for_alliance: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while processing the removal request.",
+                ephemeral=True
+            )
+
+    
+    async def show_settings_menu(self, interaction: discord.Interaction):
+        """Show unified settings menu with all configuration options."""
+        admin_info = await self.get_admin_info(interaction.user.id)
+        if not admin_info:
+            await interaction.response.send_message(
+                "❌ You are not authorized to perform this action.",
+                ephemeral=True
+            )
+            return
+        
+        settings_embed = discord.Embed(
+            title="⚙️ Gift Code Settings",
+            description=(
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📢 **Channel Management**\n"
+                "└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
+                "🎁 **Automatic Redemption**\n"
+                "└ Enable/disable auto-redemption of new valid gift codes\n\n"
+                "🔍 **Channel History Scan**\n"
+                "└ Trigger an on-demand scan of existing messages in a gift channel\n\n"
+                "⚙️ **CAPTCHA Settings**\n"
+                "└ Configure CAPTCHA-solver related settings and image saving\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        settings_view = SettingsMenuView(self)
+        
+        await interaction.response.edit_message(
+            embed=settings_embed,
+            view=settings_view
+        )
+    
+    async def manage_channel_settings(self, interaction: discord.Interaction):
+        """Manage gift code channel settings including channel configuration and historical scanning."""
+        admin_info = await self.get_admin_info(interaction.user.id)
+        if not admin_info:
+            await interaction.response.send_message(
+                "❌ You are not authorized to perform this action.",
+                ephemeral=True
+            )
+            return
+        
+        available_alliances = await self.get_available_alliances(interaction)
+        if not available_alliances:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ No Available Alliances",
+                    description="You don't have access to any alliances.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+        
+        # Get alliances with configured channels
+        self.cursor.execute("""
+            SELECT alliance_id, channel_id 
+            FROM giftcode_channel
+            ORDER BY alliance_id
+        """)
+        channel_configs = self.cursor.fetchall()
+        
+        alliance_names = {aid: name for aid, name in available_alliances}
+        main_embed = discord.Embed(
+            title="⚙️ Channel Management",
+            description="Manage gift code channels for your alliances.",
+            color=discord.Color.blue()
+        )
+        
+        # Show configured channels
+        if channel_configs:
+            configured_text = ""
+            for alliance_id, channel_id in channel_configs:
+                if alliance_id in alliance_names:
+                    alliance_name = alliance_names[alliance_id]
+                    channel = self.bot.get_channel(channel_id)
+                    channel_name = f"<#{channel_id}>" if channel else f"Unknown Channel ({channel_id})"
+                    configured_text += f"🏰 **{alliance_name}**\n📢 Channel: {channel_name}\n\n"
+            
+            if configured_text:
+                main_embed.add_field(
+                    name="📋 Current Configurations",
+                    value=configured_text,
+                    inline=False
+                )
+        else:
+            main_embed.add_field(
+                name="📋 Current Configurations",
+                value="No gift code channels configured yet.",
+                inline=False
+            )
+        
+        main_view = discord.ui.View(timeout=300)
+        
+        # Configure/Change Channel button
+        config_button = discord.ui.Button(
+            label="Configure Channel",
+            style=discord.ButtonStyle.primary,
+            emoji="📢"
+        )
+        
+        async def config_callback(config_interaction: discord.Interaction):
+            # Show alliance selection for configuration
+            alliance_embed = discord.Embed(
+                title="📢 Select Alliance to Configure",
+                description="Choose an alliance to set up or change its gift code channel:",
+                color=discord.Color.blue()
+            )
+            
+            alliance_options = []
+            for alliance_id, name in available_alliances:
+                # Check if already configured
+                current_channel_id = None
+                for aid, cid in channel_configs:
+                    if aid == alliance_id:
+                        current_channel_id = cid
+                        break
+                
+                if current_channel_id:
+                    # Get the actual channel object to display the name
+                    channel = self.bot.get_channel(current_channel_id)
+                    if channel:
+                        description = f"Currently: #{channel.name}"
+                    else:
+                        description = f"Currently: Unknown Channel ({current_channel_id})"
+                else:
+                    description = "Not configured"
+                
+                alliance_options.append(discord.SelectOption(
+                    label=name,
+                    value=str(alliance_id),
+                    description=description,
+                    emoji="🏰"
+                ))
+            
+            alliance_select = discord.ui.Select(
+                placeholder="Select alliance to configure...",
+                options=alliance_options,
+                min_values=1,
+                max_values=1
+            )
+            
+            async def alliance_select_callback(alliance_interaction: discord.Interaction):
+                alliance_id = int(alliance_select.values[0])
+                alliance_name = alliance_names[alliance_id]
+                
+                channel_embed = discord.Embed(
+                    title=f"📢 Configure Channel for {alliance_name}",
+                    description="Select a channel for gift codes:",
+                    color=discord.Color.blue()
+                )
+                
+                # Using PaginatedChannelView from alliance.py for channel selection
+                from .alliance import PaginatedChannelView
+                
+                async def channel_callback(channel_interaction: discord.Interaction):
+                    try:
+                        channel_id = int(channel_interaction.data["values"][0])
+                        
+                        self.cursor.execute("""
+                            INSERT OR REPLACE INTO giftcode_channel (alliance_id, channel_id)
+                            VALUES (?, ?)
+                        """, (alliance_id, channel_id))
+                        self.conn.commit()
+                        
+                        success_embed = discord.Embed(
+                            title="✅ Channel Configured",
+                            description=(
+                                f"🏰 **Alliance:** {alliance_name}\n"
+                                f"📢 **Channel:** <#{channel_id}>\n\n"
+                                f"✅ Channel has been successfully configured for gift code monitoring."
+                            ),
+                            color=discord.Color.green()
+                        )
+                        
+                        await channel_interaction.response.edit_message(
+                            embed=success_embed,
+                            view=None
+                        )
+                        
+                    except Exception as e:
+                        self.logger.exception(f"Error configuring channel: {e}")
+                        await channel_interaction.response.send_message(
+                            "❌ An error occurred while configuring the channel.",
+                            ephemeral=True
+                        )
+                
+                channel_view = PaginatedChannelView(
+                    alliance_interaction.guild.text_channels,
+                    channel_callback
+                )
+                
+                await alliance_interaction.response.edit_message(
+                    embed=channel_embed,
+                    view=channel_view
+                )
+            
+            alliance_select.callback = alliance_select_callback
+            alliance_view = discord.ui.View(timeout=300)
+            alliance_view.add_item(alliance_select)
+            
+            await config_interaction.response.edit_message(
+                embed=alliance_embed,
+                view=alliance_view
+            )
+        
+        config_button.callback = config_callback
+        main_view.add_item(config_button)
+        
+        
+        # Remove Channel button (only show if there are configured channels)
+        if channel_configs:
+            remove_button = discord.ui.Button(
+                label="Remove Channel",
+                style=discord.ButtonStyle.danger,
+                emoji="🗑️"
+            )
+            
+            async def remove_callback(remove_interaction: discord.Interaction):
+                # Show alliance selection for removal
+                remove_embed = discord.Embed(
+                    title="🗑️ Select Alliance to Remove",
+                    description="Choose an alliance to remove its gift code channel configuration:",
+                    color=discord.Color.red()
+                )
+                
+                remove_options = []
+                for alliance_id, channel_id in channel_configs:
+                    if alliance_id in alliance_names:
+                        name = alliance_names[alliance_id]
+                        remove_options.append(discord.SelectOption(
+                            label=name,
+                            value=str(alliance_id),
+                            description=f"Remove channel <#{channel_id}>",
+                            emoji="🗑️"
+                        ))
+                
+                remove_select = discord.ui.Select(
+                    placeholder="Select alliance to remove channel...",
+                    options=remove_options,
+                    min_values=1,
+                    max_values=1
+                )
+                
+                async def remove_select_callback(remove_select_interaction: discord.Interaction):
+                    alliance_id = int(remove_select.values[0])
+                    alliance_name = alliance_names[alliance_id]
+                    
+                    # Get channel info for confirmation
+                    self.cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+                    result = self.cursor.fetchone()
+                    if not result:
+                        await remove_select_interaction.response.send_message(
+                            "❌ Configuration not found.",
+                            ephemeral=True
+                        )
+                        return
+                    
+                    channel_id = result[0]
+                    
+                    # Confirmation embed
+                    confirm_embed = discord.Embed(
+                        title="⚠️ Confirm Removal",
+                        description=(
+                            f"Are you sure you want to remove the gift code channel configuration?\n\n"
+                            f"🏰 **Alliance:** {alliance_name}\n"
+                            f"📢 **Channel:** <#{channel_id}>\n\n"
+                            f"⚠️ **Warning:** This will stop the bot from monitoring this channel for gift codes."
+                        ),
+                        color=discord.Color.red()
+                    )
+                    
+                    confirm_view = discord.ui.View(timeout=60)
+                    
+                    confirm_button = discord.ui.Button(
+                        label="Yes, Remove",
+                        style=discord.ButtonStyle.danger,
+                        emoji="✅"
+                    )
+                    
+                    cancel_button = discord.ui.Button(
+                        label="Cancel",
+                        style=discord.ButtonStyle.secondary,
+                        emoji="❌"
+                    )
+                    
+                    async def confirm_remove_callback(confirm_interaction: discord.Interaction):
+                        try:
+                            self.cursor.execute("DELETE FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+                            self.conn.commit()
+                            
+                            success_embed = discord.Embed(
+                                title="✅ Channel Configuration Removed",
+                                description=(
+                                    f"Successfully removed gift code channel configuration:\n\n"
+                                    f"🏰 **Alliance:** {alliance_name}\n"
+                                    f"📢 **Channel:** <#{channel_id}>"
+                                ),
+                                color=discord.Color.green()
+                            )
+                            
+                            await confirm_interaction.response.edit_message(
+                                embed=success_embed,
+                                view=None
+                            )
+                            
+                        except Exception as e:
+                            self.logger.exception(f"Error removing channel configuration: {e}")
+                            await confirm_interaction.response.send_message(
+                                f"❌ Error removing configuration: {str(e)}",
+                                ephemeral=True
+                            )
+                    
+                    async def cancel_remove_callback(cancel_interaction: discord.Interaction):
+                        await self.manage_channel_settings(cancel_interaction)
+                    
+                    confirm_button.callback = confirm_remove_callback
+                    cancel_button.callback = cancel_remove_callback
+                    confirm_view.add_item(confirm_button)
+                    confirm_view.add_item(cancel_button)
+                    
+                    await remove_select_interaction.response.edit_message(
+                        embed=confirm_embed,
+                        view=confirm_view
+                    )
+                
+                remove_select.callback = remove_select_callback
+                remove_view = discord.ui.View(timeout=300)
+                remove_view.add_item(remove_select)
+                
+                await remove_interaction.response.edit_message(
+                    embed=remove_embed,
+                    view=remove_view
+                )
+            
+            remove_button.callback = remove_callback
+            main_view.add_item(remove_button)
+        
+        await interaction.response.send_message(
+            embed=main_embed,
+            view=main_view,
+            ephemeral=True
+        )
+
+    async def channel_history_scan(self, interaction: discord.Interaction):
+        """Perform on-demand historical scan of gift code channels."""
+        admin_info = await self.get_admin_info(interaction.user.id)
+        if not admin_info:
+            await interaction.response.send_message(
+                "❌ You are not authorized to perform this action.",
+                ephemeral=True
+            )
+            return
+        
+        available_alliances = await self.get_available_alliances(interaction)
+        if not available_alliances:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ No Available Alliances",
+                    description="You don't have access to any alliances.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+        
+        # Get alliances with configured channels
+        self.cursor.execute("""
+            SELECT alliance_id, channel_id 
+            FROM giftcode_channel
+            ORDER BY alliance_id
+        """)
+        channel_configs = self.cursor.fetchall()
+        
+        if not channel_configs:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ No Configured Channels",
+                    description="No gift code channels have been configured yet.\nUse **Channel Management** to set up channels first.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+        
+        alliance_names = {aid: name for aid, name in available_alliances}
+        
+        # Filter to only show alliances the user has access to
+        available_alliance_ids = [aid for aid, _ in available_alliances]
+        accessible_configs = []
+        for alliance_id, channel_id in channel_configs:
+            if alliance_id in available_alliance_ids:
+                accessible_configs.append((alliance_id, channel_id))
+        
+        if not accessible_configs:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="❌ No Accessible Channels",
+                    description="You don't have access to any configured gift code channels.",
+                    color=discord.Color.red()
+                ),
+                ephemeral=True
+            )
+            return
+        
+        # Create alliance selection menu
+        scan_embed = discord.Embed(
+            title="🔍 Channel History Scan",
+            description="Select an alliance to scan its message history for potential gift codes:",
+            color=discord.Color.blue()
+        )
+        
+        alliance_options = []
+        for alliance_id, channel_id in accessible_configs:
+            alliance_name = alliance_names[alliance_id]
+            channel = self.bot.get_channel(channel_id)
+            channel_display = f"#{channel.name}" if channel else f"Unknown Channel ({channel_id})"
+            
+            alliance_options.append(discord.SelectOption(
+                label=alliance_name,
+                value=str(alliance_id),
+                description=f"Scan {channel_display}",
+                emoji="🔍"
+            ))
+        
+        alliance_select = discord.ui.Select(
+            placeholder="Select alliance to scan...",
+            options=alliance_options,
+            min_values=1,
+            max_values=1
+        )
+        
+        async def alliance_select_callback(select_interaction: discord.Interaction):
+            alliance_id = int(alliance_select.values[0])
+            alliance_name = alliance_names[alliance_id]
+            
+            # Get fresh channel info from database (in case it was recently changed)
+            self.cursor.execute("""
+                SELECT channel_id FROM giftcode_channel 
+                WHERE alliance_id = ?
+            """, (alliance_id,))
+            result = self.cursor.fetchone()
+            
+            if not result:
+                await select_interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ No Channel Configured",
+                        description=f"No gift code channel is configured for {alliance_name}.",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+                return
+            
+            channel_id = result[0]
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                await select_interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="❌ Channel Not Found",
+                        description="The configured channel could not be found.",
+                        color=discord.Color.red()
+                    ),
+                    ephemeral=True
+                )
+                return
+            
+            # Create confirmation dialog
+            confirm_embed = discord.Embed(
+                title="🔍 Confirm Historical Scan",
+                description=(
+                    f"**Scan Details**\n"
+                    f"──────────────────────\n"
+                    f"🏰 **Alliance:** {alliance_name}\n"
+                    f"📢 **Channel:** #{channel.name}\n"
+                    f"📊 **Scan Limit:** Up to 75 historical messages\n\n"
+                    f"⚠️ **Note:** This will scan historical messages in the channel to find "
+                    f"potential gift codes. Use this carefully in channels with lots of non-gift-code messages.\n\n"
+                    f"Do you want to proceed with the historical scan?"
+                ),
+                color=discord.Color.yellow()
+            )
+            
+            confirm_view = discord.ui.View(timeout=60)
+            
+            confirm_button = discord.ui.Button(
+                label="Start Scan",
+                style=discord.ButtonStyle.success,
+                emoji="✅"
+            )
+            
+            cancel_button = discord.ui.Button(
+                label="Cancel",
+                style=discord.ButtonStyle.secondary,
+                emoji="❌"
+            )
+            
+            async def confirm_scan_callback(confirm_interaction: discord.Interaction):
+                await confirm_interaction.response.defer()
+                
+                # Perform the historical scan
+                scan_results = await self.scan_historical_messages(channel, alliance_id)
+                
+                # Build detailed results summary
+                total_found = scan_results.get('total_codes_found', 0)
+                messages_scanned = scan_results.get('messages_scanned', 0)
+                
+                # Count validation results
+                new_valid = len([code for code, is_valid in scan_results.get('validation_results', {}).items() if is_valid])
+                new_invalid = len([code for code, is_valid in scan_results.get('validation_results', {}).items() if not is_valid])
+                existing_valid = len(scan_results.get('existing_valid', []))
+                existing_invalid = len(scan_results.get('existing_invalid', []))
+                existing_pending = len(scan_results.get('existing_pending', []))
+                
+                results_text = f"**Scan Complete**\n"
+                results_text += f"──────────────────────\n"
+                results_text += f"🏰 **Alliance:** {alliance_name}\n"
+                results_text += f"📢 **Channel:** #{channel.name}\n"
+                results_text += f"📊 **Messages Scanned:** {messages_scanned}\n"
+                results_text += f"🎁 **Total Codes Found:** {total_found}\n\n"
+                
+                if total_found > 0:
+                    results_text += f"**Validation Results:**\n"
+                    if new_valid > 0:
+                        results_text += f"✅ New Valid Codes: {new_valid}\n"
+                    if new_invalid > 0:
+                        results_text += f"❌ New Invalid Codes: {new_invalid}\n"
+                    if existing_valid > 0:
+                        results_text += f"✅ Previously Valid: {existing_valid}\n"
+                    if existing_invalid > 0:
+                        results_text += f"❌ Previously Invalid: {existing_invalid}\n"
+                    if existing_pending > 0:
+                        results_text += f"⚠️ Pending Validation: {existing_pending}\n"
+                    
+                    results_text += f"\n📝 **Note:** A detailed summary has been posted in #{channel.name}"
+                else:
+                    results_text += f"No gift codes found in the scanned messages."
+                
+                await confirm_interaction.edit_original_response(
+                    embed=discord.Embed(
+                        title="🔍 History Scan Complete",
+                        description=results_text,
+                        color=discord.Color.green()
+                    ),
+                    view=None
+                )
+            
+            async def cancel_scan_callback(cancel_interaction: discord.Interaction):
+                await cancel_interaction.response.edit_message(
+                    embed=discord.Embed(
+                        title="❌ Scan Cancelled",
+                        description="History scan has been cancelled.",
+                        color=discord.Color.red()
+                    ),
+                    view=None
+                )
+            
+            confirm_button.callback = confirm_scan_callback
+            cancel_button.callback = cancel_scan_callback
+            confirm_view.add_item(confirm_button)
+            confirm_view.add_item(cancel_button)
+            
+            await select_interaction.response.edit_message(
+                embed=confirm_embed,
+                view=confirm_view
+            )
+        
+        alliance_select.callback = alliance_select_callback
+        alliance_view = discord.ui.View(timeout=300)
+        alliance_view.add_item(alliance_select)
+        
+        await interaction.response.send_message(
+            embed=scan_embed,
+            view=alliance_view,
+            ephemeral=True
+        )
 
     async def setup_giftcode_auto(self, interaction: discord.Interaction):
         admin_info = await self.get_admin_info(interaction.user.id)
@@ -2121,9 +3386,9 @@ class GiftOperations(commands.Cog):
                 alliances_with_counts.append((alliance_id, name, member_count))
 
         auto_gift_embed = discord.Embed(
-            title="⚙️ Auto Gift Code Settings",
+            title="⚙️ Gift Code Settings",
             description=(
-                "Select an alliance to configure auto gift code:\n\n"
+                "Select an alliance to configure automatic redemption:\n\n"
                 "**Alliance List**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "Select an alliance from the list below:\n"
@@ -2136,14 +3401,14 @@ class GiftOperations(commands.Cog):
         view.current_select.options.insert(0, discord.SelectOption(
             label="ENABLE ALL ALLIANCES",
             value="enable_all",
-            description="Enable auto gift code for all alliances",
+            description="Enable automatic redemption for all alliances",
             emoji="✅"
         ))
         
         view.current_select.options.insert(1, discord.SelectOption(
             label="DISABLE ALL ALLIANCES",
             value="disable_all",
-            description="Disable auto gift code for all alliances",
+            description="Disable automatic redemption for all alliances",
             emoji="❌"
         ))
 
@@ -2168,12 +3433,12 @@ class GiftOperations(commands.Cog):
 
                     status_text = "enabled" if status == 1 else "disabled"
                     success_embed = discord.Embed(
-                        title="✅ Auto Gift Code Setting Updated",
+                        title="✅ Automatic Redemption Updated",
                         description=(
                             f"**Configuration Details**\n"
                             f"━━━━━━━━━━━━━━━━━━━━━━\n"
                             f"🌐 **Scope:** All Alliances\n"
-                            f"📊 **Status:** Auto gift code {status_text}\n"
+                            f"📊 **Status:** Automatic redemption {status_text}\n"
                             f"👤 **Updated by:** {select_interaction.user.mention}\n"
                             f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         ),
@@ -2192,14 +3457,14 @@ class GiftOperations(commands.Cog):
                 current_setting = "enabled" if current_status.get(alliance_id, 0) == 1 else "disabled"
                 
                 confirm_embed = discord.Embed(
-                    title="⚙️ Auto Gift Code Configuration",
+                    title="⚙️ Automatic Redemption Configuration",
                     description=(
                         f"**Alliance Details**\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"🏰 **Alliance:** {alliance_name}\n"
-                        f"📊 **Current Status:** Auto gift code is {current_setting}\n"
+                        f"📊 **Current Status:** Automatic redemption is {current_setting}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                        f"Do you want to enable or disable auto gift code for this alliance?"
+                        f"Do you want to enable or disable automatic redemption for this alliance?"
                     ),
                     color=discord.Color.yellow()
                 )
@@ -2223,12 +3488,12 @@ class GiftOperations(commands.Cog):
 
                         status_text = "enabled" if status == 1 else "disabled"
                         success_embed = discord.Embed(
-                            title="✅ Auto Gift Code Setting Updated",
+                            title="✅ Automatic Redemption Updated",
                             description=(
                                 f"**Configuration Details**\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                                 f"🏰 **Alliance:** {alliance_name}\n"
-                                f"📊 **Status:** Auto gift code {status_text}\n"
+                                f"📊 **Status:** Automatic redemption {status_text}\n"
                                 f"👤 **Updated by:** {button_interaction.user.mention}\n"
                                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
                             ),
@@ -2349,8 +3614,7 @@ class GiftOperations(commands.Cog):
                     fid_status = validation_fid_status_row[0]
                     if fid_status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                         self.logger.info(f"GiftOps: Code {giftcode} known to be invalid via test FID (status: {fid_status}). Marking invalid.")
-                        self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
-                        self.conn.commit()
+                        self.mark_code_invalid(giftcode)
                         if hasattr(self, 'api') and self.api:
                             asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
                         
@@ -2374,7 +3638,7 @@ class GiftOperations(commands.Cog):
                         f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                     ),
-                    color=discord.Color.red() # Red is fine for a hard stop
+                    color=discord.Color.red()
                 )
                 await channel.send(embed=error_embed)
                 return False
@@ -2402,15 +3666,14 @@ class GiftOperations(commands.Cog):
 
             retry_queue = []
             active_members_to_process = []
+            
+            # Batch Processing
+            batch_results = []
+            batch_size = 10
 
             # Check Cache & Populate Initial List
             member_ids = [m[0] for m in members]
-            if member_ids: # Ensure member_ids is not empty to prevent SQL error
-                placeholders = ','.join('?' * len(member_ids))
-                self.cursor.execute(f"SELECT fid, status FROM user_giftcodes WHERE giftcode = ? AND fid IN ({placeholders})", (giftcode, *member_ids))
-                cached_member_statuses = dict(self.cursor.fetchall())
-            else:
-                cached_member_statuses = {}
+            cached_member_statuses = self.batch_get_user_giftcode_status(giftcode, member_ids)
 
             for fid, nickname in members:
                 if fid in cached_member_statuses:
@@ -2491,12 +3754,7 @@ class GiftOperations(commands.Cog):
                     self.logger.info(f"GiftOps: Code {giftcode} became invalid (status: {response_status}) while processing {fid}. Marking as invalid in DB.")
                     
                     # Mark as invalid
-                    self.cursor.execute("""
-                        UPDATE gift_codes 
-                        SET validation_status = 'invalid' 
-                        WHERE giftcode = ? AND validation_status != 'invalid'
-                    """, (giftcode,))
-                    self.conn.commit()
+                    self.mark_code_invalid(giftcode)
                     
                     if hasattr(self, 'api') and self.api:
                         asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
@@ -2568,10 +3826,12 @@ class GiftOperations(commands.Cog):
                 if response_status == "SUCCESS":
                     success_count += 1
                     successful_users.append(nickname)
+                    batch_results.append((fid, giftcode, response_status))
                     mark_processed = True
                 elif response_status in ["RECEIVED", "SAME TYPE EXCHANGE"]:
                     received_count += 1
                     already_used_users.append(nickname)
+                    batch_results.append((fid, giftcode, response_status))
                     mark_processed = True
                 elif response_status in ["LOGIN_FAILED", "LOGIN_EXPIRED_MID_PROCESS", "ERROR", "UNKNOWN_API_RESPONSE", "OCR_DISABLED", "SOLVER_ERROR", "CAPTCHA_FETCH_ERROR"]:
                     add_to_failed = True
@@ -2609,6 +3869,11 @@ class GiftOperations(commands.Cog):
                     retry_after_ts = time.time() + retry_delay
                     cycle_for_next_retry = current_cycle_count + 1 if response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] else current_cycle_count
                     retry_queue.append((fid, nickname, cycle_for_next_retry, retry_after_ts))
+                
+                # Batch process results when reaching batch size
+                if len(batch_results) >= batch_size:
+                    self.batch_process_alliance_results(batch_results)
+                    batch_results = []
 
                 # Update Embed Periodically
                 current_time = time.time()
@@ -2691,6 +3956,12 @@ class GiftOperations(commands.Cog):
             summary_lines.append("--- Redemption Summary End ---\n")
             summary_log_message = "\n".join(summary_lines)
             self.logger.info(summary_log_message)
+            
+            # Process any remaining batch results
+            if batch_results:
+                self.batch_process_alliance_results(batch_results)
+                batch_results = []
+            
             return True
         
         except Exception as e:
@@ -2717,14 +3988,10 @@ class CreateGiftCodeModal(discord.ui.Modal):
     
     async def on_submit(self, interaction: discord.Interaction):
         logger = self.cog.logger
-        logger.info("[CreateGiftCodeModal] on_submit started.")
-
         await interaction.response.defer(ephemeral=True)
-        logger.info("[CreateGiftCodeModal] Interaction deferred.")
 
         code = self.cog.clean_gift_code(self.giftcode.value)
         logger.info(f"[CreateGiftCodeModal] Code entered: {code}")
-
         final_embed = discord.Embed(title="🎁 Gift Code Creation Result")
 
         # Check if code already exists
@@ -2739,33 +4006,73 @@ class CreateGiftCodeModal(discord.ui.Modal):
                 f"━━━━━━━━━━━━━━━━━━━━━━\n"
             )
             final_embed.color = discord.Color.blue()
-        else:
-            # Add code (without validation)
-            logger.info(f"[CreateGiftCodeModal] Adding code {code} to DB without validation.")
-            date = datetime.now().strftime("%Y-%m-%d")
-            try:
-                self.cog.cursor.execute(
-                    "INSERT INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)",
-                    (code, date, "pending")
-                )
-                self.cog.conn.commit()
-
-                logger.info(f"[CreateGiftCodeModal] Code '{code}' added as pending - will send to API after validation.")
-
-                final_embed.title = "✅ Gift Code Added"
+        else: # Validate the code immediately
+            logger.info(f"[CreateGiftCodeModal] Validating code {code} before adding to DB.")
+            
+            validation_embed = discord.Embed(
+                title="🔄 Validating Gift Code...",
+                description=f"Checking if `{code}` is valid...",
+                color=discord.Color.blue()
+            )
+            await interaction.edit_original_response(embed=validation_embed)
+            
+            is_valid, validation_msg = await self.cog.validate_gift_code_immediately(code, "button")
+            
+            if is_valid: # Valid code - send to API and add to DB
+                logger.info(f"[CreateGiftCodeModal] Code '{code}' validated successfully.")
+                
+                if hasattr(self.cog, 'api') and self.cog.api:
+                    asyncio.create_task(self.cog.api.add_giftcode(code))
+                
+                final_embed.title = "✅ Gift Code Validated"
                 final_embed.description = (
                     f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"🎁 **Gift Code:** `{code}`\n"
-                    f"✅ **Status:** Added to database (will be validated on first use).\n"
+                    f"✅ **Status:** {validation_msg}\n"
+                    f"📝 **Action:** Added to database and sent to API\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                 )
                 final_embed.color = discord.Color.green()
-
-            except sqlite3.Error as db_err:
-                logger.exception(f"[CreateGiftCodeModal] DB Error inserting code '{code}': {db_err}")
-                final_embed.title = "❌ Database Error"
-                final_embed.description = f"Failed to save gift code `{code}` to the database. Please check logs."
+                
+            elif is_valid is False: # Invalid code - do not add
+                logger.warning(f"[CreateGiftCodeModal] Code '{code}' is invalid: {validation_msg}")
+                
+                final_embed.title = "❌ Invalid Gift Code"
+                final_embed.description = (
+                    f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🎁 **Gift Code:** `{code}`\n"
+                    f"❌ **Status:** {validation_msg}\n"
+                    f"📝 **Action:** Code not added to database\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                )
                 final_embed.color = discord.Color.red()
+                
+            else: # Validation inconclusive - add as pending
+                logger.warning(f"[CreateGiftCodeModal] Code '{code}' validation inconclusive: {validation_msg}")
+                
+                try:
+                    date = datetime.now().strftime("%Y-%m-%d")
+                    self.cog.cursor.execute(
+                        "INSERT INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)",
+                        (code, date, "pending")
+                    )
+                    self.cog.conn.commit()
+                    
+                    final_embed.title = "⚠️ Gift Code Added (Pending)"
+                    final_embed.description = (
+                        f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🎁 **Gift Code:** `{code}`\n"
+                        f"⚠️ **Status:** {validation_msg}\n"
+                        f"📝 **Action:** Added for later validation\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    )
+                    final_embed.color = discord.Color.yellow()
+                    
+                except sqlite3.Error as db_err:
+                    logger.exception(f"[CreateGiftCodeModal] DB Error inserting code '{code}': {db_err}")
+                    final_embed.title = "❌ Database Error"
+                    final_embed.description = f"Failed to save gift code `{code}` to the database. Please check logs."
+                    final_embed.color = discord.Color.red()
 
         try:
             await interaction.edit_original_response(embed=final_embed)
@@ -2884,11 +4191,11 @@ class TestFIDModal(discord.ui.Modal, title="Change Test FID"):
 
 class GiftView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=7200)
         self.cog = cog
 
     @discord.ui.button(
-        label="Create Gift Code",
+        label="Add Gift Code",
         style=discord.ButtonStyle.green,
         custom_id="create_gift",
         emoji="🎫",
@@ -2898,14 +4205,14 @@ class GiftView(discord.ui.View):
         await self.cog.create_gift_code(interaction)
         
     @discord.ui.button(
-        label="CAPTCHA Settings",
-        style=discord.ButtonStyle.primary,
-        custom_id="ocr_settings",
-        emoji="🔍",
-        row=0
+        label="Gift Code Settings",
+        style=discord.ButtonStyle.secondary,
+        custom_id="gift_code_settings",
+        emoji="⚙️",
+        row=1
     )
-    async def ocr_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_ocr_settings(interaction)
+    async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_settings_menu(interaction)
 
     @discord.ui.button(
         label="List Gift Codes",
@@ -2918,20 +4225,11 @@ class GiftView(discord.ui.View):
         await self.cog.list_gift_codes(interaction)
 
     @discord.ui.button(
-        label="Auto Gift Settings",
-        style=discord.ButtonStyle.grey,
-        custom_id="auto_gift_settings",
-        emoji="⚙️",
-        row=1
-    )
-    async def auto_gift_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.setup_giftcode_auto(interaction)
-
-    @discord.ui.button(
         label="Delete Gift Code",
-        emoji="❌",
+        emoji="🗑️",
         style=discord.ButtonStyle.danger,
-        custom_id="delete_gift"
+        custom_id="delete_gift",
+        row=0
     )
     async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -2944,44 +4242,11 @@ class GiftView(discord.ui.View):
             )
 
     @discord.ui.button(
-        label="Gift Code Channel",
-        emoji="📢",
-        style=discord.ButtonStyle.primary,
-        custom_id="gift_channel"
-    )
-    async def gift_channel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self.cog.setup_gift_channel(interaction)
-        except Exception as e:
-            self.logger.exception(f"Gift channel button error: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ An error occurred while setting up gift channel.",
-                    ephemeral=True
-                )
-
-    @discord.ui.button(
-        label="Delete Gift Channel",
-        emoji="🗑️",
-        style=discord.ButtonStyle.danger,
-        custom_id="delete_gift_channel"
-    )
-    async def delete_gift_channel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self.cog.delete_gift_channel(interaction)
-        except Exception as e:
-            self.logger.exception(f"Delete gift channel button error: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "❌ An error occurred while deleting gift channel.",
-                    ephemeral=True
-                )
-
-    @discord.ui.button(
         label="Use Gift Code for Alliance",
         emoji="🎯",
         style=discord.ButtonStyle.primary,
-        custom_id="use_gift_alliance"
+        custom_id="use_gift_alliance",
+        row=1
     )
     async def use_gift_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -3268,7 +4533,8 @@ class GiftView(discord.ui.View):
         label="Main Menu",
         emoji="🏠",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu"
+        custom_id="main_menu",
+        row=2
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -3282,14 +4548,124 @@ class GiftView(discord.ui.View):
         except:
             pass
 
+class SettingsMenuView(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=7200)
+        self.cog = cog
+    
+    @discord.ui.button(
+        label="Channel Management",
+        style=discord.ButtonStyle.green,
+        custom_id="channel_management",
+        emoji="📢",
+        row=0
+    )
+    async def channel_management_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.manage_channel_settings(interaction)
+    
+    @discord.ui.button(
+        label="Automatic Redemption",
+        style=discord.ButtonStyle.primary,
+        custom_id="auto_gift_settings",
+        emoji="🎁",
+        row=0
+    )
+    async def auto_gift_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.setup_giftcode_auto(interaction)
+    
+    @discord.ui.button(
+        label="Channel History Scan",
+        style=discord.ButtonStyle.secondary,
+        custom_id="channel_history_scan",
+        emoji="🔍",
+        row=1
+    )
+    async def channel_history_scan_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.channel_history_scan(interaction)
+    
+    @discord.ui.button(
+        label="CAPTCHA Settings",
+        style=discord.ButtonStyle.secondary,
+        custom_id="captcha_settings",
+        emoji="⚙️",
+        row=1
+    )
+    async def captcha_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_ocr_settings(interaction)
+    
+    @discord.ui.button(
+        label="⬅️ Back",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_main",
+        row=2
+    )
+    async def back_to_main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_gift_menu(interaction)
+
+class ClearCacheConfirmView(discord.ui.View):
+    def __init__(self, parent_cog):
+        super().__init__(timeout=60)
+        self.parent_cog = parent_cog
+
+    @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try: # Clear the user_giftcodes table
+            self.parent_cog.cursor.execute("DELETE FROM user_giftcodes")
+            deleted_count = self.parent_cog.cursor.rowcount
+            self.parent_cog.conn.commit()
+            
+            success_embed = discord.Embed(
+                title="✅ Redemption Cache Cleared",
+                description=f"Successfully deleted {deleted_count:,} redemption records.\n\nUsers can now attempt to redeem gift codes again.",
+                color=discord.Color.green()
+            )
+            
+            self.parent_cog.logger.info(f"Redemption cache cleared by user {interaction.user.id}: {deleted_count} records deleted")
+            
+            await interaction.response.edit_message(embed=success_embed, view=None)
+            
+        except Exception as e:
+            self.parent_cog.logger.exception(f"Error clearing redemption cache: {e}")
+            error_embed = discord.Embed(
+                title="❌ Error",
+                description=f"Failed to clear redemption cache: {str(e)}",
+                color=discord.Color.red()
+            )
+            try:
+                await interaction.response.edit_message(embed=error_embed, view=None)
+            except discord.InteractionResponded:
+                await interaction.followup.edit_message(interaction.message.id, embed=error_embed, view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
+        cancel_embed = discord.Embed(
+            title="❌ Operation Cancelled",
+            description="Redemption cache was not cleared.",
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+
+    async def on_timeout(self):
+        """Handle timeout by disabling all buttons"""
+        for item in self.children:
+            item.disabled = True
+        try:
+            timeout_embed = discord.Embed(
+                title="⏰ Timeout",
+                description="Confirmation timed out. Redemption cache was not cleared.",
+                color=discord.Color.orange()
+            )
+        except:
+            pass
+
 class OCRSettingsView(discord.ui.View):
-    def __init__(self, cog, ocr_settings, ddddocr_available):
-        super().__init__(timeout=None)
+    def __init__(self, cog, ocr_settings, onnx_available):
+        super().__init__(timeout=7200)
         self.cog = cog
         self.enabled = ocr_settings[0]
         self.save_images_setting = ocr_settings[1]
-        self.ddddocr_available = ddddocr_available
-        self.disable_controls = not ddddocr_available
+        self.onnx_available = onnx_available
+        self.disable_controls = not onnx_available
 
         # Row 0: Enable/Disable Button, Test Button
         self.enable_ocr_button_item = discord.ui.Button(
@@ -3319,10 +4695,19 @@ class OCRSettingsView(discord.ui.View):
         self.change_test_fid_button_item.callback = self.change_test_fid_button
         self.add_item(self.change_test_fid_button_item)
 
+        # Add the Clear Redemption Cache Button
+        self.clear_cache_button_item = discord.ui.Button(
+            label="Clear Redemption Cache", style=discord.ButtonStyle.danger, emoji="🗑️",
+            custom_id="clear_redemption_cache", row=1,
+            disabled=self.disable_controls
+        )
+        self.clear_cache_button_item.callback = self.clear_redemption_cache_button
+        self.add_item(self.clear_cache_button_item)
+
         # Row 2: Image Save Select Menu
         self.image_save_select_item = discord.ui.Select(
             placeholder="Select Captcha Image Saving Option",
-            min_values=1, max_values=1, row=1, custom_id="image_save_select",
+            min_values=1, max_values=1, row=2, custom_id="image_save_select",
             options=[
                 discord.SelectOption(label="Don't Save Any Images", value="0", description="Fastest, no disk usage"),
                 discord.SelectOption(label="Save Only Failed Captchas", value="1", description="For debugging server rejects"),
@@ -3338,14 +4723,14 @@ class OCRSettingsView(discord.ui.View):
 
     async def change_test_fid_button(self, interaction: discord.Interaction):
         """Handle the change test FID button click."""
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         await interaction.response.send_modal(TestFIDModal(self.cog))
 
     async def enable_ocr_button(self, interaction: discord.Interaction):
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -3358,8 +4743,8 @@ class OCRSettingsView(discord.ui.View):
         user_id = interaction.user.id
         current_time = time.time()
 
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         if not self.cog.captcha_solver or not self.cog.captcha_solver.is_initialized:
             await interaction.response.send_message("❌ CAPTCHA solver is not initialized. Ensure OCR is enabled.", ephemeral=True)
@@ -3442,7 +4827,7 @@ class OCRSettingsView(discord.ui.View):
 
             confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
             embed = discord.Embed(
-                title="🧪 CAPTCHA Solver Test Results (ddddocr)",
+                title="🧪 CAPTCHA Solver Test Results (ONNX)",
                 description=(
                     f"**Test Summary**\n━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"🤖 **OCR Success:** {'✅ Yes' if success else '❌ No'}\n"
@@ -3518,9 +4903,50 @@ class OCRSettingsView(discord.ui.View):
             except Exception as followup_err:
                 logger.error(f"[Test Button] Failed to send final error followup to user {user_id}: {followup_err}")
 
+    async def clear_redemption_cache_button(self, interaction: discord.Interaction):
+        """Handle the clear redemption cache button click."""
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            return
+
+        # Create confirmation embed
+        embed = discord.Embed(
+            title="⚠️ Clear Redemption Cache",
+            description=(
+                "This will **permanently delete** all gift code redemption records from the database.\n\n"
+                "**What this does:**\n"
+                "• Removes all entries from the `user_giftcodes` table\n"
+                "• Allows users to attempt redeeming gift codes again\n"
+                "• Useful for development testing and image collection\n\n"
+                "**Warning:** This action cannot be undone!"
+            ),
+            color=discord.Color.orange()
+        )
+
+        # Get current count for display
+        try:
+            self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
+            current_count = self.cog.cursor.fetchone()[0]
+            embed.add_field(
+                name="📊 Current Records",
+                value=f"{current_count:,} redemption records will be deleted",
+                inline=False
+            )
+        except Exception as e:
+            self.cog.logger.error(f"Error getting user_giftcodes count: {e}")
+            embed.add_field(
+                name="📊 Current Records", 
+                value="Unable to count records",
+                inline=False
+            )
+
+        # Create confirmation view
+        confirm_view = ClearCacheConfirmView(self.cog)
+        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+
     async def image_save_select_callback(self, interaction: discord.Interaction):
-        if not self.ddddocr_available:
-            await interaction.response.send_message("❌ Required library (ddddocr) is not installed or failed to load.", ephemeral=True)
+        if not self.onnx_available:
+            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True) 

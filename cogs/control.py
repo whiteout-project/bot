@@ -554,5 +554,3 @@ class Control(commands.Cog):
 async def setup(bot):
     control_cog = Control(bot)
     await bot.add_cog(control_cog)
-    if not control_cog.monitor_alliance_changes.is_running():
-        control_cog.monitor_alliance_changes.start()

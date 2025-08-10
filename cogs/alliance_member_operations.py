@@ -15,7 +15,7 @@ SECRET = 'tB87#kPtkxqOS2'
 
 class PaginationView(discord.ui.View):
     def __init__(self, chunks: List[discord.Embed], author_id: int):
-        super().__init__(timeout=180.0)
+        super().__init__(timeout=7200)
         self.chunks = chunks
         self.current_page = 0
         self.message = None
@@ -694,7 +694,6 @@ class AllianceMemberOperations(commands.Cog):
             @discord.ui.button(label="Transfer Member", emoji="🔄", style=discord.ButtonStyle.primary)
             async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
-                    
                     with sqlite3.connect('db/settings.sqlite') as settings_db:
                         cursor = settings_db.cursor()
                         cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
@@ -709,7 +708,6 @@ class AllianceMemberOperations(commands.Cog):
                             
                         is_initial = admin_result[0]
 
-                    
                     alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
                         button_interaction.user.id, 
                         button_interaction.guild_id
@@ -722,7 +720,6 @@ class AllianceMemberOperations(commands.Cog):
                         )
                         return
 
-                    
                     special_alliance_text = ""
                     if special_alliances:
                         special_alliance_text = "\n\n**Special Access Alliances**\n"
@@ -747,7 +744,6 @@ class AllianceMemberOperations(commands.Cog):
                         color=discord.Color.blue()
                     )
 
-                    
                     alliances_with_counts = []
                     for alliance_id, name in alliances:
                         with sqlite3.connect('db/users.sqlite') as users_db:
@@ -756,7 +752,6 @@ class AllianceMemberOperations(commands.Cog):
                             member_count = cursor.fetchone()[0]
                             alliances_with_counts.append((alliance_id, name, member_count))
 
-                    
                     view = AllianceSelectView(alliances_with_counts, self.cog)
                     
                     async def source_callback(interaction: discord.Interaction):
@@ -768,7 +763,6 @@ class AllianceMemberOperations(commands.Cog):
                                 cursor = alliance_db.cursor()
                                 cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (source_alliance_id,))
                                 source_alliance_name = cursor.fetchone()[0]
-                            
                             
                             with sqlite3.connect('db/users.sqlite') as users_db:
                                 cursor = users_db.cursor()
@@ -787,7 +781,6 @@ class AllianceMemberOperations(commands.Cog):
                                 )
                                 return
 
-                            
                             max_fl = max(member[2] for member in members)
                             avg_fl = sum(member[2] for member in members) / len(members)
 
@@ -812,7 +805,6 @@ class AllianceMemberOperations(commands.Cog):
                                 color=discord.Color.blue()
                             )
 
-                            
                             member_view = MemberSelectView(members, source_alliance_name, self.cog)
                             
                             async def member_callback(member_interaction: discord.Interaction):
@@ -834,7 +826,6 @@ class AllianceMemberOperations(commands.Cog):
                                     color=discord.Color.blue()
                                 )
 
-                                
                                 target_options = [
                                     discord.SelectOption(
                                         label=f"{name[:50]}",
@@ -863,7 +854,6 @@ class AllianceMemberOperations(commands.Cog):
                                             cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
                                             target_alliance_name = cursor.fetchone()[0]
 
-                                        
                                         with sqlite3.connect('db/users.sqlite') as users_db:
                                             cursor = users_db.cursor()
                                             cursor.execute(
@@ -933,7 +923,6 @@ class AllianceMemberOperations(commands.Cog):
                         "❌ An error occurred during the transfer operation.",
                         ephemeral=True
                     )
-
 
         view = MemberOperationsView(self)
         await interaction.response.edit_message(embed=embed, view=view)
@@ -1045,11 +1034,9 @@ class AllianceMemberOperations(commands.Cog):
                 
                 else:
                     try:
-                        
                         selected_fid = selected_value
                         self.c_users.execute("SELECT nickname FROM users WHERE fid = ?", (selected_fid,))
                         nickname = self.c_users.fetchone()[0]
-                        
                         
                         self.c_users.execute("DELETE FROM users WHERE fid = ?", (selected_fid,))
                         self.conn_users.commit()
@@ -1082,9 +1069,12 @@ class AllianceMemberOperations(commands.Cog):
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
 
-        ids_list = [fid.strip() for fid in ids.split(",")]
+        # Handle both comma-separated and newline-separated FIDs
+        if '\n' in ids:
+            ids_list = [fid.strip() for fid in ids.split('\n') if fid.strip()]
+        else:
+            ids_list = [fid.strip() for fid in ids.split(",") if fid.strip()]
 
-        
         total_users = len(ids_list)
         embed = discord.Embed(
             title="👥 User Addition Progress", 
@@ -1126,7 +1116,7 @@ class AllianceMemberOperations(commands.Cog):
                 log_file.write(f"Date: {timestamp}\n")
                 log_file.write(f"Administrator: {interaction.user.name} (ID: {interaction.user.id})\n")
                 log_file.write(f"Alliance: {alliance_name} (ID: {alliance_id})\n")
-                log_file.write(f"FIDs to Process: {ids}\n")
+                log_file.write(f"FIDs to Process: {ids.replace(chr(10), ', ')}\n")
                 log_file.write(f"Total Members to Process: {total_users}\n")
                 log_file.write('-'*50 + '\n')
 
@@ -1310,7 +1300,7 @@ class AllianceMemberOperations(commands.Cog):
                                 f"❌ Failed: {error_count}\n"
                                 f"⚠️ Already Exists: {already_exists_count}\n\n"
                                 "**Added FIDs:**\n"
-                                f"```\n{','.join(ids_list)}\n```"
+                                f"```\n{', '.join(ids_list)}\n```"
                             ),
                             color=discord.Color.green()
                         )
@@ -1447,19 +1437,19 @@ class AllianceMemberOperations(commands.Cog):
                 await alliance_cog.show_main_menu(interaction)
             else:
                 await interaction.response.send_message(
-                    "❌ Ana menüye dönüş sırasında bir hata oluştu.",
+                    "❌ An error occurred while returning to main menu.",
                     ephemeral=True
                 )
         except Exception as e:
             self.log_message(f"[ERROR] Main Menu error in member operations: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "An error occurred while returning to main menu.", 
+                    "❌ An error occurred while returning to main menu.", 
                     ephemeral=True
                 )
             else:
                 await interaction.followup.send(
-                    "An error occurred while returning to main menu.",
+                    "❌ An error occurred while returning to main menu.",
                     ephemeral=True
                 )
 
@@ -1468,8 +1458,8 @@ class AddMemberModal(discord.ui.Modal):
         super().__init__(title="Add Member")
         self.alliance_id = alliance_id
         self.add_item(discord.ui.TextInput(
-            label="Enter IDs (comma-separated)", 
-            placeholder="Example: 12345,67890",
+            label="Enter FIDs (comma or newline separated)", 
+            placeholder="Comma: 12345,67890,54321\nNewline:\n12345\n67890\n54321",
             style=discord.TextStyle.paragraph
         ))
 
@@ -1503,7 +1493,7 @@ class RemoveMemberModal(discord.ui.Modal):
 
 class AllianceSelectView(discord.ui.View):
     def __init__(self, alliances_with_counts, cog=None, page=0):
-        super().__init__(timeout=180)
+        super().__init__(timeout=7200)
         self.alliances = alliances_with_counts
         self.cog = cog
         self.page = page
@@ -1625,7 +1615,6 @@ class FIDSearchModal(discord.ui.Modal):
                     cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (current_alliance_id,))
                     current_alliance_name = cursor.fetchone()[0]
 
-                
                 embed = discord.Embed(
                     title="✅ Member Found - Transfer Process",
                     description=(
@@ -1640,7 +1629,6 @@ class FIDSearchModal(discord.ui.Modal):
                     color=discord.Color.blue()
                 )
 
-                
                 select = discord.ui.Select(
                     placeholder="🎯 Choose the target alliance...",
                     options=[
@@ -1661,7 +1649,6 @@ class FIDSearchModal(discord.ui.Modal):
                     target_alliance_id = int(select.values[0])
                     
                     try:
-                        
                         with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                             cursor = alliance_db.cursor()
                             cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
@@ -1723,7 +1710,7 @@ class FIDSearchModal(discord.ui.Modal):
 
 class MemberSelectView(discord.ui.View):
     def __init__(self, members, source_alliance_name, cog, page=0):
-        super().__init__(timeout=180)
+        super().__init__(timeout=7200)
         self.members = members
         self.source_alliance_name = source_alliance_name
         self.cog = cog

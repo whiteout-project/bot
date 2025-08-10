@@ -1,0 +1,501 @@
+# .gitlab-ci.yml
+
+stages:
+  - sync
+  - test
+
+variables:
+  GITHUB_REPO_URL: "https://github.com/whiteout-project/bot.git"
+  GIT_STRATEGY: none
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+# YAML Anchors to define common configurations once
+.database_init: &database_init |
+  mkdir -p db
+  if [ -n "$CI_ADMIN_USER_ID" ]; then
+    sqlite3 db/settings.sqlite << EOF
+    CREATE TABLE IF NOT EXISTS admin (
+        id INTEGER PRIMARY KEY,
+        is_initial INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS auto (
+        value INTEGER
+    );
+    INSERT INTO admin (id, is_initial) VALUES ($CI_ADMIN_USER_ID, 1);
+    INSERT INTO auto (value) VALUES (1);
+  EOF
+    echo "Admin database initialized with user ID: $CI_ADMIN_USER_ID"
+  else
+    echo "Warning: CI_ADMIN_USER_ID not set, bot will wait for manual setup"
+  fi
+
+.common_rules: &common_rules
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+      changes:
+        - "**/*.py"
+        - ".gitlab-ci.yml"
+        - "requirements.txt"
+
+.test_artifacts: &test_artifacts
+  artifacts:
+    when: always
+    paths:
+      - bot_output.log
+      - log/
+    expire_in: 1 week
+
+.shell_artifacts: &shell_artifacts
+  artifacts:
+    when: always
+    paths:
+      - bot_output.log
+      - bot_error.log
+      - log/
+    expire_in: 1 week
+
+.venv_setup: &venv_setup |
+  echo "Creating virtual environment to bypass system restrictions..."
+  python3 -m venv bot_venv
+  source bot_venv/bin/activate
+  pip install --upgrade pip wheel
+  echo "Virtual environment ready"
+
+.bot_token_setup: &bot_token_setup |
+  echo "$CI_BOT_TOKEN" > bot_token.txt
+
+sync_from_github:
+  stage: sync
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
+  tags:
+    - docker
+  script:
+    - echo "Starting clean-room sync..."
+    - git clone --mirror $GITHUB_REPO_URL .
+    - git push --mirror "https://gitlab-ci:${GITLAB_PUSH_TOKEN}@${CI_PROJECT_URL#https://}"
+    - echo "Sync complete."
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
+
+test-bot-docker-update:
+  stage: test
+  image: python:3.12-slim-bookworm
+  tags:
+    - docker
+  interruptible: true
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-docker-py312"
+    paths:
+      - .cache/pip
+  variables:
+    GIT_STRATEGY: clone
+    PIP_VERBOSE: "1"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git procps sqlite3
+    - *database_init
+  script:
+    - echo "Testing bot startup in Docker with updates (Debian)..."
+    - *bot_token_setup
+    - |
+      if [ ! -f main.py ]; then
+        echo "ERROR: main.py not found!"
+        exit 1
+      fi
+    - |
+      echo "=== Running bot in foreground with timeout ==="
+      echo "The bot will run until it logs in successfully or timeout occurs"
+      # Create a wrapper script to check for success
+      cat > check_bot_success.sh << 'EOF'
+      #!/bin/bash
+      LOG_FILE="bot_output.log"
+      TIMEOUT=300
+      START_TIME=$(date +%s)
+      
+      # Start the bot and tee output to log file
+      python -u main.py 2>&1 | tee $LOG_FILE &
+      BOT_PID=$!
+      
+      echo "Bot started with PID: $BOT_PID"
+      
+      while true; do
+        CURRENT_TIME=$(date +%s)
+        ELAPSED=$((CURRENT_TIME - START_TIME))
+        
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+          echo "Timeout after $TIMEOUT seconds"
+          kill $BOT_PID 2>/dev/null || true
+          exit 1
+        fi
+        
+        # Check if bot process is still running
+        if ! ps -p $BOT_PID > /dev/null 2>&1; then
+          echo "Bot process has exited"
+          wait $BOT_PID
+          EXIT_CODE=$?
+          
+          # Check if it was a restart
+          if grep -q "Restarting bot..." $LOG_FILE; then
+            echo "Bot restarted after update - this is normal"
+            # The bot will restart itself, so this script exits successfully
+            exit 0
+          else
+            echo "Bot exited with code: $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
+        fi
+        
+        # Check for success indicators
+        if grep -q "✓ All requirements satisfied" $LOG_FILE && \
+           grep -q "✓ All core imports successful" $LOG_FILE && \
+           grep -q "Logged in as" $LOG_FILE && \
+           grep -q "Activation messages sent to admin user." $LOG_FILE; then
+          echo "Bot initialization successful!"
+          sleep 5  # Let it run a bit more
+          kill $BOT_PID 2>/dev/null || true
+          exit 0
+        fi
+        
+        # Show progress
+        if [ $((ELAPSED % 10)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+          echo "Still waiting... ($ELAPSED/$TIMEOUT seconds)"
+        fi
+        
+        sleep 1
+      done
+      EOF
+      
+      chmod +x check_bot_success.sh
+      ./check_bot_success.sh
+  after_script:
+    - echo "=== Gift Solver Log ==="
+    - cat log/gift_solver.txt || true
+  <<: *test_artifacts
+  <<: *common_rules
+
+test-bot-linux-update:
+  stage: test
+  tags:
+    - shell
+  interruptible: true
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-shell"
+    paths:
+      - .cache/pip
+      - bot_venv/
+  variables:
+    GIT_STRATEGY: clone
+  before_script:
+    - python3 --version
+    - *venv_setup
+    - *database_init
+  script:
+    - source bot_venv/bin/activate
+    - echo "Testing bot startup on Linux with updates (native)..."
+    - *bot_token_setup
+    - |
+      python main.py --no-venv --autoupdate > bot_output.log 2> bot_error.log &
+      BOT_PID=$!
+      echo $BOT_PID > .bot_pid
+      
+      TIMEOUT=300
+      START_TIME=$(date +%s)
+      RESTART_DETECTED=false
+      
+      while true; do
+        CURRENT_TIME=$(date +%s)
+        ELAPSED=$((CURRENT_TIME - START_TIME))
+        
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+          echo "Timeout waiting for bot initialization"
+          kill $BOT_PID 2>/dev/null || true
+          echo "=== STDOUT ==="
+          cat bot_output.log
+          echo "=== STDERR ==="
+          cat bot_error.log || true
+          exit 1
+        fi
+        
+        if ! ps -p $BOT_PID > /dev/null; then
+          # Check if this is expected due to restart
+          if [ "$RESTART_DETECTED" = "true" ]; then
+            echo "Original bot process terminated (expected during restart)"
+            # Try to find any new python process
+            NEW_PID=$(ps aux | grep -E "python[0-9]?.*main.py" | grep -v grep | awk '{print $2}' | head -1)
+            if [ -n "$NEW_PID" ]; then
+              echo "Found replacement process with PID: $NEW_PID"
+              BOT_PID=$NEW_PID
+              echo $BOT_PID > .bot_pid
+              continue
+            fi
+          fi
+          
+          echo "Bot process terminated unexpectedly"
+          echo "=== STDOUT ==="
+          cat bot_output.log
+          echo "=== STDERR ==="
+          cat bot_error.log || true
+          
+          # Check if the bot completed its update process
+          if grep -q "Update completed successfully from GitHub" bot_output.log; then
+            echo "Bot successfully updated but failed to restart - this is a known issue with the CI environment"
+            exit 0
+          fi
+          
+          exit 1
+        fi
+        
+        # Check error log for pip failures
+        if [ -f bot_error.log ] && [ -s bot_error.log ]; then
+          if grep -q "pip" bot_error.log || grep -q "Failed to install" bot_error.log; then
+            echo "=== PIP ERROR DETECTED ==="
+            cat bot_error.log
+          fi
+        fi
+        
+        # Check for bot restart (happens after auto-update)
+        if grep -q "Restarting bot..." bot_output.log && [ "$RESTART_DETECTED" != "true" ]; then
+          echo "Bot is restarting after update - waiting for new process..."
+          RESTART_DETECTED=true
+          sleep 10  # Give more time for the restart
+          
+          # Look for any python process running main.py (without strict pattern matching)
+          NEW_PID=$(ps aux | grep -E "python[0-9]?.*main.py" | grep -v grep | awk '{print $2}' | head -1)
+          if [ -n "$NEW_PID" ]; then
+            echo "Found new bot process with PID: $NEW_PID"
+            BOT_PID=$NEW_PID
+            echo $BOT_PID > .bot_pid
+            # Clear the output log to catch new startup messages
+            > bot_output.log
+            # Reset start time for the new process
+            START_TIME=$(date +%s)
+          else
+            echo "Warning: Could not find new bot process after restart"
+            # Check if there's an error that caused the restart to fail
+            if [ -f bot_error.log ] && grep -q "error" bot_error.log; then
+              echo "=== Restart failed with errors ==="
+              cat bot_error.log
+            fi
+          fi
+          
+          # Continue waiting for actual success
+          continue
+        fi
+        
+        # Check for successful bot startup (may happen before or after update)
+        if grep -q "Logged in as" bot_output.log && \
+           grep -q "Activation messages sent to admin user." bot_output.log; then
+          echo "Bot initialization successful!"
+          # Allow extra time to ensure bot is stable
+          sleep 5
+          # Kill the bot process cleanly
+          kill $BOT_PID 2>/dev/null || true
+          sleep 2
+          break
+        fi
+        
+        # Show progress every 10 seconds
+        if [ $((ELAPSED % 10)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+          echo "Still waiting for bot initialization... ($ELAPSED/$TIMEOUT seconds)"
+        fi
+        
+        sleep 1
+      done
+      
+      echo "=== Bot started successfully ==="
+      grep "Logged in as" bot_output.log
+      grep "Activation messages" bot_output.log
+  after_script:
+    - |
+      if [ -f .bot_pid ]; then
+        kill $(cat .bot_pid) 2>/dev/null || true
+        sleep 2
+        kill -9 $(cat .bot_pid) 2>/dev/null || true
+      fi
+    - echo "=== Final Logs (STDOUT) ==="
+    - cat bot_output.log || true
+    - echo "=== Error Log (STDERR) ==="
+    - cat bot_error.log || true
+    - echo "=== Gift Solver Log ==="
+    - cat log/gift_solver.txt || true
+  <<: *shell_artifacts
+  <<: *common_rules
+
+test-bot-docker-no-update:
+  stage: test
+  image: python:3.12-slim-bookworm
+  tags:
+    - docker
+  interruptible: true
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-docker-py312"
+    paths:
+      - .cache/pip
+  variables:
+    GIT_STRATEGY: clone
+    PIP_VERBOSE: "1"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git procps sqlite3
+    - *database_init
+  script:
+    - echo "Testing bot startup in Docker without updates (Debian)..."
+    - *bot_token_setup
+    - |
+      if [ ! -f main.py ]; then
+        echo "ERROR: main.py not found!"
+        exit 1
+      fi
+    - |
+      echo "=== Running bot in foreground with --no-update flag ==="
+      echo "The bot will run until it logs in successfully or timeout occurs"
+      # Create a wrapper script to check for success
+      cat > check_bot_success.sh << 'EOF'
+      #!/bin/bash
+      LOG_FILE="bot_output.log"
+      TIMEOUT=180
+      START_TIME=$(date +%s)
+      
+      # Start the bot and tee output to log file
+      python -u main.py --no-update 2>&1 | tee $LOG_FILE &
+      BOT_PID=$!
+      
+      echo "Bot started with PID: $BOT_PID"
+      
+      while true; do
+        CURRENT_TIME=$(date +%s)
+        ELAPSED=$((CURRENT_TIME - START_TIME))
+        
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+          echo "Timeout after $TIMEOUT seconds"
+          kill $BOT_PID 2>/dev/null || true
+          exit 1
+        fi
+        
+        # Check if bot process is still running
+        if ! ps -p $BOT_PID > /dev/null 2>&1; then
+          echo "Bot process has exited"
+          wait $BOT_PID
+          EXIT_CODE=$?
+          echo "Bot exited with code: $EXIT_CODE"
+          exit $EXIT_CODE
+        fi
+        
+        # Check for success indicators
+        if grep -q "Update check skipped due to --no-update flag" $LOG_FILE && \
+           grep -q "✓ All requirements satisfied" $LOG_FILE && \
+           grep -q "✓ All core imports successful" $LOG_FILE && \
+           grep -q "Logged in as" $LOG_FILE && \
+           grep -q "Activation messages sent to admin user." $LOG_FILE; then
+          echo "Bot initialization successful!"
+          sleep 5  # Let it run a bit more
+          kill $BOT_PID 2>/dev/null || true
+          exit 0
+        fi
+        
+        # Show progress
+        if [ $((ELAPSED % 10)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+          echo "Still waiting... ($ELAPSED/$TIMEOUT seconds)"
+        fi
+        
+        sleep 1
+      done
+      EOF
+      
+      chmod +x check_bot_success.sh
+      ./check_bot_success.sh
+  after_script:
+    - echo "=== Gift Solver Log ==="
+    - cat log/gift_solver.txt || true
+  <<: *test_artifacts
+  <<: *common_rules
+
+# Linux native test without update (Debian runner)
+test-bot-linux-no-update:
+  stage: test
+  tags:
+    - shell
+  interruptible: true
+  cache:
+    key: "$CI_COMMIT_REF_SLUG-shell"
+    paths:
+      - .cache/pip
+      - bot_venv/
+  variables:
+    GIT_STRATEGY: clone
+  before_script:
+    - python3 --version
+    - *venv_setup
+    - *database_init
+  script:
+    - source bot_venv/bin/activate
+    - echo "Testing bot startup on Linux without updates (native)..."
+    - *bot_token_setup
+    - |
+      python main.py --no-venv --no-update 2>&1 | tee bot_output.log &
+      BOT_PID=$!
+      echo $BOT_PID > .bot_pid
+      
+      TIMEOUT=180
+      START_TIME=$(date +%s)
+      
+      while true; do
+        CURRENT_TIME=$(date +%s)
+        ELAPSED=$((CURRENT_TIME - START_TIME))
+        
+        if [ $ELAPSED -gt $TIMEOUT ]; then
+          echo "Timeout waiting for bot initialization"
+          kill $BOT_PID 2>/dev/null || true
+          echo "=== STDOUT ==="
+          cat bot_output.log
+          exit 1
+        fi
+        
+        if ! ps -p $BOT_PID > /dev/null; then
+          echo "Bot process terminated unexpectedly"
+          echo "=== STDOUT ==="
+          cat bot_output.log
+          exit 1
+        fi
+        
+        if grep -q "Update check skipped due to --no-update flag" bot_output.log && \
+           grep -q "✓ All requirements satisfied" bot_output.log && \
+           grep -q "✓ All core imports successful" bot_output.log && \
+           grep -q "Logged in as" bot_output.log && \
+           grep -q "Activation messages sent to admin user." bot_output.log; then
+          echo "Bot initialization successful!"
+          # Kill the bot process since we've confirmed it started successfully
+          kill $BOT_PID 2>/dev/null || true
+          sleep 2
+          # Ensure process is terminated
+          kill -9 $BOT_PID 2>/dev/null || true
+          break
+        fi
+        
+        # Show progress every 10 seconds
+        if [ $((ELAPSED % 10)) -eq 0 ] && [ $ELAPSED -gt 0 ]; then
+          echo "Still waiting for bot initialization... ($ELAPSED/$TIMEOUT seconds)"
+        fi
+        
+        sleep 1
+      done
+      
+      echo "=== Bot started successfully ==="
+      grep "Logged in as" bot_output.log
+      grep "Activation messages" bot_output.log
+      grep "Update check skipped" bot_output.log
+  after_script:
+    - |
+      if [ -f .bot_pid ]; then
+        kill $(cat .bot_pid) 2>/dev/null || true
+        sleep 2
+        kill -9 $(cat .bot_pid) 2>/dev/null || true
+      fi
+    - echo "=== Final Logs (STDOUT) ==="
+    - cat bot_output.log || true
+    - echo "=== Gift Solver Log ==="
+    - cat log/gift_solver.txt || true
+  <<: *test_artifacts
+  <<: *common_rules

@@ -222,10 +222,6 @@ def check_and_install_requirements():
     for requirement in requirements:
         package_name = requirement.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
         
-        # Skip OCR-related packages for now
-        if package_name.lower() in ["ddddocr", "opencv-python-headless", "numpy", "pillow", "onnxruntime"]:
-            continue
-            
         try:
             if package_name == "discord.py":
                 import discord
@@ -233,6 +229,16 @@ def check_and_install_requirements():
                 import aiohttp_socks
             elif package_name == "python-dotenv":
                 import dotenv
+            elif package_name == "python-bidi":
+                import bidi
+            elif package_name == "arabic-reshaper":
+                import arabic_reshaper
+            elif package_name.lower() == "pillow":
+                import PIL
+            elif package_name.lower() == "numpy":
+                import numpy
+            elif package_name.lower() == "onnxruntime":
+                import onnxruntime
             else:
                 __import__(package_name)
                         
@@ -247,9 +253,6 @@ def check_and_install_requirements():
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
                 
-                # Special handling for ddddocr on Python 3.13+
-                if package.startswith("ddddocr") and sys.version_info >= (3, 13):
-                    cmd.append("--ignore-requires-python")
                 
                 subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"✓ {package} installed successfully")
@@ -258,74 +261,8 @@ def check_and_install_requirements():
                 print(f"✗ Failed to install {package}: {e}")
                 return False
     
-    print("✓ All basic requirements satisfied")
+    print("✓ All requirements satisfied")
     return True
-
-def check_ocr_dependencies():
-    """Check and install OCR-specific dependencies."""
-    print("Checking OCR dependencies...")
-        
-    missing_ocr = []
-    
-    # Test OCR imports
-    try:
-        import numpy
-    except ImportError:
-        print("✗ numpy - MISSING")
-        missing_ocr.append("numpy")
-    
-    try:
-        import PIL
-    except ImportError:
-        print("✗ Pillow - MISSING")
-        missing_ocr.append("Pillow")
-    
-    try:
-        import cv2
-    except ImportError:
-        print("✗ opencv-python-headless - MISSING")
-        missing_ocr.append("opencv-python-headless")
-    
-    try:
-        import onnxruntime
-    except ImportError:
-        print("✗ onnxruntime - MISSING")
-        missing_ocr.append("onnxruntime")
-    
-    try:
-        import ddddocr
-    except ImportError:
-        print("✗ ddddocr - MISSING")
-        missing_ocr.append("ddddocr==1.5.6")
-    
-    # Install missing OCR packages
-    if missing_ocr:
-        print(f"Installing {len(missing_ocr)} missing OCR packages...")
-        
-        for package in missing_ocr:
-            try:
-                cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
-                
-                if package.startswith("ddddocr") and sys.version_info >= (3, 13):
-                    cmd.append("--ignore-requires-python")
-                
-                subprocess.check_call(cmd, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print(f"✓ {package} installed successfully")
-                
-            except Exception as e:
-                print(f"✗ Failed to install {package}: {e}")
-    
-    # Test OCR object creation
-    try:
-        import ddddocr
-        ocr = ddddocr.DdddOcr(show_ad=False)
-        return True
-    except Exception as e:
-        print(f"✗ OCR object creation failed: {e}")
-        if "DLL" in str(e):
-            print("Visual C++ Redistributable may be missing or outdated.")
-            print("Please install latest 64-bit from: https://aka.ms/vs/17/release/vc_redist.x64.exe")
-        return False
 
 def setup_dependencies():
     """Main function to set up all dependencies."""
@@ -336,15 +273,10 @@ def setup_dependencies():
         print("Failed to obtain requirements.txt")
         return False
     
-    # Check and install basic requirements
+    # Check and install all requirements
     if not check_and_install_requirements():
-        print("Failed to install basic requirements")
+        print("Failed to install requirements")
         return False
-    
-    # Check and install OCR dependencies
-    ocr_success = check_ocr_dependencies()
-    if not ocr_success:
-        print("OCR setup failed, but continuing with basic functionality")
     
     print("Dependency check completed...")
     return True
@@ -366,6 +298,32 @@ import warnings
 import shutil
 
 print("Removing unnecessary files...")
+
+try: # Clean up old ddddocr dependency if present
+    try: # Try importlib.metadata approach first
+        import importlib.metadata
+        installed_packages = [dist.metadata['Name'].lower() for dist in importlib.metadata.distributions()]
+    except ImportError:
+        try: # Fallback to pkg_resources if importlib.metadata not available
+            import pkg_resources
+            installed_packages = [pkg.key for pkg in pkg_resources.working_set]
+        except ImportError: # Neither available, skip cleanup
+            installed_packages = []
+    
+    obsolete_packages = ['ddddocr', 'opencv-python-headless']
+    
+    for package in obsolete_packages:
+        if package in installed_packages:
+            print(f"Found old {package} dependency, removing...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "uninstall", package, "-y"], 
+                                    timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print(f"✓ Successfully removed {package}")
+            except Exception as e:
+                print(f"Warning: Failed to uninstall {package}: {e}")
+                print(f"You may want to manually uninstall it with: pip uninstall {package}")
+except Exception as e:
+    print(f"Warning: Error checking for ddddocr: {e}")
 
 v1_path = "V1oldbot"
 if os.path.exists(v1_path) and os.path.isdir(v1_path):
@@ -427,6 +385,13 @@ except Exception as e:
 if __name__ == "__main__":
     import requests
 
+    # Check for mutually exclusive flags
+    if "--autoupdate" in sys.argv and "--no-update" in sys.argv:
+        print(Fore.RED + "Error: --autoupdate and --no-update flags are mutually exclusive." + Style.RESET_ALL)
+        print("Use --autoupdate to automatically install updates without prompting.")
+        print("Use --no-update to skip all update checks.")
+        sys.exit(1)
+
     def restart_bot():
         python = sys.executable
         script_path = os.path.abspath(sys.argv[0])
@@ -476,8 +441,6 @@ if __name__ == "__main__":
         for dependency in lines:
             full_command = [sys.executable, "-m", "pip", "install", dependency, "--no-cache-dir"]
             
-            if dependency.startswith("ddddocr") and (sys.version_info.major == 3 and sys.version_info.minor >= 13):
-                full_command = full_command + ["--ignore-requires-python"]
         
             try:
                 if debug:
@@ -503,7 +466,8 @@ if __name__ == "__main__":
                     current_version = f.read().strip()
             else:
                 current_version = "v0.0.0"
-                        
+            print(Fore.CYAN + f"Current version: {current_version}" + Style.RESET_ALL)
+
             if current_version != latest_tag:
                 print(Fore.YELLOW + f"New version available: {latest_tag} (from {source_name})" + Style.RESET_ALL)
                 print("Update Notes:")
@@ -635,6 +599,34 @@ if __name__ == "__main__":
                             f.write(latest_tag)
                         
                         print(Fore.GREEN + f"Update completed successfully from {source_name}." + Style.RESET_ALL)
+                        
+                        try: # Clean up removed dependencies after update
+                            print(Fore.YELLOW + "Checking for obsolete dependencies..." + Style.RESET_ALL)
+                            try: # Try importlib.metadata approach first
+                                import importlib.metadata
+                                installed_packages = {dist.metadata['Name'].lower(): dist for dist in importlib.metadata.distributions()}
+                            except ImportError:
+                                
+                                try: # Fallback to pkg_resources if importlib.metadata not available
+                                    import pkg_resources
+                                    installed_packages = {pkg.key: pkg for pkg in pkg_resources.working_set}
+                                except ImportError:
+                                    installed_packages = {}
+                            
+                            obsolete_packages = ['ddddocr', 'opencv-python-headless']
+                            
+                            for package in obsolete_packages:
+                                if package in installed_packages:
+                                    print(f"Found obsolete package: {package}")
+                                    try:
+                                        subprocess.check_call([sys.executable, "-m", "pip", "uninstall", package, "-y"], 
+                                                            timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                        print(Fore.GREEN + f"✓ Removed {package}" + Style.RESET_ALL)
+                                    except Exception as e:
+                                        print(Fore.YELLOW + f"Warning: Could not remove {package}: {e}" + Style.RESET_ALL)
+                        except Exception as e:
+                            print(Fore.YELLOW + f"Could not check for obsolete packages: {e}" + Style.RESET_ALL)
+                        
                         restart_bot()
                     else:
                         print(Fore.RED + f"Failed to download the update from {source_name}. HTTP status: {download_resp.status_code}" + Style.RESET_ALL)
@@ -645,7 +637,10 @@ if __name__ == "__main__":
     import asyncio
     from datetime import datetime
             
-    asyncio.run(check_and_update_files())
+    if "--no-update" in sys.argv:
+        print(Fore.YELLOW + "Update check skipped due to --no-update flag." + Style.RESET_ALL)
+    else:
+        asyncio.run(check_and_update_files())
             
     import discord
     from discord.ext import commands
@@ -769,7 +764,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "minister_schedule", "minister_menu"]
+        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "attendance", "attendance_report", "minister_schedule", "minister_menu"]
         
         failed_cogs = []
         
