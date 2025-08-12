@@ -9,6 +9,287 @@ from aiohttp_socks import ProxyConnector
 
 SECRET = 'tB87#kPtkxqOS2'
 
+class UserFilterModal(discord.ui.Modal, title="Filter Users"):
+    def __init__(self, parent_view):
+        super().__init__()
+        self.parent_view = parent_view
+        
+        self.filter_input = discord.ui.TextInput(
+            label="Filter by FID or Name",
+            placeholder="Enter FID or nickname (partial match supported)",
+            required=False,
+            max_length=100,
+            default=self.parent_view.filter_text
+        )
+        self.add_item(self.filter_input)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent_view.filter_text = self.filter_input.value.strip()
+        self.parent_view.page = 0  # Reset to first page when filtering
+        self.parent_view.apply_filter()
+        self.parent_view.update_select_menu()
+        self.parent_view.update_navigation_buttons()
+        await self.parent_view.update_embed(interaction)
+
+class FilteredUserSelectView(discord.ui.View):
+    def __init__(self, bot, cog, activity_name, users, booked_times, page=0):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.cog = cog
+        self.activity_name = activity_name
+        self.users = users  # List of (fid, nickname, alliance_id) tuples
+        self.booked_times = booked_times  # Dict of time: (fid, alliance) for this activity
+        self.page = page
+        self.filter_text = ""
+        self.filtered_users = self.users.copy()
+        self.max_page = (len(self.filtered_users) - 1) // 25 if self.filtered_users else 0
+        
+        # Get list of FIDs that are already booked for this activity
+        self.booked_fids = {fid for time, (fid, alliance) in self.booked_times.items() if fid}
+        
+        self.update_select_menu()
+        self.update_navigation_buttons()
+    
+    def apply_filter(self):
+        """Apply the filter to the users list"""
+        if not self.filter_text:
+            self.filtered_users = self.users.copy()
+        else:
+            filter_lower = self.filter_text.lower()
+            self.filtered_users = []
+            
+            for fid, nickname, alliance_id in self.users:
+                # Check if filter matches FID or nickname (partial, case-insensitive)
+                if filter_lower in str(fid).lower() or filter_lower in nickname.lower():
+                    self.filtered_users.append((fid, nickname, alliance_id))
+        
+        # Update max page based on filtered results
+        self.max_page = (len(self.filtered_users) - 1) // 25 if self.filtered_users else 0
+        
+        # Ensure current page is valid
+        if self.page > self.max_page:
+            self.page = self.max_page
+    
+    def update_navigation_buttons(self):
+        """Update the state of navigation and filter buttons"""
+        # Update navigation button states
+        prev_button = next((item for item in self.children if hasattr(item, 'custom_id') and item.custom_id == 'prev_page'), None)
+        next_button = next((item for item in self.children if hasattr(item, 'custom_id') and item.custom_id == 'next_page'), None)
+        clear_button = next((item for item in self.children if hasattr(item, 'custom_id') and item.custom_id == 'clear_filter'), None)
+        
+        if prev_button:
+            prev_button.disabled = self.page == 0
+        if next_button:
+            next_button.disabled = self.page >= self.max_page
+        if clear_button:
+            clear_button.disabled = not bool(self.filter_text)
+    
+    def update_select_menu(self):
+        """Update the user selection dropdown"""
+        # Remove existing select menu
+        for item in self.children[:]:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+        
+        # Calculate page boundaries
+        start_idx = self.page * 25
+        end_idx = min(start_idx + 25, len(self.filtered_users))
+        current_users = self.filtered_users[start_idx:end_idx]
+        
+        if not current_users:
+            # No users to display
+            placeholder = "No users found" if self.filter_text else "No users available"
+            select = discord.ui.Select(
+                placeholder=placeholder,
+                options=[discord.SelectOption(label="No users", value="none")],
+                disabled=True
+            )
+        else:
+            # Create options for users
+            options = []
+            for fid, nickname, alliance_id in current_users:
+                # Check if user is already booked
+                emoji = "📅" if fid in self.booked_fids else ""
+                label = f"{emoji} {nickname} ({fid})" if emoji else f"{nickname} ({fid})"
+                
+                option = discord.SelectOption(
+                    label=label[:100],  # Discord limit
+                    value=str(fid)
+                )
+                options.append(option)
+            
+            select = discord.ui.Select(
+                placeholder=f"Select a user... (Page {self.page + 1}/{self.max_page + 1})",
+                options=options,
+                min_values=1,
+                max_values=1
+            )
+            
+            select.callback = self.user_select_callback
+        
+        self.add_item(select)
+    
+    async def user_select_callback(self, interaction: discord.Interaction):
+        """Handle user selection"""
+        selected_fid = int(interaction.data['values'][0])
+        
+        # Find the selected user's data
+        user_data = next((user for user in self.users if user[0] == selected_fid), None)
+        if not user_data:
+            await interaction.response.send_message("❌ User not found.", ephemeral=True)
+            return
+        
+        fid, nickname, alliance_id = user_data
+        
+        # Check if user is already booked
+        if fid in self.booked_fids:
+            # Find their current time slot
+            current_time = next((time for time, (booked_fid, _) in self.booked_times.items() if booked_fid == fid), None)
+            await self.cog.show_time_selection(interaction, self.activity_name, str(fid), current_time)
+        else:
+            await self.cog.show_time_selection(interaction, self.activity_name, str(fid), None)
+    
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, custom_id="prev_page", row=1)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self.update_select_menu()
+        self.update_navigation_buttons()
+        await self.update_embed(interaction)
+    
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, custom_id="next_page", row=1)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.max_page, self.page + 1)
+        self.update_select_menu()
+        self.update_navigation_buttons()
+        await self.update_embed(interaction)
+    
+    @discord.ui.button(label="Filter", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="filter", row=1)
+    async def filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = UserFilterModal(self)
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="Clear", style=discord.ButtonStyle.danger, emoji="❌", custom_id="clear_filter", row=1, disabled=True)
+    async def clear_filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.filter_text = ""
+        self.page = 0
+        self.apply_filter()
+        self.update_select_menu()
+        self.update_navigation_buttons()
+        await self.update_embed(interaction)
+    
+    @discord.ui.button(label="List", style=discord.ButtonStyle.secondary, emoji="📋", custom_id="list", row=1)
+    async def list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_current_schedule_list(interaction, self.activity_name)
+    
+    @discord.ui.button(label="Update Names", style=discord.ButtonStyle.secondary, emoji="🔄", row=2)
+    async def update_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.update_minister_names(interaction, self.activity_name)
+    
+    @discord.ui.button(label="Clear All", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
+    async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is admin
+        if not await self.cog.is_admin(interaction.user.id):
+            await interaction.response.send_message("❌ You do not have permission to clear appointments.", ephemeral=True)
+            return
+        
+        # For alliance admins, we'll clear only their alliance members
+        await self.cog.show_clear_confirmation(interaction, self.activity_name)
+    
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=2)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_minister_channel_menu(interaction)
+    
+    async def update_embed(self, interaction: discord.Interaction):
+        """Update the main embed with current information"""
+        # Get current stats
+        total_booked = len(self.booked_fids)
+        available_slots = 48 - total_booked
+        
+        # Create description based on filter status
+        description = f"Select a user to manage their {self.activity_name} appointment.\n\n"
+        
+        if self.filter_text:
+            description += f"**Filter:** `{self.filter_text}`\n"
+            description += f"**Filtered Users:** {len(self.filtered_users)}/{len(self.users)}\n\n"
+        
+        description += (
+            f"**Current Status**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 **Booked Slots:** `{total_booked}/48`\n"
+            f"⏰ **Available Slots:** `{available_slots}/48`\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📅 = User already has a booking"
+        )
+        
+        embed = discord.Embed(
+            title=f"🧑‍💼 {self.activity_name} Management",
+            description=description,
+            color=discord.Color.blue()
+        )
+        
+        try:
+            await interaction.response.edit_message(embed=embed, view=self)
+        except discord.InteractionResponded:
+            await interaction.edit_original_response(embed=embed, view=self)
+
+class ClearConfirmationView(discord.ui.View):
+    def __init__(self, bot, cog, activity_name, is_global_admin, alliance_ids):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.cog = cog
+        self.activity_name = activity_name
+        self.is_global_admin = is_global_admin
+        self.alliance_ids = alliance_ids
+    
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, emoji="✅")
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        
+        minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
+        
+        if self.is_global_admin:
+            # Get all appointments to log before clearing
+            self.cog.svs_cursor.execute("SELECT fid FROM appointments WHERE appointment_type=?", (self.activity_name,))
+            cleared_fids = [row[0] for row in self.cog.svs_cursor.fetchall()]
+            
+            # Clear all appointments
+            self.cog.svs_cursor.execute("DELETE FROM appointments WHERE appointment_type=?", (self.activity_name,))
+            self.cog.svs_conn.commit()
+            
+            cleared_count = len(cleared_fids)
+            message = f"Cleared all {cleared_count} appointments for {self.activity_name}"
+        else:
+            # Get appointments for allowed alliances
+            placeholders = ','.join('?' for _ in self.alliance_ids)
+            query = f"SELECT fid FROM appointments WHERE appointment_type=? AND alliance IN ({placeholders})"
+            self.cog.svs_cursor.execute(query, [self.activity_name] + self.alliance_ids)
+            cleared_fids = [row[0] for row in self.cog.svs_cursor.fetchall()]
+            
+            # Clear alliance appointments
+            query = f"DELETE FROM appointments WHERE appointment_type=? AND alliance IN ({placeholders})"
+            self.cog.svs_cursor.execute(query, [self.activity_name] + self.alliance_ids)
+            self.cog.svs_conn.commit()
+            
+            cleared_count = len(cleared_fids)
+            message = f"Cleared {cleared_count} alliance appointments for {self.activity_name}"
+        
+        # Send log
+        if minister_schedule_cog and cleared_count > 0:
+            embed = discord.Embed(
+                title=f"Appointments Cleared - {self.activity_name}",
+                description=f"{cleared_count} appointments were cleared",
+                color=discord.Color.red()
+            )
+            embed.set_author(name=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+            await minister_schedule_cog.send_embed_to_channel(embed)
+            await self.cog.update_channel_message(self.activity_name)
+        
+        await self.cog.show_filtered_user_select_with_message(interaction, self.activity_name, message)
+    
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_filtered_user_select(interaction, self.activity_name)
+
 class MinisterChannelView(discord.ui.View):
     def __init__(self, bot, cog):
         super().__init__(timeout=None)
@@ -83,8 +364,8 @@ class MinisterChannelView(discord.ui.View):
             )
             return
 
-        # Show the minister management menu for this activity
-        await self.cog.show_minister_activity_menu(interaction, activity_name)
+        # Show the filtered user selection menu for this activity
+        await self.cog.show_filtered_user_select(interaction, activity_name)
 
 class ChannelConfigurationView(discord.ui.View):
     def __init__(self, bot, cog):
@@ -133,7 +414,7 @@ class ChannelConfigurationView(discord.ui.View):
                 
             @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=1)
             async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                # Properly restore the menu with embed (fix issue with "Select a channel for..." leftover)
+                # Restore the menu with embed
                 embed = discord.Embed(
                     title="⚙️ Channel Configuration",
                     description=(
@@ -168,88 +449,25 @@ class ChannelConfigurationView(discord.ui.View):
             embed=None
         )
 
-class MinisterActivityView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name):
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.cog = cog
-        self.activity_name = activity_name
-
-    @discord.ui.button(label="Add", style=discord.ButtonStyle.success, emoji="➕")
-    async def add_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_add_minister_menu(interaction, self.activity_name)
-
-    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger, emoji="➖")
-    async def remove_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_remove_minister_menu(interaction, self.activity_name)
-
-    @discord.ui.button(label="List", style=discord.ButtonStyle.secondary, emoji="📋")
-    async def list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_list_minister_menu(interaction, self.activity_name)
-
-    @discord.ui.button(label="Clear All", style=discord.ButtonStyle.danger, emoji="🗑️")
-    async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_clear_confirmation(interaction, self.activity_name)
-
-    @discord.ui.button(label="Update Names", style=discord.ButtonStyle.secondary, emoji="🔄")
-    async def update_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.update_minister_names(interaction, self.activity_name)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=1)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_minister_channel_menu(interaction)
-
-class UserSelectView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name, available_users):
-        super().__init__(timeout=300)
-        self.bot = bot
-        self.cog = cog
-        self.activity_name = activity_name
-        self.available_users = available_users
-        self.selected_user = None
-
-        self.add_item(UserSelect(available_users))
-        self.add_item(BackToActivityButton(cog, activity_name))
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-
-class UserSelect(discord.ui.Select):
-    def __init__(self, available_users):
-        options = []
-        for fid, nickname in available_users[:25]: # Discord limit
-            options.append(discord.SelectOption(
-                label=f"{nickname}",
-                value=str(fid),
-                description=f"ID: {fid}"
-            ))
-        
-        super().__init__(
-            placeholder="Select a user to add...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        selected_fid = self.values[0]
-        self.view.selected_user = selected_fid
-        
-        minister_cog = self.view.cog
-        await minister_cog.show_time_selection(interaction, self.view.activity_name, selected_fid)
-
 class TimeSelectView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name, fid, available_times):
+    def __init__(self, bot, cog, activity_name, fid, available_times, current_time=None):
         super().__init__(timeout=300)
         self.bot = bot
         self.cog = cog
         self.activity_name = activity_name
         self.fid = fid
         self.available_times = available_times
+        self.current_time = current_time
         
         self.add_item(TimeSelect(available_times))
-        self.add_item(BackToUserSelectButton(cog, activity_name))
+        
+        # Add back button
+        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji="◀️")
+        back_button.callback = self.back_button_callback
+        self.add_item(back_button)
+
+    async def back_button_callback(self, interaction: discord.Interaction):
+        await self.cog.show_filtered_user_select(interaction, self.activity_name)
 
     async def on_timeout(self):
         for item in self.children:
@@ -276,109 +494,6 @@ class TimeSelect(discord.ui.Select):
         
         minister_cog = self.view.cog
         await minister_cog.complete_booking(interaction, self.view.activity_name, self.view.fid, selected_time)
-
-class RemoveUserSelectView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name, booked_users):
-        super().__init__(timeout=300)
-        self.bot = bot
-        self.cog = cog
-        self.activity_name = activity_name
-        self.booked_users = booked_users
-        
-        self.add_item(RemoveUserSelect(booked_users))
-        self.add_item(BackToActivityButton(cog, activity_name))
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-
-class RemoveUserSelect(discord.ui.Select):
-    def __init__(self, booked_users):
-        options = []
-        for fid, nickname in booked_users[:25]: # Discord limit
-            options.append(discord.SelectOption(
-                label=f"{nickname}",
-                value=str(fid),
-                description=f"ID: {fid}"
-            ))
-        
-        super().__init__(
-            placeholder="Select a user to remove...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        selected_fid = self.values[0]
-        
-        minister_cog = self.view.cog
-        await minister_cog.complete_removal(interaction, self.view.activity_name, selected_fid)
-
-class ListTypeView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name):
-        super().__init__(timeout=300)
-        self.bot = bot
-        self.cog = cog
-        self.activity_name = activity_name
-
-    @discord.ui.button(label="Full Schedule", style=discord.ButtonStyle.primary, emoji="📋")
-    async def full_schedule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_full_schedule_above_buttons(interaction, self.activity_name, update=False)
-
-    @discord.ui.button(label="Available Slots Only", style=discord.ButtonStyle.secondary, emoji="⏰")
-    async def available_only_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_available_schedule_above_buttons(interaction, self.activity_name)
-
-    @discord.ui.button(label="Booked Slots Only", style=discord.ButtonStyle.secondary, emoji="📅")
-    async def booked_only_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_booked_schedule_above_buttons(interaction, self.activity_name)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=1)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_minister_activity_menu_from_schedule(interaction, self.activity_name)
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-
-class ClearConfirmationView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name):
-        super().__init__(timeout=60)
-        self.bot = bot
-        self.cog = cog
-        self.activity_name = activity_name
-
-    @discord.ui.button(label="Yes, Clear All", style=discord.ButtonStyle.danger, emoji="✅")
-    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.execute_clear_all(interaction, self.activity_name)
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("❌ Clear operation cancelled.", ephemeral=True)
-        await self.cog.update_original_settings_message(self.activity_name)
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-
-class BackToActivityButton(discord.ui.Button):
-    def __init__(self, cog, activity_name):
-        super().__init__(label="Back", style=discord.ButtonStyle.secondary, emoji="◀️")
-        self.cog = cog
-        self.activity_name = activity_name
-
-    async def callback(self, interaction: discord.Interaction):
-        await self.cog.show_minister_activity_menu_from_schedule(interaction, self.activity_name)
-
-class BackToUserSelectButton(discord.ui.Button):
-    def __init__(self, cog, activity_name):
-        super().__init__(label="Back", style=discord.ButtonStyle.secondary, emoji="◀️")
-        self.cog = cog
-        self.activity_name = activity_name
-
-    async def callback(self, interaction: discord.Interaction):
-        await self.cog.show_add_minister_menu(interaction, self.activity_name)
 
 class MinisterMenu(commands.Cog):
     def __init__(self, bot):
@@ -473,191 +588,253 @@ class MinisterMenu(commands.Cog):
             await interaction.response.edit_message(embed=embed, view=view)
         except discord.InteractionResponded:
             await interaction.edit_original_response(embed=embed, view=view)
-            
-    async def show_minister_activity_menu_from_schedule(self, interaction: discord.Interaction, activity_name: str):
-        """Return from schedule view to activity menu"""
-        # Get current stats
-        self.svs_cursor.execute("SELECT COUNT(*) FROM appointments WHERE appointment_type=?", (activity_name,))
-        booked_count = self.svs_cursor.fetchone()[0]
-        available_count = 48 - booked_count # 48 total 30-minute slots in 24 hours
-
-        embed = discord.Embed(
-            title=f"🏛️ {activity_name} Management",
-            description=(
-                f"Manage appointments for **{activity_name}**:\n\n"
-                f"**Current Status**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📅 **Booked Slots:** `{booked_count}/48`\n"
-                f"⏰ **Available Slots:** `{available_count}/48`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"**Available Actions**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"➕ Add new appointment\n"
-                f"➖ Remove existing appointment\n"
-                f"📋 View schedule\n"
-                f"🗑️ Clear all appointments\n"
-                f"🔄 Update names from API\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.blue()
-        )
-
-        view = MinisterActivityView(self.bot, self, activity_name)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except:
-            pass
-
-    async def update_original_settings_message(self, activity_name: str):
-        """Update the original settings message back to the activity menu"""
-        if not self.original_interaction:
-            return
-            
-        # Get current stats
-        self.svs_cursor.execute("SELECT COUNT(*) FROM appointments WHERE appointment_type=?", (activity_name,))
-        booked_count = self.svs_cursor.fetchone()[0]
-        available_count = 48 - booked_count # 48 total 30-minute slots in 24 hours
-
-        embed = discord.Embed(
-            title=f"🏛️ {activity_name} Management",
-            description=(
-                f"Manage appointments for **{activity_name}**:\n\n"
-                f"**Current Status**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📅 **Booked Slots:** `{booked_count}/48`\n"
-                f"⏰ **Available Slots:** `{available_count}/48`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"**Available Actions**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"➕ Add new appointment\n"
-                f"➖ Remove existing appointment\n"
-                f"📋 View schedule\n"
-                f"🗑️ Clear all appointments\n"
-                f"🔄 Update names from API\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.blue()
-        )
-
-        view = MinisterActivityView(self.bot, self, activity_name)
-
-        try:
-            await self.original_interaction.edit_original_response(embed=embed, view=view)
-        except:
-            pass
-
-    async def show_minister_activity_menu_edit(self, interaction: discord.Interaction, activity_name: str, success_message: str = None):
-        """Edit the original message to show the activity menu - used after operations"""
-        # Get current stats
-        self.svs_cursor.execute("SELECT COUNT(*) FROM appointments WHERE appointment_type=?", (activity_name,))
-        booked_count = self.svs_cursor.fetchone()[0]
-        available_count = 48 - booked_count
-
-        description = f"Manage appointments for **{activity_name}**:\n\n"
+    
+    async def get_admin_permissions(self, user_id: int):
+        """Get admin permissions for a user - returns (is_admin, is_global_admin, alliance_ids)"""
+        self.settings_cursor = sqlite3.connect('db/settings.sqlite').cursor()
         
-        # Add success message if provided
-        if success_message:
-            description = f"✅ **{success_message}**\n\n{description}"
+        # Check if user is bot owner
+        if user_id == self.bot.owner_id:
+            return True, True, []
+        
+        # Check admin table
+        self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id=?", (user_id,))
+        admin_result = self.settings_cursor.fetchone()
+        
+        if not admin_result:
+            return False, False, []
+        
+        is_global_admin = admin_result[0] == 1
+        
+        if is_global_admin:
+            return True, True, []
+        
+        # Get alliance-specific permissions
+        self.settings_cursor.execute("SELECT alliances_id FROM adminserver WHERE admin=?", (user_id,))
+        alliance_permissions = self.settings_cursor.fetchall()
+        alliance_ids = [row[0] for row in alliance_permissions] if alliance_permissions else []
+        
+        return True, False, alliance_ids
+    
+    async def get_users_for_admin(self, user_id: int):
+        """Get list of users based on admin permissions"""
+        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(user_id)
+        
+        if not is_admin:
+            return []
+        
+        if is_global_admin:
+            # Get all users
+            self.users_cursor.execute("SELECT fid, nickname, alliance FROM users ORDER BY LOWER(nickname)")
+            return self.users_cursor.fetchall()
+        else:
+            # Get users only from allowed alliances
+            if not alliance_ids:
+                return []
+            
+            placeholders = ','.join('?' for _ in alliance_ids)
+            query = f"SELECT fid, nickname, alliance FROM users WHERE alliance IN ({placeholders}) ORDER BY LOWER(nickname)"
+            self.users_cursor.execute(query, alliance_ids)
+            return self.users_cursor.fetchall()
+    
+    async def show_filtered_user_select(self, interaction: discord.Interaction, activity_name: str):
+        """Show the filtered user selection view"""
+        # Check admin permissions
+        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id)
+        
+        if not is_admin:
+            await interaction.response.send_message("❌ You do not have permission to manage minister appointments.", ephemeral=True)
+            return
+        
+        # Get users based on permissions
+        users = await self.get_users_for_admin(interaction.user.id)
+        
+        if not users:
+            await interaction.response.send_message("❌ No users found in your allowed alliances.", ephemeral=True)
+            return
+        
+        # Get current bookings for this activity
+        self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
+        booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
+        
+        # Create the view
+        view = FilteredUserSelectView(self.bot, self, activity_name, users, booked_times)
+        
+        # Initial embed
+        await view.update_embed(interaction)
+    
+    async def show_current_schedule_list(self, interaction: discord.Interaction, activity_name: str):
+        """Show a paginated list of current bookings"""
+        await interaction.response.defer()
+        
+        # Get bookings
+        self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=? ORDER BY time", (activity_name,))
+        bookings = self.svs_cursor.fetchall()
+        
+        if not bookings:
+            embed = discord.Embed(
+                title=f"📋 {activity_name} Schedule",
+                description="No appointments currently booked.",
+                color=discord.Color.blue()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+        
+        # Build booking list with user info
+        booking_lines = []
+        for time, fid, alliance_id in bookings:
+            # Get user info
+            self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (fid,))
+            user_result = self.users_cursor.fetchone()
+            nickname = user_result[0] if user_result else f"Unknown ({fid})"
+            
+            # Get alliance info
+            self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (alliance_id,))
+            alliance_result = self.alliance_cursor.fetchone()
+            alliance_name = alliance_result[0] if alliance_result else "Unknown"
+            
+            booking_lines.append(f"`{time}` - [{alliance_name}] {nickname} ({fid})")
+        
+        # Create embed with all bookings
+        embed = discord.Embed(
+            title=f"📋 {activity_name} Schedule",
+            description="\n".join(booking_lines),
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text=f"Total bookings: {len(bookings)}/48")
+        
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    
+    async def show_filtered_user_select_with_message(self, interaction: discord.Interaction, activity_name: str, message: str, is_error: bool = False):
+        """Show the filtered user selection view with a status message"""
+        # Get users based on permissions
+        users = await self.get_users_for_admin(interaction.user.id)
+        
+        if not users:
+            await interaction.response.send_message("❌ No users found in your allowed alliances.", ephemeral=True)
+            return
+        
+        # Get current bookings for this activity
+        self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
+        booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
+        
+        # Create the view
+        view = FilteredUserSelectView(self.bot, self, activity_name, users, booked_times)
+        
+        # Get current stats
+        total_booked = len({fid for time, (fid, alliance) in booked_times.items() if fid})
+        available_slots = 48 - total_booked
+        
+        # Create description with message
+        status_emoji = "❌" if is_error else "✅"
+        description = f"{status_emoji} **{message}**\n\n"
+        description += f"Select a user to manage their {activity_name} appointment.\n\n"
+        
+        if view.filter_text:
+            description += f"**Filter:** `{view.filter_text}`\n"
+            description += f"**Filtered Users:** {len(view.filtered_users)}/{len(view.users)}\n\n"
         
         description += (
             f"**Current Status**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📅 **Booked Slots:** `{booked_count}/48`\n"
-            f"⏰ **Available Slots:** `{available_count}/48`\n"
+            f"📅 **Booked Slots:** `{total_booked}/48`\n"
+            f"⏰ **Available Slots:** `{available_slots}/48`\n"
             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"**Available Actions**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"➕ Add new appointment\n"
-            f"➖ Remove existing appointment\n"
-            f"📋 View schedule\n"
-            f"🗑️ Clear all appointments\n"
-            f"🔄 Update names from API\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━"
+            f"📅 = User already has a booking"
         )
-
+        
         embed = discord.Embed(
-            title=f"🏛️ {activity_name} Management",
+            title=f"🧑‍💼 {activity_name} Management",
             description=description,
-            color=discord.Color.blue()
+            color=discord.Color.red() if is_error else discord.Color.green()
         )
-
-        view = MinisterActivityView(self.bot, self, activity_name)
         
         try:
             await interaction.edit_original_response(embed=embed, view=view)
         except:
-            pass
-
-    async def show_minister_activity_menu(self, interaction: discord.Interaction, activity_name: str):
-        # Get current stats
-        self.svs_cursor.execute("SELECT COUNT(*) FROM appointments WHERE appointment_type=?", (activity_name,))
-        booked_count = self.svs_cursor.fetchone()[0]
-        available_count = 48 - booked_count # 48 total 30-minute slots in 24 hours
-
-        embed = discord.Embed(
-            title=f"🧑‍💼 {activity_name} Management",
-            description=(
-                f"Manage appointments for **{activity_name}**:\n\n"
-                f"**Current Status**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📅 **Booked Slots:** `{booked_count}/48`\n"
-                f"⏰ **Available Slots:** `{available_count}/48`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"**Available Actions**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"➕ Add new appointment\n"
-                f"➖ Remove existing appointment\n"
-                f"📋 View schedule\n"
-                f"🗑️ Clear all appointments\n"
-                f"🔄 Update names from API\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━"
-            ),
-            color=discord.Color.blue()
-        )
-
-        view = MinisterActivityView(self.bot, self, activity_name)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
-
-    async def show_add_minister_menu(self, interaction: discord.Interaction, activity_name: str):
-        if not await self.is_admin(interaction.user.id):
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-            return
-
-        # Get available users (not already booked for this activity)
-        self.svs_cursor.execute("SELECT fid FROM appointments WHERE appointment_type=?", (activity_name,))
-        booked_fids = {row[0] for row in self.svs_cursor.fetchall()}
-
-        self.users_cursor.execute("SELECT fid, nickname FROM users")
-        all_users = self.users_cursor.fetchall()
+            await interaction.followup.send(embed=embed, view=view)
+    
+    async def update_minister_names(self, interaction: discord.Interaction, activity_name: str):
+        """Update nicknames from API for all booked users"""
+        await interaction.response.defer()
         
-        available_users = [(fid, nickname) for fid, nickname in all_users if fid not in booked_fids]
-
-        if not available_users:
-            await interaction.response.send_message(
-                f"❌ No available users to add to {activity_name}. All registered users are already booked.",
-                ephemeral=True
+        # Get all bookings for this activity
+        self.svs_cursor.execute("SELECT DISTINCT fid FROM appointments WHERE appointment_type=?", (activity_name,))
+        fids = [row[0] for row in self.svs_cursor.fetchall()]
+        
+        if not fids:
+            await interaction.followup.send("❌ No appointments to update.", ephemeral=True)
+            return
+        
+        updated_count = 0
+        failed_count = 0
+        
+        for fid in fids:
+            try:
+                # Fetch user data from API
+                data = await self.fetch_user_data(fid)
+                if data and isinstance(data, dict) and "data" in data:
+                    new_nickname = data["data"].get("nickname", "")
+                    if new_nickname:
+                        # Update in database
+                        self.users_cursor.execute("UPDATE users SET nickname=? WHERE fid=?", (new_nickname, fid))
+                        self.users_conn.commit()
+                        updated_count += 1
+                    else:
+                        failed_count += 1
+                else:
+                    failed_count += 1
+            except Exception as e:
+                print(f"Error updating nickname for FID {fid}: {e}")
+                failed_count += 1
+        
+        # Show result
+        result_msg = f"Updated {updated_count} nicknames"
+        if failed_count > 0:
+            result_msg += f" ({failed_count} failed)"
+        
+        await self.show_filtered_user_select_with_message(interaction, activity_name, result_msg)
+    
+    async def show_clear_confirmation(self, interaction: discord.Interaction, activity_name: str):
+        """Show confirmation for clearing appointments"""
+        # Check permissions
+        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id)
+        
+        if is_global_admin:
+            # Count all appointments
+            self.svs_cursor.execute("SELECT COUNT(*) FROM appointments WHERE appointment_type=?", (activity_name,))
+            count = self.svs_cursor.fetchone()[0]
+            
+            embed = discord.Embed(
+                title="⚠️ Clear All Appointments",
+                description=f"Are you sure you want to clear **ALL {count} appointments** for {activity_name}?\n\nThis action cannot be undone.",
+                color=discord.Color.red()
             )
-            return
-
-        embed = discord.Embed(
-            title=f"➕ Add to {activity_name}",
-            description=f"Select a user to add to **{activity_name}**:",
-            color=discord.Color.green()
-        )
-
-        view = UserSelectView(self.bot, self, activity_name, available_users)
+        else:
+            # Count appointments for allowed alliances
+            if not alliance_ids:
+                await interaction.response.send_message("❌ You don't have permission to clear appointments.", ephemeral=True)
+                return
+            
+            placeholders = ','.join('?' for _ in alliance_ids)
+            query = f"SELECT COUNT(*) FROM appointments WHERE appointment_type=? AND alliance IN ({placeholders})"
+            self.svs_cursor.execute(query, [activity_name] + alliance_ids)
+            count = self.svs_cursor.fetchone()[0]
+            
+            embed = discord.Embed(
+                title="⚠️ Clear Alliance Appointments",
+                description=f"Are you sure you want to clear **{count} appointments** for your alliance(s) in {activity_name}?\n\nThis action cannot be undone.",
+                color=discord.Color.red()
+            )
+        
+        view = ClearConfirmationView(self.bot, self, activity_name, is_global_admin, alliance_ids)
         
         try:
             await interaction.response.edit_message(embed=embed, view=view)
         except discord.InteractionResponded:
             await interaction.edit_original_response(embed=embed, view=view)
 
-    async def show_time_selection(self, interaction: discord.Interaction, activity_name: str, fid: str):
+    async def show_time_selection(self, interaction: discord.Interaction, activity_name: str, fid: str, current_time: str = None):
         # Get available time slots
         self.svs_cursor.execute("SELECT time FROM appointments WHERE appointment_type=?", (activity_name,))
         booked_times = {row[0] for row in self.svs_cursor.fetchall()}
@@ -666,7 +843,7 @@ class MinisterMenu(commands.Cog):
         for hour in range(24):
             for minute in (0, 30):
                 time_slot = f"{hour:02}:{minute:02}"
-                if time_slot not in booked_times:
+                if time_slot not in booked_times or time_slot == current_time:
                     available_times.append(time_slot)
 
         if not available_times:
@@ -681,60 +858,23 @@ class MinisterMenu(commands.Cog):
         user_data = self.users_cursor.fetchone()
         nickname = user_data[0] if user_data else f"ID: {fid}"
 
+        description = f"Choose an available time slot for **{nickname}** in {activity_name}:"
+        if current_time:
+            description += f"\n\n**Current booking:** `{current_time}`"
+            description += "\n\nSelecting a new time will move the booking."
+
         embed = discord.Embed(
             title=f"⏰ Select Time for {nickname}",
-            description=f"Choose an available time slot for **{nickname}** in {activity_name}:",
+            description=description,
             color=discord.Color.blue()
         )
 
-        view = TimeSelectView(self.bot, self, activity_name, fid, available_times)
+        view = TimeSelectView(self.bot, self, activity_name, fid, available_times, current_time)
         
         try:
             await interaction.response.edit_message(embed=embed, view=view)
         except discord.InteractionResponded:
             await interaction.edit_original_response(embed=embed, view=view)
-
-    async def show_booked_schedule_above_buttons(self, interaction: discord.Interaction, activity_name: str):
-        try:
-            # Get booked times
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if not minister_schedule_cog:
-                await interaction.response.send_message("❌ Minister Schedule module not found.", ephemeral=True)
-                return
-
-            if not booked_times:
-                embed = discord.Embed(
-                    title=f"Booked slots for {activity_name}",
-                    description="No appointments scheduled",
-                    color=discord.Color.blue()
-                )
-            else:
-                time_list, _ = minister_schedule_cog.generate_time_list(booked_times)
-                # Filter to only show booked slots
-                booked_only = [slot for slot in time_list if " - " in slot and not slot.endswith(" - ")]
-                
-                if booked_only:
-                    time_list_text = "\n".join(booked_only)
-                    embed = discord.Embed(
-                        title=f"Booked slots for {activity_name}",
-                        description=time_list_text,
-                        color=discord.Color.blue()
-                    )
-                else:
-                    embed = discord.Embed(
-                        title=f"Booked slots for {activity_name}",
-                        description="No appointments scheduled",
-                        color=discord.Color.blue()
-                    )
-
-            view = ListTypeView(self.bot, self, activity_name)
-            await interaction.response.edit_message(embed=embed, view=view)
-
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error showing booked schedule: {e}", ephemeral=True)
 
     async def complete_booking(self, interaction: discord.Interaction, activity_name: str, fid: str, selected_time: str):
         try:
@@ -745,16 +885,13 @@ class MinisterMenu(commands.Cog):
             # Check if the user is already booked for this activity type
             self.svs_cursor.execute("SELECT time FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
             existing_booking = self.svs_cursor.fetchone()
+            
+            # If user already has a booking, we'll remove it and add the new one
             if existing_booking:
-                self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (fid,))
-                user_data = self.users_cursor.fetchone()
-                nickname = user_data[0] if user_data else f"ID: {fid}"
-                
-                error_msg = f"❌ {nickname} already has an appointment for {activity_name} at {existing_booking[0]}"
-                await self.show_minister_activity_menu_edit(interaction, activity_name, error_msg)
-                return
+                old_time = existing_booking[0]
+                self.svs_cursor.execute("DELETE FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
 
-            # Check if the time slot is already taken
+            # Check if the time slot is already taken by someone else
             self.svs_cursor.execute("SELECT fid FROM appointments WHERE appointment_type=? AND time=?", (activity_name, selected_time))
             conflicting_booking = self.svs_cursor.fetchone()
             if conflicting_booking:
@@ -763,8 +900,20 @@ class MinisterMenu(commands.Cog):
                 booked_user = self.users_cursor.fetchone()
                 booked_nickname = booked_user[0] if booked_user else "Unknown"
                 
-                error_msg = f"❌ The time {selected_time} for {activity_name} is already taken by {booked_nickname}"
-                await self.show_minister_activity_menu_edit(interaction, activity_name, error_msg)
+                # Re-add the old booking if we had removed it
+                if existing_booking:
+                    self.svs_cursor.execute("SELECT alliance FROM users WHERE fid=?", (fid,))
+                    user_alliance = self.svs_cursor.fetchone()
+                    if user_alliance:
+                        self.svs_cursor.execute(
+                            "INSERT INTO appointments (fid, appointment_type, time, alliance) VALUES (?, ?, ?, ?)",
+                            (fid, activity_name, old_time, user_alliance[0])
+                        )
+                        self.svs_conn.commit()
+                
+                error_msg = f"The time {selected_time} for {activity_name} is already taken by {booked_nickname}"
+                # Return to user selection with error in embed
+                await self.show_filtered_user_select_with_message(interaction, activity_name, error_msg, is_error=True)
                 return
 
             # Get user and alliance info
@@ -807,515 +956,38 @@ class MinisterMenu(commands.Cog):
             # Send log embed
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if minister_schedule_cog:
-                embed = discord.Embed(
-                    title=f"Player added to {activity_name}",
-                    description=f"{nickname} ({fid}) from **{alliance_name}** at {selected_time}",
-                    color=discord.Color.green()
-                )
+                if existing_booking:
+                    # This was a reschedule
+                    embed = discord.Embed(
+                        title=f"Player rescheduled in {activity_name}",
+                        description=f"{nickname} ({fid}) from **{alliance_name}** moved from {old_time} to {selected_time}",
+                        color=discord.Color.blue()
+                    )
+                else:
+                    # This was a new booking
+                    embed = discord.Embed(
+                        title=f"Player added to {activity_name}",
+                        description=f"{nickname} ({fid}) from **{alliance_name}** at {selected_time}",
+                        color=discord.Color.green()
+                    )
                 embed.set_thumbnail(url=avatar_image)
-                embed.set_author(name=f"Added by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
+                embed.set_author(name=f"Added by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
                 await minister_schedule_cog.send_embed_to_channel(embed)
                 await self.update_channel_message(activity_name)
 
-            success_msg = f"Successfully added {nickname} to {activity_name} at {selected_time}"
-            await self.show_minister_activity_menu_edit(interaction, activity_name, success_msg)
+            if existing_booking:
+                success_msg = f"Successfully moved {nickname} from {old_time} to {selected_time}"
+            else:
+                success_msg = f"Successfully added {nickname} to {activity_name} at {selected_time}"
+            
+            await self.show_filtered_user_select_with_message(interaction, activity_name, success_msg)
 
         except Exception as e:
             try:
                 error_msg = f"❌ Error booking appointment: {e}"
-                await self.show_minister_activity_menu_edit(interaction, activity_name, error_msg)
+                await interaction.followup.send(error_msg, ephemeral=True)
             except:
                 print(f"Failed to show error message for booking: {e}")
-
-    async def show_remove_minister_menu(self, interaction: discord.Interaction, activity_name: str):
-        if not await self.is_admin(interaction.user.id):
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-            return
-
-        # Get booked users for this activity
-        self.svs_cursor.execute("SELECT fid FROM appointments WHERE appointment_type=?", (activity_name,))
-        booked_fids = [row[0] for row in self.svs_cursor.fetchall()]
-
-        if not booked_fids:
-            await interaction.response.send_message(
-                f"❌ No users are currently booked for {activity_name}.",
-                ephemeral=True
-            )
-            return
-
-        # Get user info
-        placeholders = ",".join("?" for _ in booked_fids)
-        query = f"SELECT fid, nickname FROM users WHERE fid IN ({placeholders})"
-        self.users_cursor.execute(query, booked_fids)
-        booked_users = self.users_cursor.fetchall()
-
-        embed = discord.Embed(
-            title=f"➖ Remove from {activity_name}",
-            description=f"Select a user to remove from **{activity_name}**:",
-            color=discord.Color.red()
-        )
-
-        view = RemoveUserSelectView(self.bot, self, activity_name, booked_users)
-        
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
-
-    async def complete_removal(self, interaction: discord.Interaction, activity_name: str, fid: str):
-        try:
-            # Defer to prevent timeout
-            if not interaction.response.is_done():
-                await interaction.response.defer()
-
-            # Check if the user is actually booked for this activity type
-            self.svs_cursor.execute("SELECT * FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
-            booking = self.svs_cursor.fetchone()
-
-            # Get user info
-            self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (fid,))
-            user_data = self.users_cursor.fetchone()
-            nickname = user_data[0] if user_data else f"ID: {fid}"
-
-            if not booking:
-                error_msg = f"❌ {nickname} is not on the minister list for {activity_name}"
-                await self.show_minister_activity_menu_edit(interaction, activity_name, error_msg)
-                return
-
-            # Remove the appointment
-            self.svs_cursor.execute("DELETE FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
-            self.svs_conn.commit()
-
-            # Get avatar
-            try:
-                data = await self.fetch_user_data(fid)
-                if isinstance(data, int) and data == 429:
-                    avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
-                elif data and "data" in data and "avatar_image" in data["data"]:
-                    avatar_image = data["data"]["avatar_image"]
-                else:
-                    avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
-            except Exception:
-                avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
-
-            # Send log embed
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if minister_schedule_cog:
-                embed = discord.Embed(
-                    title=f"Player removed from {activity_name}",
-                    description=f"{nickname} ({fid})",
-                    color=discord.Color.red()
-                )
-                embed.set_thumbnail(url=avatar_image)
-                embed.set_author(name=f"Removed by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
-                await minister_schedule_cog.send_embed_to_channel(embed)
-                await self.update_channel_message(activity_name)
-
-            success_msg = f"Successfully removed {nickname} from {activity_name}"
-            await self.show_minister_activity_menu_edit(interaction, activity_name, success_msg)
-
-        except Exception as e:
-            try:
-                error_msg = f"❌ Error removing appointment: {e}"
-                await self.show_minister_activity_menu_edit(interaction, activity_name, error_msg)
-            except:
-                print(f"Failed to show error message for removal: {e}")
-
-    async def show_list_minister_menu(self, interaction: discord.Interaction, activity_name: str):
-        embed = discord.Embed(
-            title=f"📋 View {activity_name} Schedule",
-            description="Choose how you'd like to view the schedule:",
-            color=discord.Color.blue()
-        )
-
-        view = ListTypeView(self.bot, self, activity_name)
-        
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
-
-    async def show_full_schedule_above_buttons(self, interaction: discord.Interaction, activity_name: str, update: bool = False):
-        try:
-            if update:
-                await interaction.response.defer()
-            
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if not minister_schedule_cog:
-                if update:
-                    await interaction.followup.send("❌ Minister Schedule module not found.", ephemeral=True)
-                else:
-                    await interaction.response.send_message("❌ Minister Schedule module not found.", ephemeral=True)
-                return
-
-            if update:
-                async def update_progress(checked, total, waiting):
-                    if checked % 1 == 0:
-                        if waiting:
-                            color = discord.Color.orange()
-                            title = "⏳ Rate limit hit - waiting 60 seconds"
-                            description = f"Checked {checked}/{total} minister appointees\n\n⚠️ **Please wait** - this will take some time!"
-                        elif checked >= total:
-                            color = discord.Color.green()
-                            title = "✅ Update Complete!"
-                            description = f"Successfully updated {total}/{total} minister appointees"
-                        else:
-                            color = discord.Color.blue()
-                            title = "🔄 Updating names..."
-                            description = f"Checked {checked}/{total} minister appointees"
-                            
-                        embed = discord.Embed(
-                            title=title,
-                            description=description,
-                            color=color
-                        )
-                        try:
-                            await interaction.edit_original_response(embed=embed)
-                        except discord.NotFound:
-                            print("Interaction expired during name update. This is normal for long operations.\nPlease try to re-open the Settings menu.")
-                        except discord.HTTPException as e:
-                            if "Unknown interaction" in str(e):
-                                print("Interaction expired during name update. This is normal for long operations.\nPlease try to re-open the Settings menu.")
-                            else:
-                                raise
-
-                time_list, _ = await minister_schedule_cog.update_time_list(booked_times, update_progress)
-            else:
-                time_list, _ = minister_schedule_cog.generate_time_list(booked_times)
-
-            time_list_text = "\n".join(time_list)
-
-            if time_list_text:
-                embed = discord.Embed(
-                    title=f"Schedule for {activity_name}",
-                    description=time_list_text,
-                    color=discord.Color.blue()
-                )
-            else:
-                embed = discord.Embed(
-                    title=f"Schedule for {activity_name}",
-                    description="No appointments scheduled",
-                    color=discord.Color.blue()
-                )
-                
-            view = ListTypeView(self.bot, self, activity_name)
-            
-            if update:
-                try:
-                    await interaction.edit_original_response(embed=embed, view=view)
-                except discord.NotFound:
-                    print("Interaction expired before final update.")
-            else:
-                await interaction.response.edit_message(embed=embed, view=view)
-
-        except Exception as e:
-            error_msg = f"❌ Error showing schedule: {e}"
-            if update:
-                await interaction.followup.send(error_msg, ephemeral=True)
-            else:
-                await interaction.response.send_message(error_msg, ephemeral=True)
-
-    async def show_available_schedule_above_buttons(self, interaction: discord.Interaction, activity_name: str):
-        try:
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if not minister_schedule_cog:
-                await interaction.response.send_message("❌ Minister Schedule module not found.", ephemeral=True)
-                return
-
-            available_slots = minister_schedule_cog.generate_available_time_list(booked_times)
-            
-            if available_slots:
-                time_list = "\n".join(available_slots)
-                embed = discord.Embed(
-                    title=f"Available slots for {activity_name}",
-                    description=time_list,
-                    color=discord.Color.green()
-                )
-            else:
-                embed = discord.Embed(
-                    title=f"Available slots for {activity_name}",
-                    description="All appointment slots are filled",
-                    color=discord.Color.red()
-                )
-
-            view = ListTypeView(self.bot, self, activity_name)
-            await interaction.response.edit_message(embed=embed, view=view)
-
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error showing available schedule: {e}", ephemeral=True)
-
-    async def show_full_schedule(self, interaction: discord.Interaction, activity_name: str, update: bool = False):
-        try:
-            await interaction.response.defer()
-
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if not minister_schedule_cog:
-                await interaction.followup.send(
-                    "❌ Minister Schedule module not found.",
-                    ephemeral=True
-                )
-                return
-
-            if update:
-                async def update_progress(checked, total, waiting):
-                    if checked % 1 == 0:
-                        color = discord.Color.orange() if waiting else discord.Color.green()
-                        title = "Waiting 60 seconds before continuing" if waiting else "Updating names"
-                        embed = discord.Embed(
-                            title=title,
-                            description=f"Checked {checked}/{total} minister appointees",
-                            color=color
-                        )
-                        try:
-                            await interaction.edit_original_response(embed=embed)
-                        except discord.NotFound:
-                            print("Interaction expired before progress update.")
-
-                time_list, _ = await minister_schedule_cog.update_time_list(booked_times, update_progress)
-            else:
-                time_list, _ = minister_schedule_cog.generate_time_list(booked_times)
-
-            time_list_text = "\n".join(time_list)
-
-            if time_list_text:
-                embed = discord.Embed(
-                    title=f"Schedule for {activity_name}",
-                    description=time_list_text,
-                    color=discord.Color.blue()
-                )
-                
-                view = discord.ui.View()
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️")
-                
-                async def back_callback(button_interaction):
-                    await self.show_minister_activity_menu_from_schedule(button_interaction, activity_name)
-                
-                back_button.callback = back_callback
-                view.add_item(back_button)
-                
-                try:
-                    await interaction.edit_original_response(embed=embed, view=view)
-                except discord.NotFound:
-                    print("Interaction expired before final update.")
-
-        except Exception as e:
-            await interaction.followup.send(f"❌ Error showing schedule: {e}", ephemeral=True)
-
-    async def show_available_schedule(self, interaction: discord.Interaction, activity_name: str):
-        try:
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if not minister_schedule_cog:
-                await interaction.response.send_message(
-                    "❌ Minister Schedule module not found.",
-                    ephemeral=True
-                )
-                return
-
-            available_slots = minister_schedule_cog.generate_available_time_list(booked_times)
-            
-            if available_slots:
-                time_list = "\n".join(available_slots)
-                embed = discord.Embed(
-                    title=f"Available slots for {activity_name}",
-                    description=time_list,
-                    color=discord.Color.green()
-                )
-            else:
-                embed = discord.Embed(
-                    title=f"Available slots for {activity_name}",
-                    description="All appointment slots are filled",
-                    color=discord.Color.red()
-                )
-
-            view = discord.ui.View()
-            back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️")
-            
-            async def back_callback(button_interaction):
-                await self.show_minister_activity_menu_from_schedule(button_interaction, activity_name)
-            
-            back_button.callback = back_callback
-            view.add_item(back_button)
-
-            await interaction.response.edit_message(embed=embed, view=view)
-
-        except Exception as e:
-            await interaction.response.send_message(
-                f"❌ Error showing available schedule: {e}",
-                ephemeral=True
-            )
-
-    async def show_clear_confirmation(self, interaction: discord.Interaction, activity_name: str):
-        if not await self.is_admin(interaction.user.id):
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title=f"⚠️ Confirm clearing {activity_name} list",
-            description=(
-                f"Are you sure you want to remove all minister appointment slots for: **{activity_name}**?\n\n"
-                f"🚨 **This action cannot be undone and all names will be removed** 🚨"
-            ),
-            color=discord.Color.orange()
-        )
-
-        view = ClearConfirmationView(self.bot, self, activity_name)
-        
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
-
-    async def execute_clear_all(self, interaction: discord.Interaction, activity_name: str):
-        try:
-            # Send ephemeral success message immediately
-            await interaction.response.send_message(
-                f"✅ Successfully cleared all appointments for **{activity_name}**!",
-                ephemeral=True
-            )
-            
-            # Get current schedule before clearing
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if minister_schedule_cog:
-                # Clear all appointments
-                self.svs_cursor.execute("DELETE FROM appointments WHERE appointment_type=?", (activity_name,))
-                self.svs_conn.commit()
-
-                # Send log embed
-                embed = discord.Embed(
-                    title=f"Cleared {activity_name} list",
-                    description=f"All appointments for {activity_name} have been successfully removed.",
-                    color=discord.Color.red()
-                )
-                embed.set_author(name=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
-                await minister_schedule_cog.send_embed_to_channel(embed)
-                await self.update_channel_message(activity_name)
-
-            # Return to activity menu (update the original settings message)
-            await self.update_original_settings_message(activity_name)
-
-        except Exception as e:
-            try:
-                await interaction.response.send_message(
-                    f"❌ Error clearing appointments: {e}",
-                    ephemeral=True
-                )
-            except discord.InteractionResponded:
-                await interaction.followup.send(
-                    f"❌ Error clearing appointments: {e}",
-                    ephemeral=True
-                )
-
-    async def update_minister_names(self, interaction: discord.Interaction, activity_name: str):
-        try:
-            # Send initial ephemeral response immediately
-            await interaction.response.send_message(
-                embed=discord.Embed(
-                    title="🔄 Starting name update...",
-                    description=f"Initializing update process for **{activity_name}**",
-                    color=discord.Color.blue()
-                ),
-                ephemeral=True
-            )
-
-            # Get booked times
-            self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (activity_name,))
-            booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-
-            if not booked_times:
-                await interaction.edit_original_response(
-                    embed=discord.Embed(
-                        title="❌ No appointments found",
-                        description=f"No appointments found for **{activity_name}**",
-                        color=discord.Color.red()
-                    )
-                )
-                return
-
-            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
-            if not minister_schedule_cog:
-                await interaction.edit_original_response(
-                    embed=discord.Embed(
-                        title="❌ Error",
-                        description="Minister Schedule module not found.",
-                        color=discord.Color.red()
-                    )
-                )
-                return
-
-            async def update_progress(checked, total, waiting):
-                if checked % 1 == 0:
-                    if waiting:
-                        color = discord.Color.orange()
-                        title = "⏳ Rate limit hit - waiting 60 seconds"
-                        description = f"Checked {checked}/{total} minister appointees\n\n⚠️ **Please wait** - This is normal when updating many names\n\n✅ **You can use other bot functions while this runs**"
-                    elif checked >= total:
-                        color = discord.Color.green()
-                        title = "✅ Update Complete!"
-                        description = f"Successfully updated {total}/{total} minister appointees for **{activity_name}**"
-                    else:
-                        color = discord.Color.blue()
-                        title = "🔄 Updating names..."
-                        description = f"Checked {checked}/{total} minister appointees\n\n✅ **You can use other bot functions while this runs**"
-                        
-                    embed = discord.Embed(
-                        title=title,
-                        description=description,
-                        color=color
-                    )
-                    try:
-                        await interaction.edit_original_response(embed=embed)
-                    except discord.NotFound:
-                        print("Ephemeral interaction expired during name update. This is normal for long operations.")
-                    except discord.HTTPException as e:
-                        if "Unknown interaction" in str(e):
-                            print("Ephemeral interaction expired during name update. This is normal for long operations.")
-                        else:
-                            print(f"HTTP error during progress update: {e}")
-
-            # Update names via API
-            time_list, _ = await minister_schedule_cog.update_time_list(booked_times, update_progress)
-
-            # Final success message
-            embed = discord.Embed(
-                title="✅ Names Updated Successfully!",
-                description=f"All minister names have been updated for **{activity_name}**\n\n🔄 Channel messages have been refreshed with updated names",
-                color=discord.Color.green()
-            )
-            try:
-                await interaction.edit_original_response(embed=embed)
-            except (discord.NotFound, discord.HTTPException):
-                # If interaction expired, that's normal for long operations
-                print(f"Update completed for {activity_name} but ephemeral interaction expired. This is normal.")
-
-            # Update the channel message with fresh data
-            await self.update_channel_message(activity_name)
-
-        except Exception as e:
-            try:
-                await interaction.edit_original_response(
-                    embed=discord.Embed(
-                        title="❌ Error updating names",
-                        description=f"An error occurred: {e}",
-                        color=discord.Color.red()
-                    )
-                )
-            except:
-                print(f"Error updating names for {activity_name}: {e}")
 
     async def update_channel_message(self, activity_name: str):
         """Update the channel message with current available slots"""
