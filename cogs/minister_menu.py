@@ -149,14 +149,14 @@ class FilteredUserSelectView(discord.ui.View):
         else:
             await self.cog.show_time_selection(interaction, self.activity_name, str(fid), None)
     
-    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, custom_id="prev_page", row=1)
+    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, custom_id="prev_page", row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         self.update_navigation_buttons()
         await self.update_embed(interaction)
     
-    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, custom_id="next_page", row=1)
+    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, custom_id="next_page", row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
@@ -185,7 +185,7 @@ class FilteredUserSelectView(discord.ui.View):
     async def update_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.update_minister_names(interaction, self.activity_name)
     
-    @discord.ui.button(label="Clear All", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
+    @discord.ui.button(label="Clear Reservations", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
     async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is admin
         if not await self.cog.is_admin(interaction.user.id):
@@ -195,7 +195,7 @@ class FilteredUserSelectView(discord.ui.View):
         # For alliance admins, we'll clear only their alliance members
         await self.cog.show_clear_confirmation(interaction, self.activity_name)
     
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_minister_channel_menu(interaction)
     
@@ -324,7 +324,7 @@ class MinisterChannelView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed to delete server ID: {e}", ephemeral=True)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=1)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             other_features_cog = self.cog.bot.get_cog("OtherFeatures")
@@ -389,7 +389,7 @@ class ChannelConfigurationView(discord.ui.View):
     async def log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_channel_selection(interaction, "minister log channel", "general logging")
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=1)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_minister_channel_menu(interaction)
 
@@ -412,7 +412,7 @@ class ChannelConfigurationView(discord.ui.View):
                 self.cog = cog
                 self.add_item(ChannelSelect(bot, context))
                 
-            @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="◀️", row=1)
+            @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
             async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 # Restore the menu with embed
                 embed = discord.Embed(
@@ -461,13 +461,22 @@ class TimeSelectView(discord.ui.View):
         
         self.add_item(TimeSelect(available_times))
         
+        # Add clear reservation button if user has existing booking
+        if current_time:
+            clear_button = discord.ui.Button(label="Clear Reservation", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+            clear_button.callback = self.clear_reservation_callback
+            self.add_item(clear_button)
+        
         # Add back button
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji="◀️")
+        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji="⬅️", row=1)
         back_button.callback = self.back_button_callback
         self.add_item(back_button)
 
     async def back_button_callback(self, interaction: discord.Interaction):
         await self.cog.show_filtered_user_select(interaction, self.activity_name)
+    
+    async def clear_reservation_callback(self, interaction: discord.Interaction):
+        await self.cog.clear_user_reservation(interaction, self.activity_name, self.fid, self.current_time)
 
     async def on_timeout(self):
         for item in self.children:
@@ -1019,6 +1028,70 @@ class MinisterMenu(commands.Cog):
 
         except Exception as e:
             print(f"Error updating channel message: {e}")
+    
+    async def clear_user_reservation(self, interaction: discord.Interaction, activity_name: str, fid: str, current_time: str):
+        """Clear a user's reservation and return to the day management page"""
+        try:
+            # Defer to prevent timeout
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            
+            # Get user info for logging
+            self.users_cursor.execute("SELECT nickname, alliance FROM users WHERE fid=?", (fid,))
+            user_data = self.users_cursor.fetchone()
+            
+            if not user_data:
+                await interaction.followup.send("❌ User not found.", ephemeral=True)
+                return
+            
+            nickname, alliance_id = user_data
+            
+            # Get alliance name
+            self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (alliance_id,))
+            alliance_result = self.alliance_cursor.fetchone()
+            alliance_name = alliance_result[0] if alliance_result else "Unknown"
+            
+            # Delete the reservation
+            self.svs_cursor.execute("DELETE FROM appointments WHERE fid=? AND appointment_type=? AND time=?", 
+                                  (fid, activity_name, current_time))
+            self.svs_conn.commit()
+            
+            # Get avatar for log
+            try:
+                data = await self.fetch_user_data(fid)
+                if isinstance(data, int) and data == 429:
+                    avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+                elif data and "data" in data and "avatar_image" in data["data"]:
+                    avatar_image = data["data"]["avatar_image"]
+                else:
+                    avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+            except Exception:
+                avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+            
+            # Send log embed
+            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
+            if minister_schedule_cog:
+                embed = discord.Embed(
+                    title=f"Player removed from {activity_name}",
+                    description=f"{nickname} ({fid}) from **{alliance_name}** at {current_time}",
+                    color=discord.Color.red()
+                )
+                embed.set_thumbnail(url=avatar_image)
+                embed.set_author(name=f"Removed by {interaction.user.display_name}", 
+                               icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+                await minister_schedule_cog.send_embed_to_channel(embed)
+                await self.update_channel_message(activity_name)
+            
+            # Return to day management with confirmation
+            success_msg = f"Successfully cleared {nickname}'s reservation at {current_time}"
+            await self.show_filtered_user_select_with_message(interaction, activity_name, success_msg)
+            
+        except Exception as e:
+            try:
+                error_msg = f"❌ Error clearing reservation: {e}"
+                await interaction.followup.send(error_msg, ephemeral=True)
+            except:
+                print(f"Failed to show error message for clearing reservation: {e}")
 
 async def setup(bot):
     await bot.add_cog(MinisterMenu(bot))
