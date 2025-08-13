@@ -181,20 +181,6 @@ class FilteredUserSelectView(discord.ui.View):
     async def list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_current_schedule_list(interaction, self.activity_name)
     
-    @discord.ui.button(label="Update Names", style=discord.ButtonStyle.secondary, emoji="🔄", row=2)
-    async def update_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.update_minister_names(interaction, self.activity_name)
-    
-    @discord.ui.button(label="Clear Reservations", style=discord.ButtonStyle.danger, emoji="🗑️", row=2)
-    async def clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if user is admin
-        if not await self.cog.is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ You do not have permission to clear appointments.", ephemeral=True)
-            return
-        
-        # For alliance admins, we'll clear only their alliance members
-        await self.cog.show_clear_confirmation(interaction, self.activity_name)
-    
     @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_minister_channel_menu(interaction)
@@ -284,11 +270,95 @@ class ClearConfirmationView(discord.ui.View):
             await minister_schedule_cog.send_embed_to_channel(embed)
             await self.cog.update_channel_message(self.activity_name)
         
-        await self.cog.show_filtered_user_select_with_message(interaction, self.activity_name, message)
+        # Return to settings menu with success message
+        embed = discord.Embed(
+            title="⚙️ Minister Settings",
+            description=(
+                f"✅ **{message}**\n\n"
+                "Administrative settings for minister scheduling:\n\n"
+                "**Available Actions**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📝 **Update Names** - Update nicknames from API for booked users\n"
+                "🗑️ **Clear Reservations** - Clear appointments for a specific day\n"
+                "🗑️ **Delete Server ID** - Remove configured server from database\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.green()
+        )
+        
+        view = MinisterSettingsView(self.cog.bot, self.cog)
+        await interaction.followup.send(embed=embed, view=view)
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_filtered_user_select(interaction, self.activity_name)
+
+class ActivitySelectView(discord.ui.View):
+    def __init__(self, bot, cog, action_type):
+        super().__init__(timeout=60)
+        self.bot = bot
+        self.cog = cog
+        self.action_type = action_type  # "update_names" or "clear_reservations"
+    
+    @discord.ui.select(
+        placeholder="Select an activity day...",
+        options=[
+            discord.SelectOption(label="Construction Day", value="Construction Day", emoji="🔨"),
+            discord.SelectOption(label="Research Day", value="Research Day", emoji="🔬"),
+            discord.SelectOption(label="Troops Training Day", value="Troops Training Day", emoji="⚔️")
+        ]
+    )
+    async def activity_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        activity_name = select.values[0]
+        
+        if self.action_type == "update_names":
+            await self.cog.update_minister_names(interaction, activity_name)
+        elif self.action_type == "clear_reservations":
+            await self.cog.show_clear_confirmation(interaction, activity_name)
+    
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_settings_menu(interaction)
+
+class MinisterSettingsView(discord.ui.View):
+    def __init__(self, bot, cog):
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.cog = cog
+    
+    @discord.ui.button(label="Update Names", style=discord.ButtonStyle.secondary, emoji="📝")
+    async def update_names(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is admin
+        if not await self.cog.is_admin(interaction.user.id):
+            await interaction.response.send_message("❌ You do not have permission to update names.", ephemeral=True)
+            return
+        
+        await self.cog.show_activity_selection_for_update(interaction)
+    
+    @discord.ui.button(label="Clear Reservations", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def clear_reservations(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is admin
+        if not await self.cog.is_admin(interaction.user.id):
+            await interaction.response.send_message("❌ You do not have permission to clear appointments.", ephemeral=True)
+            return
+        
+        await self.cog.show_activity_selection_for_clear(interaction)
+    
+    @discord.ui.button(label="Delete Server ID", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            svs_conn = sqlite3.connect("db/svs.sqlite")
+            svs_cursor = svs_conn.cursor()
+            svs_cursor.execute("DELETE FROM reference WHERE context=?", ("minister guild id",))
+            svs_conn.commit()
+            svs_conn.close()
+            await interaction.response.send_message("✅ Server ID deleted from the database.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to delete server ID: {e}", ephemeral=True)
+    
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_minister_channel_menu(interaction)
 
 class MinisterChannelView(discord.ui.View):
     def __init__(self, bot, cog):
@@ -308,21 +378,13 @@ class MinisterChannelView(discord.ui.View):
     async def troops_training_day(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_activity_selection(interaction, "Troops Training Day")
 
-    @discord.ui.button(label="Channel Configuration", style=discord.ButtonStyle.secondary, emoji="⚙️", row=1)
-    async def channel_configuration(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_channel_configuration_menu(interaction)
+    @discord.ui.button(label="Channel Setup", style=discord.ButtonStyle.success, emoji="📝", row=1)
+    async def channel_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_channel_setup_menu(interaction)
 
-    @discord.ui.button(label="Delete Server ID", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            svs_conn = sqlite3.connect("db/svs.sqlite")
-            svs_cursor = svs_conn.cursor()
-            svs_cursor.execute("DELETE FROM reference WHERE context=?", ("minister guild id",))
-            svs_conn.commit()
-            svs_conn.close()
-            await interaction.response.send_message("✅ Server ID deleted from the database.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to delete server ID: {e}", ephemeral=True)
+    @discord.ui.button(label="Settings", style=discord.ButtonStyle.secondary, emoji="⚙️", row=1)
+    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_settings_menu(interaction)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -416,7 +478,7 @@ class ChannelConfigurationView(discord.ui.View):
             async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 # Restore the menu with embed
                 embed = discord.Embed(
-                    title="⚙️ Channel Configuration",
+                    title="📝 Channel Setup",
                     description=(
                         "Configure channels for minister scheduling:\n\n"
                         "**Channel Types**\n"
@@ -560,8 +622,8 @@ class MinisterMenu(commands.Cog):
                 "🔨 Manage Construction Day appointments\n"
                 "🔬 Manage Research Day appointments\n"
                 "⚔️ Manage Training Day appointments\n"
-                "⚙️ Configure log channels\n"
-                "🗑️ Delete server ID\n"
+                "📝 Configure channel setup\n"
+                "⚙️ Administrative settings\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -574,9 +636,9 @@ class MinisterMenu(commands.Cog):
         except discord.InteractionResponded:
             pass
 
-    async def show_channel_configuration_menu(self, interaction: discord.Interaction):
+    async def show_channel_setup_menu(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="⚙️ Channel Configuration",
+            title="📝 Channel Setup",
             description=(
                 "Configure channels for minister scheduling:\n\n"
                 "**Channel Types**\n"
@@ -798,11 +860,28 @@ class MinisterMenu(commands.Cog):
                 failed_count += 1
         
         # Show result
-        result_msg = f"Updated {updated_count} nicknames"
+        result_msg = f"Updated {updated_count} nicknames for {activity_name}"
         if failed_count > 0:
             result_msg += f" ({failed_count} failed)"
         
-        await self.show_filtered_user_select_with_message(interaction, activity_name, result_msg)
+        # Return to settings menu with success message
+        embed = discord.Embed(
+            title="⚙️ Minister Settings",
+            description=(
+                f"✅ **{result_msg}**\n\n"
+                "Administrative settings for minister scheduling:\n\n"
+                "**Available Actions**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📝 **Update Names** - Update nicknames from API for booked users\n"
+                "🗑️ **Clear Reservations** - Clear appointments for a specific day\n"
+                "🗑️ **Delete Server ID** - Remove configured server from database\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.green()
+        )
+        
+        view = MinisterSettingsView(self.bot, self)
+        await interaction.followup.send(embed=embed, view=view)
     
     async def show_clear_confirmation(self, interaction: discord.Interaction, activity_name: str):
         """Show confirmation for clearing appointments"""
@@ -1092,6 +1171,59 @@ class MinisterMenu(commands.Cog):
                 await interaction.followup.send(error_msg, ephemeral=True)
             except:
                 print(f"Failed to show error message for clearing reservation: {e}")
+    
+    async def show_settings_menu(self, interaction: discord.Interaction):
+        """Show the minister settings menu"""
+        embed = discord.Embed(
+            title="⚙️ Minister Settings",
+            description=(
+                "Administrative settings for minister scheduling:\n\n"
+                "**Available Actions**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📝 **Update Names** - Update nicknames from API for booked users\n"
+                "🗑️ **Clear Reservations** - Clear appointments for a specific day\n"
+                "🗑️ **Delete Server ID** - Remove configured server from database\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.blue()
+        )
+        
+        view = MinisterSettingsView(self.bot, self)
+        
+        try:
+            await interaction.response.edit_message(embed=embed, view=view)
+        except discord.InteractionResponded:
+            await interaction.edit_original_response(embed=embed, view=view)
+    
+    async def show_activity_selection_for_update(self, interaction: discord.Interaction):
+        """Show activity selection for updating names"""
+        embed = discord.Embed(
+            title="📝 Update Names",
+            description="Select which activity day you want to update names for:",
+            color=discord.Color.blue()
+        )
+        
+        view = ActivitySelectView(self.bot, self, "update_names")
+        
+        try:
+            await interaction.response.edit_message(embed=embed, view=view)
+        except discord.InteractionResponded:
+            await interaction.edit_original_response(embed=embed, view=view)
+    
+    async def show_activity_selection_for_clear(self, interaction: discord.Interaction):
+        """Show activity selection for clearing reservations"""
+        embed = discord.Embed(
+            title="🗑️ Clear Reservations",
+            description="Select which activity day you want to clear reservations for:",
+            color=discord.Color.red()
+        )
+        
+        view = ActivitySelectView(self.bot, self, "clear_reservations")
+        
+        try:
+            await interaction.response.edit_message(embed=embed, view=view)
+        except discord.InteractionResponded:
+            await interaction.edit_original_response(embed=embed, view=view)
 
 async def setup(bot):
     await bot.add_cog(MinisterMenu(bot))

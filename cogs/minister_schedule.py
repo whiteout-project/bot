@@ -56,7 +56,7 @@ class ChannelSelect(discord.ui.ChannelSelect):
             if minister_menu_cog and self.context.endswith("channel"):
                 # Return to channel configuration menu with confirmation
                 embed = discord.Embed(
-                    title="⚙️ Channel Configuration",
+                    title="📝 Channel Setup",
                     description=(
                         f"✅ **{self.context}** set to <#{channel_id}>\n\n"
                         "Configure channels for minister scheduling:\n\n"
