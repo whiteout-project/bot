@@ -660,7 +660,7 @@ class MinisterMenu(commands.Cog):
                 "📝 **Configure Channel Setup**\n"
                 "└ Configure channel setup\n\n"
                 "⚙️ **Administrative Settings**\n"
-                "└ Administrative settings\n\n"
+                "└ Update names, clear reservations and more\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -1353,11 +1353,11 @@ class MinisterMenu(commands.Cog):
                 "📝 **Update Names**\n"
                 "└ Update nicknames from API for booked users\n\n"
                 "📅 **Delete All Reservations**\n"
-                "└ Clear appointments for a specific day (Global Admin only)\n\n"
+                "└ Clear appointments for a specific day\n\n"
                 "📢 **Clear Channels**\n"
-                "└ Clear channel configurations (Global Admin only)\n\n"
+                "└ Clear channel configurations\n\n"
                 "🗑️ **Delete Server ID**\n"
-                "└ Remove configured server from database (Global Admin only)\n\n"
+                "└ Remove configured server from database\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
