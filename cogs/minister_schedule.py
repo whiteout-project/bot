@@ -43,12 +43,56 @@ class ChannelSelect(discord.ui.ChannelSelect):
         try:
             svs_conn = sqlite3.connect("db/svs.sqlite")
             svs_cursor = svs_conn.cursor()
+            
+            # Check if we're updating a minister channel
+            if self.context.endswith("channel"):
+                # Get the activity name from the context (e.g., "Construction Day channel" -> "Construction Day")
+                activity_name = self.context.replace(" channel", "")
+                
+                # Check if this is one of the minister activity channels
+                if activity_name in ["Construction Day", "Research Day", "Troops Training Day"]:
+                    # Get the old channel ID if it exists
+                    svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (self.context,))
+                    old_channel_row = svs_cursor.fetchone()
+                    
+                    if old_channel_row:
+                        old_channel_id = int(old_channel_row[0])
+                        # Get the message ID for this activity
+                        svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (activity_name,))
+                        message_row = svs_cursor.fetchone()
+                        
+                        if message_row and old_channel_id != channel_id:
+                            # Delete the old message if channel has changed
+                            message_id = int(message_row[0])
+                            guild = interaction.guild
+                            if guild:
+                                old_channel = guild.get_channel(old_channel_id)
+                                if old_channel:
+                                    try:
+                                        old_message = await old_channel.fetch_message(message_id)
+                                        await old_message.delete()
+                                    except:
+                                        pass  # Message might already be deleted
+                            
+                            # Remove the message reference so it will be recreated in the new channel
+                            svs_cursor.execute("DELETE FROM reference WHERE context=?", (activity_name,))
+            
+            # Update the channel reference
             svs_cursor.execute("""
                 INSERT INTO reference (context, context_id)
                 VALUES (?, ?)
                 ON CONFLICT(context) DO UPDATE SET context_id = excluded.context_id;
             """, (self.context, channel_id))
             svs_conn.commit()
+            
+            # Trigger message update in the new channel
+            if self.context.endswith("channel"):
+                activity_name = self.context.replace(" channel", "")
+                if activity_name in ["Construction Day", "Research Day", "Troops Training Day"]:
+                    minister_menu_cog = self.bot.get_cog("MinisterMenu")
+                    if minister_menu_cog:
+                        await minister_menu_cog.update_channel_message(activity_name)
+            
             svs_conn.close()
 
             # Check if this is being called from the minister menu system

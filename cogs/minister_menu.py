@@ -279,8 +279,8 @@ class ClearConfirmationView(discord.ui.View):
                 "**Available Actions**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "📝 **Update Names** - Update nicknames from API for booked users\n"
-                "🗑️ **Clear Reservations** - Clear appointments for a specific day\n"
-                "🗑️ **Delete Server ID** - Remove configured server from database\n"
+                "📅 **Delete All Reservations** - Clear appointments for a specific day\n"
+                "🆔 **Delete Server ID** - Remove configured server from database\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.green()
@@ -335,17 +335,34 @@ class MinisterSettingsView(discord.ui.View):
         
         await self.cog.show_activity_selection_for_update(interaction)
     
-    @discord.ui.button(label="Clear Reservations", style=discord.ButtonStyle.danger, emoji="🗑️")
+    @discord.ui.button(label="Delete All Reservations", style=discord.ButtonStyle.danger, emoji="📅")
     async def clear_reservations(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if user is admin
-        if not await self.cog.is_admin(interaction.user.id):
-            await interaction.response.send_message("❌ You do not have permission to clear appointments.", ephemeral=True)
+        # Check if user is global admin
+        is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can clear reservations.", ephemeral=True)
             return
         
         await self.cog.show_activity_selection_for_clear(interaction)
     
-    @discord.ui.button(label="Delete Server ID", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
+    @discord.ui.button(label="Clear Channels", style=discord.ButtonStyle.danger, emoji="📢", row=1)
+    async def clear_channels(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is global admin
+        is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can clear channel configurations.", ephemeral=True)
+            return
+        
+        await self.cog.show_clear_channels_selection(interaction)
+    
+    @discord.ui.button(label="Delete Server ID", style=discord.ButtonStyle.danger, emoji="🆔", row=1)
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is global admin
+        is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can delete server configuration.", ephemeral=True)
+            return
+        
         try:
             svs_conn = sqlite3.connect("db/svs.sqlite")
             svs_cursor = svs_conn.cursor()
@@ -380,6 +397,12 @@ class MinisterChannelView(discord.ui.View):
 
     @discord.ui.button(label="Channel Setup", style=discord.ButtonStyle.success, emoji="📝", row=1)
     async def channel_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is global admin
+        is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can configure channels.", ephemeral=True)
+            return
+        
         await self.cog.show_channel_setup_menu(interaction)
 
     @discord.ui.button(label="Settings", style=discord.ButtonStyle.secondary, emoji="⚙️", row=1)
@@ -873,8 +896,8 @@ class MinisterMenu(commands.Cog):
                 "**Available Actions**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "📝 **Update Names** - Update nicknames from API for booked users\n"
-                "🗑️ **Clear Reservations** - Clear appointments for a specific day\n"
-                "🗑️ **Delete Server ID** - Remove configured server from database\n"
+                "📅 **Delete All Reservations** - Clear appointments for a specific day\n"
+                "🆔 **Delete Server ID** - Remove configured server from database\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.green()
@@ -1172,6 +1195,126 @@ class MinisterMenu(commands.Cog):
             except:
                 print(f"Failed to show error message for clearing reservation: {e}")
     
+    async def show_clear_channels_selection(self, interaction: discord.Interaction):
+        """Show channel selection menu for clearing configurations"""
+        class ClearChannelsConfirmView(discord.ui.View):
+            def __init__(self, parent_cog):
+                super().__init__(timeout=60)
+                self.parent_cog = parent_cog
+                
+            @discord.ui.select(
+                placeholder="Select channels to clear...",
+                options=[
+                    discord.SelectOption(label="Construction Channel", value="Construction Day", emoji="🔨"),
+                    discord.SelectOption(label="Research Channel", value="Research Day", emoji="🔬"),
+                    discord.SelectOption(label="Training Channel", value="Troops Training Day", emoji="⚔️"),
+                    discord.SelectOption(label="Log Channel", value="minister log", emoji="📄"),
+                    discord.SelectOption(label="All Channels", value="ALL", emoji="🗑️", description="Clear all channel configurations")
+                ],
+                min_values=1,
+                max_values=5
+            )
+            async def select_channels(self, interaction: discord.Interaction, select: discord.ui.Select):
+                try:
+                    await interaction.response.defer()
+                    
+                    cleared_channels = []
+                    svs_conn = sqlite3.connect("db/svs.sqlite")
+                    svs_cursor = svs_conn.cursor()
+                    
+                    for value in select.values:
+                        if value == "ALL":
+                            # Clear all minister channels
+                            for activity in ["Construction Day", "Research Day", "Troops Training Day"]:
+                                await self._clear_channel_config(svs_cursor, activity, interaction.guild)
+                                cleared_channels.append(f"{activity} channel")
+                            
+                            # Clear log channel
+                            svs_cursor.execute("DELETE FROM reference WHERE context=?", ("minister log channel",))
+                            cleared_channels.append("Log channel")
+                        else:
+                            if value == "minister log":
+                                svs_cursor.execute("DELETE FROM reference WHERE context=?", ("minister log channel",))
+                                cleared_channels.append("Log channel")
+                            else:
+                                await self._clear_channel_config(svs_cursor, value, interaction.guild)
+                                cleared_channels.append(f"{value} channel")
+                    
+                    svs_conn.commit()
+                    svs_conn.close()
+                    
+                    # Show success message
+                    success_message = "Successfully cleared the following configurations:\n" + "\n".join([f"• {ch}" for ch in cleared_channels])
+                    
+                    # Return to settings menu with success message
+                    embed = discord.Embed(
+                        title="⚙️ Minister Settings",
+                        description=(
+                            f"✅ **{success_message}**\n\n"
+                            "Administrative settings for minister scheduling:\n\n"
+                            "**Available Actions**\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            "📝 **Update Names** - Update nicknames from API for booked users\n"
+                            "📅 **Delete All Reservations** - Clear appointments for a specific day\n"
+                            "📢 **Clear Channels** - Clear channel configurations\n"
+                            "🆔 **Delete Server ID** - Remove configured server from database\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━"
+                        ),
+                        color=discord.Color.green()
+                    )
+                    
+                    view = MinisterSettingsView(self.parent_cog.bot, self.parent_cog)
+                    await interaction.followup.edit_message(
+                        message_id=interaction.message.id,
+                        embed=embed,
+                        view=view
+                    )
+                    
+                except Exception as e:
+                    await interaction.followup.send(f"❌ Error clearing channels: {e}", ephemeral=True)
+            
+            async def _clear_channel_config(self, svs_cursor, activity_name, guild):
+                """Clear channel configuration and delete associated message - preserves appointment records"""
+                # Get the channel and message IDs
+                channel_context = f"{activity_name} channel"
+                svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (channel_context,))
+                channel_row = svs_cursor.fetchone()
+                
+                if channel_row and guild:
+                    channel_id = int(channel_row[0])
+                    channel = guild.get_channel(channel_id)
+                    
+                    # Get the message ID
+                    svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (activity_name,))
+                    message_row = svs_cursor.fetchone()
+                    
+                    if message_row and channel:
+                        message_id = int(message_row[0])
+                        try:
+                            message = await channel.fetch_message(message_id)
+                            await message.delete()
+                        except:
+                            pass  # Message might already be deleted
+                    
+                    # Delete the message reference
+                    svs_cursor.execute("DELETE FROM reference WHERE context=?", (activity_name,))
+                
+                # Delete the channel reference
+                svs_cursor.execute("DELETE FROM reference WHERE context=?", (channel_context,))
+                # NOTE: We do NOT delete appointment records - only channel configuration
+            
+            @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+            async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await self.parent_cog.show_settings_menu(interaction)
+        
+        embed = discord.Embed(
+            title="🗑️ Clear Channel Configurations",
+            description="Select which channel configurations you want to clear.\n\n**Warning:** This will remove the channel configuration and delete any existing appointment messages in those channels.\n\n**Note:** Appointment records will be preserved.",
+            color=discord.Color.red()
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=ClearChannelsConfirmView(self))
+    
     async def show_settings_menu(self, interaction: discord.Interaction):
         """Show the minister settings menu"""
         embed = discord.Embed(
@@ -1181,8 +1324,9 @@ class MinisterMenu(commands.Cog):
                 "**Available Actions**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "📝 **Update Names** - Update nicknames from API for booked users\n"
-                "🗑️ **Clear Reservations** - Clear appointments for a specific day\n"
-                "🗑️ **Delete Server ID** - Remove configured server from database\n"
+                "📅 **Delete All Reservations** - Clear appointments for a specific day (Global Admin only)\n"
+                "📢 **Clear Channels** - Clear channel configurations (Global Admin only)\n"
+                "🗑️ **Delete Server ID** - Remove configured server from database (Global Admin only)\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -1213,7 +1357,7 @@ class MinisterMenu(commands.Cog):
     async def show_activity_selection_for_clear(self, interaction: discord.Interaction):
         """Show activity selection for clearing reservations"""
         embed = discord.Embed(
-            title="🗑️ Clear Reservations",
+            title="📅 Delete All Reservations",
             description="Select which activity day you want to clear reservations for:",
             color=discord.Color.red()
         )
