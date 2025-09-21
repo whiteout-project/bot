@@ -723,15 +723,17 @@ class MinisterSchedule(commands.Cog):
 
             if list_type == 3:
                 time_list, _ = self.generate_time_list(booked_times)
+                message_content = f"**{appointment_type}** slots:\n" + "\n".join(
+                    time_list)
             elif list_type == 2:
                 time_list = self.generate_booked_time_list(booked_times)
+                message_content = f"**{appointment_type}** booked slots:\n" + "\n".join(
+                    time_list)
             else:
                 time_list = self.generate_available_time_list(booked_times)
-
-            available_slots = len(time_list) > 0  # True if there are open slots, False if all are booked
-
-            message_content = f"**{appointment_type}** available slots:\n" + "\n".join(
-                time_list) if available_slots else f"All appointment slots are filled for {appointment_type}"
+                available_slots = len(time_list) > 0
+                message_content = f"**{appointment_type}** available slots:\n" + "\n".join(
+                    time_list) if available_slots else f"All appointment slots are filled for {appointment_type}"
 
             # Update existing message or send a new one in the selected channel
             await self.get_or_create_message(context, message_content, channel)
@@ -849,12 +851,13 @@ class MinisterSchedule(commands.Cog):
 
             if list_type == 3:
                 time_list, _ = self.generate_time_list(booked_times)
+                message_content = f"**{appointment_type}** slots:\n" + "\n".join(time_list)
             elif list_type == 2:
                 time_list = self.generate_booked_time_list(booked_times)
+                message_content = f"**{appointment_type}** booked slots:\n" + "\n".join(time_list)
             else:
                 time_list = self.generate_available_time_list(booked_times)
-
-            message_content = f"**{appointment_type}** available slots:\n" + "\n".join(time_list)
+                message_content = f"**{appointment_type}** available slots:\n" + "\n".join(time_list)
 
             # Update existing message or send a new one in the selected channel
             await self.get_or_create_message(context, message_content, channel)
@@ -870,6 +873,21 @@ class MinisterSchedule(commands.Cog):
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
         await interaction.response.defer()
+
+        log_guild = await self.get_log_guild(interaction.guild)
+
+        # Check minister log channels
+        context = f"{appointment_type}"
+        channel_context = f"{appointment_type} channel"
+
+        log_context = "minister log channel"
+        log_channel_id = await self.get_channel_id(log_context)
+        log_channel = log_guild.get_channel(log_channel_id)
+
+        if not log_channel:
+            await interaction.followup.send(
+                f"[Warning] Could not find a log channel. Log channel is needed before clearing the appointment \n\nRun the `/settings` command --> Other Features --> Minister Scheduling --> Channel Setup and choose a log channel")
+            return
 
         try:
             # Send a confirmation prompt
@@ -897,14 +915,16 @@ class MinisterSchedule(commands.Cog):
                     # Generate available times list
                     time_list, _ = self.generate_time_list(booked_times)
                     message_content = f"**Previous {appointment_type} schedule** (before clearing):\n" + "\n".join(time_list)
-                    await interaction.followup.send(message_content, ephemeral=True)
+                    clear_list_embed = discord.Embed(
+                        title=f"Cleared {appointment_type}",
+                        description=message_content,
+                        color=discord.Color.orange()
+                    )
+                    await self.send_embed_to_channel(clear_list_embed)
 
                     # Regenerate empty list of available times
                     booked_times = {}
                     time_list = self.generate_available_time_list(booked_times)
-
-                    context = f"{appointment_type}"
-                    channel_context = f"{appointment_type} channel"
 
                     message_content = f"**{appointment_type}** available slots:\n" + "\n".join(time_list)
 
@@ -918,7 +938,6 @@ class MinisterSchedule(commands.Cog):
                     if msg_row and channel_row:
                         message_id = int(msg_row[0])
                         channel_id = int(channel_row[0])
-                        log_guild = await self.get_log_guild(interaction.guild)
                         channel = log_guild.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
                         message = await channel.fetch_message(message_id)
                         await message.edit(content=message_content)
@@ -937,11 +956,12 @@ class MinisterSchedule(commands.Cog):
                     embed.set_author(name=f"Cleared by {interaction.user.display_name}", icon_url=interaction.user.avatar.url)
 
                     await self.send_embed_to_channel(embed)
-                    await confirmation_message.reply(f"✅ Deleted all {appointment_type} appointments.")
+                    await interaction.followup.send(f"✅ Deleted all {appointment_type} appointments.")
                 else:
                     await confirmation_message.reply(f"Cancelled the action. Nothing was removed from {appointment_type}.")
 
             except asyncio.TimeoutError:
+                await interaction.followup.send("Time ran out. Run the command again if you want to clear the appointment", ephemeral=True)
                 await confirmation_message.reply(f"<@{interaction.user.id}> did not respond in time. The action has been cancelled.")
 
         except Exception as e:
