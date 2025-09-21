@@ -174,6 +174,10 @@ class MinisterSchedule(commands.Cog):
                         context_id INTEGER
                     );
                 """)
+        self.svs_cursor.execute("""
+            INSERT OR IGNORE INTO reference (context, context_id)
+            VALUES ('list type', 1);
+        """)
 
         self.svs_conn.commit()
 
@@ -591,6 +595,7 @@ class MinisterSchedule(commands.Cog):
             context = f"{appointment_type}"
             channel_context = f"{appointment_type} channel"
             log_context = "minister log channel"
+            list_type = await self.get_channel_id("list type")
 
             channel_id = await self.get_channel_id(channel_context)
             log_channel_id = await self.get_channel_id(log_context)
@@ -715,7 +720,13 @@ class MinisterSchedule(commands.Cog):
             # Update the appointment list
             self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (appointment_type,))
             booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-            time_list = self.generate_available_time_list(booked_times)
+
+            if list_type == 3:
+                time_list, _ = self.generate_time_list(booked_times)
+            elif list_type == 2:
+                time_list = self.generate_booked_time_list(booked_times)
+            else:
+                time_list = self.generate_available_time_list(booked_times)
 
             available_slots = len(time_list) > 0  # True if there are open slots, False if all are booked
 
@@ -749,6 +760,7 @@ class MinisterSchedule(commands.Cog):
             context = f"{appointment_type}"
             channel_context = f"{appointment_type} channel"
             log_context = "minister log channel"
+            list_type = await self.get_channel_id("list type")
 
             channel_id = await self.get_channel_id(channel_context)
             log_channel_id = await self.get_channel_id(log_context)
@@ -834,7 +846,13 @@ class MinisterSchedule(commands.Cog):
             # Send the list of times for the selected appointment type
             self.svs_cursor.execute("SELECT time, fid, alliance FROM appointments WHERE appointment_type=?", (appointment_type,))
             booked_times = {row[0]: (row[1], row[2]) for row in self.svs_cursor.fetchall()}
-            time_list = self.generate_available_time_list(booked_times)
+
+            if list_type == 3:
+                time_list, _ = self.generate_time_list(booked_times)
+            elif list_type == 2:
+                time_list = self.generate_booked_time_list(booked_times)
+            else:
+                time_list = self.generate_available_time_list(booked_times)
 
             message_content = f"**{appointment_type}** available slots:\n" + "\n".join(time_list)
 
