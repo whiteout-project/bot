@@ -43,7 +43,7 @@ class FilteredUserSelectView(discord.ui.View):
         self.filter_text = ""
         self.filtered_users = self.users.copy()
         self.max_page = (len(self.filtered_users) - 1) // 25 if self.filtered_users else 0
-        
+
         # Get list of IDs that are already booked for this activity
         self.booked_fids = {fid for time, (fid, alliance) in self.booked_times.items() if fid}
         
@@ -1013,7 +1013,7 @@ class MinisterMenu(commands.Cog):
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 "📝 **Update Names**\n"
                 "└ Update nicknames from API for booked users\n\n"
-                "📋 **Schedule List Type\n"
+                "📋 **Schedule List Type**\n"
                 "└ Change the type of schedule list message when adding/removing people\n\n"
                 "📅 **Delete All Reservations**\n"
                 "└ Clear appointments for a specific day\n\n"
@@ -1388,7 +1388,7 @@ class MinisterMenu(commands.Cog):
                             "━━━━━━━━━━━━━━━━━━━━━━\n\n"
                             "📝 **Update Names**\n"
                             "└ Update nicknames from API for booked users\n\n"
-                            "📋 **Schedule List Type\n"
+                            "📋 **Schedule List Type**\n"
                             "└ Change the type of schedule list message when adding/removing people\n\n"
                             "📅 **Delete All Reservations**\n"
                             "└ Clear appointments for a specific day\n\n"
@@ -1463,7 +1463,7 @@ class MinisterMenu(commands.Cog):
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 "📝 **Update Names**\n"
                 "└ Update nicknames from API for booked users\n\n"
-                "📋 **Schedule List Type\n"
+                "📋 **Schedule List Type**\n"
                 "└ Change the type of schedule list message when adding/removing people\n\n"
                 "📅 **Delete All Reservations**\n"
                 "└ Clear appointments for a specific day\n\n"
@@ -1479,9 +1479,9 @@ class MinisterMenu(commands.Cog):
         view = MinisterSettingsView(self.bot, self)
         
         try:
-            await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.response.edit_message(content=None, embed=embed, view=view)
         except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
     
     async def show_activity_selection_for_update(self, interaction: discord.Interaction):
         """Show activity selection for updating names"""
@@ -1540,7 +1540,7 @@ class MinisterMenu(commands.Cog):
 
         embed = discord.Embed(
             title="📋 Schedule List Type",
-            description="Select the type of generated minister list message when adding/removing people:",
+            description=f"Select the type of generated minister list message when adding/removing people:\n\n**Currently showing:** {current_label}",
             color=discord.Color.green()
         )
 
@@ -1563,9 +1563,15 @@ class MinisterMenu(commands.Cog):
             )
             self.svs_conn.commit()
 
+            updated_embed = discord.Embed(
+                title="📋 Schedule List Type", 
+                description=f"✅ Schedule list type updated successfully!\n\n**Now showing:** {labels[value]}\n\nNew changes will take effect when you add/remove a person to/from the minister schedule.",
+                color=discord.Color.green()
+            )
+
             await interaction.response.edit_message(
-                content=f"Schedule List Type — currently showing: **{labels[value]}**\n\n✅ Schedule list type updated successfully, new changes will take effect when you add/remove a person to/from the minister schedule",
-                embed=embed,
+                content=None,
+                embed=updated_embed,
                 view=view
             )
 
@@ -1582,13 +1588,13 @@ class MinisterMenu(commands.Cog):
 
         try:
             await interaction.response.edit_message(
-                content=f"Schedule List Type — currently showing: **{current_label}**",
+                content=None,
                 embed=embed,
                 view=view
             )
         except discord.InteractionResponded:
             await interaction.edit_original_response(
-                content=f"Schedule List Type — currently showing: **{current_label}**",
+                content=None,
                 embed=embed,
                 view=view
             )
