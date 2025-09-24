@@ -1116,17 +1116,23 @@ class GiftOperations(commands.Cog):
             msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
             err_code = response_json_redeem.get("err_code")
             
-            # Consolidate all captcha errors
-            captcha_errors = {
-                ("CAPTCHA CHECK ERROR", 40103),
+            # Check if this is a rate limit error - these need special handling
+            rate_limit_errors = {
                 ("CAPTCHA GET TOO FREQUENT", 40100),
-                ("CAPTCHA CHECK TOO FREQUENT", 40101),
+                ("CAPTCHA CHECK TOO FREQUENT", 40101)
+            }
+            
+            if (msg, err_code) in rate_limit_errors:
+                self.logger.info(f"GiftOps: Rate limit hit for ID {player_id} (msg: {msg}, code: {err_code})")
+                return "CAPTCHA_TOO_FREQUENT", image_bytes, captcha_code, method
+            
+            # Handle other captcha errors with retry logic
+            other_captcha_errors = {
+                ("CAPTCHA CHECK ERROR", 40103),
                 ("CAPTCHA EXPIRED", 40102)
             }
             
-            is_captcha_error = (msg, err_code) in captcha_errors
-            
-            if is_captcha_error:
+            if (msg, err_code) in other_captcha_errors:
                 self.processing_stats["server_validation_failure"] += 1
                 if attempt == max_ocr_attempts - 1:
                     return "CAPTCHA_INVALID", image_bytes, captcha_code, method
@@ -4049,6 +4055,14 @@ class GiftOperations(commands.Cog):
                     mark_processed = True
                     fail_reason = "Furnace level too low"
                     error_summary["TOO_SMALL_SPEND_MORE"] = error_summary.get("TOO_SMALL_SPEND_MORE", 0) + 1
+                elif response_status == "CAPTCHA_TOO_FREQUENT":
+                    # Queue for retry with rate limit delay (60s max)
+                    queue_for_retry = True
+                    retry_delay = 60.0
+                    fail_reason = "Captcha API rate limited (too frequent)"
+                    self.logger.info(f"GiftOps: ID {fid} hit CAPTCHA_TOO_FREQUENT. Queuing for retry in {retry_delay:.1f}s.")
+                    if current_cycle_count + 1 >= MAX_RETRY_CYCLES:
+                        error_summary["CAPTCHA_TOO_FREQUENT"] = error_summary.get("CAPTCHA_TOO_FREQUENT", 0) + 1
                 elif response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"]:
                     if current_cycle_count + 1 < MAX_RETRY_CYCLES:
                         queue_for_retry = True
