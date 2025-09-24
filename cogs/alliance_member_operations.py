@@ -124,7 +124,7 @@ class AllianceMemberOperations(commands.Cog):
             description=(
                 "Please select an operation from below:\n\n"
                 "**Available Operations:**\n"
-                "➕ `Add Member` - Add new members to alliance\n"
+                "➕ `Add Member` - Add new members (supports IDs, CSV/TSV imports)\n"
                 "➖ `Remove Member` - Remove members from alliance\n"
                 "📋 `View Members` - View alliance member list\n"
                 "🔄 `Transfer Member` - Transfer members to another alliance\n"
@@ -216,7 +216,7 @@ class AllianceMemberOperations(commands.Cog):
                     view = AllianceSelectView(alliances_with_counts, self.cog)
                     
                     async def select_callback(interaction: discord.Interaction):
-                        alliance_id = int(view.current_select.values[0])
+                        alliance_id = view.current_select.values[0]
                         await interaction.response.send_modal(AddMemberModal(alliance_id))
 
                     view.callback = select_callback
@@ -1128,11 +1128,58 @@ class AllianceMemberOperations(commands.Cog):
 
     async def _process_add_user(self, interaction: discord.Interaction, alliance_id: str, alliance_name: str, ids: str):
         """Process the actual user addition operation"""
-        # Handle both comma-separated and newline-separated IDs
-        if '\n' in ids:
-            ids_list = [fid.strip() for fid in ids.split('\n') if fid.strip()]
-        else:
-            ids_list = [fid.strip() for fid in ids.split(",") if fid.strip()]
+        ids_list = []
+        
+        # Check if this is CSV/TSV data with headers
+        lines = [line.strip() for line in ids.split('\n') if line.strip()]
+        if lines and any(delimiter in lines[0] for delimiter in [',', '\t']):
+            # Detect delimiter
+            delimiter = '\t' if '\t' in lines[0] else ','
+            
+            # Try to parse as CSV/TSV
+            try:
+                reader = csv.reader(io.StringIO(ids), delimiter=delimiter)
+                rows = list(reader)
+                
+                if rows and len(rows) > 1:
+                    # Get headers
+                    headers = [h.strip().lower() for h in rows[0]]
+                    
+                    # Find ID column - look for 'id', 'fid'
+                    id_col_index = None
+                    for i, header in enumerate(headers):
+                        if header in ['id', 'fid']:
+                            id_col_index = i
+                            break
+                    
+                    if id_col_index is not None:
+                        # Extract IDs from data rows
+                        for row in rows[1:]:
+                            if len(row) > id_col_index and row[id_col_index].strip():
+                                # Clean the ID
+                                fid = ''.join(c for c in row[id_col_index] if c.isdigit())
+                                if fid:
+                                    ids_list.append(fid)
+                        
+                        if ids_list:
+                            self.log_message(f"Parsed CSV/TSV import: Found {len(ids_list)} IDs from {len(rows)-1} rows")
+                    else:
+                        # No header found, treat first row as data if it looks like IDs
+                        if rows[0] and rows[0][0].strip().isdigit():
+                            for row in rows:
+                                if row and row[0].strip():
+                                    fid = ''.join(c for c in row[0] if c.isdigit())
+                                    if fid:
+                                        ids_list.append(fid)
+            except Exception as e:
+                self.log_message(f"CSV/TSV parsing failed, falling back to simple parsing: {e}")
+        
+        # If CSV/TSV parsing didn't work or wasn't applicable, use simple parsing
+        if not ids_list:
+            if '\n' in ids:
+                ids_list = [fid.strip() for fid in ids.split('\n') if fid.strip()]
+            else:
+                ids_list = [fid.strip() for fid in ids.split(",") if fid.strip()]
 
         # Pre-check which IDs already exist in the database
         already_in_db = []
@@ -1216,13 +1263,21 @@ class AllianceMemberOperations(commands.Cog):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         log_file_path = os.path.join(self.log_directory, 'add_memberlog.txt')
         
+        # Determine input format
+        input_format = "Simple IDs"
+        if '\t' in ids and ',' not in ids.split('\n')[0] if '\n' in ids else ids:
+            input_format = "TSV Format"
+        elif ',' in ids and len(ids.split(',')[0]) > 10:
+            input_format = "CSV Format"
+        
         try:
             with open(log_file_path, 'a', encoding='utf-8') as log_file:
                 log_file.write(f"\n{'='*50}\n")
                 log_file.write(f"Date: {timestamp}\n")
                 log_file.write(f"Administrator: {interaction.user.name} (ID: {interaction.user.id})\n")
                 log_file.write(f"Alliance: {alliance_name} (ID: {alliance_id})\n")
-                log_file.write(f"IDs to Process: {ids.replace(chr(10), ', ')}\n")
+                log_file.write(f"Input Format: {input_format}\n")
+                log_file.write(f"IDs to Process: {', '.join(ids_list) if len(ids_list) <= 20 else f'{', '.join(ids_list[:20])}... ({len(ids_list)} total)'}\n")
                 log_file.write(f"Total Members to Process: {total_users}\n")
                 log_file.write(f"API Mode: {self.login_handler.get_mode_text()}\n")
                 log_file.write(f"Available APIs: {self.login_handler.available_apis}\n")
@@ -1770,8 +1825,8 @@ class AddMemberModal(discord.ui.Modal):
         super().__init__(title="Add Member")
         self.alliance_id = alliance_id
         self.add_item(discord.ui.TextInput(
-            label="Enter IDs (comma or newline separated)", 
-            placeholder="Comma: 12345,67890,54321\nNewline:\n12345\n67890\n54321",
+            label="Enter IDs or paste CSV/TSV data",
+            placeholder="12345,67890, or newline-separated IDs, or paste your CSV/TSV export",
             style=discord.TextStyle.paragraph
         ))
 
