@@ -19,9 +19,7 @@ class IDChannel(commands.Cog):
         self.log_directory = 'log'
         if not os.path.exists(self.log_directory):
             os.makedirs(self.log_directory)
-            
-        self.message_listeners = {}
-            
+
         self.level_mapping = {
             31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
             35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
@@ -64,14 +62,6 @@ class IDChannel(commands.Cog):
             member = guild.get_member(user_id)
             if member:
                 user_name = f"{member.name}#{member.discriminator}" if member.discriminator != '0' else member.name
-        
-        if user_name == "Unknown User":
-            try:
-                user = self.bot.get_user(user_id)
-                if user:
-                    user_name = f"{user.name}#{user.discriminator}" if user.discriminator != '0' else user.name
-            except:
-                pass
         
         if user_name == "Unknown User":
             try:
@@ -124,7 +114,7 @@ class IDChannel(commands.Cog):
                         continue
 
                     content = message.content.strip()
-                    if not content or not content.isdigit():
+                    if not content.isdigit():
                         continue
 
                     fid = int(content)
@@ -363,9 +353,6 @@ class IDChannel(commands.Cog):
                         continue
 
                     content = message.content.strip()
-                    if not content:
-                        continue
-
                     if not content.isdigit():
                         await message.add_reaction('❌')
                         continue
@@ -420,16 +407,6 @@ class IDChannel(commands.Cog):
                     "❌ An error occurred. Please try again.",
                     ephemeral=True
                 )
-
-    async def start_channel_listener(self, channel_id: int, alliance_id: int):
-        if channel_id in self.message_listeners:
-            self.bot.remove_listener(self.message_listeners[channel_id])
-            del self.message_listeners[channel_id]
-
-    async def stop_channel_listener(self, channel_id: int):
-        if channel_id in self.message_listeners:
-            self.bot.remove_listener(self.message_listeners[channel_id])
-            del self.message_listeners[channel_id]
 
 class IDChannelView(discord.ui.View):
     def __init__(self, cog):
@@ -558,8 +535,6 @@ class IDChannelView(discord.ui.View):
                 async def callback(self, select_interaction: discord.Interaction):
                     try:
                         channel_id = int(self.values[0])
-                        
-                        await self.view.cog.stop_channel_listener(channel_id)
 
                         with sqlite3.connect('db/id_channel.sqlite') as db:
                             cursor = db.cursor()
@@ -688,8 +663,6 @@ class IDChannelView(discord.ui.View):
                                         channel_interaction.user.id
                                     ))
                                     db.commit()
-
-                                await self.view.cog.start_channel_listener(selected_channel.id, alliance_id)
 
                                 await self.view.cog.log_action(
                                     "CREATE_CHANNEL",
