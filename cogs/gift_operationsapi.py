@@ -257,9 +257,23 @@ class GiftCodeAPI:
                                                 if is_valid:
                                                     valid_codes_count += 1
                                                     self.logger.info(f"API code '{code}' validated successfully")
-                                                    # Check for auto-use
-                                                    self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
-                                                    auto_alliances = self.cursor.fetchall() or []
+
+                                                    try:
+                                                        await self._execute_with_retry(
+                                                            lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+                                                        )
+                                                        auto_alliances = self.cursor.fetchall() or []
+                                                    except sqlite3.OperationalError as e:
+                                                        error_msg = f"Auto-alliance query failed after retries for code '{code}': {e}"
+                                                        self.logger.error(error_msg)
+                                                        print(f"ERROR: {error_msg}")
+                                                        auto_alliances = []
+                                                    except Exception as e:
+                                                        error_msg = f"Unexpected error in auto-alliance query for code '{code}': {e}"
+                                                        self.logger.error(error_msg)
+                                                        print(f"ERROR: {error_msg}")
+                                                        auto_alliances = []
+
                                                     validation_status = "✅ Validated"
                                                 elif is_valid is False:
                                                     invalid_codes_count += 1

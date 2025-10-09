@@ -67,8 +67,14 @@ class GiftOperations(commands.Cog):
         else:
             if not os.path.exists('db'):
                 os.makedirs('db')
-            self.conn = sqlite3.connect('db/giftcode.sqlite')
+            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0)
             self.cursor = self.conn.cursor()
+
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute("PRAGMA cache_size=10000")
+            self.conn.execute("PRAGMA temp_store=MEMORY")
+            self.conn.commit()
 
         # API Setup
         self.api = GiftCodeAPI(bot)
