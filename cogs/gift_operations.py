@@ -232,6 +232,19 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Error setting up test ID table: {e}")
 
+    async def _execute_with_retry(self, operation, *args, max_retries=3, delay=0.1):
+        """Execute a database operation with retry logic for handling locks."""
+        for attempt in range(max_retries):
+            try:
+                return operation(*args)
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and attempt < max_retries - 1:
+                    self.logger.warning(f"Database locked, retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                else:
+                    raise
+
     def clean_gift_code(self, giftcode):
         """Remove invisible Unicode characters (like RLM) that can contaminate gift codes"""
         import unicodedata
@@ -1711,16 +1724,62 @@ class GiftOperations(commands.Cog):
                         
                         elif status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"]:
                             codes_still_valid += 1
-                            
-                            # Update to validated if it was pending
+
                             if current_status == 'pending':
                                 self.logger.info(f"GiftOps: Code '{giftcode}' confirmed valid. Updating status to 'validated'.")
                                 self.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
                                 self.conn.commit()
-                                
-                                # Send to API if newly validated
+
                                 if hasattr(self, 'api') and self.api:
                                     asyncio.create_task(self.api.add_giftcode(giftcode))
+
+                                try:
+                                    await self._execute_with_retry(
+                                        lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+                                    )
+                                    auto_alliances = self.cursor.fetchall() or []
+                                except sqlite3.OperationalError as e:
+                                    error_msg = f"Auto-alliance query failed after retries for code '{giftcode}': {e}"
+                                    self.logger.error(error_msg)
+                                    print(f"ERROR: {error_msg}")
+                                    auto_alliances = []
+                                except Exception as e:
+                                    error_msg = f"Unexpected error in auto-alliance query for code '{giftcode}': {e}"
+                                    self.logger.error(error_msg)
+                                    print(f"ERROR: {error_msg}")
+                                    auto_alliances = []
+
+                                if auto_alliances:
+                                    self.logger.info(f"GiftOps: Triggering delayed auto-redemption for code '{giftcode}' to {len(auto_alliances)} alliances")
+
+                                    for alliance in auto_alliances:
+                                        try:
+                                            await self.add_to_validation_queue(
+                                                giftcode=giftcode,
+                                                source='periodic-auto',
+                                                operation_type='redemption',
+                                                alliance_id=alliance[0],
+                                                interaction=None
+                                            )
+                                        except Exception as e:
+                                            self.logger.exception(f"Error queueing delayed auto-redemption for code {giftcode} to alliance {alliance[0]}: {e}")
+
+                                    self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
+                                    admin_ids = [row[0] for row in self.settings_cursor.fetchall()]
+
+                                    for admin_id in admin_ids:
+                                        try:
+                                            admin_user = await self.bot.fetch_user(admin_id)
+                                            if admin_user:
+                                                embed = discord.Embed(
+                                                    title="✅ Auto-Redemption Started",
+                                                    description=f"Code `{giftcode}` has been validated and auto-redemption is now starting for {len(auto_alliances)} alliance(s).",
+                                                    color=discord.Color.green(),
+                                                    timestamp=datetime.now()
+                                                )
+                                                await admin_user.send(embed=embed)
+                                        except Exception as e:
+                                            self.logger.exception(f"Error notifying admin {admin_id} about delayed auto-redemption: {e}")
                         
                         else:
                             self.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
