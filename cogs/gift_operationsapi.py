@@ -273,20 +273,15 @@ class GiftCodeAPI:
                                                         self.logger.error(error_msg)
                                                         print(f"ERROR: {error_msg}")
                                                         auto_alliances = []
-
-                                                    validation_status = "✅ Validated"
                                                 elif is_valid is False:
                                                     invalid_codes_count += 1
                                                     self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
-                                                    validation_status = f"❌ Invalid: {validation_msg}"
                                                     auto_alliances = []  # Don't auto-use invalid codes
                                                 else:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive: {validation_msg}")
-                                                    validation_status = f"⚠️ Pending: {validation_msg}"
                                                     auto_alliances = []  # Don't auto-use pending codes
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
-                                                validation_status = "⚠️ Validation unavailable"
                                                 auto_alliances = []
 
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
