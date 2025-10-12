@@ -873,7 +873,7 @@ class PlayerSelectView(discord.ui.View):
                             'nickname': nickname,
                             'attendance_type': status,
                             'points': points,
-                            'last_event_attendance': 'N/A'  # This will be fetched if needed
+                            'last_event_attendance': None  # This will be fetched if needed
                         }
         
         self.page = page
@@ -883,12 +883,14 @@ class PlayerSelectView(discord.ui.View):
         # Filter-related attributes
         self.filter_text = ""
         self.filtered_players = self.players.copy()
-        
+
+        # Selection tracking
+        self.pending_selections = set()  # Store FIDs of selected players
+
         self.update_select_menu()
         self.update_clear_button_visibility()
+        self.update_action_buttons()
         
-        # Edit Event Details button is now available for both create and edit modes
-
     def apply_filter(self):
         """Apply the filter to the players list"""
         if not self.filter_text:
@@ -946,8 +948,12 @@ class PlayerSelectView(discord.ui.View):
                 else:
                     status = player.get('status', 'not_recorded')
                 status_emoji = self.cog._get_status_emoji(status)
-                
-                label = f"{status_emoji} {nickname[:40]}"
+
+                # Add checkmark for selected players
+                if fid in self.pending_selections:
+                    label = f"☑️ {status_emoji} {nickname[:40]}"
+                else:
+                    label = f"{status_emoji} {nickname[:40]}"
                 description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
             else:
                 # Handle tuple format with 3 or 5 elements
@@ -973,15 +979,20 @@ class PlayerSelectView(discord.ui.View):
                     else:
                         status = 'not_recorded'
                     status_emoji = self.cog._get_status_emoji(status)
-                
-                label = f"{status_emoji} {nickname[:40]}"
+
+                # Add checkmark for selected players
+                if fid in self.pending_selections:
+                    label = f"☑️ {status_emoji} {nickname[:40]}"
+                else:
+                    label = f"{status_emoji} {nickname[:40]}"
                 description = f"ID: {fid} | FC: {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}"
                 
             options.append(discord.SelectOption(
                 label=label,
                 value=str(fid),
                 description=description[:100],
-                emoji="👤"
+                emoji="👤",
+                default=(fid in self.pending_selections)
             ))
         
         # Update placeholder to show filter status
@@ -998,51 +1009,54 @@ class PlayerSelectView(discord.ui.View):
             else:
                 placeholder = f"👥 Filtered: '{self.filter_text}' - {len(self.filtered_players)} results (Page {self.page + 1}/{self.max_page + 1})"
         else:
-            placeholder = f"👥 Select a player to mark attendance... (Page {self.page + 1}/{self.max_page + 1})"
-        
+            placeholder = f"👥 Select players to mark attendance (Page {self.page + 1}/{self.max_page + 1})"
+
+        # Always use multi-select
+        max_vals = min(len(options), 25)
         select = discord.ui.Select(
             placeholder=placeholder,
-            options=options
+            options=options,
+            max_values=max_vals,
+            min_values=0
         )
-        
+
         async def select_callback(interaction: discord.Interaction):
             try:
                 self.current_select = select
-                
-                # Check if this is the "no results" option
-                if select.values[0] == "none":
+
+                # Handle selection with "none" option
+                if len(select.values) > 0 and select.values[0] == "none":
                     await interaction.response.send_message(
                         "No players found with the current filter. Use the Clear button to remove the filter.",
                         ephemeral=True
                     )
                     return
-                
-                selected_fid = int(select.values[0])
-                
-                # Find the selected player with proper error handling
-                selected_player = None
-                
-                # Check if we have players and determine format
-                if self.players:
-                    if isinstance(self.players[0], dict):
-                        selected_player = next((p for p in self.players if p['fid'] == selected_fid), None)
+
+                # Get FIDs on current page
+                current_page_fids = set()
+                for player in current_players:
+                    if isinstance(player, dict):
+                        current_page_fids.add(player['fid'])
                     else:
-                        selected_player = next((p for p in self.players if p[0] == selected_fid), None)
-                
-                if selected_player:
-                    await self.show_player_attendance_options(interaction, selected_player)
-                else:
-                    # Handle the case where player is not found
-                    error_embed = discord.Embed(
-                        title="❌ Error",
-                        description="Player not found. Please try again.",
-                        color=discord.Color.red()
-                    )
-                    await interaction.response.edit_message(embed=error_embed, view=self)
+                        current_page_fids.add(player[0])
+
+                # Remove selections from current page
+                self.pending_selections -= current_page_fids
+
+                # Add new selections from dropdown
+                for val in select.values:
+                    if val != "none":
+                        self.pending_selections.add(int(val))
+
+                # Update UI
+                self.update_select_menu()
+                self.update_action_buttons()
+                await self.update_main_embed(interaction)
+
             except Exception as e:
                 error_embed = discord.Embed(
                     title="❌ Error",
-                    description="An error occurred while selecting the player. Please try again.",
+                    description="An error occurred while selecting players. Please try again.",
                     color=discord.Color.red()
                 )
                 try:
@@ -1063,36 +1077,6 @@ class PlayerSelectView(discord.ui.View):
             prev_button.disabled = self.page == 0
         if next_button:
             next_button.disabled = self.page == self.max_page
-
-    async def show_player_attendance_options(self, interaction: discord.Interaction, player):
-        # Handle both dict and tuple formats
-        if isinstance(player, dict):
-            fid = player['fid']
-            nickname = player['nickname']
-            furnace_lv = player.get('furnace_lv', 0)
-        else:
-            # Handle tuple format - can be 3 or 5 elements
-            if len(player) >= 5:
-                fid, nickname, furnace_lv, status, points = player[:5]
-            else:
-                fid, nickname, furnace_lv = player[:3]
-        
-        # Create new view with attendance options for this player
-        attendance_view = PlayerAttendanceView(player, self)
-        
-        embed = discord.Embed(
-            title=f"📋 Mark Attendance - {nickname}",
-            description=(
-                f"**Player:** {nickname}\n"
-                f"**ID:** {fid}\n"
-                f"**FC:** {FC_LEVEL_MAPPING.get(furnace_lv, str(furnace_lv))}\n"
-                f"**Session:** {self.session_name}\n\n"
-                "Please select the attendance status for this player:"
-            ),
-            color=discord.Color.blue()
-        )
-        
-        await interaction.response.edit_message(embed=embed, view=attendance_view)
 
     @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1136,7 +1120,34 @@ class PlayerSelectView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=view)
 
-    @discord.ui.button(label="📊 View Summary", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="Present", emoji="✅", style=discord.ButtonStyle.success, row=2, disabled=True)
+    async def mark_present(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Mark all selected players as present"""
+        if not self.pending_selections:
+            await interaction.response.send_message("No players selected", ephemeral=True)
+            return
+
+        modal = BulkAttendanceModal(self.pending_selections, "present", self)
+        await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Absent", emoji="❌", style=discord.ButtonStyle.danger, row=2, disabled=True)
+    async def mark_absent(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Mark all selected players as absent"""
+        if not self.pending_selections:
+            await interaction.response.send_message("No players selected", ephemeral=True)
+            return
+
+        await self.bulk_mark_attendance(interaction, "absent", 0)
+
+    @discord.ui.button(label="Clear", emoji="🗑️", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    async def clear_selection(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Clear all selected players"""
+        self.pending_selections.clear()
+        self.update_select_menu()
+        self.update_action_buttons()
+        await self.update_main_embed(interaction)
+
+    @discord.ui.button(label="📊 View Summary", style=discord.ButtonStyle.primary, row=3)
     async def view_summary_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_players:
             # Show error in the same message
@@ -1152,13 +1163,13 @@ class PlayerSelectView(discord.ui.View):
             )
             back_button.callback = lambda i: self.update_main_embed(i)
             back_view.add_item(back_button)
-            
+
             await interaction.response.edit_message(embed=error_embed, view=back_view)
             return
-        
+
         await self.show_summary(interaction)
 
-    @discord.ui.button(label="✅ Finish Attendance", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="✅ Finish Attendance", style=discord.ButtonStyle.success, row=3)
     async def finish_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if not self.selected_players:
@@ -1174,16 +1185,16 @@ class PlayerSelectView(discord.ui.View):
                 )
                 back_button.callback = lambda i: self.update_main_embed(i)
                 back_view.add_item(back_button)
-                
+
                 await interaction.response.edit_message(embed=error_embed, view=back_view)
                 return
-            
+
             await interaction.response.defer()
             await self.cog.process_attendance_results(
-                interaction, 
-                self.selected_players, 
-                self.alliance_name, 
-                self.session_name, 
+                interaction,
+                self.selected_players,
+                self.alliance_name,
+                self.session_name,
                 use_defer=True,
                 session_id=self.session_id,
                 is_edit=self.is_edit,
@@ -1200,31 +1211,45 @@ class PlayerSelectView(discord.ui.View):
                 view=None
             )
 
-    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=3)
     async def back_to_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_attendance_menu(interaction)
+    
+    def update_action_buttons(self):
+        """Update visibility and state of action buttons based on selections"""
+        has_selections = len(self.pending_selections) > 0
+
+        # Find and update the action buttons
+        for item in self.children:
+            if hasattr(item, 'label') and hasattr(item, 'row') and item.row == 2:
+                if item.label in ["Present", "Absent", "Clear"]:
+                    item.disabled = not has_selections
 
     async def update_main_embed(self, interaction: discord.Interaction):
-        marked_count = sum(1 for p in self.selected_players.values() 
+        marked_count = sum(1 for p in self.selected_players.values()
                           if p['attendance_type'] in ['present', 'absent'])
         total_count = len(self.players)
-        
+
         # Build description with filter info
         description_parts = [
             f"**Session:** {self.session_name}",
             f"**Progress:** {marked_count}/{total_count} players marked",
             f"**Current Page:** {self.page + 1}/{self.max_page + 1}"
         ]
-        
+
         if self.filter_text:
             description_parts.append(f"**Filter Active:** '{self.filter_text}' ({len(self.filtered_players)} results)")
-        
+
+        # Add selection status
+        if self.pending_selections:
+            description_parts.append(f"**🔹 Selected:** {len(self.pending_selections)} players")
+
         description_parts.extend([
             "",
-            "Select a player from the dropdown to mark their attendance.",
-            "Use the buttons below to navigate, view summary, or finish."
+            "Select players across pages using the dropdown. Selected players show ☑️.",
+            "Use Present/Absent to mark attendance or Clear to deselect all."
         ])
-        
+
         embed = discord.Embed(
             title=f"📋 Marking Attendance - {self.alliance_name}",
             description="\n".join(description_parts),
@@ -1273,7 +1298,6 @@ class PlayerSelectView(discord.ui.View):
                     ephemeral=True
                 )
 
-
     def add_player_attendance(self, fid, nickname, attendance_type, points, last_event_attendance):
         self.selected_players[fid] = {
             'nickname': nickname,
@@ -1281,6 +1305,155 @@ class PlayerSelectView(discord.ui.View):
             'points': points,
             'last_event_attendance': last_event_attendance
         }
+    
+    async def bulk_mark_attendance(self, interaction: discord.Interaction, attendance_type: str, points: int):
+        """Mark multiple selected players with the same attendance status"""
+        try:
+            await interaction.response.defer()
+            
+            # Get player details for all selected FIDs
+            players_to_mark = []
+            for fid in self.pending_selections:
+                # Find player in the main list
+                player_data = None
+                if isinstance(self.players[0], dict):
+                    player_data = next((p for p in self.players if p['fid'] == fid), None)
+                else:
+                    player_data = next((p for p in self.players if p[0] == fid), None)
+                
+                if player_data:
+                    if isinstance(player_data, dict):
+                        nickname = player_data['nickname']
+                    else:
+                        nickname = player_data[1] if len(player_data) > 1 else "Unknown"
+                    
+                    players_to_mark.append((fid, nickname))
+                    
+                    # Add to selected_players
+                    self.selected_players[fid] = {
+                        'nickname': nickname,
+                        'attendance_type': attendance_type,
+                        'points': points,
+                        'last_event_attendance': None
+                    }
+            
+            # Clear the pending selections
+            self.pending_selections.clear()
+
+            # Update the UI
+            self.update_select_menu()
+            self.update_action_buttons()
+
+            # Prepare success info for the main embed
+            status_display = "Present" if attendance_type == "present" else "Absent"
+            
+            # Update the main view with success message
+            await self.update_main_embed_from_deferred(
+                interaction, 
+                bulk_marked_count=len(players_to_mark),
+                bulk_marked_status=status_display,
+                bulk_marked_points=points if attendance_type == "present" else None
+            )
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(
+                f"❌ An error occurred while marking bulk attendance: {str(e)}",
+                ephemeral=True
+            )
+    
+    async def update_main_embed_from_deferred(self, interaction: discord.Interaction, 
+                                               bulk_marked_count=None, bulk_marked_status=None, bulk_marked_points=None):
+        """Update main embed after a deferred interaction"""
+        marked_count = sum(1 for p in self.selected_players.values() 
+                          if p['attendance_type'] in ['present', 'absent'])
+        total_count = len(self.players)
+        
+        # Build description with filter info
+        description_parts = [
+            f"**Session:** {self.session_name}",
+            f"**Progress:** {marked_count}/{total_count} players marked",
+            f"**Current Page:** {self.page + 1}/{self.max_page + 1}"
+        ]
+        
+        # Add bulk marking success message if provided
+        if bulk_marked_count and bulk_marked_status:
+            success_msg = f"✅ **{bulk_marked_count} players** marked as **{bulk_marked_status}**"
+            if bulk_marked_points is not None:
+                success_msg += f" with **{bulk_marked_points:,} points**"
+            description_parts.append("")
+            description_parts.append(success_msg)
+        
+        if self.filter_text:
+            description_parts.append(f"**Filter Active:** '{self.filter_text}' ({len(self.filtered_players)} results)")
+
+        # Add selection status
+        if self.pending_selections:
+            description_parts.append(f"**🔹 Selected:** {len(self.pending_selections)} players")
+
+        description_parts.extend([
+            "",
+            "Select players across pages using the dropdown. Selected players show ☑️.",
+            "Use Present/Absent to mark attendance or Clear to deselect all."
+        ])
+
+        embed = discord.Embed(
+            title=f"📋 Marking Attendance - {self.alliance_name}",
+            description="\n".join(description_parts),
+            color=discord.Color.blue()
+        )
+
+        if total_count > 0:
+            present = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'present')
+            absent = sum(1 for p in self.selected_players.values() if p['attendance_type'] == 'absent')
+            not_recorded = total_count - present - absent
+
+            embed.add_field(
+                name="📊 Current Stats",
+                value=f"Present: {present}\nAbsent: {absent}\nNot Recorded: {not_recorded}",
+                inline=True
+            )
+
+        await interaction.edit_original_response(embed=embed, view=self, attachments=[])
+
+class BulkAttendanceModal(discord.ui.Modal):
+    def __init__(self, fid_set, attendance_type, parent_view):
+        player_count = len(fid_set)
+        super().__init__(title=f"Mark {player_count} Players as Present")
+        self.fid_set = fid_set
+        self.attendance_type = attendance_type
+        self.parent_view = parent_view
+        
+        self.points_input = discord.ui.TextInput(
+            label="Points for all selected players",
+            placeholder="Enter points (e.g., 100, 4.3K, 2.5M), default is 0",
+            required=False,
+            max_length=15
+        )
+        self.add_item(self.points_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            # Parse points
+            points = 0
+            points_value = self.points_input.value.strip()
+            if points_value:
+                points = parse_points(points_value)
+            
+            # Call bulk marking method
+            await self.parent_view.bulk_mark_attendance(interaction, self.attendance_type, points)
+            
+        except ValueError as e:
+            await interaction.response.send_message(
+                f"❌ Invalid points format: {str(e)}",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ An error occurred: {str(e)}",
+                ephemeral=True
+            )
 
 class AttendanceModal(discord.ui.Modal):
     def __init__(self, fid, nickname, attendance_type, parent_view, last_attendance):

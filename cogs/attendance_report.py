@@ -920,7 +920,10 @@ class AttendanceReport(commands.Cog):
                 session_line += f" [{event_type}]"
             report_sections.append(session_line)
             report_sections.append(f"**Alliance:** {alliance_name}")
-            report_sections.append(f"**Date:** {records[0][5].split()[0] if records else 'N/A'}")
+            date_str = "N/A"
+            if records and records[0][5]:
+                date_str = records[0][5].split()[0] if isinstance(records[0][5], str) else str(records[0][5])
+            report_sections.append(f"**Date:** {date_str}")
             report_sections.append(f"**Total Marked:** {len(records)} players")
             report_sections.append(f"**Present:** {present_count} | **Absent:** {absent_count}")
             if session_id:
@@ -984,18 +987,30 @@ class AttendanceReport(commands.Cog):
             
             # Create view with back and export buttons
             view = discord.ui.View(timeout=7200)
-            
-            # Back button
-            back_button = discord.ui.Button(
-                label="⬅️ Back to Sessions",
-                style=discord.ButtonStyle.secondary
-            )
-            
-            async def back_callback(back_interaction: discord.Interaction):
-                await self.show_session_selection(back_interaction, alliance_id)
-            
-            back_button.callback = back_callback
-            view.add_item(back_button)
+
+            # Back button - different behavior for preview vs regular mode
+            if is_preview and marking_view:
+                back_button = discord.ui.Button(
+                    label="⬅️ Back to Marking",
+                    style=discord.ButtonStyle.secondary
+                )
+
+                async def back_callback(back_interaction: discord.Interaction):
+                    await marking_view.update_main_embed(back_interaction)
+
+                back_button.callback = back_callback
+                view.add_item(back_button)
+            else:
+                back_button = discord.ui.Button(
+                    label="⬅️ Back to Sessions",
+                    style=discord.ButtonStyle.secondary
+                )
+
+                async def back_callback(back_interaction: discord.Interaction):
+                    await self.show_session_selection(back_interaction, alliance_id)
+
+                back_button.callback = back_callback
+                view.add_item(back_button)
             
             # Export button
             export_button = discord.ui.Button(
