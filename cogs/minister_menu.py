@@ -341,14 +341,14 @@ class MinisterSettingsView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
         self.cog = cog
-    
+
     @discord.ui.button(label="Update Names", style=discord.ButtonStyle.secondary, emoji="📝", row=1)
     async def update_names(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Check if user is admin
         if not await self.cog.is_admin(interaction.user.id):
             await interaction.response.send_message("❌ You do not have permission to update names.", ephemeral=True)
             return
-        
+
         await self.cog.show_activity_selection_for_update(interaction)
 
     @discord.ui.button(label="Schedule List Type", style=discord.ButtonStyle.secondary, emoji="📋", row=1)
@@ -359,6 +359,15 @@ class MinisterSettingsView(discord.ui.View):
             return
 
         await self.cog.show_activity_selection_for_list_type(interaction)
+
+    @discord.ui.button(label="Time Slot Mode", style=discord.ButtonStyle.secondary, emoji="🕐", row=1)
+    async def time_slot_mode(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is admin
+        if not await self.cog.is_admin(interaction.user.id):
+            await interaction.response.send_message("❌ You do not have permission to change time slot mode.", ephemeral=True)
+            return
+
+        await self.cog.show_time_slot_mode_menu(interaction)
     
     @discord.ui.button(label="Delete All Reservations", style=discord.ButtonStyle.danger, emoji="📅", row=2)
     async def clear_reservations(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1069,16 +1078,24 @@ class MinisterMenu(commands.Cog):
             await interaction.edit_original_response(embed=embed, view=view)
 
     async def show_time_selection(self, interaction: discord.Interaction, activity_name: str, fid: str, current_time: str = None):
+        # Get current slot mode
+        self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+        row = self.svs_cursor.fetchone()
+        slot_mode = int(row[0]) if row else 0
+
+        # Get MinisterSchedule cog to access get_time_slots
+        minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
+        if not minister_schedule_cog:
+            await interaction.response.send_message("❌ Minister Schedule module not found.", ephemeral=True)
+            return
+
         # Get available time slots
         self.svs_cursor.execute("SELECT time FROM appointments WHERE appointment_type=?", (activity_name,))
         booked_times = {row[0] for row in self.svs_cursor.fetchall()}
 
-        available_times = []
-        for hour in range(24):
-            for minute in (0, 30):
-                time_slot = f"{hour:02}:{minute:02}"
-                if time_slot not in booked_times or time_slot == current_time:
-                    available_times.append(time_slot)
+        # Generate time slots based on mode
+        time_slots = minister_schedule_cog.get_time_slots(slot_mode)
+        available_times = [time_slot for time_slot in time_slots if time_slot not in booked_times or time_slot == current_time]
 
         if not available_times:
             await interaction.response.send_message(
@@ -1104,7 +1121,7 @@ class MinisterMenu(commands.Cog):
         )
 
         view = TimeSelectView(self.bot, self, activity_name, fid, available_times, current_time)
-        
+
         try:
             await interaction.response.edit_message(embed=embed, view=view)
         except discord.InteractionResponded:
@@ -1465,6 +1482,8 @@ class MinisterMenu(commands.Cog):
                 "└ Update nicknames from API for booked users\n\n"
                 "📋 **Schedule List Type**\n"
                 "└ Change the type of schedule list message when adding/removing people\n\n"
+                "🕐 **Time Slot Mode**\n"
+                "└ Toggle between standard (00:00/00:30) and offset (00:00/00:15/00:45) time slots\n\n"
                 "📅 **Delete All Reservations**\n"
                 "└ Clear appointments for a specific day\n\n"
                 "📢 **Clear Channels**\n"
@@ -1528,6 +1547,171 @@ class MinisterMenu(commands.Cog):
         except discord.InteractionResponded:
             await interaction.edit_original_response(embed=embed, view=view)
 
+    async def show_time_slot_mode_menu(self, interaction: discord.Interaction):
+        """Show time slot mode selection menu"""
+        self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+        row = self.svs_cursor.fetchone()
+        current_mode = int(row[0]) if row else 0
+
+        mode_labels = {
+            0: "Standard (00:00, 00:30, 01:00...)",
+            1: "Offset (00:00, 00:15, 00:45, 01:15...)"
+        }
+        current_label = mode_labels[current_mode]
+
+        embed = discord.Embed(
+            title="🕐 Time Slot Mode",
+            description=(
+                f"**Current Mode:** {current_label}\n\n"
+                "**Mode 0 (Standard):**\n"
+                "└ 48 slots: 00:00, 00:30, 01:00, 01:30... 23:30\n"
+                "└ Each slot is 30 minutes\n\n"
+                "**Mode 1 (Offset):**\n"
+                "└ 48 slots: 00:00 (15min), 00:15, 00:45, 01:15... 23:45 (15min to midnight)\n"
+                "└ First slot: 00:00-00:15 (15 min)\n"
+                "└ Middle slots: 30 min each\n"
+                "└ Last slot: 23:45-00:00 (15 min, ends at daily reset)\n\n"
+                "⚠️ **Warning:** Changing modes will automatically migrate all existing reservations to the new time slots."
+            ),
+            color=discord.Color.blue()
+        )
+
+        view = discord.ui.View(timeout=60)
+
+        select = discord.ui.Select(
+            placeholder="Choose a time slot mode:",
+            options=[
+                discord.SelectOption(label="Standard", description="00:00, 00:30, 01:00... (30min slots)", value="0"),
+                discord.SelectOption(label="Offset", description="00:00, 00:15, 00:45... (offset 15min)", value="1")
+            ]
+        )
+
+        async def select_callback(interaction: discord.Interaction):
+            new_mode = int(select.values[0])
+
+            if new_mode == current_mode:
+                await interaction.response.send_message("ℹ️ Already using this mode.", ephemeral=True)
+                return
+
+            # Migrate reservations
+            await self.migrate_time_slots(interaction, current_mode, new_mode)
+
+        select.callback = select_callback
+        view.add_item(select)
+
+        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+
+        async def back_callback(interaction: discord.Interaction):
+            await self.show_settings_menu(interaction)
+
+        back_button.callback = back_callback
+        view.add_item(back_button)
+
+        try:
+            await interaction.response.edit_message(content=None, embed=embed, view=view)
+        except discord.InteractionResponded:
+            await interaction.edit_original_response(content=None, embed=embed, view=view)
+
+    async def migrate_time_slots(self, interaction: discord.Interaction, old_mode: int, new_mode: int):
+        """Migrate all reservations from old mode to new mode"""
+        try:
+            await interaction.response.defer()
+
+            # Get all appointments
+            self.svs_cursor.execute("SELECT fid, appointment_type, time, alliance FROM appointments")
+            appointments = self.svs_cursor.fetchall()
+
+            if not appointments:
+                # No appointments to migrate, just update mode
+                self.svs_cursor.execute("UPDATE reference SET context_id=? WHERE context=?", (new_mode, "slot_mode"))
+                self.svs_conn.commit()
+
+                embed = discord.Embed(
+                    title="✅ Time Slot Mode Updated",
+                    description=f"Successfully switched to **Mode {new_mode}** (no reservations to migrate).",
+                    color=discord.Color.green()
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                await self.show_settings_menu(interaction)
+                return
+
+            # Build migration mapping
+            migrations = []
+            for fid, appointment_type, old_time, alliance in appointments:
+                new_time = self.convert_time_slot(old_time, old_mode, new_mode)
+                migrations.append((fid, appointment_type, old_time, new_time, alliance))
+
+            # Update database atomically
+            for fid, appointment_type, old_time, new_time, alliance in migrations:
+                self.svs_cursor.execute(
+                    "UPDATE appointments SET time=? WHERE fid=? AND appointment_type=?",
+                    (new_time, fid, appointment_type)
+                )
+
+            # Update slot mode
+            self.svs_cursor.execute("UPDATE reference SET context_id=? WHERE context=?", (new_mode, "slot_mode"))
+            self.svs_conn.commit()
+
+            # Log to minister log channel
+            minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
+            if minister_schedule_cog:
+                migration_text = "\n".join([f"`{old}` → `{new}` - {atype}" for _, atype, old, new, _ in migrations[:20]])
+                if len(migrations) > 20:
+                    migration_text += f"\n... and {len(migrations) - 20} more"
+
+                embed = discord.Embed(
+                    title=f"Time Slot Mode Changed: Mode {old_mode} → Mode {new_mode}",
+                    description=f"**Migrated {len(migrations)} reservations:**\n\n{migration_text}",
+                    color=discord.Color.orange()
+                )
+                embed.set_author(name=f"Changed by {interaction.user.display_name}",
+                               icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+                await minister_schedule_cog.send_embed_to_channel(embed)
+
+                # Update all channel messages
+                for activity_name in ["Construction Day", "Research Day", "Troops Training Day"]:
+                    await self.update_channel_message(activity_name)
+
+            # Show success
+            mode_labels = {0: "Standard", 1: "Offset"}
+            embed = discord.Embed(
+                title="✅ Time Slot Mode Updated",
+                description=f"Successfully switched to **{mode_labels[new_mode]}** mode.\n\n{len(migrations)} reservations were migrated.",
+                color=discord.Color.green()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            await self.show_settings_menu(interaction)
+
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error migrating time slots: {e}", ephemeral=True)
+
+    def convert_time_slot(self, time_str: str, old_mode: int, new_mode: int) -> str:
+        """Convert a time slot from old mode to new mode"""
+        hour, minute = map(int, time_str.split(":"))
+        total_minutes = hour * 60 + minute
+
+        if old_mode == 0 and new_mode == 1:
+            # Standard → Offset
+            if total_minutes == 0:
+                return "00:00"
+            new_minutes = total_minutes - 15
+            new_hour = new_minutes // 60
+            new_min = new_minutes % 60
+            return f"{new_hour:02}:{new_min:02}"
+        elif old_mode == 1 and new_mode == 0:
+            # Offset → Standard
+            # Special case: 23:45 → 23:30 (no 00:00 available as it's first slot)
+            if total_minutes == 0:
+                return "00:00"
+            if time_str == "23:45":
+                return "23:30"
+            new_minutes = total_minutes + 15
+            new_hour = new_minutes // 60
+            new_min = new_minutes % 60
+            return f"{new_hour:02}:{new_min:02}"
+
+        return time_str
+
     async def show_activity_selection_for_list_type(self, interaction: discord.Interaction):
         """Show activity selection for changing the list type"""
 
@@ -1564,7 +1748,7 @@ class MinisterMenu(commands.Cog):
             self.svs_conn.commit()
 
             updated_embed = discord.Embed(
-                title="📋 Schedule List Type", 
+                title="📋 Schedule List Type",
                 description=f"✅ Schedule list type updated successfully!\n\n**Now showing:** {labels[value]}\n\nNew changes will take effect when you add/remove a person to/from the minister schedule.",
                 color=discord.Color.green()
             )

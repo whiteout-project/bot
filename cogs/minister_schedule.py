@@ -7,6 +7,14 @@ import aiohttp
 import hashlib
 from aiohttp_socks import ProxyConnector
 import time
+import re
+
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+    ARABIC_SUPPORT = True
+except ImportError:
+    ARABIC_SUPPORT = False
 
 SECRET = 'tB87#kPtkxqOS2'
 
@@ -178,6 +186,10 @@ class MinisterSchedule(commands.Cog):
             INSERT OR IGNORE INTO reference (context, context_id)
             VALUES ('list type', 1);
         """)
+        self.svs_cursor.execute("""
+            INSERT OR IGNORE INTO reference (context, context_id)
+            VALUES ('slot_mode', 0);
+        """)
 
         self.svs_conn.commit()
 
@@ -215,6 +227,50 @@ class MinisterSchedule(commands.Cog):
             return True
         self.settings_cursor.execute("SELECT 1 FROM admin WHERE id=?", (user_id,))
         return self.settings_cursor.fetchone() is not None
+
+    def fix_arabic(self, text):
+        """
+        Fix Arabic text rendering by reshaping and applying bidirectional algorithm.
+        """
+        if not text or not ARABIC_SUPPORT:
+            return text
+
+        # Check if text contains Arabic characters
+        if re.search(r'[\u0600-\u06FF]', text):
+            try:
+                reshaped = arabic_reshaper.reshape(text)
+                return get_display(reshaped)
+            except Exception:
+                return text
+        return text
+
+    def get_time_slots(self, slot_mode: int):
+        """
+        Generate time slots based on the slot mode.
+
+        Mode 0 (Standard): 00:00, 00:30, 01:00, ..., 23:30 (48 slots × 30min)
+        Mode 1 (Offset): 00:00 (15min), 00:15, 00:45, 01:15, ..., 23:45 (15min to midnight)
+
+        Returns: List of time strings in HH:MM format
+        """
+        time_slots = []
+
+        if slot_mode == 0:
+            # Standard mode: 30-minute intervals starting at 00:00
+            for hour in range(24):
+                for minute in (0, 30):
+                    time_slots.append(f"{hour:02}:{minute:02}")
+        else:
+            # Offset mode: First slot at 00:00 (15min), then 30min slots at :15 and :45
+            time_slots.append("00:00")  # First slot: 00:00-00:15
+            for hour in range(24):
+                for minute in (15, 45):
+                    if hour == 23 and minute == 45:
+                        time_slots.append("23:45")  # Last slot: 23:45-00:00
+                        break
+                    time_slots.append(f"{hour:02}:{minute:02}")
+
+        return time_slots
 
     async def show_minister_channel_menu(self, interaction: discord.Interaction):
         # Redirect to the MinisterMenu cog
@@ -334,17 +390,18 @@ class MinisterSchedule(commands.Cog):
             if not appointment_type:
                 return []
 
+            # Get current slot mode
+            self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+            row = self.svs_cursor.fetchone()
+            slot_mode = int(row[0]) if row else 0
+
             # Get booked times
             self.svs_cursor.execute("SELECT time FROM appointments WHERE appointment_type=?", (appointment_type,))
             booked_times = {row[0] for row in self.svs_cursor.fetchall()}
 
-            # Generate valid 30-minute interval times in order
-            available_times = []
-            for hour in range(24):
-                for minute in (0, 30):
-                    time_slot = f"{hour:02}:{minute:02}"
-                    if time_slot not in booked_times:
-                        available_times.append(time_slot)
+            # Generate time slots based on mode
+            time_slots = self.get_time_slots(slot_mode)
+            available_times = [time_slot for time_slot in time_slots if time_slot not in booked_times]
 
             # Ensure user input is properly formatted (normalize input)
             if current:
@@ -355,8 +412,8 @@ class MinisterSchedule(commands.Cog):
                 else:
                     return []  # Invalid format
 
-                # Ensure input is valid 30-minute interval
-                valid_times = {f"{hour:02}:{minute:02}" for hour in range(24) for minute in (0, 30)}
+                # Ensure input is valid for current slot mode
+                valid_times = set(time_slots)
                 if formatted_input not in valid_times:
                     return []
 
@@ -406,51 +463,58 @@ class MinisterSchedule(commands.Cog):
         fids_to_fetch = {fid for fid, _ in booked_times.values() if fid}
         fetched_data = {}  # Cache API responses
 
-        for hour in range(24):
-            for minute in (0, 30):
-                time_slot = f"{hour:02}:{minute:02}"
-                booked_fid, booked_alliance = booked_times.get(time_slot, ("", ""))
+        # Get current slot mode
+        self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+        row = self.svs_cursor.fetchone()
+        slot_mode = int(row[0]) if row else 0
 
-                booked_nickname = "Unknown"
-                if booked_fid:
-                    # Check cache first
-                    if booked_fid not in fetched_data:
-                        while True:
-                            if progress_callback:
+        # Generate time slots based on mode
+        time_slots = self.get_time_slots(slot_mode)
+
+        for time_slot in time_slots:
+            booked_fid, booked_alliance = booked_times.get(time_slot, ("", ""))
+
+            booked_nickname = "Unknown"
+            if booked_fid:
+                # Check cache first
+                if booked_fid not in fetched_data:
+                    while True:
+                        if progress_callback:
+                            await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
+
+                        data = await self.fetch_user_data(booked_fid)
+                        if isinstance(data, dict) and "data" in data:
+                            fetched_data[booked_fid] = data["data"].get("nickname", "Unknown")
+                            if progress_callback: # Immediate progress update after successful fetch
                                 await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
+                            break
+                        elif data == 429:
+                            if progress_callback:
+                                await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=True)
+                            await asyncio.sleep(60) # Rate limit, wait and retry
+                        else:
+                            fetched_data[booked_fid] = "Unknown"
+                            if progress_callback: # Immediate progress update even for failed fetch
+                                await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
+                            break
 
-                            data = await self.fetch_user_data(booked_fid)
-                            if isinstance(data, dict) and "data" in data:
-                                fetched_data[booked_fid] = data["data"].get("nickname", "Unknown")
-                                if progress_callback: # Immediate progress update after successful fetch
-                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
-                                break
-                            elif data == 429:
-                                if progress_callback:
-                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=True)
-                                await asyncio.sleep(60) # Rate limit, wait and retry
-                            else:
-                                fetched_data[booked_fid] = "Unknown"
-                                if progress_callback: # Immediate progress update even for failed fetch
-                                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
-                                break
+                booked_nickname = fetched_data.get(booked_fid, "Unknown")
 
-                    booked_nickname = fetched_data.get(booked_fid, "Unknown")
+                # Fetch alliance name
+                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (booked_alliance,))
+                alliance_data = self.alliance_cursor.fetchone()
+                booked_alliance_name = alliance_data[0] if alliance_data else "Unknown"
 
-                    # Fetch alliance name
-                    self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (booked_alliance,))
-                    alliance_data = self.alliance_cursor.fetchone()
-                    booked_alliance_name = alliance_data[0] if alliance_data else "Unknown"
+                # Wrap nickname in LTR embedding to prevent line reversal
+                time_list.append(f"`{time_slot}` - [{booked_alliance_name}]\u202a{booked_nickname}\u202c - {booked_fid}")
+            else:
+                time_list.append(f"`{time_slot}` - ")
 
-                    time_list.append(f"`{time_slot}` - [{booked_alliance_name}]`{booked_nickname}` - `{booked_fid}`")
-                else:
-                    time_list.append(f"`{time_slot}` - ")
+            booked_fids[time_slot] = booked_fid
 
-                booked_fids[time_slot] = booked_fid
-
-                # Update progress after processing each time slot
-                if progress_callback:
-                    await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
+            # Update progress after processing each time slot
+            if progress_callback:
+                await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
 
         return time_list, booked_fids
 
@@ -461,10 +525,74 @@ class MinisterSchedule(commands.Cog):
         """
         time_list = []
         booked_fids = {}
-        for hour in range(24):
-            for minute in (0, 30):
-                time_slot = f"{hour:02}:{minute:02}"
-                booked_fid, booked_alliance = booked_times.get(time_slot, ("", ""))
+
+        # Get current slot mode
+        self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+        row = self.svs_cursor.fetchone()
+        slot_mode = int(row[0]) if row else 0
+
+        # Generate time slots based on mode
+        time_slots = self.get_time_slots(slot_mode)
+
+        for time_slot in time_slots:
+            booked_fid, booked_alliance = booked_times.get(time_slot, ("", ""))
+            booked_nickname = ""
+            if booked_fid:
+                self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (booked_fid,))
+                user = self.users_cursor.fetchone()
+                booked_nickname = user[0] if user else f"ID: {booked_fid}"
+
+                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (booked_alliance,))
+                alliance_data = self.alliance_cursor.fetchone()
+                booked_alliance_name = alliance_data[0] if alliance_data else "Unknown"
+
+                # Wrap nickname in LTR embedding to prevent line reversal
+                time_list.append(f"`{time_slot}` - [{booked_alliance_name}]\u202a{booked_nickname}\u202c - {booked_fid}")
+            else:
+                time_list.append(f"`{time_slot}` - ")
+            booked_fids[time_slot] = booked_fid
+
+        return time_list, booked_fids
+
+    # handler for looping through available times
+    def generate_available_time_list(self, booked_times):
+        """
+        Generates a list of only available (non-booked) time slots.
+        """
+        time_list = []
+
+        # Get current slot mode
+        self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+        row = self.svs_cursor.fetchone()
+        slot_mode = int(row[0]) if row else 0
+
+        # Generate time slots based on mode
+        time_slots = self.get_time_slots(slot_mode)
+
+        for time_slot in time_slots:
+            if time_slot not in booked_times:  # Only add unbooked slots
+                time_list.append(f"`{time_slot}` - ")
+
+        return time_list
+    
+    # handler for looping through unavailable times
+    def generate_booked_time_list(self, booked_times):
+        """
+        Generates a list of only booked time slots with their details.
+        """
+        time_list = []
+
+        # Get current slot mode
+        self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", ("slot_mode",))
+        row = self.svs_cursor.fetchone()
+        slot_mode = int(row[0]) if row else 0
+
+        # Generate time slots based on mode
+        time_slots = self.get_time_slots(slot_mode)
+
+        for time_slot in time_slots:
+            if time_slot in booked_times:
+                booked_fid, booked_alliance = booked_times[time_slot]
                 booked_nickname = ""
                 if booked_fid:
                     self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (booked_fid,))
@@ -475,49 +603,8 @@ class MinisterSchedule(commands.Cog):
                     alliance_data = self.alliance_cursor.fetchone()
                     booked_alliance_name = alliance_data[0] if alliance_data else "Unknown"
 
-                    time_list.append(f"`{time_slot}` - [{booked_alliance_name}]`{booked_nickname}` - `{booked_fid}`")
-                else:
-                    time_list.append(f"`{time_slot}` - ")
-                booked_fids[time_slot] = booked_fid
-
-        return time_list, booked_fids
-
-    # handler for looping through available times
-    def generate_available_time_list(self, booked_times):
-        """
-        Generates a list of only available (non-booked) time slots.
-        """
-        time_list = []
-        for hour in range(24):
-            for minute in (0, 30):
-                time_slot = f"{hour:02}:{minute:02}"
-                if time_slot not in booked_times:  # Only add unbooked slots
-                    time_list.append(f"`{time_slot}` - ")
-
-        return time_list
-    
-    # handler for looping through unavailable times
-    def generate_booked_time_list(self, booked_times):
-        """
-        Generates a list of only booked time slots with their details.
-        """
-        time_list = []
-        for hour in range(24):
-            for minute in (0, 30):
-                time_slot = f"{hour:02}:{minute:02}"
-                if time_slot in booked_times:
-                    booked_fid, booked_alliance = booked_times[time_slot]
-                    booked_nickname = ""
-                    if booked_fid:
-                        self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (booked_fid,))
-                        user = self.users_cursor.fetchone()
-                        booked_nickname = user[0] if user else f"ID: {booked_fid}"
-
-                        self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (booked_alliance,))
-                        alliance_data = self.alliance_cursor.fetchone()
-                        booked_alliance_name = alliance_data[0] if alliance_data else "Unknown"
-
-                        time_list.append(f"`{time_slot}` - [{booked_alliance_name}]`{booked_nickname}` - `{booked_fid}`")
+                    # Wrap nickname in LTR embedding to prevent line reversal
+                    time_list.append(f"`{time_slot}` - [{booked_alliance_name}]\u202a{booked_nickname}\u202c - {booked_fid}")
 
         return time_list
 
@@ -634,6 +721,10 @@ class MinisterSchedule(commands.Cog):
                     await interaction.followup.send(f"Could not select the channel: {e}")
                     return
 
+            # Get current slot mode
+            slot_mode_row = await self.get_channel_id("slot_mode")
+            slot_mode = slot_mode_row if slot_mode_row else 0
+
             # Normalize time input to always be HH:MM format
             try:
                 hours, minutes = map(int, time.split(":"))
@@ -642,9 +733,22 @@ class MinisterSchedule(commands.Cog):
                 await interaction.followup.send("Invalid time format. Please use HH:MM (e.g., 08:00, 14:30).")
                 return
 
-            # Validate 30-minute interval times
-            if minutes not in {0, 30}:
-                await interaction.followup.send("Invalid time. Appointments can only be booked in 30-minute intervals (e.g., 08:00, 08:30).")
+            # Validate time based on slot mode
+            if slot_mode == 0:
+                # Standard mode: only 0 and 30 minutes
+                if minutes not in {0, 30}:
+                    await interaction.followup.send("Invalid time. In Standard mode, appointments can only be booked at :00 or :30 (e.g., 08:00, 08:30).")
+                    return
+            else:
+                # Offset mode: 0, 15, and 45 minutes
+                if minutes not in {0, 15, 45}:
+                    await interaction.followup.send("Invalid time. In Offset mode, appointments can only be booked at :00, :15, or :45 (e.g., 08:00, 08:15, 08:45).")
+                    return
+
+            # Validate time is in valid slot list for current mode
+            valid_slots = self.get_time_slots(slot_mode)
+            if normalized_time not in valid_slots:
+                await interaction.followup.send(f"Invalid time slot `{normalized_time}` for current slot mode.")
                 return
 
             # Retrieve alliance_id based on fid
