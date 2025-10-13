@@ -607,8 +607,13 @@ class AttendanceReport(commands.Cog):
             if event_type:
                 title_text += f' [{event_type}]'
             if event_date:
-                # Extract just the date part if it's a datetime string
-                date_str = event_date.split('T')[0] if 'T' in str(event_date) else str(event_date).split()[0]
+                if isinstance(event_date, str):
+                    date_str = event_date.split('T')[0] if 'T' in event_date else event_date.split()[0]
+                else:
+                    try:
+                        date_str = event_date.strftime("%Y-%m-%d")
+                    except:
+                        date_str = str(event_date)
                 title_text += f' | Date: {date_str}'
             
             ax.text(0.5, 0.98, title_text, 
@@ -754,10 +759,17 @@ class AttendanceReport(commands.Cog):
                     status, last_date = result
                     # Format the date
                     try:
-                        last_date_obj = datetime.fromisoformat(last_date.replace('Z', '+00:00'))
+                        if isinstance(last_date, str):
+                            last_date_obj = datetime.fromisoformat(last_date.replace('Z', '+00:00'))
+                        else:
+                            last_date_obj = last_date
                         date_str = last_date_obj.strftime("%m/%d")
                     except:
-                        date_str = last_date.split('T')[0] if 'T' in last_date else last_date
+                        # Fallback for unparseable dates
+                        if isinstance(last_date, str):
+                            date_str = last_date.split('T')[0] if 'T' in last_date else last_date.split()[0] if ' ' in last_date else last_date
+                        else:
+                            date_str = str(last_date)
                     
                     status_display = status.replace('_', ' ').title()
                     return f"{status_display} ({date_str})"
@@ -922,7 +934,16 @@ class AttendanceReport(commands.Cog):
             report_sections.append(f"**Alliance:** {alliance_name}")
             date_str = "N/A"
             if records and records[0][5]:
-                date_str = records[0][5].split()[0] if isinstance(records[0][5], str) else str(records[0][5])
+                event_date_value = records[0][5]
+                if isinstance(event_date_value, str):
+                    # String format - extract date portion
+                    date_str = event_date_value.split('T')[0] if 'T' in event_date_value else event_date_value.split()[0]
+                else:
+                    # Datetime object - format it
+                    try:
+                        date_str = event_date_value.strftime("%Y-%m-%d")
+                    except:
+                        date_str = str(event_date_value)
             report_sections.append(f"**Date:** {date_str}")
             report_sections.append(f"**Total Marked:** {len(records)} players")
             report_sections.append(f"**Present:** {present_count} | **Absent:** {absent_count}")
@@ -971,20 +992,69 @@ class AttendanceReport(commands.Cog):
                 
                 report_sections.append(player_line)
 
-            # Join all sections and create final embed
-            report_description = "\n".join(report_sections)
-            
-            embed = discord.Embed(
-                title=f"📊 Attendance Report - {alliance_name}",
-                description=report_description,
-                color=discord.Color.blue()
-            )
-            
-            if session_id:
-                embed.set_footer(text=f"Session ID: {session_id} | Sorted by Points (Highest to Lowest)")
-            else:
-                embed.set_footer(text="Sorted by Points (Highest to Lowest)")
-            
+            # Discord embed description limit is 4096 characters
+            MAX_EMBED_LENGTH = 4096
+
+            # Split report into multiple embeds if needed
+            embeds = []
+            current_sections = []
+            current_length = 0
+
+            # Keep track of where we split (after summary or in player list)
+            summary_end_index = report_sections.index("") if "" in report_sections else 0
+
+            for i, section in enumerate(report_sections):
+                section_with_newline = section + "\n"
+                section_length = len(section_with_newline)
+
+                # Check if adding this section exceeds limit
+                if current_length + section_length > MAX_EMBED_LENGTH and current_sections:
+                    # Create embed with current sections
+                    embed_description = "\n".join(current_sections)
+                    embeds.append(embed_description)
+                    current_sections = []
+                    current_length = 0
+
+                    # If we're past the summary, add a continuation header
+                    if i > summary_end_index:
+                        continuation_header = "👥 **PLAYER DETAILS** (continued)"
+                        current_sections.append(continuation_header)
+                        current_length = len(continuation_header) + 1
+
+                current_sections.append(section)
+                current_length += section_length
+
+            # Add remaining sections
+            if current_sections:
+                embeds.append("\n".join(current_sections))
+
+            # Create Discord embeds
+            discord_embeds = []
+            for idx, embed_desc in enumerate(embeds):
+                if idx == 0:
+                    # First embed gets the full title
+                    embed = discord.Embed(
+                        title=f"📊 Attendance Report - {alliance_name}",
+                        description=embed_desc,
+                        color=discord.Color.blue()
+                    )
+                else:
+                    # Subsequent embeds get continuation title
+                    embed = discord.Embed(
+                        title=f"📊 Attendance Report - {alliance_name} (Page {idx + 1})",
+                        description=embed_desc,
+                        color=discord.Color.blue()
+                    )
+
+                # Add footer only to last embed
+                if idx == len(embeds) - 1:
+                    if session_id:
+                        embed.set_footer(text=f"Session ID: {session_id} | Sorted by Points (Highest to Lowest)")
+                    else:
+                        embed.set_footer(text="Sorted by Points (Highest to Lowest)")
+
+                discord_embeds.append(embed)
+
             # Create view with back and export buttons
             view = discord.ui.View(timeout=7200)
 
@@ -1011,14 +1081,14 @@ class AttendanceReport(commands.Cog):
 
                 back_button.callback = back_callback
                 view.add_item(back_button)
-            
+
             # Export button
             export_button = discord.ui.Button(
                 label="Export",
                 emoji="📥",
                 style=discord.ButtonStyle.primary
             )
-            
+
             async def export_callback(export_interaction: discord.Interaction):
                 session_info = {
                     'session_name': session_name,
@@ -1036,15 +1106,21 @@ class AttendanceReport(commands.Cog):
                     view=export_view,
                     ephemeral=True
                 )
-            
+
             export_button.callback = export_callback
             view.add_item(export_button)
-            
+
             # Handle both regular and deferred interactions
+            # Send first embed with view, then send additional embeds
             if interaction.response.is_done():
-                await interaction.edit_original_response(embed=embed, view=view)
+                await interaction.edit_original_response(embed=discord_embeds[0], view=view)
             else:
-                await interaction.response.edit_message(embed=embed, view=view)
+                await interaction.response.edit_message(embed=discord_embeds[0], view=view)
+
+            # Send additional embeds as follow-up messages (without view)
+            if len(discord_embeds) > 1:
+                for embed in discord_embeds[1:]:
+                    await interaction.followup.send(embed=embed, ephemeral=False)
 
         except Exception as e:
             print(f"Error showing text attendance report: {e}")
@@ -1086,11 +1162,24 @@ class AttendanceReport(commands.Cog):
                 """, (str(alliance_id),))
                 
                 for row in cursor.fetchall():
+                    # Handle date - could be string or datetime object
+                    date_value = row[3]
+                    if date_value:
+                        if isinstance(date_value, str):
+                            date_display = date_value.split('T')[0] if 'T' in date_value else date_value.split()[0] if ' ' in date_value else date_value
+                        else:
+                            try:
+                                date_display = date_value.strftime("%Y-%m-%d")
+                            except:
+                                date_display = str(date_value)
+                    else:
+                        date_display = "Unknown"
+
                     sessions.append({
                         'session_id': row[0],
                         'name': row[1],
                         'event_type': row[2],
-                        'date': row[3].split('T')[0] if row[3] else "Unknown",
+                        'date': date_display,
                         'player_count': row[4],
                         'marked_count': row[5]
                     })
