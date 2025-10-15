@@ -217,7 +217,7 @@ class ReportTypeSelectView(discord.ui.View):
                 "📊 **Report Type**\n"
                 "└ Choose between text or visual reports\n\n"
                 "🔄 **Sort Order**\n"
-                "└ Choose how to sort attendance reports\n"
+                "└ Choose how to sort players in the reports\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -486,7 +486,7 @@ class AttendanceView(discord.ui.View):
                     "📊 **Report Type**\n"
                     "└ Choose between text or visual reports\n\n"
                     "🔄 **Sort Order**\n"
-                    "└ Choose how to sort attendance reports\n"
+                    "└ Choose how to sort players in the reports\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.blue()
