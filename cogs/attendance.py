@@ -112,6 +112,58 @@ class AttendanceSettingsView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=None)
 
     @discord.ui.button(
+        label="Sort Order",
+        emoji="🔄",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_order"
+    )
+    async def sort_order_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Configure report sort order"""
+        try:
+            # Get current setting from attendance_report cog
+            report_cog = self.cog.bot.get_cog("AttendanceReport")
+            if not report_cog:
+                await interaction.response.send_message("❌ Attendance report system not available.", ephemeral=True)
+                return
+
+            current_setting = await report_cog.get_user_sort_preference(interaction.user.id)
+
+            # Create selection view
+            select_view = ReportSortSelectView(self.cog, report_cog, current_setting)
+
+            embed = discord.Embed(
+                title="🔄 Sort Order Settings",
+                description=(
+                    f"**Current Setting:** {self._format_sort_name(current_setting)}\n\n"
+                    "**Available Options:**\n"
+                    "• **By Points** - Highest points first (Present → Absent)\n"
+                    "• **Name A-Z** - Alphabetical order (Present → Absent)\n"
+                    "• **Name A-Z (All)** - Alphabetical order (All Users)\n"
+                    "• **Last Attended First** - Most recent attendance first\n\n"
+                    "Select your preferred sort order below:"
+                ),
+                color=discord.Color.blue()
+            )
+
+            await interaction.response.edit_message(embed=embed, view=select_view)
+
+        except Exception as e:
+            error_embed = self.cog._create_error_embed(
+                "❌ Error",
+                "An error occurred while loading settings."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+    def _format_sort_name(self, sort_type):
+        """Format sort type name for display"""
+        return {
+            "points_desc": "By Points",
+            "name_asc": "Name A-Z",
+            "name_asc_all": "Name A-Z (All)",
+            "last_attended_first": "Last Attended First"
+        }.get(sort_type, sort_type)
+
+    @discord.ui.button(
         label="⬅️ Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main"
@@ -163,7 +215,9 @@ class ReportTypeSelectView(discord.ui.View):
                 "**Available Settings**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "📊 **Report Type**\n"
-                "└ Choose between text or visual reports\n"
+                "└ Choose between text or visual reports\n\n"
+                "🔄 **Sort Order**\n"
+                "└ Choose how to sort attendance reports\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.blue()
@@ -190,6 +244,106 @@ class ReportTypeSelectView(discord.ui.View):
         except Exception as e:
             error_embed = self.cog._create_error_embed(
                 "❌ Error", 
+                "Failed to update settings."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+class ReportSortSelectView(discord.ui.View):
+    def __init__(self, cog, report_cog, current_setting):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.report_cog = report_cog
+        self.current_setting = current_setting
+
+    @discord.ui.button(
+        label="By Points",
+        emoji="💯",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_points"
+    )
+    async def points_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "points_desc")
+
+    @discord.ui.button(
+        label="Name A-Z",
+        emoji="🔤",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_name"
+    )
+    async def name_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "name_asc")
+
+    @discord.ui.button(
+        label="Name A-Z (All)",
+        emoji="📝",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_name_all"
+    )
+    async def name_all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "name_asc_all")
+
+    @discord.ui.button(
+        label="Last Attended First",
+        emoji="📅",
+        style=discord.ButtonStyle.primary,
+        custom_id="sort_last_attended"
+    )
+    async def last_attended_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.set_sort_preference(interaction, "last_attended_first")
+
+    @discord.ui.button(
+        label="⬅️ Back",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_settings"
+    )
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings_view = AttendanceSettingsView(self.cog)
+        embed = discord.Embed(
+            title="⚙️ Attendance Settings",
+            description=(
+                "Configure your attendance system preferences:\n\n"
+                "**Available Settings**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                "📊 **Report Type**\n"
+                "└ Choose between text or visual reports\n\n"
+                "🔄 **Sort Order**\n"
+                "└ Choose how to sort players in the reports\n"
+                "━━━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=settings_view)
+
+    async def set_sort_preference(self, interaction: discord.Interaction, preference: str):
+        """Set user's sort preference"""
+        try:
+            success = await self.report_cog.set_user_sort_preference(interaction.user.id, preference)
+
+            if success:
+                sort_name = {
+                    "points_desc": "By Points",
+                    "name_asc": "Name A-Z",
+                    "name_asc_all": "Name A-Z (All)",
+                    "last_attended_first": "Last Attended First"
+                }.get(preference, preference)
+
+                embed = discord.Embed(
+                    title="✅ Settings Updated",
+                    description=f"Sort order has been set to: **{sort_name}**",
+                    color=discord.Color.green()
+                )
+
+                back_view = self.cog._create_back_view(
+                    lambda i: self.cog.show_attendance_menu(i)
+                )
+
+                await interaction.response.edit_message(embed=embed, view=back_view)
+            else:
+                raise Exception("Failed to save preference")
+
+        except Exception as e:
+            error_embed = self.cog._create_error_embed(
+                "❌ Error",
                 "Failed to update settings."
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
@@ -322,7 +476,7 @@ class AttendanceView(discord.ui.View):
                 return
 
             settings_view = AttendanceSettingsView(self.cog)
-            
+
             embed = discord.Embed(
                 title="⚙️ Attendance Settings",
                 description=(
@@ -330,12 +484,14 @@ class AttendanceView(discord.ui.View):
                     "**Available Settings**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
                     "📊 **Report Type**\n"
-                    "└ Choose between text or visual reports\n"
+                    "└ Choose between text or visual reports\n\n"
+                    "🔄 **Sort Order**\n"
+                    "└ Choose how to sort attendance reports\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.blue()
             )
-            
+
             await interaction.response.edit_message(embed=embed, view=settings_view)
 
         except Exception as e:
@@ -1862,10 +2018,19 @@ class Attendance(commands.Cog):
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS user_preferences (
                         user_id INTEGER PRIMARY KEY,
-                        report_type TEXT DEFAULT 'text'
+                        report_type TEXT DEFAULT 'text',
+                        sort_preference TEXT DEFAULT 'points_desc'
                     )
                 """)
-                
+
+                # Migration: Add sort_preference column if it doesn't exist
+                try:
+                    cursor.execute("SELECT sort_preference FROM user_preferences LIMIT 1")
+                except sqlite3.OperationalError:
+                    # Column doesn't exist, add it
+                    cursor.execute("ALTER TABLE user_preferences ADD COLUMN sort_preference TEXT DEFAULT 'points_desc'")
+                    print("Added sort_preference column to user_preferences table")
+
                 attendance_db.commit()
                 
         except Exception as e:
