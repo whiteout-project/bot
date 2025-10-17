@@ -238,17 +238,27 @@ class BotOperations(commands.Cog):
                             async def admin_callback(admin_interaction: discord.Interaction):
                                 try:
                                     selected_admin_id = int(admin_select.values[0])
-                                    
+
+                                    # Query existing assignments for this admin
+                                    with sqlite3.connect('db/settings.sqlite') as check_db:
+                                        check_cursor = check_db.cursor()
+                                        check_cursor.execute("""
+                                            SELECT alliances_id
+                                            FROM adminserver
+                                            WHERE admin = ?
+                                        """, (selected_admin_id,))
+                                        existing_assignments = {row[0] for row in check_cursor.fetchall()}
+
                                     self.c_alliance.execute("""
-                                        SELECT alliance_id, name 
-                                        FROM alliance_list 
+                                        SELECT alliance_id, name
+                                        FROM alliance_list
                                         ORDER BY name
                                     """)
                                     alliances = self.c_alliance.fetchall()
 
                                     if not alliances:
                                         await admin_interaction.response.send_message(
-                                            "❌ No alliances found.", 
+                                            "❌ No alliances found.",
                                             ephemeral=True
                                         )
                                         return
@@ -259,7 +269,9 @@ class BotOperations(commands.Cog):
                                             cursor = users_db.cursor()
                                             cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
                                             member_count = cursor.fetchone()[0]
-                                            alliances_with_counts.append((alliance_id, name, member_count))
+                                            # Add a flag to indicate if already assigned
+                                            is_assigned = alliance_id in existing_assignments
+                                            alliances_with_counts.append((alliance_id, name, member_count, is_assigned))
 
                                     alliance_embed = discord.Embed(
                                         title="🏰 Alliance Selection",
@@ -277,14 +289,43 @@ class BotOperations(commands.Cog):
                                     async def alliance_callback(alliance_interaction: discord.Interaction):
                                         try:
                                             selected_alliance_id = int(view.current_select.values[0])
-                                            
+
+                                            # Check if already assigned
                                             with sqlite3.connect('db/settings.sqlite') as settings_db:
                                                 cursor = settings_db.cursor()
                                                 cursor.execute("""
-                                                    INSERT INTO adminserver (admin, alliances_id)
-                                                    VALUES (?, ?)
+                                                    SELECT COUNT(*) FROM adminserver
+                                                    WHERE admin = ? AND alliances_id = ?
                                                 """, (selected_admin_id, selected_alliance_id))
-                                                settings_db.commit()
+
+                                                if cursor.fetchone()[0] > 0:
+                                                    # Already assigned - show friendly message
+                                                    await alliance_interaction.response.send_message(
+                                                        "❌ This administrator is already assigned to this alliance.",
+                                                        ephemeral=True
+                                                    )
+                                                    return
+
+                                                # Not assigned yet, proceed with INSERT
+                                                try:
+                                                    cursor.execute("""
+                                                        INSERT INTO adminserver (admin, alliances_id)
+                                                        VALUES (?, ?)
+                                                    """, (selected_admin_id, selected_alliance_id))
+                                                    settings_db.commit()
+                                                except sqlite3.IntegrityError as e:
+                                                    # Catch any remaining UNIQUE constraint errors (race conditions)
+                                                    if "UNIQUE constraint failed" in str(e):
+                                                        await alliance_interaction.response.send_message(
+                                                            "❌ This administrator is already assigned to this alliance.",
+                                                            ephemeral=True
+                                                        )
+                                                    else:
+                                                        await alliance_interaction.response.send_message(
+                                                            "❌ An error occurred while assigning the alliance.",
+                                                            ephemeral=True
+                                                        )
+                                                    return
 
                                             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                                                 cursor = alliance_db.cursor()

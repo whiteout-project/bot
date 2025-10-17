@@ -1868,16 +1868,30 @@ class AllianceSelectView(discord.ui.View):
         end_idx = min(start_idx + 25, len(self.alliances))
         current_alliances = self.alliances[start_idx:end_idx]
 
+        options = []
+        for alliance_data in current_alliances:
+            # Handle both 3-tuple and 4-tuple formats
+            if len(alliance_data) == 4:
+                alliance_id, name, count, is_assigned = alliance_data
+                label = f"{name[:45]} {'✓ Assigned' if is_assigned else ''}"[:50]
+                description = f"ID: {alliance_id} | Members: {count}{' | Already Assigned' if is_assigned else ''}"[:100]
+            else:
+                alliance_id, name, count = alliance_data
+                label = f"{name[:50]}"
+                description = f"ID: {alliance_id} | Members: {count}"
+
+            options.append(
+                discord.SelectOption(
+                    label=label,
+                    value=str(alliance_id),
+                    description=description,
+                    emoji="✅" if len(alliance_data) == 4 and alliance_data[3] else "🏰"
+                )
+            )
+
         select = discord.ui.Select(
             placeholder=f"🏰 Select an alliance... (Page {self.page + 1}/{self.max_page + 1})",
-            options=[
-                discord.SelectOption(
-                    label=f"{name[:50]}",
-                    value=str(alliance_id),
-                    description=f"ID: {alliance_id} | Members: {count}",
-                    emoji="🏰"
-                ) for alliance_id, name, count in current_alliances
-            ]
+            options=options
         )
         
         async def select_callback(interaction: discord.Interaction):
