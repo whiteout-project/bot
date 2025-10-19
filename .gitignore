@@ -8,3 +8,4 @@ version
 bot_venv
 backups
 captcha_images
+.vscode
