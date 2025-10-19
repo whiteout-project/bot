@@ -5,9 +5,9 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-        tag:
-          description: "existing release tag (e.g. v1.0.0)"
-          required: true
+      tag:
+        description: "existing release tag (e.g. v1.0.0)"
+        required: true
 
 jobs:
   build:
