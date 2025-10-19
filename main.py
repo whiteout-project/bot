@@ -378,12 +378,12 @@ def download_requirements_from_release(beta_mode=False):
     # Build raw URL based on source and mode
     if source_name == "GitHub" or "GitHub" in source_name:
         if beta_mode:
-            raw_url = f"https://raw.githubusercontent.com/whiteout-project/bot/main/requirements.txt"
+            raw_url = "https://raw.githubusercontent.com/whiteout-project/bot/main/requirements.txt"
         else:
             raw_url = f"https://raw.githubusercontent.com/whiteout-project/bot/refs/tags/{tag}/requirements.txt"
     elif source_name == "GitLab":
         if beta_mode:
-            raw_url = f"https://gitlab.whiteout-bot.com/whiteout-project/bot/-/raw/main/requirements.txt"
+            raw_url = "https://gitlab.whiteout-bot.com/whiteout-project/bot/-/raw/main/requirements.txt"
         else:
             raw_url = f"https://gitlab.whiteout-bot.com/whiteout-project/bot/-/raw/{tag}/requirements.txt"
     else:
@@ -639,11 +639,11 @@ if __name__ == "__main__":
                 with open("version", "r") as f:
                     current_version = f.read().strip()
                 if beta_mode:
-                    print(F.YELLOW + f"Beta mode: Comparing latest commit from main branch" + R)
+                    print(F.YELLOW + "Beta mode: Comparing latest commit from main branch" + R)
             else:
                 current_version = "v0.0.0"
                 if beta_mode:
-                    print(F.YELLOW + f"Beta mode: Comparing latest commit from main branch" + R)
+                    print(F.YELLOW + "Beta mode: Comparing latest commit from main branch" + R)
 
             if not repair_mode:
                 print(F.CYAN + f"Current version: {current_version}" + R)
@@ -686,7 +686,7 @@ if __name__ == "__main__":
                         if os.path.exists(db_bak_path) and os.path.isdir(db_bak_path):
                             if not safe_remove(db_bak_path): # Create a timestamped backup to avoid upgrading without first having a backup
                                 db_bak_path = f"db.bak_{int(datetime.now().timestamp())}"
-                                print(F.YELLOW + f"WARNING: Couldn't remove db.bak folder: {e}. Making backup with timestamp instead." + R)
+                                print(F.YELLOW + "WARNING: Couldn't remove db.bak folder. Making backup with timestamp instead." + R)
 
                         try:
                             shutil.copytree("db", db_bak_path)
@@ -973,7 +973,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive"]
+        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "id_channel", "backup_operations", "bear_trap_editor", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "registration"]
 
         failed_cogs = []
         
