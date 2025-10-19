@@ -641,42 +641,22 @@ class BearTrap(commands.Cog):
             print(f"Error toggling notification: {e}")
             return False
 
-    def get_world_times(self):
-        current_utc = datetime.now(pytz.UTC)
-        times = {
-            "UTC": current_utc,
-            "US/Pacific": current_utc.astimezone(pytz.timezone('US/Pacific')),
-            "US/Eastern": current_utc.astimezone(pytz.timezone('US/Eastern')),
-            "Europe/London": current_utc.astimezone(pytz.timezone('Europe/London')),
-            "Europe/Istanbul": current_utc.astimezone(pytz.timezone('Europe/Istanbul')),
-            "Asia/Tokyo": current_utc.astimezone(pytz.timezone('Asia/Tokyo')),
-        }
-        return times
-
     async def show_bear_trap_menu(self, interaction: discord.Interaction):
         try:
-            times = self.get_world_times()
-            time_display = "\n".join([
-                f"🌍 **{zone}:** {time.strftime('%H:%M:%S')}"
-                for zone, time in times.items()
-            ])
-
             embed = discord.Embed(
                 title="🔔 Notification System",
                 description=(
-                    "Configure time notification settings:\n\n"
-                    "**Current World Times**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{time_display}\n\n"
+                    "The Notification System can be used to create notifications that will alert players of upcoming events. "
+                    "It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n\n"
                     "**Available Operations**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "⏰ **Set Time**\n"
-                    "└ Configure notification time\n"
-                    "└ Not just for Bear! Use it for any event:\n"
-                    "   Bear - KE - Frostfire - CJ and everything else\n"
-                    "└ Add unlimited notifications\n\n"
-                    "📋 **Manage notification**\n"
-                    "└ Edit, Enable/disable, see a preview, and delete\n\n"
+                    "⏰ **Create Notification**\n"
+                    "└ Set up a new notification with custom time, message, mentions, and repeat options\n"
+                    "└ Supports both plain messages and rich embeds\n"
+                    "└ Perfect for Bear Trap, Crazy Joe, Kill Event, Frostfire and more...\n\n"
+                    "📋 **Manage Notifications**\n"
+                    "└ View all existing notifications\n"
+                    "└ Edit, enable/disable or delete them\n\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.gold()
@@ -1950,7 +1930,7 @@ class BearTrapView(discord.ui.View):
         self.cursor = self.conn.cursor()
 
     @discord.ui.button(
-        label="Set Time",
+        label="Create Notification",
         emoji="⏰",
         style=discord.ButtonStyle.primary,
         custom_id="set_time",
@@ -2004,7 +1984,7 @@ class BearTrapView(discord.ui.View):
             )
 
     @discord.ui.button(
-        label="Manage notification",
+        label="Manage Notifications",
         emoji="📋",
         style=discord.ButtonStyle.primary,
         custom_id="manage_notification",
