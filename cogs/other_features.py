@@ -155,6 +155,30 @@ class OtherFeaturesView(discord.ui.View):
                 "❌ An error occurred while loading Backup System menu.",
                 ephemeral=True
             )
+            
+    @discord.ui.button(
+        label="Registration System",
+        emoji="📝",
+        style=discord.ButtonStyle.primary,
+        custom_id="registration_system",
+        row=1
+    )
+    async def registration_system_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            register_cog = self.cog.bot.get_cog("Register")
+            if register_cog:
+                await register_cog.show_settings_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Registration System module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Registration System menu: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while loading Registration System menu.",
+                ephemeral=True
+            )
 
     @discord.ui.button(
         label="Attendance System",
