@@ -8,6 +8,8 @@ import hashlib
 from aiohttp_socks import ProxyConnector
 import time
 import re
+from datetime import datetime
+import json
 
 try:
     import arabic_reshaper
@@ -227,6 +229,41 @@ class MinisterSchedule(commands.Cog):
             return True
         self.settings_cursor.execute("SELECT 1 FROM admin WHERE id=?", (user_id,))
         return self.settings_cursor.fetchone() is not None
+
+    async def log_change(self, action_type: str, user, appointment_type: str = None, fid: int = None,
+                        nickname: str = None, old_time: str = None, new_time: str = None,
+                        alliance_name: str = None, additional_data: str = None, archive_id: int = None):
+        """
+        Log a change to the minister change history table.
+
+        Args:
+            action_type: Type of action (add, remove, reschedule, clear_all, time_slot_mode_change, archive_created)
+            user: Discord user object who made the change
+            appointment_type: Type of appointment (Construction Day, Research Day, etc.)
+            fid: User FID
+            nickname: User nickname
+            old_time: Previous time slot (for reschedule)
+            new_time: New time slot (for add/reschedule)
+            alliance_name: Alliance name
+            additional_data: JSON string with extra context
+            archive_id: Archive ID if this change is associated with an archive
+        """
+        try:
+            timestamp = datetime.now().isoformat()
+            discord_user_id = user.id
+            discord_username = user.display_name
+
+            self.svs_cursor.execute("""
+                INSERT INTO minister_change_history
+                (archive_id, timestamp, discord_user_id, discord_username, action_type,
+                 appointment_type, fid, nickname, old_time, new_time, alliance_name, additional_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (archive_id, timestamp, discord_user_id, discord_username, action_type,
+                  appointment_type, fid, nickname, old_time, new_time, alliance_name, additional_data))
+
+            self.svs_conn.commit()
+        except Exception as e:
+            print(f"Error logging change: {e}")
 
     def fix_arabic(self, text):
         """
@@ -794,6 +831,18 @@ class MinisterSchedule(commands.Cog):
                                       (fid, appointment_type, normalized_time, alliance_id))
             self.svs_conn.commit()
 
+            # Log the change
+            await self.log_change(
+                action_type="add",
+                user=interaction.user,
+                appointment_type=appointment_type,
+                fid=int(fid),
+                nickname=nickname,
+                old_time=None,
+                new_time=normalized_time,
+                alliance_name=alliance_name
+            )
+
             # Try to get the avatar image
             try:
                 data = await self.fetch_user_data(fid)
@@ -909,18 +958,38 @@ class MinisterSchedule(commands.Cog):
             self.svs_cursor.execute("SELECT * FROM appointments WHERE fid=? AND appointment_type=?", (fid, appointment_type))
             booking = self.svs_cursor.fetchone()
 
-            # Fetch nickname for the user
-            self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (fid,))
+            # Fetch nickname and alliance for the user
+            self.users_cursor.execute("SELECT nickname, alliance FROM users WHERE fid=?", (fid,))
             user = self.users_cursor.fetchone()
             nickname = user[0] if user else "Unknown"
-            
+            alliance_id = user[1] if user else None
+
             if not booking:
                 await interaction.followup.send(f"{nickname} is not on the minister list for {appointment_type}.")
                 return
 
+            # Get alliance name for logging
+            alliance_name = None
+            if alliance_id:
+                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (alliance_id,))
+                alliance_result = self.alliance_cursor.fetchone()
+                alliance_name = alliance_result[0] if alliance_result else None
+
             # Remove the appointment
             self.svs_cursor.execute("DELETE FROM appointments WHERE fid=? AND appointment_type=?", (fid, appointment_type))
             self.svs_conn.commit()
+
+            # Log the change
+            await self.log_change(
+                action_type="remove",
+                user=interaction.user,
+                appointment_type=appointment_type,
+                fid=int(fid),
+                nickname=nickname,
+                old_time=None,
+                new_time=None,
+                alliance_name=alliance_name
+            )
 
             # Try to get the avatar image
             try:
@@ -1052,6 +1121,18 @@ class MinisterSchedule(commands.Cog):
                     self.svs_cursor.execute("DELETE FROM appointments WHERE appointment_type=?", (appointment_type,))
                     self.svs_conn.commit()
 
+                    # Log the change
+                    await self.log_change(
+                        action_type="clear_all",
+                        user=interaction.user,
+                        appointment_type=appointment_type,
+                        fid=None,
+                        nickname=None,
+                        old_time=None,
+                        new_time=None,
+                        alliance_name=None
+                    )
+
                     embed = discord.Embed(
                         title=f"Cleared {appointment_type} list",
                         description=f"All appointments for {appointment_type} have been successfully removed.",
@@ -1134,6 +1215,151 @@ class MinisterSchedule(commands.Cog):
         except Exception as e:
             print(f"An error occurred: {e}")
             await interaction.followup.send(f"An error occurred while fetching the schedule: {e}")
+
+    @discord.app_commands.command(name='minister_archive_save', description='Save current minister schedule to an archive (Global Admin only)')
+    @app_commands.describe(name="Optional name for the archive (defaults to current date)")
+    async def minister_archive_save(self, interaction: discord.Interaction, name: str = None):
+        # Check if user is global admin
+        minister_menu_cog = self.bot.get_cog("MinisterMenu")
+        if not minister_menu_cog:
+            await interaction.response.send_message("❌ Minister Menu module not found.", ephemeral=True)
+            return
+
+        is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can save archives.", ephemeral=True)
+            return
+
+        # Get archive cog
+        archive_cog = self.bot.get_cog("MinisterArchive")
+        if not archive_cog:
+            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            return
+
+        # Generate name if not provided
+        if not name:
+            name = datetime.now().strftime("SvS %Y-%m-%d")
+
+        # Save the current schedule
+        await archive_cog.save_current_schedule(interaction, name)
+
+    @discord.app_commands.command(name='minister_archive_list', description='View all saved minister archives (Global Admin only)')
+    async def minister_archive_list(self, interaction: discord.Interaction):
+        # Check if user is global admin
+        minister_menu_cog = self.bot.get_cog("MinisterMenu")
+        if not minister_menu_cog:
+            await interaction.response.send_message("❌ Minister Menu module not found.", ephemeral=True)
+            return
+
+        is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can view archives.", ephemeral=True)
+            return
+
+        # Get archive cog
+        archive_cog = self.bot.get_cog("MinisterArchive")
+        if not archive_cog:
+            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            return
+
+        # Show archive list
+        await archive_cog.show_archive_list(interaction)
+
+    async def archive_id_autocomplete(self, interaction: discord.Interaction, current: str):
+        """Autocomplete for archive IDs"""
+        try:
+            # Get all archives
+            self.svs_cursor.execute("""
+                SELECT archive_id, archive_name, created_at
+                FROM minister_archives
+                ORDER BY created_at DESC
+                LIMIT 25
+            """)
+            archives = self.svs_cursor.fetchall()
+
+            choices = []
+            for archive_id, archive_name, created_at in archives:
+                created_date = datetime.fromisoformat(created_at).strftime("%Y-%m-%d")
+                label = f"{archive_name} ({created_date})"
+
+                if current and current.lower() not in label.lower():
+                    continue
+
+                choices.append(discord.app_commands.Choice(name=label[:100], value=archive_id))
+
+            return choices[:25]
+        except Exception as e:
+            print(f"Error in archive autocomplete: {e}")
+            return []
+
+    @discord.app_commands.command(name='minister_archive_history', description='View change history for minister appointments (Global Admin only)')
+    @app_commands.describe(
+        archive_id="Optional: View history for a specific archive (leave empty for current changes)",
+        appointment_type="Optional: Filter by appointment type",
+        discord_user="Optional: Filter by user who made changes"
+    )
+    @app_commands.autocomplete(archive_id=archive_id_autocomplete, appointment_type=appointment_autocomplete)
+    async def minister_archive_history(
+        self,
+        interaction: discord.Interaction,
+        archive_id: int = None,
+        appointment_type: str = None,
+        discord_user: discord.User = None
+    ):
+        # Check if user is global admin
+        minister_menu_cog = self.bot.get_cog("MinisterMenu")
+        if not minister_menu_cog:
+            await interaction.response.send_message("❌ Minister Menu module not found.", ephemeral=True)
+            return
+
+        is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can view change history.", ephemeral=True)
+            return
+
+        # Get archive cog
+        archive_cog = self.bot.get_cog("MinisterArchive")
+        if not archive_cog:
+            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            return
+
+        # Build query based on filters
+        query = """
+            SELECT
+                timestamp, discord_username, action_type, appointment_type,
+                fid, nickname, old_time, new_time, alliance_name, additional_data
+            FROM minister_change_history
+            WHERE 1=1
+        """
+        params = []
+
+        if archive_id is not None:
+            query += " AND archive_id = ?"
+            params.append(archive_id)
+        else:
+            query += " AND archive_id IS NULL"
+
+        if appointment_type:
+            query += " AND appointment_type = ?"
+            params.append(appointment_type)
+
+        if discord_user:
+            query += " AND discord_user_id = ?"
+            params.append(discord_user.id)
+
+        query += " ORDER BY timestamp DESC"
+
+        self.svs_cursor.execute(query, params)
+        history_records = self.svs_cursor.fetchall()
+
+        if not history_records:
+            await interaction.response.send_message("No change history found with the specified filters.", ephemeral=True)
+            return
+
+        # Show history via archive cog
+        from .minister_archive import ChangeHistoryView
+        view = ChangeHistoryView(self.bot, archive_cog, history_records, page=0, archive_id=archive_id)
+        await archive_cog.update_history_embed(interaction, history_records, 0, archive_id, view)
 
 async def setup(bot):
     await bot.add_cog(MinisterSchedule(bot))

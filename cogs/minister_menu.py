@@ -439,11 +439,27 @@ class MinisterChannelView(discord.ui.View):
         
         await self.cog.show_channel_setup_menu(interaction)
 
+    @discord.ui.button(label="Event Archive", style=discord.ButtonStyle.secondary, emoji="🗃️", row=1)
+    async def event_archive(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user is global admin
+        is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
+        if not is_global_admin:
+            await interaction.response.send_message("❌ Only Global Admins can access archives.", ephemeral=True)
+            return
+
+        # Get archive cog
+        archive_cog = self.bot.get_cog("MinisterArchive")
+        if not archive_cog:
+            await interaction.response.send_message("❌ Minister Archive module not found.", ephemeral=True)
+            return
+
+        await archive_cog.show_archive_menu(interaction)
+
     @discord.ui.button(label="Settings", style=discord.ButtonStyle.secondary, emoji="⚙️", row=1)
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             other_features_cog = self.cog.bot.get_cog("OtherFeatures")
@@ -764,9 +780,11 @@ class MinisterMenu(commands.Cog):
                 "└ Manage Research Day appointments\n\n"
                 "⚔️ **Training Day**\n"
                 "└ Manage Troops Training Day appointments\n\n"
-                "📝 **Configure Channel Setup**\n"
-                "└ Configure channel setup\n\n"
-                "⚙️ **Administrative Settings**\n"
+                "📝 **Channel Setup**\n"
+                "└ Configure channels for appointments and logging\n\n"
+                "📚 **Event Archive**\n"
+                "└ Save and view past SvS minister schedules\n\n"
+                "⚙️ **Settings**\n"
                 "└ Update names, clear reservations and more\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
@@ -794,7 +812,7 @@ class MinisterMenu(commands.Cog):
                 "⚔️ **Training Channel**\n"
                 "└ Shows available Training Day slots\n\n"
                 "📄 **Log Channel**\n"
-                "└ Receives add/remove notifications\n\n"
+                "└ Receives all change notifications\n\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 "Select a channel type to configure:"
             ),
@@ -1204,7 +1222,7 @@ class MinisterMenu(commands.Cog):
             except Exception:
                 avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
 
-            # Send log embed
+            # Send log embed and log change
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if minister_schedule_cog:
                 if existing_booking:
@@ -1214,12 +1232,34 @@ class MinisterMenu(commands.Cog):
                         description=f"{nickname} ({fid}) from **{alliance_name}** moved from {old_time} to {selected_time}",
                         color=discord.Color.blue()
                     )
+                    # Log reschedule
+                    await minister_schedule_cog.log_change(
+                        action_type="reschedule",
+                        user=interaction.user,
+                        appointment_type=activity_name,
+                        fid=int(fid),
+                        nickname=nickname,
+                        old_time=old_time,
+                        new_time=selected_time,
+                        alliance_name=alliance_name
+                    )
                 else:
                     # This was a new booking
                     embed = discord.Embed(
                         title=f"Player added to {activity_name}",
                         description=f"{nickname} ({fid}) from **{alliance_name}** at {selected_time}",
                         color=discord.Color.green()
+                    )
+                    # Log add
+                    await minister_schedule_cog.log_change(
+                        action_type="add",
+                        user=interaction.user,
+                        appointment_type=activity_name,
+                        fid=int(fid),
+                        nickname=nickname,
+                        old_time=None,
+                        new_time=selected_time,
+                        alliance_name=alliance_name
                     )
                 embed.set_thumbnail(url=avatar_image)
                 embed.set_author(name=f"Added by {interaction.user.display_name}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
@@ -1319,7 +1359,7 @@ class MinisterMenu(commands.Cog):
             except Exception:
                 avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
             
-            # Send log embed
+            # Send log embed and log change
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if minister_schedule_cog:
                 embed = discord.Embed(
@@ -1328,9 +1368,22 @@ class MinisterMenu(commands.Cog):
                     color=discord.Color.red()
                 )
                 embed.set_thumbnail(url=avatar_image)
-                embed.set_author(name=f"Removed by {interaction.user.display_name}", 
+                embed.set_author(name=f"Removed by {interaction.user.display_name}",
                                icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
                 await minister_schedule_cog.send_embed_to_channel(embed)
+
+                # Log the change
+                await minister_schedule_cog.log_change(
+                    action_type="remove",
+                    user=interaction.user,
+                    appointment_type=activity_name,
+                    fid=int(fid),
+                    nickname=nickname,
+                    old_time=None,
+                    new_time=None,
+                    alliance_name=alliance_name
+                )
+
                 await self.update_channel_message(activity_name)
             
             # Return to day management with confirmation
@@ -1652,7 +1705,7 @@ class MinisterMenu(commands.Cog):
             self.svs_cursor.execute("UPDATE reference SET context_id=? WHERE context=?", (new_mode, "slot_mode"))
             self.svs_conn.commit()
 
-            # Log to minister log channel
+            # Log to minister log channel and change history
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
             if minister_schedule_cog:
                 migration_text = "\n".join([f"`{old}` → `{new}` - {atype}" for _, atype, old, new, _ in migrations[:20]])
@@ -1667,6 +1720,25 @@ class MinisterMenu(commands.Cog):
                 embed.set_author(name=f"Changed by {interaction.user.display_name}",
                                icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
                 await minister_schedule_cog.send_embed_to_channel(embed)
+
+                # Log the time slot mode change
+                import json
+                additional_data = json.dumps({
+                    "old_mode": old_mode,
+                    "new_mode": new_mode,
+                    "migrations_count": len(migrations)
+                })
+                await minister_schedule_cog.log_change(
+                    action_type="time_slot_mode_change",
+                    user=interaction.user,
+                    appointment_type=None,
+                    fid=None,
+                    nickname=None,
+                    old_time=None,
+                    new_time=None,
+                    alliance_name=None,
+                    additional_data=additional_data
+                )
 
                 # Update all channel messages
                 for activity_name in ["Construction Day", "Research Day", "Troops Training Day"]:
