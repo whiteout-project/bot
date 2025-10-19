@@ -413,7 +413,7 @@ class BearTrap(commands.Cog):
 
                                 try:
                                     color_value = embed_data.get("color")
-                                    if color_value is not None:
+                                    if color_value is not None and str(color_value).strip() != '':
                                         embed.color = int(color_value)
                                     else:
                                         embed.color = discord.Color.blue()

@@ -114,7 +114,7 @@ class WCommand(commands.Cog):
                                 title=f"👤 {nickname}",
                                 description=(
                                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"**🆔 FID:** `{fid_value}`\n"
+                                    f"**🆔 ID:** `{fid_value}`\n"
                                     f"**🔥 Furnace Level:** `{stove_level_name}`\n"
                                     f"**🌍 State:** `{kid}`\n"
                                     "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -148,4 +148,4 @@ class WCommand(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(WCommand(bot))
+    await bot.add_cog(WCommand(bot))

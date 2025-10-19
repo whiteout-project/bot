@@ -1,0 +1,39 @@
+name: build + push docker image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+        tag:
+          description: "existing release tag (e.g. v1.0.0)"
+          required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/whiteout-project/bot:latest
+            ghcr.io/whiteout-project/bot:${{ github.event.inputs.tag || github.event.release.tag_name }}

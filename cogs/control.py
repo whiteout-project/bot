@@ -1,19 +1,14 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
-import aiohttp
-import hashlib
-import time
 import sqlite3
 import asyncio
 from datetime import datetime
 from colorama import Fore, Style
 import os
-from aiohttp_socks import ProxyConnector
 import traceback
-import ssl
-
-SECRET = 'tB87#kPtkxqOS2'
+import logging
+from logging.handlers import RotatingFileHandler
+from .login_handler import LoginHandler
 
 level_mapping = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -35,6 +30,34 @@ class Control(commands.Cog):
         self.conn_alliance = sqlite3.connect('db/alliance.sqlite')
         self.conn_users = sqlite3.connect('db/users.sqlite')
         self.conn_changes = sqlite3.connect('db/changes.sqlite')
+        
+        # Setup logger for alliance control
+        self.logger = logging.getLogger('alliance_control')
+        self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
+        
+        # Clear existing handlers
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
+        
+        # Create log directory if it doesn't exist
+        os.makedirs('log', exist_ok=True)
+        
+        # Rotating file handler for alliance control logs
+        # maxBytes = 1MB (1024 * 1024), backupCount = 1
+        file_handler = RotatingFileHandler(
+            'log/alliance_control.txt',
+            maxBytes=1024*1024,  # 1MB
+            backupCount=1,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.INFO)
+        
+        # Formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
         self.cursor_alliance = self.conn_alliance.cursor()
         self.cursor_users = self.conn_users.cursor()
         self.cursor_changes = self.conn_changes.cursor()
@@ -53,15 +76,32 @@ class Control(commands.Cog):
             self.cursor_settings.execute("INSERT INTO auto (value) VALUES (1)")
         self.conn_settings.commit()
         
+        # Add control settings columns to alliancesettings if they don't exist
+        self.cursor_alliance.execute("PRAGMA table_info(alliancesettings)")
+        columns = [col[1] for col in self.cursor_alliance.fetchall()]
+        
+        if 'auto_remove_on_transfer' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings 
+                ADD COLUMN auto_remove_on_transfer INTEGER DEFAULT 0
+            """)
+        
+        if 'notify_on_transfer' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings 
+                ADD COLUMN notify_on_transfer INTEGER DEFAULT 0
+            """)
+        
+        self.conn_alliance.commit()
+        
         self.db_lock = asyncio.Lock()
         self.proxies = self.load_proxies()
         self.alliance_tasks = {}
         self.is_running = {}
         self.monitor_started = False
         
-        self.control_queue = asyncio.Queue()
-        self.control_lock = asyncio.Lock()
-        self.current_control = None
+        # Initialize login handler for centralized queue management
+        self.login_handler = LoginHandler()
 
     def load_proxies(self):
         proxies = []
@@ -69,55 +109,67 @@ class Control(commands.Cog):
             with open('proxy.txt', 'r') as f:
                 proxies = [f"socks4://{line.strip()}" for line in f if line.strip()]
         return proxies
+    
+    def get_auto_remove_setting(self, alliance_id):
+        """Get the auto_remove_on_transfer setting for a specific alliance"""
+        self.cursor_alliance.execute("""
+            SELECT auto_remove_on_transfer 
+            FROM alliancesettings 
+            WHERE alliance_id = ?
+        """, (alliance_id,))
+        result = self.cursor_alliance.fetchone()
+        # Default to 0 (disabled) if not set
+        return result[0] if result and result[0] is not None else 0
+    
+    def get_transfer_notification_setting(self, alliance_id):
+        """Get the notify_on_transfer setting for a specific alliance"""
+        self.cursor_alliance.execute("""
+            SELECT notify_on_transfer 
+            FROM alliancesettings 
+            WHERE alliance_id = ?
+        """, (alliance_id,))
+        result = self.cursor_alliance.fetchone()
+        # Default to 0 (disabled) if not set
+        return result[0] if result and result[0] is not None else 0
 
     async def fetch_user_data(self, fid, proxy=None):
-        url = 'https://wos-giftcode-api.centurygame.com/api/player'
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-        current_time = int(time.time() * 1000)
-        form = f"fid={fid}&time={current_time}"
-        sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
-        form = f"sign={sign}&{form}"
+        """Fetch user data using the centralized login handler"""
+        result = await self.login_handler.fetch_player_data(fid, use_proxy=proxy)
+        
+        if result['status'] == 'success':
+            # Return in the old format for compatibility
+            return {'data': result['data']}
+        elif result['status'] == 'rate_limited':
+            return 429
+        elif result['status'] == 'not_found':
+            return {'error': 'not_found', 'fid': fid}
+        else:
+            return {'error': result.get('error_message', 'Unknown error'), 'fid': fid}
 
+    async def remove_invalid_fid(self, fid: str, reason: str):
+        """Safely remove an invalid ID from the database with logging"""
         try:
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)
-            connector_kwargs = {
-                'ssl': ssl_context,
-                'limit': 10,
-                'limit_per_host': 5,
-                'enable_cleanup_closed': True
-            }
-            
-            if proxy:
-                connector = ProxyConnector.from_url(proxy, **connector_kwargs)
-            else:
-                connector = aiohttp.TCPConnector(**connector_kwargs)
+            async with self.db_lock:
+                # Get user info before deletion for logging
+                self.cursor_users.execute("SELECT nickname, alliance FROM users WHERE fid = ?", (fid,))
+                user_info = self.cursor_users.fetchone()
                 
-            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-                async with session.post(url, headers=headers, data=form) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        return response.status
+                if user_info:
+                    nickname, alliance_id = user_info
+                    
+                    # Delete from users table
+                    self.cursor_users.execute("DELETE FROM users WHERE fid = ?", (fid,))
+                    self.conn_users.commit()
+                    
+                    # Log the deletion to alliance control log
+                    self.logger.warning(f"[AUTO-CLEANUP] Removed invalid ID {fid} (nickname: {nickname}) - Reason: {reason}")
+                    
+                    return True, nickname
         except Exception as e:
-            return None
+            self.logger.error(f"Failed to remove invalid ID {fid}: {str(e)}")
+            return False, None
 
-    async def process_user(self, fid, old_nickname, old_furnace_lv, old_stove_lv_content, old_kid, proxies):
-        data = await self.fetch_user_data(fid)
-        if data and data != 429:
-            return data
-
-        for proxy in proxies:
-            data = await self.fetch_user_data(fid, proxy=proxy)
-            if data and data != 429:
-                return data
-
-        return None
-
-    async def check_agslist(self, channel, alliance_id):
+    async def check_agslist(self, channel, alliance_id, interaction=None, interaction_message=None, alliance_name=None, is_batch=False, batch_info=None):
         async with self.db_lock:
             self.cursor_users.execute("SELECT fid, nickname, furnace_lv, stove_lv_content, kid FROM users WHERE alliance = ?", (alliance_id,))
             users = self.cursor_users.fetchall()
@@ -129,10 +181,49 @@ class Control(commands.Cog):
         checked_users = 0
 
         self.cursor_alliance.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-        alliance_name = self.cursor_alliance.fetchone()[0]
+        alliance_name_from_db = self.cursor_alliance.fetchone()[0]
+        # Use provided name if available, otherwise use from database
+        if not alliance_name:
+            alliance_name = alliance_name_from_db
 
         start_time = datetime.now()
-        print(f"{Fore.CYAN}{alliance_name} Alliance Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
+        self.logger.info(f"{alliance_name} Alliance Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # Update ephemeral message at start if provided
+        if interaction_message:
+            try:
+                if is_batch and batch_info:
+                    # For batch processing (all alliances)
+                    status_embed = discord.Embed(
+                        title="🔄 Alliance Control Operation",
+                        description=(
+                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
+                            f"🏰 **Currently Processing:** {alliance_name}\n"
+                            f"📍 **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
+                            f"⏰ **Started:** <t:{int(start_time.timestamp())}:R>\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━"
+                        ),
+                        color=discord.Color.blue()
+                    )
+                else:
+                    # For single alliance processing
+                    status_embed = discord.Embed(
+                        title="🔄 Alliance Control Operation",
+                        description=(
+                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📊 **Type:** Single Alliance\n"
+                            f"🏰 **Alliance:** {alliance_name}\n"
+                            f"📍 **Status:** In Progress\n"
+                            f"⏰ **Started:** <t:{int(start_time.timestamp())}:R>\n"
+                            f"📢 **Results Channel:** {channel.mention}\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━"
+                        ),
+                        color=discord.Color.blue()
+                    )
+                await interaction_message.edit(embed=status_embed)
+            except Exception as e:
+                self.logger.warning(f"Could not update interaction message at start: {e}")
         
         async with self.db_lock:
             with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -162,7 +253,7 @@ class Control(commands.Cog):
         if auto_value == 1:
             message = await channel.send(embed=embed)
 
-        furnace_changes, nickname_changes, kid_changes = [], [], []
+        furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -175,13 +266,16 @@ class Control(commands.Cog):
             for fid, old_nickname, old_furnace_lv, old_stove_lv_content, old_kid in batch_users:
                 data = await self.fetch_user_data(fid)
                 
-                if data == 429 and (not os.path.exists('proxy.txt') or not self.proxies):
-                    embed.description = f"⚠️ API Rate Limit! Waiting 60 seconds...\n📊 Progress: {checked_users}/{total_users} members"
+                if data == 429:
+                    # Get wait time from login handler
+                    wait_time = self.login_handler._get_wait_time()
+                    
+                    embed.description = f"⚠️ API Rate Limit! Waiting {wait_time:.1f} seconds...\n📊 Progress: {checked_users}/{total_users} members"
                     embed.color = discord.Color.orange()
                     if message:
                         await message.edit(embed=embed)
                     
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(wait_time)
                     
                     embed.description = "🔍 Checking for changes in member status..."
                     embed.color = discord.Color.blue()
@@ -190,42 +284,83 @@ class Control(commands.Cog):
                     data = await self.fetch_user_data(fid)
                 
                 if isinstance(data, dict):
-                    user_data = data['data']
-                    new_furnace_lv = user_data['stove_lv']
-                    new_nickname = user_data['nickname'].strip()
-                    new_kid = user_data.get('kid', 0)
-                    new_stove_lv_content = user_data['stove_lv_content']
-                    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    if 'error' in data:
+                        # Handle error responses (including 40004)
+                        error_msg = data.get('error', 'Unknown error')
+                        
+                        # Check if this is a permanently invalid ID (not found)
+                        if error_msg == 'not_found':
+                            # Auto-remove the invalid ID
+                            removed, old_nickname = await self.remove_invalid_fid(fid, "Player does not exist (error 40004)")
+                            if removed:
+                                check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Auto-removed)")
+                            else:
+                                check_fail_list.append(f"❌ `{fid}` - Player not found (Failed to remove)")
+                        else:
+                            # For other errors, just report without removing
+                            check_fail_list.append(f"❌ `{fid}` - {error_msg}")
+                            self.logger.warning(f"Failed to check ID {fid}: {error_msg}")
+                        
+                        checked_users += 1
+                    elif 'data' in data:
+                        # Process successful response
+                        user_data = data['data']
+                        new_furnace_lv = user_data['stove_lv']
+                        new_nickname = user_data['nickname'].strip()
+                        new_kid = user_data.get('kid', 0)
+                        new_stove_lv_content = user_data['stove_lv_content']
+                        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                    async with self.db_lock:
-                        if new_stove_lv_content != old_stove_lv_content:
-                            self.cursor_users.execute("UPDATE users SET stove_lv_content = ? WHERE fid = ?", (new_stove_lv_content, fid))
-                            self.conn_users.commit()
+                        async with self.db_lock:
+                            if new_stove_lv_content != old_stove_lv_content:
+                                self.cursor_users.execute("UPDATE users SET stove_lv_content = ? WHERE fid = ?", (new_stove_lv_content, fid))
+                                self.conn_users.commit()
 
-                        if old_kid != new_kid:
-                            kid_changes.append(f"👤 **{old_nickname}** has transferred to a new state\n🔄 Old State: `{old_kid}`\n🆕 New State: `{new_kid}`")
-                            self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
-                            self.conn_users.commit()
+                            if old_kid != new_kid:
+                                kid_changes.append(f"👤 {old_nickname} has transferred to a new state\n🔄 Old State: {old_kid}\n🆕 New State: {new_kid}")
+                                
+                                # Check if auto-removal is enabled for this alliance
+                                auto_remove = self.get_auto_remove_setting(alliance_id)
+                                notify_on_transfer = self.get_transfer_notification_setting(alliance_id)
+                                
+                                if auto_remove:
+                                    # Remove user from alliance when auto-removal is enabled
+                                    self.cursor_users.execute("DELETE FROM users WHERE fid = ?", (fid,))
+                                    self.conn_users.commit()
+                                    
+                                    # Only notify if notifications are enabled for auto-removal
+                                    if notify_on_transfer:
+                                        self.cursor_settings.execute("SELECT id FROM admin WHERE is_initial = 1")
+                                        admin_data = self.cursor_settings.fetchone()
+                                        
+                                        if admin_data:
+                                            user = await self.bot.fetch_user(admin_data[0])
+                                            if user:
+                                                await user.send(f"❌ {old_nickname} ({fid}) was removed from the users table due to state transfer.")
+                                else:
+                                    # Just update kid without removing (default behavior)
+                                    self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
+                                    self.conn_users.commit()
 
-                        if new_furnace_lv != old_furnace_lv:
-                            new_furnace_display = level_mapping.get(new_furnace_lv, new_furnace_lv)
-                            old_furnace_display = level_mapping.get(old_furnace_lv, old_furnace_lv)
-                            self.cursor_changes.execute("INSERT INTO furnace_changes (fid, old_furnace_lv, new_furnace_lv, change_date) VALUES (?, ?, ?, ?)",
-                                                         (fid, old_furnace_lv, new_furnace_lv, current_time))
-                            self.conn_changes.commit()
-                            self.cursor_users.execute("UPDATE users SET furnace_lv = ? WHERE fid = ?", (new_furnace_lv, fid))
-                            self.conn_users.commit()
-                            furnace_changes.append(f"👤 **{old_nickname}**\n🔥 `{old_furnace_display}` ➡️ `{new_furnace_display}`")
+                            if new_furnace_lv != old_furnace_lv:
+                                new_furnace_display = level_mapping.get(new_furnace_lv, new_furnace_lv)
+                                old_furnace_display = level_mapping.get(old_furnace_lv, old_furnace_lv)
+                                self.cursor_changes.execute("INSERT INTO furnace_changes (fid, old_furnace_lv, new_furnace_lv, change_date) VALUES (?, ?, ?, ?)",
+                                                             (fid, old_furnace_lv, new_furnace_lv, current_time))
+                                self.conn_changes.commit()
+                                self.cursor_users.execute("UPDATE users SET furnace_lv = ? WHERE fid = ?", (new_furnace_lv, fid))
+                                self.conn_users.commit()
+                                furnace_changes.append(f"👤 **{old_nickname}**\n🔥 `{old_furnace_display}` ➡️ `{new_furnace_display}`")
 
-                        if new_nickname.lower() != old_nickname.lower().strip():
-                            self.cursor_changes.execute("INSERT INTO nickname_changes (fid, old_nickname, new_nickname, change_date) VALUES (?, ?, ?, ?)",
-                                                         (fid, old_nickname, new_nickname, current_time))
-                            self.conn_changes.commit()
-                            self.cursor_users.execute("UPDATE users SET nickname = ? WHERE fid = ?", (new_nickname, fid))
-                            self.conn_users.commit()
-                            nickname_changes.append(f"📝 `{old_nickname}` ➡️ `{new_nickname}`")
+                            if new_nickname.lower() != old_nickname.lower().strip():
+                                self.cursor_changes.execute("INSERT INTO nickname_changes (fid, old_nickname, new_nickname, change_date) VALUES (?, ?, ?, ?)",
+                                                             (fid, old_nickname, new_nickname, current_time))
+                                self.conn_changes.commit()
+                                self.cursor_users.execute("UPDATE users SET nickname = ? WHERE fid = ?", (new_nickname, fid))
+                                self.conn_users.commit()
+                                nickname_changes.append(f"📝 `{old_nickname}` ➡️ `{new_nickname}`")
 
-                checked_users += 1
+                        checked_users += 1
                 embed.set_field_at(
                     1,
                     name="📈 Progress",
@@ -240,7 +375,7 @@ class Control(commands.Cog):
         end_time = datetime.now()
         duration = end_time - start_time
 
-        if furnace_changes or nickname_changes or kid_changes:
+        if furnace_changes or nickname_changes or kid_changes or check_fail_list:
             if furnace_changes:
                 await self.send_embed(
                     channel=channel,
@@ -268,6 +403,22 @@ class Control(commands.Cog):
                     footer=f"📊 Total Changes: {len(kid_changes)}"
                 )
 
+            if check_fail_list:
+                # Count auto-removed entries
+                auto_removed_count = sum(1 for item in check_fail_list if "Auto-removed" in item)
+                
+                footer_text = f"📊 Total Issues: {len(check_fail_list)}"
+                if auto_removed_count > 0:
+                    footer_text += f" | 🗑️ Auto-removed: {auto_removed_count}"
+                
+                await self.send_embed(
+                    channel=channel,
+                    title=f"❌ **{alliance_name}** Invalid Members Detected",
+                    description=safe_list(check_fail_list),
+                    color=discord.Color.red(),
+                    footer=footer_text
+                )
+
             embed.color = discord.Color.green()
             embed.set_field_at(
                 0,
@@ -282,7 +433,7 @@ class Control(commands.Cog):
             )
             embed.add_field(
                 name="📈 Total Changes",
-                value=f"🔄 {len(furnace_changes) + len(nickname_changes) + len(kid_changes)} changes detected",
+                value=f"🔄 {len(furnace_changes) + len(nickname_changes) + len(kid_changes)} changes detected" + (f"\n🗑️ {sum(1 for item in check_fail_list if 'Auto-removed' in item)} invalid IDs removed" if any('Auto-removed' in item for item in check_fail_list) else "") + (f"\n❌ {sum(1 for item in check_fail_list if 'Auto-removed' not in item)} check failures" if any('Auto-removed' not in item for item in check_fail_list) else ""),
                 inline=True
             )
         else:
@@ -301,8 +452,64 @@ class Control(commands.Cog):
 
         if message:
             await message.edit(embed=embed)
-        print(f"{Fore.GREEN}{alliance_name} Alliance Control completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}")
-        print(f"{Fore.YELLOW}{alliance_name} Alliance Total Duration: {duration}{Style.RESET_ALL}")
+        self.logger.info(f"{alliance_name} Alliance Control completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"{alliance_name} Alliance Total Duration: {duration}")
+        
+        # Update ephemeral message at completion if provided
+        if interaction_message:
+            try:
+                changes_detected = bool(furnace_changes or nickname_changes or kid_changes or check_fail_list)
+                
+                if is_batch and batch_info:
+                    # Check if this is the last alliance in the batch
+                    if batch_info['current'] == batch_info['total']:
+                        # Final completion message for all alliances
+                        status_embed = discord.Embed(
+                            title="✅ Alliance Control Complete",
+                            description=(
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
+                                f"🏰 **Alliances:** {batch_info['total']} processed\n"
+                                f"✅ **Status:** Completed\n"
+                                f"📈 **Latest Alliance:** {alliance_name}\n"
+                                f"⏱️ **Duration:** {duration.total_seconds():.1f} seconds\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━"
+                            ),
+                            color=discord.Color.green()
+                        )
+                    else:
+                        # Still processing other alliances - just update progress
+                        status_embed = discord.Embed(
+                            title="🔄 Alliance Control Operation",
+                            description=(
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
+                                f"🏰 **Completed:** {alliance_name}\n"
+                                f"📍 **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
+                                f"📈 **Changes in {alliance_name}:** {'Yes' if changes_detected else 'No'}\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━"
+                            ),
+                            color=discord.Color.blue()
+                        )
+                else:
+                    # Single alliance completion
+                    status_embed = discord.Embed(
+                        title="✅ Alliance Control Complete",
+                        description=(
+                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📊 **Type:** Single Alliance\n"
+                            f"🏰 **Alliance:** {alliance_name}\n"
+                            f"✅ **Status:** Completed\n"
+                            f"📈 **Changes Detected:** {'Yes' if changes_detected else 'No'}\n"
+                            f"⏱️ **Duration:** {duration.total_seconds():.1f} seconds\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━"
+                        ),
+                        color=discord.Color.green()
+                    )
+                
+                await interaction_message.edit(embed=status_embed)
+            except Exception as e:
+                self.logger.warning(f"Could not update interaction message at completion: {e}")
 
     async def send_embed(self, channel, title, description, color, footer):
         if isinstance(description, str):
@@ -337,63 +544,6 @@ class Control(commands.Cog):
             embed.set_footer(text=footer)
             await channel.send(embed=embed)
 
-    async def process_control_queue(self):
-        print("[CONTROL] Queue processor started")
-        while True:
-            try:
-                control_task = await self.control_queue.get()
-                channel = control_task['channel']
-                alliance_id = control_task['alliance_id']
-                is_manual = control_task.get('is_manual', False)
-                
-                print(f"[CONTROL] Processing alliance ID: {alliance_id} (Manual: {is_manual})")
-                
-                if self.current_control:
-                    await self.current_control
-                
-                print(f"[CONTROL] Starting control for alliance ID: {alliance_id}")
-                
-                self.cursor_alliance.execute("""
-                    SELECT name FROM alliance_list 
-                    WHERE alliance_id = ?
-                """, (alliance_id,))
-                alliance_name = self.cursor_alliance.fetchone()[0]
-                
-                self.cursor_users.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                member_count = self.cursor_users.fetchone()[0]
-                
-                self.current_control = asyncio.create_task(self.check_agslist(channel, alliance_id))
-                await self.current_control
-                
-                self.current_control = None
-                self.control_queue.task_done()
-                
-                print(f"[CONTROL] Completed control for alliance ID: {alliance_id}")
-                
-                if not is_manual:
-                    await asyncio.sleep(60)
-                
-            except Exception as e:
-                print(f"[ERROR] Error in process_control_queue: {str(e)}")
-                import traceback
-                traceback.print_exc()
-                
-                error_embed = discord.Embed(
-                    title="⚠️ Control Process Error",
-                    description=f"An error occurred during the control process:\n```{str(e)}```",
-                    color=discord.Color.red()
-                )
-                try:
-                    if channel is not None: # Check if channel exists before trying to send
-                        await channel.send(embed=error_embed)
-                    else:
-                        print(f"[ERROR] Cannot send error message - no channel for alliance {alliance_id}")
-                except:
-                    pass
-                
-                if not is_manual:
-                    await asyncio.sleep(60)
-
     async def schedule_alliance_check(self, channel, alliance_id, current_interval):
         try:
             await asyncio.sleep(current_interval * 60)
@@ -422,8 +572,10 @@ class Control(commands.Cog):
                             )
                             break
 
-                    await self.control_queue.put({
-                        'channel': channel,
+                    await self.login_handler.queue_operation({
+                        'type': 'alliance_control',
+                        'callback': lambda ch=channel, aid=alliance_id: self.check_agslist(ch, aid, interaction_message=None),
+                        'description': f'Scheduled control check for alliance {alliance_id}',
                         'alliance_id': alliance_id
                     })
                     
@@ -440,12 +592,19 @@ class Control(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.monitor_started:
-            print("[CONTROL] Starting monitor and queue processor...")
-            self._queue_processor_task = asyncio.create_task(self.process_control_queue())
+            print("[CONTROL] Starting monitor...")
+            
+            # Check API availability
+            await self.login_handler.check_apis_availability()
+            print(f"[CONTROL] {self.login_handler.get_mode_text()}")
+            
+            # Start the centralized queue processor
+            await self.login_handler.start_queue_processor()
+            
             self.monitor_alliance_changes.start()
             await self.start_alliance_checks()
             self.monitor_started = True
-            print("[CONTROL] Monitor and queue processor started successfully")
+            self.logger.info("Monitor and queue processor started successfully")
 
     async def start_alliance_checks(self):
         try:
@@ -472,18 +631,15 @@ class Control(commands.Cog):
                 for alliance_id, channel_id, interval in alliances:
                     channel = self.bot.get_channel(channel_id)
                     if channel is not None:
-                        print(f"[CONTROL] Starting initial check for alliance {alliance_id}")
-                        await self.control_queue.put({
-                            'channel': channel,
-                            'alliance_id': alliance_id
-                        })
+                        print(f"[CONTROL] Scheduling alliance {alliance_id} with interval {interval} minutes")
                         
+                        # Don't queue an immediate check - let the schedule handle it
                         self.is_running[alliance_id] = True
                         self.alliance_tasks[alliance_id] = asyncio.create_task(
                             self.schedule_alliance_check(channel, alliance_id, interval)
                         )
                         
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(0.5)  # Small delay to prevent overwhelming the system
                     else:
                         print(f"[CONTROL] Channel not found for alliance {alliance_id}")
 
@@ -502,8 +658,6 @@ class Control(commands.Cog):
     @tasks.loop(minutes=1)
     async def monitor_alliance_changes(self):
         try:
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
             async with self.db_lock:
                 self.cursor_alliance.execute("SELECT alliance_id, channel_id, interval FROM alliancesettings")
                 current_settings = {

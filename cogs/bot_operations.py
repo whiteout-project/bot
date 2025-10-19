@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import os
 import sqlite3
 import asyncio
@@ -147,6 +146,28 @@ class BotOperations(commands.Cog):
                         "❌ An error occurred while managing alliance control messages.",
                         ephemeral=True
                     )
+        
+        elif custom_id == "control_settings":
+            try:
+                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+                result = self.settings_cursor.fetchone()
+                
+                if not result or result[0] != 1:
+                    await interaction.response.send_message(
+                        "❌ Only global administrators can manage control settings.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                await self.show_control_settings_menu(interaction)
+                
+            except Exception as e:
+                print(f"Control settings error: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "❌ An error occurred while opening control settings.",
+                        ephemeral=True
+                    )
                     
         elif custom_id in ["assign_alliance", "add_admin", "remove_admin", "main_menu", "bot_status", "bot_settings"]:
             try:
@@ -217,17 +238,27 @@ class BotOperations(commands.Cog):
                             async def admin_callback(admin_interaction: discord.Interaction):
                                 try:
                                     selected_admin_id = int(admin_select.values[0])
-                                    
+
+                                    # Query existing assignments for this admin
+                                    with sqlite3.connect('db/settings.sqlite') as check_db:
+                                        check_cursor = check_db.cursor()
+                                        check_cursor.execute("""
+                                            SELECT alliances_id
+                                            FROM adminserver
+                                            WHERE admin = ?
+                                        """, (selected_admin_id,))
+                                        existing_assignments = {row[0] for row in check_cursor.fetchall()}
+
                                     self.c_alliance.execute("""
-                                        SELECT alliance_id, name 
-                                        FROM alliance_list 
+                                        SELECT alliance_id, name
+                                        FROM alliance_list
                                         ORDER BY name
                                     """)
                                     alliances = self.c_alliance.fetchall()
 
                                     if not alliances:
                                         await admin_interaction.response.send_message(
-                                            "❌ No alliances found.", 
+                                            "❌ No alliances found.",
                                             ephemeral=True
                                         )
                                         return
@@ -238,7 +269,9 @@ class BotOperations(commands.Cog):
                                             cursor = users_db.cursor()
                                             cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
                                             member_count = cursor.fetchone()[0]
-                                            alliances_with_counts.append((alliance_id, name, member_count))
+                                            # Add a flag to indicate if already assigned
+                                            is_assigned = alliance_id in existing_assignments
+                                            alliances_with_counts.append((alliance_id, name, member_count, is_assigned))
 
                                     alliance_embed = discord.Embed(
                                         title="🏰 Alliance Selection",
@@ -256,14 +289,43 @@ class BotOperations(commands.Cog):
                                     async def alliance_callback(alliance_interaction: discord.Interaction):
                                         try:
                                             selected_alliance_id = int(view.current_select.values[0])
-                                            
+
+                                            # Check if already assigned
                                             with sqlite3.connect('db/settings.sqlite') as settings_db:
                                                 cursor = settings_db.cursor()
                                                 cursor.execute("""
-                                                    INSERT INTO adminserver (admin, alliances_id)
-                                                    VALUES (?, ?)
+                                                    SELECT COUNT(*) FROM adminserver
+                                                    WHERE admin = ? AND alliances_id = ?
                                                 """, (selected_admin_id, selected_alliance_id))
-                                                settings_db.commit()
+
+                                                if cursor.fetchone()[0] > 0:
+                                                    # Already assigned - show friendly message
+                                                    await alliance_interaction.response.send_message(
+                                                        "❌ This administrator is already assigned to this alliance.",
+                                                        ephemeral=True
+                                                    )
+                                                    return
+
+                                                # Not assigned yet, proceed with INSERT
+                                                try:
+                                                    cursor.execute("""
+                                                        INSERT INTO adminserver (admin, alliances_id)
+                                                        VALUES (?, ?)
+                                                    """, (selected_admin_id, selected_alliance_id))
+                                                    settings_db.commit()
+                                                except sqlite3.IntegrityError as e:
+                                                    # Catch any remaining UNIQUE constraint errors (race conditions)
+                                                    if "UNIQUE constraint failed" in str(e):
+                                                        await alliance_interaction.response.send_message(
+                                                            "❌ This administrator is already assigned to this alliance.",
+                                                            ephemeral=True
+                                                        )
+                                                    else:
+                                                        await alliance_interaction.response.send_message(
+                                                            "❌ An error occurred while assigning the alliance.",
+                                                            ephemeral=True
+                                                        )
+                                                    return
 
                                             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                                                 cursor = alliance_db.cursor()
@@ -1093,6 +1155,8 @@ class BotOperations(commands.Cog):
                     "└ Manage bot administrators\n\n"
                     "🔍 **Admin Permissions**\n"
                     "└ View and manage admin permissions\n\n"
+                    "⚙️ **Control Settings**\n"
+                    "└ Configure alliance control behaviors\n\n"
                     "🔄 **Bot Updates**\n"
                     "└ Check and manage updates\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
@@ -1165,6 +1229,13 @@ class BotOperations(commands.Cog):
                 row=3
             ))
             view.add_item(discord.ui.Button(
+                label="Control Settings",
+                emoji="⚙️",
+                style=discord.ButtonStyle.primary,
+                custom_id="control_settings",
+                row=4
+            ))
+            view.add_item(discord.ui.Button(
                 label="Main Menu",
                 emoji="🏠",
                 style=discord.ButtonStyle.secondary,
@@ -1226,6 +1297,256 @@ class BotOperations(commands.Cog):
         except Exception as e:
             print(f"Error checking for updates: {e}")
             return None, None, [], False
+    
+    async def show_control_settings_menu(self, interaction: discord.Interaction):
+        """Show the control settings menu with alliance selection"""
+        try:
+            # Get all alliances
+            self.c_alliance.execute("SELECT alliance_id, name FROM alliance_list ORDER BY name")
+            alliances = self.c_alliance.fetchall()
+            
+            if not alliances:
+                await interaction.response.send_message(
+                    "❌ No alliances found. Please create an alliance first.",
+                    ephemeral=True
+                )
+                return
+            
+            embed = discord.Embed(
+                title="⚙️ Control Settings",
+                description=(
+                    "Configure automatic control behaviors for each alliance.\n\n"
+                    "**State Transfer Auto-Removal**\n"
+                    "When enabled, users who transfer to another state are automatically "
+                    "removed from the alliance.\n\n"
+                    "Select an alliance to view or change its settings:"
+                ),
+                color=discord.Color.blue()
+            )
+            
+            # Create view with alliance dropdown
+            view = ControlSettingsView(self.c_alliance, self.alliance_db, alliances, interaction)
+            
+            # Start with initial state
+            await view.update_view(interaction)
+            
+        except Exception as e:
+            print(f"Error in show_control_settings_menu: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ An error occurred while showing control settings.",
+                    ephemeral=True
+                )
+
+class ControlSettingsView(discord.ui.View):
+    def __init__(self, alliance_cursor, alliance_db, alliances, initial_interaction):
+        super().__init__(timeout=300)
+        self.alliance_cursor = alliance_cursor
+        self.alliance_db = alliance_db
+        self.alliances = alliances
+        self.selected_alliance = None
+        self.auto_remove = False
+        self.notify_on_transfer = False
+        
+        # Create all components but they'll be added/updated dynamically
+        self.setup_components()
+    
+    def setup_components(self):
+        """Setup all UI components"""
+        self.clear_items()
+        
+        # Alliance dropdown
+        self.alliance_select = discord.ui.Select(
+            placeholder="Select an alliance..." if not self.selected_alliance else f"Selected: {next((name for aid, name in self.alliances if aid == self.selected_alliance), 'Unknown')[:50]}",
+            options=[
+                discord.SelectOption(
+                    label=f"{name[:50]}",
+                    value=str(alliance_id),
+                    description=f"Alliance ID: {alliance_id}",
+                    default=(alliance_id == self.selected_alliance) if self.selected_alliance else False
+                ) for alliance_id, name in self.alliances[:25]
+            ],
+            row=0
+        )
+        self.alliance_select.callback = self.alliance_selected
+        self.add_item(self.alliance_select)
+        
+        # Auto-removal toggle button - disabled until alliance selected
+        self.auto_remove_button = discord.ui.Button(
+            label=f"{'Disable' if self.auto_remove else 'Enable'} Auto-Removal",
+            style=discord.ButtonStyle.danger if self.auto_remove else discord.ButtonStyle.success,
+            emoji="🔄",
+            disabled=(self.selected_alliance is None),
+            row=1
+        )
+        self.auto_remove_button.callback = self.toggle_auto_removal
+        self.add_item(self.auto_remove_button)
+        
+        # Notification toggle button - only shown and enabled if auto-removal is enabled
+        if self.auto_remove and self.selected_alliance:
+            self.notify_button = discord.ui.Button(
+                label=f"{'Disable' if self.notify_on_transfer else 'Enable'} Notifications",
+                style=discord.ButtonStyle.secondary,
+                emoji="🔔" if not self.notify_on_transfer else "🔕",
+                row=1
+            )
+            self.notify_button.callback = self.toggle_notifications
+            self.add_item(self.notify_button)
+        
+        # Back button
+        self.back_button = discord.ui.Button(
+            label="Back",
+            style=discord.ButtonStyle.secondary,
+            emoji="⬅️",
+            row=2
+        )
+        self.back_button.callback = self.back_to_bot_operations
+        self.add_item(self.back_button)
+    
+    async def update_view(self, interaction: discord.Interaction):
+        """Update the embed and view based on current state"""
+        if self.selected_alliance:
+            alliance_name = next((name for aid, name in self.alliances if aid == self.selected_alliance), "Unknown")
+            
+            # Get current settings from database
+            self.alliance_cursor.execute("""
+                SELECT auto_remove_on_transfer, notify_on_transfer 
+                FROM alliancesettings 
+                WHERE alliance_id = ?
+            """, (self.selected_alliance,))
+            result = self.alliance_cursor.fetchone()
+            self.auto_remove = bool(result[0]) if result and result[0] is not None else False
+            self.notify_on_transfer = bool(result[1]) if result and len(result) > 1 and result[1] is not None else False
+            
+            status_emoji = "✅" if self.auto_remove else "❌"
+            status_text = "Enabled" if self.auto_remove else "Disabled"
+            notify_emoji = "🔔" if self.notify_on_transfer else "🔕"
+            notify_text = "Enabled" if self.notify_on_transfer else "Disabled"
+            
+            embed = discord.Embed(
+                title=f"⚙️ Control Settings - {alliance_name}",
+                description=(
+                    f"**State Transfer Auto-Removal**\n"
+                    f"Status: {status_emoji} **{status_text}**\n"
+                    f"Admin Notification: {notify_emoji} **{notify_text}**\n\n"
+                    f"When auto-removal is enabled, users who transfer to another state are automatically "
+                    f"removed from this alliance.\n\n"
+                    f"**Current behavior:**\n"
+                    f"{'• Users are removed when they transfer states' if self.auto_remove else '• Users remain in the alliance when they transfer states'}\n"
+                    f"{'• Admin receives notifications for removals' if self.notify_on_transfer and self.auto_remove else ''}"
+                ),
+                color=discord.Color.green() if self.auto_remove else discord.Color.red()
+            )
+        else:
+            # No alliance selected yet
+            embed = discord.Embed(
+                title="⚙️ Control Settings",
+                description=(
+                    "**Please select an alliance from the dropdown menu above.**\n\n"
+                    "Once selected, you can configure:\n"
+                    "• State Transfer Auto-Removal\n"
+                    "• Admin Notifications\n\n"
+                    "These settings control what happens when a user transfers to another state."
+                ),
+                color=discord.Color.blue()
+            )
+        
+        # Update components based on current state
+        self.setup_components()
+        
+        # Edit the message
+        if interaction.response.is_done():
+            await interaction.followup.edit_message(
+                message_id=interaction.message.id,
+                embed=embed,
+                view=self
+            )
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    async def alliance_selected(self, interaction: discord.Interaction):
+        """Handle alliance selection from dropdown"""
+        try:
+            self.selected_alliance = int(self.alliance_select.values[0])
+            await self.update_view(interaction)
+        except Exception as e:
+            print(f"Error in alliance_selected: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while selecting the alliance.",
+                ephemeral=True
+            )
+    
+    async def toggle_auto_removal(self, interaction: discord.Interaction):
+        """Toggle auto-removal setting"""
+        try:
+            # Toggle the value in database
+            new_value = not self.auto_remove
+            self.alliance_cursor.execute("""
+                UPDATE alliancesettings 
+                SET auto_remove_on_transfer = ?
+                WHERE alliance_id = ?
+            """, (1 if new_value else 0, self.selected_alliance))
+            
+            # If disabling auto-removal, also disable notifications
+            if not new_value:
+                self.alliance_cursor.execute("""
+                    UPDATE alliancesettings 
+                    SET notify_on_transfer = 0
+                    WHERE alliance_id = ?
+                """, (self.selected_alliance,))
+            
+            self.alliance_db.commit()
+            
+            # Update the view
+            await self.update_view(interaction)
+            
+        except Exception as e:
+            print(f"Error toggling auto-removal: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while updating the setting.",
+                ephemeral=True
+            )
+    
+    async def toggle_notifications(self, interaction: discord.Interaction):
+        """Toggle notification setting"""
+        try:
+            # Toggle the value in database
+            new_value = not self.notify_on_transfer
+            self.alliance_cursor.execute("""
+                UPDATE alliancesettings 
+                SET notify_on_transfer = ?
+                WHERE alliance_id = ?
+            """, (1 if new_value else 0, self.selected_alliance))
+            self.alliance_db.commit()
+            
+            # Update the view
+            await self.update_view(interaction)
+            
+        except Exception as e:
+            print(f"Error toggling notifications: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while updating the setting.",
+                ephemeral=True
+            )
+    
+    async def back_to_bot_operations(self, interaction: discord.Interaction):
+        """Return to bot operations menu"""
+        try:
+            bot_ops = interaction.client.get_cog("BotOperations")
+            if bot_ops:
+                await bot_ops.show_bot_operations_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Unable to return to bot operations menu.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error in back_to_bot_operations: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ An error occurred.",
+                    ephemeral=True
+                )
 
 async def setup(bot):
     await bot.add_cog(BotOperations(bot, sqlite3.connect('db/settings.sqlite'))) 

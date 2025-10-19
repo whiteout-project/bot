@@ -192,7 +192,7 @@ class GiftCaptchaSolver:
                    - image_path (None): No longer provides a path from solver.
         """
         if not self.is_initialized or not self.onnx_session or not self.model_metadata:
-            self.logger.error(f"ONNX model not initialized. Cannot solve captcha for FID {fid}.")
+            self.logger.error(f"ONNX model not initialized. Cannot solve captcha for ID {fid}.")
             return None, False, "ONNX", 0.0, None
 
         self.stats["total_attempts"] += 1
@@ -208,7 +208,7 @@ class GiftCaptchaSolver:
             if input_data is None:
                 self.stats["failures"] += 1
                 self.run_stats["failures"] += 1
-                self.logger.error(f"[Solver] FID {fid}, Attempt {attempt+1}: Failed to preprocess image")
+                self.logger.error(f"[Solver] ID {fid}, Attempt {attempt+1}: Failed to preprocess image")
                 return None, False, "ONNX", 0.0, None
 
             # Run inference
@@ -232,7 +232,7 @@ class GiftCaptchaSolver:
             avg_confidence = sum(confidences) / len(confidences)
 
             solve_duration = time.time() - start_time
-            self.logger.info(f"[Solver] FID {fid}, Attempt {attempt+1}: ONNX raw result='{predicted_text}' (confidence: {avg_confidence:.3f}, {solve_duration:.3f}s)")
+            self.logger.info(f"[Solver] ID {fid}, Attempt {attempt+1}: ONNX raw result='{predicted_text}' (confidence: {avg_confidence:.3f}, {solve_duration:.3f}s)")
 
             if (predicted_text and
                 isinstance(predicted_text, str) and
@@ -241,18 +241,18 @@ class GiftCaptchaSolver:
 
                 self.stats["successful_decodes"] += 1
                 self.run_stats["successful_decodes"] += 1
-                self.logger.info(f"[Solver] FID {fid}, Attempt {attempt+1}: Success. Solved: {predicted_text}")
+                self.logger.info(f"[Solver] ID {fid}, Attempt {attempt+1}: Success. Solved: {predicted_text}")
                 return predicted_text, True, "ONNX", avg_confidence, None
             else:
                 self.stats["failures"] += 1
                 self.run_stats["failures"] += 1
-                self.logger.warning(f"[Solver] FID {fid}, Attempt {attempt+1}: Failed validation (Length: {len(predicted_text) if predicted_text else 'N/A'}, Chars OK: {all(c in VALID_CHARACTERS for c in predicted_text) if predicted_text else 'N/A'})")
+                self.logger.warning(f"[Solver] ID {fid}, Attempt {attempt+1}: Failed validation (Length: {len(predicted_text) if predicted_text else 'N/A'}, Chars OK: {all(c in VALID_CHARACTERS for c in predicted_text) if predicted_text else 'N/A'})")
                 return None, False, "ONNX", 0.0, None
 
         except Exception as e:
             self.stats["failures"] += 1
             self.run_stats["failures"] += 1
-            self.logger.exception(f"[Solver] FID {fid}, Attempt {attempt+1}: Exception during ONNX inference: {e}")
+            self.logger.exception(f"[Solver] ID {fid}, Attempt {attempt+1}: Exception during ONNX inference: {e}")
             return None, False, "ONNX", 0.0, None
 
     def get_stats(self):
