@@ -1,0 +1,2 @@
+docker/Dockerfile text eol=lf
+docker/bootstrap.sh text eol=lf
