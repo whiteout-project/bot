@@ -1,5 +1,6 @@
 FROM python:3.12.12-slim-bookworm
 LABEL maintainer="zenpaiang <zenpai@2020220.xyz>"
+LABEL org.opencontainers.image.source https://github.com/whiteout-project/bot
 
 COPY bootstrap.sh /bootstrap.sh
 
