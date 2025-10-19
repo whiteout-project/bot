@@ -23,6 +23,9 @@ class OtherFeatures(commands.Cog):
                     "└ Create and manage ID channels\n"
                     "└ Automatic ID verification system\n"
                     "└ Custom channel settings\n\n"
+                    "📝 **Registration System**\n"
+                    "└ Enable/disable user self-registration (Global Admin only)\n"
+                    "└ Users can /register to add themselves based on ID\n\n"
                     "📋 **Attendance System**\n"
                     "└ Manage event attendance records\n"
                     "└ View detailed attendance reports\n"
@@ -34,7 +37,7 @@ class OtherFeatures(commands.Cog):
                     "💾 **Backup System**\n"
                     "└ Automatic database backup\n"
                     "└ Send backups to your DMs\n"
-                    "└ Only for Global Admins\n"
+                    "└ Only for Global Admin\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.blue()
@@ -161,7 +164,7 @@ class OtherFeaturesView(discord.ui.View):
         emoji="📝",
         style=discord.ButtonStyle.primary,
         custom_id="registration_system",
-        row=1
+        row=0
     )
     async def registration_system_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
