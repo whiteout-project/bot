@@ -1187,7 +1187,7 @@ class GiftOperations(commands.Cog):
                 status = "TOO_SMALL_SPEND_MORE"
                 self.logger.error(f"[FURNACE LVL ERROR] Furnace level is too low for ID {player_id}, code {giftcode}")
                 self.logger.error(f"[FURNACE LVL ERROR] Response: {response_json_redeem}")
-            elif msg == "RECHARGE_MONEY ERROR" and err_code == 40017:
+            elif (msg == "RECHARGE_MONEY ERROR" and err_code == 40017) or (msg == "RECHARGE_MONEY_VIP ERROR" and err_code == 40018):
                 status = "TOO_POOR_SPEND_MORE"
                 self.logger.error(f"[VIP LEVEL ERROR] VIP level is too low for ID {player_id}, code {giftcode}")
                 self.logger.error(f"[VIP LEVEL ERROR] Response: {response_json_redeem}")
