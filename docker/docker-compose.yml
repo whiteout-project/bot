@@ -1,5 +1,5 @@
   wos-discord-bot:
-    image: eilandert/whiteout-survival-discord-bot:v4
+    image: ghcr.io/whiteout-project/bot:latest
     container_name: wos-discord-bot
     volumes:
       - /opt/docker/wos/db/:/app/db
