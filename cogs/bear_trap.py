@@ -853,7 +853,6 @@ class RepeatOptionView(discord.ui.View):
                 ephemeral=True
             )
 
-
 class RepeatIntervalModal(discord.ui.Modal):
     def __init__(self, repeat_view: RepeatOptionView):
         super().__init__(title="Set Repeat Interval")
@@ -1037,7 +1036,6 @@ class TextInputModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         self.value = self.input.value
         await interaction.response.defer()
-
 
 class EmbedEditorView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, original_message):
@@ -1410,7 +1408,6 @@ class MessageTypeView(discord.ui.View):
         modal.on_submit = modal_submit
         await interaction.response.send_modal(modal)
 
-
 class TimeSelectModal(discord.ui.Modal):
     def __init__(self, cog: BearTrap):
         super().__init__(title="Set Notification Time")
@@ -1534,7 +1531,6 @@ class TimeSelectModal(discord.ui.Modal):
                 ephemeral=True
             )
 
-
 class NotificationTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message):
         super().__init__(timeout=300)
@@ -1610,7 +1606,6 @@ class NotificationTypeView(discord.ui.View):
                 "❌ An error occurred while showing mention options!",
                 ephemeral=True
             )
-
 
 class CustomTimesModal(discord.ui.Modal):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message):
@@ -1689,7 +1684,6 @@ class CustomTimesModal(discord.ui.Modal):
                 "❌ An error occurred while processing custom times.",
                 ephemeral=True
             )
-
 
 class MentionTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, notification_type,
@@ -1921,7 +1915,6 @@ class MentionSelectMenu(discord.ui.Select):
                 ephemeral=True
             )
 
-
 class BearTrapView(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=None)
@@ -2017,11 +2010,15 @@ class BearTrapView(discord.ui.View):
                 for notif in page_notifications:
                     status = "🟢 Enabled" if notif[11] else "🔴 Disabled"
 
+                    # Check if channel exists
+                    channel = interaction.guild.get_channel(notif[2])
+                    channel_warning = "⚠️ " if not channel else ""
+
                     if "EMBED_MESSAGE:" in notif[6]:
                         self.cog.cursor.execute("""
-                            SELECT title, description 
-                            FROM bear_notification_embeds 
-                            WHERE notification_id = ? 
+                            SELECT title, description
+                            FROM bear_notification_embeds
+                            WHERE notification_id = ?
                         """, (notif[0],))
                         embed_data = self.cog.cursor.fetchone()
 
@@ -2036,7 +2033,7 @@ class BearTrapView(discord.ui.View):
 
                     options.append(
                         discord.SelectOption(
-                            label=f"{notif[3]:02d}:{notif[4]:02d} - {display_description[:30]}",
+                            label=f"{channel_warning}{notif[3]:02d}:{notif[4]:02d} - {display_description[:30]}",
                             description=f"ID: {notif[0]} | {status}",
                             value=f"{notif[0]}|embed" if "EMBED_MESSAGE:" in notif[6] else f"{notif[0]}|plain"
                         )
@@ -2239,12 +2236,19 @@ class BearTrapView(discord.ui.View):
                         else:
                             formatted_repeat = "Every " + ", ".join(day_list[:-1]) + " and " + day_list[-1]
 
+                    # Check if channel exists
+                    channel = select_interaction.guild.get_channel(selected_notif[2])
+                    if channel:
+                        channel_display = f"<#{selected_notif[2]}>"
+                    else:
+                        channel_display = f"⚠️ #unknown-channel (Deleted or Inaccessible)"
+
                     details_embed = discord.Embed(
                         title=f"📋 Notification Details",
                         description=(
                             f"**📅 Next Notification date:** {datetime.fromisoformat(selected_notif[15]).strftime('%d/%m/%Y')}\n"
                             f"**⏰ Time:** {selected_notif[3]:02d}:{selected_notif[4]:02d} ({selected_notif[5]})\n"
-                            f"**📢 Channel:** <#{selected_notif[2]}>\n"
+                            f"**📢 Channel:** {channel_display}\n"
                             f"**📝 Description:** {selected_notif[6]}\n\n"
                             f"**⚙️ Notification Type:** \n{notification_type_desc}\n\n"
                             f"**👥 Mention:** {mention_display}\n"
@@ -2519,6 +2523,88 @@ class BearTrapView(discord.ui.View):
                                     "❌ An error occurred while toggling notification!", ephemeral=True
                                 )
 
+                    class ChangeChannelButton(discord.ui.Button):
+                        def __init__(self, cog, notification_id, channel_exists):
+                            self.cog = cog
+                            self.notification_id = notification_id
+                            # Only show button if channel doesn't exist
+                            if not channel_exists:
+                                super().__init__(label="📝 Change Channel", style=discord.ButtonStyle.primary)
+                            else:
+                                super().__init__(label="📝 Change Channel", style=discord.ButtonStyle.secondary)
+
+                        async def callback(self, interaction: discord.Interaction):
+                            try:
+                                # Get current notification data
+                                self.cog.cursor.execute("""
+                                    SELECT channel_id, hour, minute, timezone, description, mention_type,
+                                           repeat_minutes, next_notification, notification_type
+                                    FROM bear_notifications WHERE id = ?
+                                """, (self.notification_id,))
+                                notif_data = self.cog.cursor.fetchone()
+
+                                if not notif_data:
+                                    await interaction.response.send_message("❌ Notification not found.", ephemeral=True)
+                                    return
+
+                                # Create channel selector view
+                                channel_select = discord.ui.ChannelSelect(
+                                    placeholder="Select a new channel for this notification",
+                                    channel_types=[discord.ChannelType.text],
+                                    min_values=1,
+                                    max_values=1
+                                )
+
+                                async def channel_select_callback(select_interaction: discord.Interaction):
+                                    try:
+                                        new_channel_id = int(select_interaction.data["values"][0])
+                                        new_channel = select_interaction.guild.get_channel(new_channel_id)
+
+                                        # Check if bot has permissions in the new channel
+                                        if not new_channel.permissions_for(select_interaction.guild.me).send_messages:
+                                            await select_interaction.response.send_message(
+                                                "❌ I don't have permission to send messages in that channel!",
+                                                ephemeral=True
+                                            )
+                                            return
+
+                                        # Update the notification's channel
+                                        self.cog.cursor.execute("""
+                                            UPDATE bear_notifications
+                                            SET channel_id = ?
+                                            WHERE id = ?
+                                        """, (new_channel_id, self.notification_id))
+                                        self.cog.conn.commit()
+
+                                        await select_interaction.response.send_message(
+                                            f"✅ Notification channel updated to <#{new_channel_id}>!",
+                                            ephemeral=True
+                                        )
+
+                                    except Exception as e:
+                                        print(f"[ERROR] Error updating channel: {e}")
+                                        await select_interaction.response.send_message(
+                                            "❌ An error occurred while updating the channel.",
+                                            ephemeral=True
+                                        )
+
+                                channel_select.callback = channel_select_callback
+                                temp_view = discord.ui.View()
+                                temp_view.add_item(channel_select)
+
+                                await interaction.response.send_message(
+                                    "Select a new channel for this notification:",
+                                    view=temp_view,
+                                    ephemeral=True
+                                )
+
+                            except Exception as e:
+                                print(f"[ERROR] Exception in ChangeChannelButton callback: {e}")
+                                await interaction.response.send_message(
+                                    "❌ An error occurred!",
+                                    ephemeral=True
+                                )
+
                     view.add_item(select)
                     if total_pages > 1:
                         view.add_item(prev_button)
@@ -2528,21 +2614,31 @@ class BearTrapView(discord.ui.View):
                     view.add_item(EditButton())
                     view.add_item(ToggleButton(self.cog, notification_id, EditButton(), select))
                     view.add_item(PreviewButton(self.cog, notification_id))
+                    view.add_item(ChangeChannelButton(self.cog, notification_id, channel is not None))
                     view.add_item(DeleteButton(self.cog, notification_id))
 
                     editor_cog = self.cog.bot.get_cog('NotificationEditor')
                     view.editor_cog = editor_cog
 
+                    # Build help text - add Change Channel info if channel is missing
+                    help_text = (
+                        "- **🔍 Search:** Filter the menu options based on specific keywords\n"
+                        "- **📝 Edit:** Modify notification details.\n"
+                        "- **⚙️ Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
+                        "  - -# Click to toggle between enabling or disabling.\n"
+                        "  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
+                        "- **👀 Preview:** See how the notification will look when it's sent.\n"
+                    )
+
+                    if not channel:
+                        help_text += "- **📝 Change Channel:** ⚠️ Update the channel for this notification (current channel is unavailable).\n"
+                    else:
+                        help_text += "- **📝 Change Channel:** Update the channel for this notification.\n"
+
+                    help_text += "- **🗑️ Delete:** Remove the selected notification.\n\n"
+
                     await select_interaction.response.edit_message(
-                        content=(
-                            "- **🔍 Search:** Filter the menu options based on specific keywords\n"
-                            "- **📝 Edit:** Modify notification details.\n"
-                            "- **⚙️ Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
-                            "  - -# Click to toggle between enabling or disabling.\n"
-                            "  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
-                            "- **👀 Preview:** See how the notification will look when it's sent.\n"
-                            "- **🗑️ Delete:** Remove the selected notification.\n\n"
-                        ),
+                        content=help_text,
                         embed=details_embed,
                         view=view
                     )
@@ -2576,7 +2672,6 @@ class BearTrapView(discord.ui.View):
                 ephemeral=True
             )
 
-
 class ChannelSelectView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message):
         super().__init__(timeout=300)
@@ -2589,7 +2684,6 @@ class ChannelSelectView(discord.ui.View):
         self.original_message = original_message
 
         self.add_item(ChannelSelectMenu(self))
-
 
 class ChannelSelectMenu(discord.ui.ChannelSelect):
     def __init__(self, view):

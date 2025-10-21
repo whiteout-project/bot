@@ -356,7 +356,7 @@ class PlainEditorView(discord.ui.View):
                 cursor.execute("SELECT weekday FROM notification_days WHERE notification_id = ?", (self.notification_id,))
                 weekday_value = cursor.fetchone()
                 if weekday_value:
-                    self.weekdays = row[0]
+                    self.weekdays = weekday_value[0]
                 conn.close()
             except Exception as e:
                 print(f"Failed to load weekdays: {e}")
