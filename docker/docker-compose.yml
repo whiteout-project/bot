@@ -1,3 +1,4 @@
+services:
   wos-discord-bot:
     image: ghcr.io/whiteout-project/bot:latest
     container_name: wos-discord-bot
