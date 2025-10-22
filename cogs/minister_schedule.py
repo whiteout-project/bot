@@ -1294,9 +1294,9 @@ class MinisterSchedule(commands.Cog):
 
     @discord.app_commands.command(name='minister_archive_history', description='View change history for minister appointments (Global Admin only)')
     @app_commands.describe(
-        archive_id="Optional: View history for a specific archive (leave empty for current changes)",
-        appointment_type="Optional: Filter by appointment type",
-        discord_user="Optional: Filter by user who made changes"
+        archive_id="Optional: Select an archive to view its change history (leave empty for current changes)",
+        appointment_type="Optional: Filter by appointment type (Construction/Research/Training Day)",
+        discord_user="Optional: Filter by specific Discord user who made changes"
     )
     @app_commands.autocomplete(archive_id=archive_id_autocomplete, appointment_type=appointment_autocomplete)
     async def minister_archive_history(
