@@ -25,13 +25,12 @@ def break_system_packages_arg() -> bool:
 def should_skip_venv() -> bool:
     """Check if venv should be skipped"""
     
-    if sys.platform.startswith("linux"):
-        if not break_system_packages():
-            print("WARNING: On linux, running without a virtual environment won't work unless you break system packages.")
-            print("WARNING: Add the --break-system-packages argument to your command to confirm you understand the risks.")
-            print("Exiting...")
-            
-            sys.exit(1)
+    if ("--no-venv" in sys.argv) and (sys.platform.startswith("linux")) and (not is_container()) and (not break_system_packages()):
+        print("WARNING: On linux, running without a virtual environment won't work unless you break system packages.")
+        print("WARNING: Add the --break-system-packages argument to your command to confirm you understand the risks.")
+        print("Exiting...")
+        
+        sys.exit(1)
     
     return '--no-venv' in sys.argv or is_container() or is_ci_environment()
 
