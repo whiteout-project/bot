@@ -15,8 +15,20 @@ def is_ci_environment() -> bool:
     ]
     return any(os.getenv(indicator) for indicator in ci_indicators)
 
+def break_system_packages() -> bool:
+    """Check if the user is certain about breaking system packages"""
+    return "--break-system-packages" in sys.argv
+
 def should_skip_venv() -> bool:
     """Check if venv should be skipped"""
+    
+    if sys.platform.startswith("linux"):
+        if not break_system_packages():
+            print("WARNING: On linux, running without a virtual environment won't work unless you break system packages.")
+            print("WARNING: Add the --break-system-packages argument to your command to confirm you understand the risks.")
+            
+            sys.exit(1)
+    
     return '--no-venv' in sys.argv or is_container() or is_ci_environment()
 
 # Handle venv setup
@@ -82,8 +94,12 @@ try: # Import or install requests so we can get the requirements
 except ImportError:
     print("Installing requests (required for dependency management)...")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"], 
-                            timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cmd = [sys.executable, "-m", "pip", "install", "requests"]
+        
+        if break_system_packages():
+            cmd.append("--break-system-packages")
+        
+        subprocess.check_call(cmd, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         import requests
     except Exception as e:
         print(f"Failed to install requests: {e}")
@@ -456,6 +472,9 @@ def check_and_install_requirements():
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
                 
+                if break_system_packages():
+                    cmd.append("--break-system-packages")
+                
                 subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"✓ {package} installed successfully")
                 
@@ -610,6 +629,9 @@ if __name__ == "__main__":
     def install_packages(requirements_txt_path: str, debug: bool = False) -> bool:
         """Install packages from requirements.txt file using pip install -r."""
         full_command = [sys.executable, "-m", "pip", "install", "-r", requirements_txt_path, "--no-cache-dir"]
+        
+        if break_system_packages():
+            full_command.append("--break-system-packages")
         
         try:
             if debug:
