@@ -767,13 +767,20 @@ class MinisterMenu(commands.Cog):
     async def show_minister_channel_menu(self, interaction: discord.Interaction):
         # Store the original interaction for later updates
         self.original_interaction = interaction
-        
+
+        # Get channel status
+        channel_status, embed_color = await self.get_channel_status_display()
+
         embed = discord.Embed(
             title="🏛️ Minister Scheduling",
             description=(
                 "Manage your minister appointments here:\n\n"
-                "Available Operations\n"
+                "**Channel Status**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{channel_status}\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "**Available Operations**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "🔨 **Construction Day**\n"
                 "└ Manage Construction Day appointments\n\n"
                 "🔬 **Research Day**\n"
@@ -785,10 +792,10 @@ class MinisterMenu(commands.Cog):
                 "📚 **Event Archive**\n"
                 "└ Save and view past SvS minister schedules\n\n"
                 "⚙️ **Settings**\n"
-                "└ Update names, clear reservations and more\n\n"
+                "└ Update names, clear reservations and more\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
-            color=discord.Color.blue()
+            color=embed_color
         )
 
         view = MinisterChannelView(self.bot, self)
@@ -826,31 +833,88 @@ class MinisterMenu(commands.Cog):
         except discord.InteractionResponded:
             await interaction.edit_original_response(embed=embed, view=view)
     
+    async def get_channel_status_display(self) -> tuple[str, discord.Color]:
+        """
+        Generate channel status display for main menu.
+        Returns (status_text, embed_color)
+        """
+        minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
+        if not minister_schedule_cog:
+            return "⚠️ **Minister Schedule module not loaded**\n", discord.Color.red()
+
+        # Get the log guild to check channels
+        try:
+            log_guild = await minister_schedule_cog.get_log_guild(None)
+        except:
+            log_guild = None
+
+        # Define channels to check
+        channels_config = [
+            ("Construction Day channel", "🔨 Construction"),
+            ("Research Day channel", "🔬 Research"),
+            ("Troops Training Day channel", "⚔️ Training"),
+            ("minister log channel", "📄 Log Channel")
+        ]
+
+        status_lines = []
+        configured_count = 0
+        invalid_count = 0
+
+        for context, label in channels_config:
+            channel_id = await minister_schedule_cog.get_channel_id(context)
+
+            if not channel_id:
+                status_lines.append(f"{label}: ⚠️ Not Configured")
+            else:
+                # Try to get the channel
+                channel = None
+                if log_guild:
+                    channel = log_guild.get_channel(channel_id)
+
+                if channel:
+                    status_lines.append(f"{label}: ✅ {channel.mention}")
+                    configured_count += 1
+                else:
+                    status_lines.append(f"{label}: ❌ Invalid Channel")
+                    invalid_count += 1
+
+        # Determine embed color based on status
+        total_channels = len(channels_config)
+        if configured_count == total_channels:
+            embed_color = discord.Color.green()
+        elif configured_count > 0:
+            embed_color = discord.Color.orange()
+        else:
+            embed_color = discord.Color.red()
+
+        status_text = "\n".join(status_lines)
+        return status_text, embed_color
+
     async def get_admin_permissions(self, user_id: int):
         """Get admin permissions for a user - returns (is_admin, is_global_admin, alliance_ids)"""
         self.settings_cursor = sqlite3.connect('db/settings.sqlite').cursor()
-        
+
         # Check if user is bot owner
         if user_id == self.bot.owner_id:
             return True, True, []
-        
+
         # Check admin table
         self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id=?", (user_id,))
         admin_result = self.settings_cursor.fetchone()
-        
+
         if not admin_result:
             return False, False, []
-        
+
         is_global_admin = admin_result[0] == 1
-        
+
         if is_global_admin:
             return True, True, []
-        
+
         # Get alliance-specific permissions
         self.settings_cursor.execute("SELECT alliances_id FROM adminserver WHERE admin=?", (user_id,))
         alliance_permissions = self.settings_cursor.fetchall()
         alliance_ids = [row[0] for row in alliance_permissions] if alliance_permissions else []
-        
+
         return True, False, alliance_ids
     
     async def get_users_for_admin(self, user_id: int):
