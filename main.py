@@ -19,6 +19,9 @@ def break_system_packages() -> bool:
     """Check if the user is certain about breaking system packages"""
     return "--break-system-packages" in sys.argv
 
+def break_system_packages_arg() -> bool:
+    return break_system_packages() and not should_skip_venv()
+
 def should_skip_venv() -> bool:
     """Check if venv should be skipped"""
     
@@ -26,6 +29,7 @@ def should_skip_venv() -> bool:
         if not break_system_packages():
             print("WARNING: On linux, running without a virtual environment won't work unless you break system packages.")
             print("WARNING: Add the --break-system-packages argument to your command to confirm you understand the risks.")
+            print("Exiting...")
             
             sys.exit(1)
     
@@ -96,7 +100,7 @@ except ImportError:
     try:
         cmd = [sys.executable, "-m", "pip", "install", "requests"]
         
-        if break_system_packages():
+        if break_system_packages_arg():
             cmd.append("--break-system-packages")
         
         subprocess.check_call(cmd, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -472,7 +476,7 @@ def check_and_install_requirements():
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
                 
-                if break_system_packages():
+                if break_system_packages_arg():
                     cmd.append("--break-system-packages")
                 
                 subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -630,7 +634,7 @@ if __name__ == "__main__":
         """Install packages from requirements.txt file using pip install -r."""
         full_command = [sys.executable, "-m", "pip", "install", "-r", requirements_txt_path, "--no-cache-dir"]
         
-        if break_system_packages():
+        if break_system_packages_arg():
             full_command.append("--break-system-packages")
         
         try:
