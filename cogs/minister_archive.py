@@ -687,7 +687,10 @@ class MinisterArchive(commands.Cog):
                 back_button.callback = back_callback
                 view.add_item(back_button)
 
-                await interaction.response.edit_message(embed=embed, view=view)
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                else:
+                    await interaction.response.edit_message(embed=embed, view=view)
                 return
 
             embed = discord.Embed(
@@ -698,10 +701,10 @@ class MinisterArchive(commands.Cog):
 
             view = ArchiveListView(self.bot, self, archives)
 
-            try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+            else:
                 await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                await interaction.edit_original_response(embed=embed, view=view)
 
         except Exception as e:
             await interaction.response.send_message(f"❌ Error loading archives: {e}", ephemeral=True)
@@ -1194,10 +1197,10 @@ class MinisterArchive(commands.Cog):
         )
         embed.set_footer(text=f"Page {page + 1}/{((len(history_records) - 1) // 25) + 1} • Total: {len(history_records)} changes")
 
-        try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
             await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
 
 async def setup(bot):
     await bot.add_cog(MinisterArchive(bot))
