@@ -3055,7 +3055,11 @@ class GiftOperations(commands.Cog):
                 if alliance_id in alliance_names:
                     alliance_name = alliance_names[alliance_id]
                     channel = self.bot.get_channel(channel_id)
-                    channel_name = f"<#{channel_id}>" if channel else f"Unknown Channel ({channel_id})"
+                    # Avoid nested f-strings for Python 3.9+ compatibility
+                    if channel:
+                        channel_name = f"<#{channel_id}>"
+                    else:
+                        channel_name = f"Unknown Channel ({channel_id})"
                     configured_text += f"🏰 **{alliance_name}**\n📢 Channel: {channel_name}\n\n"
             
             if configured_text:
@@ -3395,8 +3399,12 @@ class GiftOperations(commands.Cog):
         for alliance_id, channel_id in accessible_configs:
             alliance_name = alliance_names[alliance_id]
             channel = self.bot.get_channel(channel_id)
-            channel_display = f"#{channel.name}" if channel else f"Unknown Channel ({channel_id})"
-            
+            # Avoid nested f-strings for Python 3.9+ compatibility
+            if channel:
+                channel_display = f"#{channel.name}"
+            else:
+                channel_display = f"Unknown Channel ({channel_id})"
+
             alliance_options.append(discord.SelectOption(
                 label=alliance_name,
                 value=str(alliance_id),

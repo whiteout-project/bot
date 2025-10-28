@@ -1371,14 +1371,22 @@ class PaginatedChannelView(discord.ui.View):
         self.clear_items()
         
         current_channels = self.pages[self.current_page]
-        channel_options = [
-            discord.SelectOption(
-                label=f"#{channel.name}"[:100],
+        # Build options list without nested f-strings for Python 3.9+ compatibility
+        channel_options = []
+        for channel in current_channels:
+            channel_label = f"#{channel.name}"[:100]
+            # Determine description based on channel name length
+            if len(f"#{channel.name}") > 40:
+                option_description = f"Channel ID: {channel.id}"
+            else:
+                option_description = None
+
+            channel_options.append(discord.SelectOption(
+                label=channel_label,
                 value=str(channel.id),
-                description=f"Channel ID: {channel.id}" if len(f"#{channel.name}") > 40 else None,
+                description=option_description,
                 emoji="📢"
-            ) for channel in current_channels
-        ]
+            ))
         
         select = discord.ui.Select(
             placeholder=f"Select channel ({self.current_page + 1}/{self.total_pages})",

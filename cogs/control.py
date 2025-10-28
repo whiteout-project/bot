@@ -431,9 +431,23 @@ class Control(commands.Cog):
                 value=str(duration),
                 inline=True
             )
+            # Build the value string without nested f-strings for Python 3.9+ compatibility
+            total_changes = len(furnace_changes) + len(nickname_changes) + len(kid_changes)
+            changes_text = f"🔄 {total_changes} changes detected"
+
+            # Add auto-removed count if any
+            auto_removed_count = sum(1 for item in check_fail_list if 'Auto-removed' in item)
+            if auto_removed_count > 0:
+                changes_text += f"\n🗑️ {auto_removed_count} invalid IDs removed"
+
+            # Add check failures count if any
+            check_failure_count = sum(1 for item in check_fail_list if 'Auto-removed' not in item)
+            if check_failure_count > 0:
+                changes_text += f"\n❌ {check_failure_count} check failures"
+
             embed.add_field(
                 name="📈 Total Changes",
-                value=f"🔄 {len(furnace_changes) + len(nickname_changes) + len(kid_changes)} changes detected" + (f"\n🗑️ {sum(1 for item in check_fail_list if 'Auto-removed' in item)} invalid IDs removed" if any('Auto-removed' in item for item in check_fail_list) else "") + (f"\n❌ {sum(1 for item in check_fail_list if 'Auto-removed' not in item)} check failures" if any('Auto-removed' not in item for item in check_fail_list) else ""),
+                value=changes_text,
                 inline=True
             )
         else:

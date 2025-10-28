@@ -110,8 +110,12 @@ class FilteredUserSelectView(discord.ui.View):
             for fid, nickname, alliance_id in current_users:
                 # Check if user is already booked
                 emoji = "📅" if fid in self.booked_fids else ""
-                label = f"{emoji} {nickname} ({fid})" if emoji else f"{nickname} ({fid})"
-                
+                # Avoid nested f-strings for Python 3.9+ compatibility
+                if emoji:
+                    label = f"{emoji} {nickname} ({fid})"
+                else:
+                    label = f"{nickname} ({fid})"
+
                 option = discord.SelectOption(
                     label=label[:100],  # Discord limit
                     value=str(fid)

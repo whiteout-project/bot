@@ -1326,7 +1326,12 @@ class AllianceMemberOperations(commands.Cog):
                 log_file.write(f"Administrator: {interaction.user.name} (ID: {interaction.user.id})\n")
                 log_file.write(f"Alliance: {alliance_name} (ID: {alliance_id})\n")
                 log_file.write(f"Input Format: {input_format}\n")
-                log_file.write(f"IDs to Process: {', '.join(ids_list) if len(ids_list) <= 20 else f'{', '.join(ids_list[:20])}... ({len(ids_list)} total)'}\n")
+                # Avoid nested f-strings for Python 3.9+ compatibility
+                if len(ids_list) <= 20:
+                    ids_display = ', '.join(ids_list)
+                else:
+                    ids_display = f"{', '.join(ids_list[:20])}... ({len(ids_list)} total)"
+                log_file.write(f"IDs to Process: {ids_display}\n")
                 log_file.write(f"Total Members to Process: {total_users}\n")
                 log_file.write(f"API Mode: {self.login_handler.get_mode_text()}\n")
                 log_file.write(f"Available APIs: {self.login_handler.available_apis}\n")
