@@ -15,8 +15,13 @@ class BearTrap(commands.Cog):
 
         self.db_path = 'db/beartime.sqlite'
         os.makedirs('db', exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         self.cursor = self.conn.cursor()
+
+        # Enable WAL mode for better concurrency with other cogs
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.commit()
 
         # Rate limiting for channel unavailable warnings
         self.channel_warning_timestamps = {}
@@ -152,6 +157,12 @@ class BearTrap(commands.Cog):
                 await self.save_notification_fixed(notification_id, selected_weekdays)
 
             self.conn.commit()
+
+            # Notify schedule boards of new notification
+            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                await schedule_cog.on_notification_created(guild_id, channel_id)
+
             return notification_id
         except Exception as e:
             print(f"Error saving notification: {e}")
@@ -248,17 +259,17 @@ class BearTrap(commands.Cog):
             await asyncio.sleep(0.1)
 
     async def process_notification(self, notification):
+        id = None  # Initialize to avoid UnboundLocalError in exception handler
         try:
             (id, guild_id, channel_id, hour, minute, timezone, description,
              notification_type, mention_type, repeat_enabled, repeat_minutes,
              is_enabled, created_at, created_by, last_notification,
-             next_notification) = notification
+             next_notification, repeat_days) = notification
 
             weekly_repeat_days = []
             if repeat_enabled and repeat_minutes == 0:
                 self.cursor.execute("SELECT weekday FROM notification_days WHERE notification_id = ?", (id,))
                 weekly_repeat_days = [row[0] for row in self.cursor.fetchall()]
-
 
             if not is_enabled:
                 return
@@ -583,8 +594,14 @@ class BearTrap(commands.Cog):
 
                 self.conn.commit()
 
+                # Notify schedule boards after sending notification
+                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                if schedule_cog:
+                    await schedule_cog.on_notification_sent(guild_id, channel_id)
+
         except Exception as e:
-            error_msg = f"[ERROR] Error processing notification {id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
+            notif_id = id if id is not None else "unknown"
+            error_msg = f"[ERROR] Error processing notification {notif_id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
             print(error_msg)
 
     async def get_notifications(self, guild_id: int) -> list:
@@ -607,14 +624,22 @@ class BearTrap(commands.Cog):
     async def delete_notification(self, notification_id):
         try:
             # Ensure we're using the same connection as toggle_notification
-            self.cursor.execute("""SELECT id FROM bear_notifications WHERE id = ?""", (notification_id,))
+            self.cursor.execute("""SELECT id, guild_id, channel_id FROM bear_notifications WHERE id = ?""", (notification_id,))
             result = self.cursor.fetchone()
             if not result:
                 return False  # If the notification doesn't exist, return False
 
+            notif_id, guild_id, channel_id = result
+
             # If the notification exists, proceed to delete
             self.cursor.execute("""DELETE FROM bear_notifications WHERE id = ?""", (notification_id,))
             self.conn.commit()  # Commit the changes using the same connection as toggle_notification
+
+            # Notify schedule boards of deletion
+            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                await schedule_cog.on_notification_deleted(guild_id, channel_id)
+
             return True
         except Exception as e:
             print(f"[ERROR] Error deleting notification {notification_id}: {e}")
@@ -624,18 +649,26 @@ class BearTrap(commands.Cog):
         try:
 
             self.cursor.execute("""
-                SELECT is_enabled FROM bear_notifications WHERE id = ?
+                SELECT is_enabled, guild_id, channel_id FROM bear_notifications WHERE id = ?
             """, (notification_id,))
             result = self.cursor.fetchone()
             if not result:
                 return False
 
+            old_enabled, guild_id, channel_id = result
+
             self.cursor.execute("""
-                UPDATE bear_notifications 
-                SET is_enabled = ? 
+                UPDATE bear_notifications
+                SET is_enabled = ?
                 WHERE id = ?
             """, (1 if enabled else 0, notification_id))
             self.conn.commit()
+
+            # Notify schedule boards of toggle
+            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                await schedule_cog.on_notification_toggled(guild_id, channel_id)
+
             return True
         except Exception as e:
             print(f"Error toggling notification: {e}")
@@ -657,6 +690,10 @@ class BearTrap(commands.Cog):
                     "📋 **Manage Notifications**\n"
                     "└ View all existing notifications\n"
                     "└ Edit, enable/disable or delete them\n\n"
+                    "📅 **Schedule Boards**\n"
+                    "└ Create live schedule boards that display upcoming notifications\n"
+                    "└ Auto-updates when notifications are created, edited, or deleted\n"
+                    "└ Supports server-wide or per-channel boards with customizable settings\n\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.gold()
@@ -794,11 +831,19 @@ class RepeatOptionView(discord.ui.View):
             elif self.mention_type.startswith("role_"):
                 role_id = int(self.mention_type.split('_')[1])
                 role = interaction.guild.get_role(role_id)
-                mention_display = f"@{role.name}" if role else f"Role: {role_id}"
+                # Avoid nested f-strings for Python 3.9+ compatibility
+                if role:
+                    mention_display = f"@{role.name}"
+                else:
+                    mention_display = f"Role: {role_id}"
             elif self.mention_type.startswith("member_"):
                 member_id = int(self.mention_type.split('_')[1])
                 member = interaction.guild.get_member(member_id)
-                mention_display = f"@{member.display_name}" if member else f"Member: {member_id}"
+                # Avoid nested f-strings for Python 3.9+ compatibility
+                if member:
+                    mention_display = f"@{member.display_name}"
+                else:
+                    mention_display = f"Member: {member_id}"
             else:
                 mention_display = "No Mention"
 
@@ -2031,11 +2076,17 @@ class BearTrapView(discord.ui.View):
                         if display_description.startswith("PLAIN_MESSAGE:"):
                             display_description = display_description.replace("PLAIN_MESSAGE:", "✍️ ")
 
+                    # Avoid nested f-strings for Python 3.9+ compatibility
+                    if "EMBED_MESSAGE:" in notif[6]:
+                        option_value = f"{notif[0]}|embed"
+                    else:
+                        option_value = f"{notif[0]}|plain"
+
                     options.append(
                         discord.SelectOption(
                             label=f"{channel_warning}{notif[3]:02d}:{notif[4]:02d} - {display_description[:30]}",
                             description=f"ID: {notif[0]} | {status}",
-                            value=f"{notif[0]}|embed" if "EMBED_MESSAGE:" in notif[6] else f"{notif[0]}|plain"
+                            value=option_value
                         )
                     )
                 if len(options) > 25:
@@ -2669,6 +2720,33 @@ class BearTrapView(discord.ui.View):
             print(f"[ERROR] Error in manage_notification button: {e}")
             await interaction.response.send_message(
                 "❌ An error occurred while starting the edit process!",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Schedule Boards",
+        emoji="📅",
+        style=discord.ButtonStyle.primary,
+        custom_id="schedule_boards",
+        row=1
+    )
+    async def schedule_boards_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.cog.check_admin(interaction):
+            return
+        try:
+            schedule_cog = self.cog.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                await schedule_cog.show_main_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Schedule board system is not loaded!",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"[ERROR] Error in schedule boards button: {e}")
+            traceback.print_exc()
+            await interaction.response.send_message(
+                "❌ An error occurred while loading schedule boards!",
                 ephemeral=True
             )
 
