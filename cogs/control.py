@@ -254,6 +254,7 @@ class Control(commands.Cog):
             message = await channel.send(embed=embed)
 
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
+        members_to_remove = []  # Track members that should be removed for bulk check
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -290,12 +291,9 @@ class Control(commands.Cog):
                         
                         # Check if this is a permanently invalid ID (not found)
                         if error_msg == 'not_found':
-                            # Auto-remove the invalid ID
-                            removed, old_nickname = await self.remove_invalid_fid(fid, "Player does not exist (error 40004)")
-                            if removed:
-                                check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Auto-removed)")
-                            else:
-                                check_fail_list.append(f"❌ `{fid}` - Player not found (Failed to remove)")
+                            # Mark for removal (will check bulk threshold later)
+                            members_to_remove.append((fid, old_nickname, "Player does not exist (error 40004)"))
+                            check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Pending removal)")
                         else:
                             # For other errors, just report without removing
                             check_fail_list.append(f"❌ `{fid}` - {error_msg}")
@@ -371,6 +369,57 @@ class Control(commands.Cog):
                     await message.edit(embed=embed)
 
             i += 20
+
+        # Bulk removal safeguard - check if we're removing too many members
+        removal_count = len(members_to_remove)
+        removal_percentage = (removal_count / total_users * 100) if total_users > 0 else 0
+
+        # Only apply safeguard if alliance has at least 5 members and would remove >20%
+        if total_users >= 5 and removal_percentage > 20:
+            self.logger.error(f"BULK REMOVAL BLOCKED: Attempted to remove {removal_count}/{total_users} members ({removal_percentage:.1f}%) from alliance {alliance_id}")
+
+            # Send alert to channel
+            alert_embed = discord.Embed(
+                title="⚠️ BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
+                description=(
+                    f"**Alliance Check Safety System Activated**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🏰 **Alliance:** {alliance_name}\n"
+                    f"👥 **Total Members:** {total_users}\n"
+                    f"❌ **Attempted Removals:** {removal_count}\n"
+                    f"📊 **Percentage:** {removal_percentage:.1f}%\n"
+                    f"🛡️ **Threshold:** 20%\n\n"
+                    f"**Reason:** Removing more than 20% of members suggests a potential API issue.\n\n"
+                    f"**Members that would have been removed:**\n"
+                    + "\n".join([f"• `{fid}` ({nickname})" for fid, nickname, _ in members_to_remove[:10]])
+                    + (f"\n• ... and {removal_count - 10} more" if removal_count > 10 else "")
+                    + f"\n\n⚠️ **Action Required:** Please verify these members manually or wait for API issues to resolve."
+                ),
+                color=discord.Color.red()
+            )
+            alert_embed.set_footer(text="🛡️ Automatic Safety System | No members were removed")
+            await channel.send(embed=alert_embed)
+
+            # Update check_fail_list to show blocked status instead of pending
+            for i, item in enumerate(check_fail_list):
+                if "Pending removal" in item:
+                    check_fail_list[i] = item.replace("Pending removal", "REMOVAL BLOCKED (Safety)")
+        else:
+            # Safe to proceed with removals
+            if members_to_remove:
+                self.logger.info(f"Proceeding with removal of {removal_count} members from alliance {alliance_id} ({removal_percentage:.1f}%)")
+
+                for fid, nickname, reason in members_to_remove:
+                    removed, _ = await self.remove_invalid_fid(fid, reason)
+
+                    # Update check_fail_list to show actual removal status
+                    for i, item in enumerate(check_fail_list):
+                        if f"`{fid}`" in item and "Pending removal" in item:
+                            if removed:
+                                check_fail_list[i] = item.replace("Pending removal", "Auto-removed")
+                            else:
+                                check_fail_list[i] = item.replace("Pending removal", "Failed to remove")
+                            break
 
         end_time = datetime.now()
         duration = end_time - start_time
