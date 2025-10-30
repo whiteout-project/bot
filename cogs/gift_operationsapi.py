@@ -271,7 +271,48 @@ class GiftCodeAPI:
                                                 if is_valid:
                                                     valid_codes_count += 1
                                                     self.logger.info(f"API code '{code}' validated successfully")
-                                                    validation_status = "✅ Validated"
+
+                                                    # Check if this code was previously invalid (reactivation detection)
+                                                    is_reactivated = False
+                                                    cleared_redemptions = 0
+
+                                                    try:
+                                                        self.cursor.execute(
+                                                            "SELECT validation_status FROM gift_codes WHERE giftcode = ?",
+                                                            (code,)
+                                                        )
+                                                        previous_status_row = self.cursor.fetchone()
+
+                                                        if previous_status_row and previous_status_row[0] == 'invalid':
+                                                            # This is a REACTIVATED code - clear all user redemption history
+                                                            self.logger.info(f"🔄 REACTIVATION DETECTED: Code '{code}' was invalid, now valid again")
+
+                                                            # Count existing redemptions before clearing
+                                                            self.cursor.execute(
+                                                                "SELECT COUNT(*) FROM user_giftcodes WHERE giftcode = ?",
+                                                                (code,)
+                                                            )
+                                                            count_row = self.cursor.fetchone()
+                                                            cleared_redemptions = count_row[0] if count_row else 0
+
+                                                            # Clear all user redemption records for this code
+                                                            self.cursor.execute(
+                                                                "DELETE FROM user_giftcodes WHERE giftcode = ?",
+                                                                (code,)
+                                                            )
+                                                            await self._safe_commit(self.conn, f"clear redemption history for reactivated code {code}")
+
+                                                            self.logger.info(f"✅ Cleared {cleared_redemptions} redemption records for reactivated code '{code}'")
+                                                            is_reactivated = True
+
+                                                    except Exception as e:
+                                                        self.logger.error(f"Error checking/clearing reactivation status for code '{code}': {e}")
+
+                                                    # Set validation status message
+                                                    if is_reactivated:
+                                                        validation_status = f"✅ Validated (🔄 REACTIVATED - {cleared_redemptions} redemptions cleared)"
+                                                    else:
+                                                        validation_status = "✅ Validated"
 
                                                     try:
                                                         await self._execute_with_retry(
