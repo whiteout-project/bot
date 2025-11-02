@@ -2736,7 +2736,7 @@ class BearTrapView(discord.ui.View):
         try:
             schedule_cog = self.cog.bot.get_cog("BearTrapSchedule")
             if schedule_cog:
-                await schedule_cog.show_main_menu(interaction)
+                await schedule_cog.show_main_menu(interaction, force_new=True)
             else:
                 await interaction.response.send_message(
                     "❌ Schedule board system is not loaded!",
