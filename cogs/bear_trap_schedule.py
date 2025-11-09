@@ -436,7 +436,8 @@ class BearTrapSchedule(commands.Cog):
 
             # Format notifications by urgency
             now = datetime.now(pytz.UTC)
-            tz = pytz.timezone(settings.get('timezone', 'UTC'))
+            tz_string = settings.get('timezone', 'UTC')
+            tz = self._get_timezone_object(tz_string)
 
             sections = {
                 'imminent': [],  # < 1 hour
@@ -457,7 +458,7 @@ class BearTrapSchedule(commands.Cog):
                 if hours_until < 0:
                     continue
 
-                line = await self._format_event_line(notif, tz, board_type == 'server')
+                line = await self._format_event_line(notif, tz, tz_string, board_type == 'server')
 
                 if hours_until < 1:
                     sections['imminent'].append(line)
@@ -518,21 +519,28 @@ class BearTrapSchedule(commands.Cog):
             traceback.print_exc()
             return self._create_error_embed(f"Error: {str(e)}")
 
-    async def _format_event_line(self, notification, timezone, show_channel: bool) -> str:
-        """Formats a single notification as a line in the schedule"""
+    async def _format_event_line(self, notification, timezone_obj, timezone_string: str, show_channel: bool) -> str:
+        """Formats a single notification as a line in the schedule
+
+        Args:
+            notification: The notification tuple
+            timezone_obj: Timezone object for calculations
+            timezone_string: Timezone string for display (e.g., "UTC+5:30", "Etc/GMT-3")
+            show_channel: Whether to show channel info
+        """
         try:
             (notif_id, channel_id, hour, minute, notif_timezone, description,
              notification_type, next_notification, is_enabled) = notification
 
             # Parse next notification time
             next_time = datetime.fromisoformat(next_notification)
-            next_time_tz = next_time.astimezone(timezone)
+            next_time_tz = next_time.astimezone(timezone_obj)
 
             # Format time
             now = datetime.now(pytz.UTC)
 
             # Get current date in the board's timezone
-            now_in_tz = now.astimezone(timezone)
+            now_in_tz = now.astimezone(timezone_obj)
             next_date = next_time_tz.date()
             today_date = now_in_tz.date()
 
@@ -560,7 +568,7 @@ class BearTrapSchedule(commands.Cog):
                 name = description[:30] if len(description) > 30 else description
 
             # Build line - convert timezone to friendly format
-            tz_display = self._format_timezone_display(timezone.zone)
+            tz_display = self._format_timezone_display(timezone_string)
             line = f"• {time_str} {tz_display} | {name}"
 
             if show_channel:
@@ -586,7 +594,7 @@ class BearTrapSchedule(commands.Cog):
 
         description += "━━━━━━━━━━━━━━━━━━━━━━"
 
-        tz = pytz.timezone(settings.get('timezone', 'UTC'))
+        tz = self._get_timezone_object(settings.get('timezone', 'UTC'))
         now = datetime.now(pytz.UTC).astimezone(tz)
 
         embed = discord.Embed(
@@ -606,11 +614,70 @@ class BearTrapSchedule(commands.Cog):
             color=0xFF0000
         )
 
+    def _get_timezone_object(self, tz_string: str):
+        """Convert timezone string to a usable timezone object
+
+        Handles:
+            - "UTC" -> pytz.UTC
+            - "Etc/GMT+3" -> pytz timezone
+            - "UTC+05:30" -> Fixed offset timezone
+        """
+        from datetime import timezone, timedelta
+
+        if tz_string == "UTC":
+            return pytz.UTC
+        elif tz_string.startswith("UTC+") or tz_string.startswith("UTC-"):
+            # Parse fractional offset like UTC+05:30
+            try:
+                sign = 1 if tz_string[3] == '+' else -1
+                parts = tz_string[4:].split(':')
+                if len(parts) == 2:
+                    hours = int(parts[0])
+                    minutes = int(parts[1])
+                    total_minutes = sign * (hours * 60 + minutes)
+                    return timezone(timedelta(minutes=total_minutes))
+                else:
+                    # Shouldn't happen with our validation, but fallback
+                    return pytz.UTC
+            except:
+                return pytz.UTC
+        else:
+            # Etc/GMT zones or other standard pytz timezones
+            try:
+                return pytz.timezone(tz_string)
+            except:
+                return pytz.UTC
+
     def _format_timezone_display(self, tz_zone: str) -> str:
-        """Convert pytz timezone name to user-friendly format (e.g., Etc/GMT-3 -> UTC+3)"""
+        """Convert timezone name to user-friendly format
+
+        Examples:
+            Etc/GMT-3 -> UTC+3
+            Etc/GMT+5 -> UTC-5
+            UTC+05:30 -> UTC+5:30
+            UTC -> UTC
+        """
         if tz_zone == "UTC":
             return "UTC"
+        elif tz_zone.startswith("UTC+") or tz_zone.startswith("UTC-"):
+            # Already in user-friendly format (fractional offsets like UTC+05:30)
+            # Convert to cleaner format: UTC+05:30 -> UTC+5:30
+            try:
+                sign = tz_zone[3]  # + or -
+                parts = tz_zone[4:].split(':')
+                if len(parts) == 2:
+                    hours = int(parts[0])
+                    minutes = int(parts[1])
+                    if minutes == 0:
+                        return f"UTC{sign}{hours}"
+                    else:
+                        return f"UTC{sign}{hours}:{minutes:02d}"
+                else:
+                    return tz_zone
+            except:
+                return tz_zone
         elif tz_zone.startswith("Etc/GMT"):
+            # Etc/GMT zones are inverted: Etc/GMT-3 is actually UTC+3
             offset_str = tz_zone.replace("Etc/GMT", "")
             try:
                 offset = int(offset_str)
@@ -1100,10 +1167,10 @@ class CreateBoardSettingsView(discord.ui.View):
                     current_tz = getattr(parent, 'timezone_display', parent.timezone)
 
                     self.timezone_input = discord.ui.TextInput(
-                        label="Timezone (UTC, UTC+3, UTC-5, etc.)",
-                        placeholder="e.g., UTC, UTC+3, UTC-5",
+                        label="Timezone (UTC±X or UTC±H:MM)",
+                        placeholder="e.g., UTC+3, UTC-5, UTC+5:30",
                         default=current_tz,
-                        max_length=10,
+                        max_length=12,
                         required=True
                     )
                     self.add_item(self.timezone_input)
@@ -1112,14 +1179,51 @@ class CreateBoardSettingsView(discord.ui.View):
                     try:
                         tz_input = self.timezone_input.value.strip()
 
-                        # Convert UTC+X or UTC-X to Etc/GMT format
+                        # Convert UTC+X or UTC-X to appropriate timezone format (supports decimals like UTC+5.5)
                         if tz_input.upper() == "UTC":
-                            pytz_tz = pytz.UTC
+                            tz_name = "UTC"
                             display_name = "UTC"
                         elif tz_input.upper().startswith("UTC+") or tz_input.upper().startswith("UTC-"):
-                            # Extract offset
+                            # Extract offset (supports both decimal like 5.5 and HH:MM like 5:30)
                             offset_str = tz_input[3:]  # Remove "UTC"
-                            offset = int(offset_str)
+
+                            # Parse offset - support both formats
+                            if ':' in offset_str:
+                                # HH:MM format (e.g., "5:30", "-5:45")
+                                parts = offset_str.split(':')
+                                if len(parts) != 2:
+                                    await modal_interaction.response.send_message(
+                                        "❌ Invalid time format! Use HH:MM (e.g., 5:30)",
+                                        ephemeral=True
+                                    )
+                                    return
+                                try:
+                                    hours = int(parts[0])
+                                    minutes = int(parts[1])
+                                    if minutes < 0 or minutes >= 60:
+                                        await modal_interaction.response.send_message(
+                                            "❌ Minutes must be between 0 and 59!",
+                                            ephemeral=True
+                                        )
+                                        return
+                                    # Convert to decimal (preserve sign from hours)
+                                    offset = hours + (minutes / 60.0 if hours >= 0 else -minutes / 60.0)
+                                except ValueError:
+                                    await modal_interaction.response.send_message(
+                                        "❌ Invalid time format! Use HH:MM (e.g., 5:30)",
+                                        ephemeral=True
+                                    )
+                                    return
+                            else:
+                                # Decimal format (e.g., "5.5", "-5.75")
+                                try:
+                                    offset = float(offset_str)
+                                except ValueError:
+                                    await modal_interaction.response.send_message(
+                                        "❌ Invalid offset! Use decimal (5.5) or HH:MM (5:30) format",
+                                        ephemeral=True
+                                    )
+                                    return
 
                             # Validate offset range
                             if offset < -12 or offset > 14:
@@ -1129,26 +1233,43 @@ class CreateBoardSettingsView(discord.ui.View):
                                 )
                                 return
 
-                            # Note: Etc/GMT zones are inverted (Etc/GMT+3 is actually UTC-3)
-                            inverted_offset = -offset
-                            if inverted_offset == 0:
-                                pytz_tz = pytz.UTC
+                            # Check if it's a whole hour or fractional
+                            if offset == int(offset):
+                                # Whole hour - use Etc/GMT zones (inverted)
+                                inverted_offset = -int(offset)
+                                if inverted_offset == 0:
+                                    tz_name = "UTC"
+                                else:
+                                    tz_name = f"Etc/GMT{inverted_offset:+d}"
                             else:
-                                tz_name = f"Etc/GMT{inverted_offset:+d}"
-                                pytz_tz = pytz.timezone(tz_name)
+                                # Fractional offset (e.g., 5.5 for India, 9.5 for Australia)
+                                # Store in standard UTC+HH:MM format
+                                sign = "+" if offset >= 0 else "-"
+                                abs_offset = abs(offset)
+                                hours = int(abs_offset)
+                                minutes = int((abs_offset - hours) * 60)
+                                tz_name = f"UTC{sign}{hours:02d}:{minutes:02d}"
 
                             display_name = tz_input.upper()
                         else:
                             await modal_interaction.response.send_message(
-                                "❌ Invalid timezone format! Use UTC, UTC+3, UTC-5, etc.",
+                                "❌ Invalid timezone format! Use UTC, UTC+3, UTC-5, UTC+5.5, etc.",
                                 ephemeral=True
                             )
                             return
 
-                        # Test that the timezone is valid
-                        _ = pytz_tz.zone
+                        # Validate the timezone (for Etc/GMT zones)
+                        if tz_name.startswith("Etc/GMT"):
+                            try:
+                                _ = pytz.timezone(tz_name)
+                            except:
+                                await modal_interaction.response.send_message(
+                                    "❌ Invalid timezone!",
+                                    ephemeral=True
+                                )
+                                return
 
-                        self.parent.timezone = pytz_tz.zone
+                        self.parent.timezone = tz_name
                         self.parent.timezone_display = display_name
                         self.parent.timezone_button.label = f"Timezone ({display_name})"
                         await self.parent.refresh_embed(modal_interaction)
@@ -1499,6 +1620,18 @@ class BoardManagementView(discord.ui.View):
         self.guild_id = guild_id
         self.board_id = board_id
 
+        # Check if this is a per-channel board
+        cog.cursor.execute("SELECT board_type FROM notification_schedule_boards WHERE id = ?", (board_id,))
+        result = cog.cursor.fetchone()
+        self.board_type = result[0] if result else None
+
+        # Hide "Change Tracking" button for server-wide boards
+        if self.board_type != "channel":
+            for item in self.children:
+                if hasattr(item, 'label') and item.label == "Change Tracking":
+                    self.remove_item(item)
+                    break
+
     async def create_embed(self) -> discord.Embed:
         """Creates embed showing board info"""
         try:
@@ -1558,46 +1691,100 @@ class BoardManagementView(discord.ui.View):
             print(f"[ERROR] Error in edit settings: {e}")
             traceback.print_exc()
 
-    @discord.ui.button(label="Move Board", emoji="📤", style=discord.ButtonStyle.secondary, row=0)
-    async def move_board_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def change_target_channel_callback(self, interaction: discord.Interaction):
+        """Callback for changing which channel to monitor (per-channel boards only)"""
         try:
             channel_select = discord.ui.ChannelSelect(
-                placeholder="Select new channel for board",
+                placeholder="Select channel to monitor events from",
                 channel_types=[discord.ChannelType.text],
                 min_values=1,
                 max_values=1
             )
 
             async def channel_callback(select_interaction: discord.Interaction):
-                await select_interaction.response.defer(ephemeral=True)
+                await select_interaction.response.defer()
+                new_target_channel_id = int(select_interaction.data["values"][0])
+
+                # Update target channel in database
+                self.cog.cursor.execute("""
+                    UPDATE notification_schedule_boards
+                    SET target_channel_id = ?
+                    WHERE id = ?
+                """, (new_target_channel_id, self.board_id))
+                self.cog.conn.commit()
+
+                # Update the board
+                await self.cog.update_schedule_board(self.board_id)
+
+                # Refresh the view
+                embed = await self.create_embed()
+                await select_interaction.edit_original_response(embed=embed, view=self)
+
+            channel_select.callback = channel_callback
+
+            view = discord.ui.View(timeout=60)
+            view.add_item(channel_select)
+
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="🔄 Change Tracking Channel",
+                    description="Select which channel's events this board should display:",
+                    color=discord.Color.blue()
+                ),
+                view=view
+            )
+
+        except Exception as e:
+            print(f"[ERROR] Error in change tracking channel: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Move Board", emoji="📤", style=discord.ButtonStyle.secondary, row=0)
+    async def move_board_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            channel_select = discord.ui.ChannelSelect(
+                placeholder="Select new channel to post the board",
+                channel_types=[discord.ChannelType.text],
+                min_values=1,
+                max_values=1
+            )
+
+            async def channel_callback(select_interaction: discord.Interaction):
+                await select_interaction.response.defer()
                 new_channel_id = int(select_interaction.data["values"][0])
 
                 success, error = await self.cog.move_schedule_board(self.board_id, new_channel_id)
 
                 if error:
                     await select_interaction.followup.send(f"❌ Failed to move: {error}", ephemeral=True)
-                else:
-                    await select_interaction.followup.send(
-                        f"✅ Board moved to <#{new_channel_id}>!",
-                        ephemeral=True
-                    )
-                    # Refresh the view
-                    embed = await self.create_embed()
-                    await select_interaction.message.edit(embed=embed, view=self)
+                    return
+
+                # Refresh the board management view (no confirmation message)
+                embed = await self.create_embed()
+                await select_interaction.edit_original_response(embed=embed, view=self)
 
             channel_select.callback = channel_callback
-            view = discord.ui.View()
+
+            view = discord.ui.View(timeout=60)
             view.add_item(channel_select)
 
-            await interaction.response.send_message(
-                "Select new channel for the board:",
-                view=view,
-                ephemeral=True
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="📤 Move Board",
+                    description="Select where to post this schedule board:",
+                    color=discord.Color.blue()
+                ),
+                view=view
             )
 
         except Exception as e:
             print(f"[ERROR] Error in move board: {e}")
             traceback.print_exc()
+
+    @discord.ui.button(label="Change Tracking", emoji="🔄", style=discord.ButtonStyle.secondary, row=0)
+    async def change_tracking_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Change which channel to monitor (only for per-channel boards)"""
+        # This button is only visible for per-channel boards, hiding is done in __init__
+        await self.change_target_channel_callback(interaction)
 
     @discord.ui.button(label="Preview", emoji="👁️", style=discord.ButtonStyle.secondary, row=0)
     async def preview_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1660,10 +1847,10 @@ class EditBoardSettingsModal(discord.ui.Modal):
             self.add_item(self.max_events)
 
             self.timezone = discord.ui.TextInput(
-                label="Timezone (UTC, UTC+3, UTC-5, etc.)",
-                placeholder="e.g., UTC, UTC+3, UTC-5",
+                label="Timezone (UTC±X or UTC±H:MM)",
+                placeholder="e.g., UTC+3, UTC-5, UTC+5:30",
                 default=cog._format_timezone_display(timezone),
-                max_length=10,
+                max_length=12,
                 required=False
             )
             self.add_item(self.timezone)
@@ -1686,15 +1873,52 @@ class EditBoardSettingsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            # Parse and validate timezone (support UTC+X format)
+            # Parse and validate timezone (support UTC+X format including decimals and HH:MM)
             tz_input = self.timezone.value.strip()
             try:
                 if tz_input.upper() == "UTC":
-                    tz = pytz.UTC
+                    tz_name = "UTC"
                 elif tz_input.upper().startswith("UTC+") or tz_input.upper().startswith("UTC-"):
-                    # Parse UTC offset
+                    # Parse UTC offset (supports both decimal like 5.5 and HH:MM like 5:30)
                     offset_str = tz_input[3:]
-                    offset = int(offset_str)
+
+                    # Parse offset - support both formats
+                    if ':' in offset_str:
+                        # HH:MM format (e.g., "5:30", "-5:45")
+                        parts = offset_str.split(':')
+                        if len(parts) != 2:
+                            await interaction.response.send_message(
+                                "❌ Invalid time format! Use HH:MM (e.g., 5:30)",
+                                ephemeral=True
+                            )
+                            return
+                        try:
+                            hours = int(parts[0])
+                            minutes = int(parts[1])
+                            if minutes < 0 or minutes >= 60:
+                                await interaction.response.send_message(
+                                    "❌ Minutes must be between 0 and 59!",
+                                    ephemeral=True
+                                )
+                                return
+                            # Convert to decimal (preserve sign from hours)
+                            offset = hours + (minutes / 60.0 if hours >= 0 else -minutes / 60.0)
+                        except ValueError:
+                            await interaction.response.send_message(
+                                "❌ Invalid time format! Use HH:MM (e.g., 5:30)",
+                                ephemeral=True
+                            )
+                            return
+                    else:
+                        # Decimal format (e.g., "5.5", "-5.75")
+                        try:
+                            offset = float(offset_str)
+                        except ValueError:
+                            await interaction.response.send_message(
+                                "❌ Invalid offset! Use decimal (5.5) or HH:MM (5:30) format",
+                                ephemeral=True
+                            )
+                            return
 
                     if offset < -12 or offset > 14:
                         await interaction.response.send_message(
@@ -1703,15 +1927,25 @@ class EditBoardSettingsModal(discord.ui.Modal):
                         )
                         return
 
-                    # Convert to Etc/GMT (inverted)
-                    inverted_offset = -offset
-                    if inverted_offset == 0:
-                        tz = pytz.UTC
+                    # Check if it's a whole hour or fractional
+                    if offset == int(offset):
+                        # Whole hour - use Etc/GMT zones (inverted)
+                        inverted_offset = -int(offset)
+                        if inverted_offset == 0:
+                            tz_name = "UTC"
+                        else:
+                            tz_name = f"Etc/GMT{inverted_offset:+d}"
                     else:
-                        tz = pytz.timezone(f"Etc/GMT{inverted_offset:+d}")
+                        # Fractional offset (e.g., 5.5 for India, 9.5 for Australia)
+                        # Store in standard UTC+HH:MM format
+                        sign = "+" if offset >= 0 else "-"
+                        abs_offset = abs(offset)
+                        hours = int(abs_offset)
+                        minutes = int((abs_offset - hours) * 60)
+                        tz_name = f"UTC{sign}{hours:02d}:{minutes:02d}"
                 else:
                     await interaction.response.send_message(
-                        "❌ Invalid timezone format! Use UTC, UTC+3, UTC-5, etc.",
+                        "❌ Invalid timezone format! Use UTC, UTC+3, UTC-5, UTC+5.5, etc.",
                         ephemeral=True
                     )
                     return
@@ -1738,21 +1972,28 @@ class EditBoardSettingsModal(discord.ui.Modal):
             show_disabled = self.show_disabled.value.strip().lower() in ["yes", "y", "true", "1"]
             auto_pin = self.auto_pin.value.strip().lower() in ["yes", "y", "true", "1"]
 
+            # Defer the response while we update
+            await interaction.response.defer()
+
             # Update database
             self.cog.cursor.execute("""
                 UPDATE notification_schedule_boards
                 SET max_events = ?, timezone = ?, show_disabled = ?, auto_pin = ?
                 WHERE id = ?
-            """, (max_events, tz.zone, 1 if show_disabled else 0, 1 if auto_pin else 0, self.board_id))
+            """, (max_events, tz_name, 1 if show_disabled else 0, 1 if auto_pin else 0, self.board_id))
             self.cog.conn.commit()
 
             # Update the board
             await self.cog.update_schedule_board(self.board_id)
 
-            await interaction.response.send_message(
-                "✅ Settings updated and board refreshed!",
-                ephemeral=True
-            )
+            # Refresh the board management view with updated data
+            view = BoardManagementView(self.cog, self.cog.cursor.execute(
+                "SELECT guild_id FROM notification_schedule_boards WHERE id = ?",
+                (self.board_id,)
+            ).fetchone()[0], self.board_id)
+
+            embed = await view.create_embed()
+            await interaction.edit_original_response(embed=embed, view=view)
 
         except Exception as e:
             print(f"[ERROR] Error updating settings: {e}")
