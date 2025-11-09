@@ -72,16 +72,19 @@ class BearTrapSchedule(commands.Cog):
 
     async def cog_load(self):
         """Start background tasks when cog loads"""
-        self.logger.info("[SCHEDULE] Starting daily refresh task...")
+        self.logger.info("[SCHEDULE] Starting background tasks...")
         self.refresh_task = asyncio.create_task(self.daily_refresh_loop())
+        self.urgency_task = asyncio.create_task(self.urgency_update_loop())
 
     async def cog_unload(self):
         """Cleanup when cog is unloaded"""
         self.logger.info("[SCHEDULE] Cog unloading...")
 
-        # Cancel refresh task
+        # Cancel background tasks
         if hasattr(self, 'refresh_task'):
             self.refresh_task.cancel()
+        if hasattr(self, 'urgency_task'):
+            self.urgency_task.cancel()
 
         if hasattr(self, 'conn'):
             self.conn.close()
@@ -134,6 +137,80 @@ class BearTrapSchedule(commands.Cog):
             except Exception as e:
                 self.logger.error(f"[SCHEDULE] Error in daily refresh loop: {e}")
                 await asyncio.sleep(60)  # Continue even if error occurs
+
+    async def urgency_update_loop(self):
+        """Background task that updates boards when events transition to SOON or IMMINENT"""
+        await self.bot.wait_until_ready()
+
+        while not self.bot.is_closed():
+            try:
+                now_utc = datetime.now(pytz.UTC)
+
+                # Get all notifications that are approaching
+                svs_conn = sqlite3.connect('db/svs.sqlite')
+                svs_cursor = svs_conn.cursor()
+
+                svs_cursor.execute("""
+                    SELECT id, channel_id, next_notification
+                    FROM bear_notifications
+                    WHERE is_enabled = 1 AND next_notification IS NOT NULL
+                """)
+                notifications = svs_cursor.fetchall()
+                svs_conn.close()
+
+                boards_to_update = set()
+
+                for notif_id, channel_id, next_notif_str in notifications:
+                    try:
+                        # Parse next notification time
+                        next_time = datetime.fromisoformat(next_notif_str.replace('Z', '+00:00'))
+                        if next_time.tzinfo is None:
+                            next_time = pytz.UTC.localize(next_time)
+
+                        # Calculate time until notification
+                        time_until = (next_time - now_utc).total_seconds() / 3600.0  # in hours
+
+                        # Check if we're crossing the 6-hour or 1-hour threshold
+                        crossing_threshold = False
+
+                        if 6.0 < time_until <= 6.083:  # Just crossed 6-hour threshold
+                            crossing_threshold = True
+                        elif 1.0 < time_until <= 1.083:  # Just crossed 1-hour threshold
+                            crossing_threshold = True
+
+                        if crossing_threshold:
+                            # Find all boards that should show this notification
+                            self.cursor.execute("""
+                                SELECT DISTINCT nsb.id
+                                FROM notification_schedule_boards nsb
+                                WHERE nsb.guild_id IN (
+                                    SELECT guild_id FROM channels WHERE id = ?
+                                )
+                                AND (
+                                    (nsb.board_type = 'server')
+                                    OR (nsb.board_type = 'channel' AND nsb.target_channel_id = ?)
+                                )
+                            """, (channel_id, channel_id))
+
+                            for (board_id,) in self.cursor.fetchall():
+                                boards_to_update.add(board_id)
+
+                    except Exception as e:
+                        self.logger.error(f"[SCHEDULE] Error processing notification {notif_id}: {e}")
+                        continue
+
+                # Update all affected boards
+                if boards_to_update:
+                    self.logger.info(f"[SCHEDULE] Urgency update - refreshing {len(boards_to_update)} board(s)")
+                    for board_id in boards_to_update:
+                        await self.update_schedule_board(board_id)
+
+                # Check every 5 minutes
+                await asyncio.sleep(300)
+
+            except Exception as e:
+                self.logger.error(f"[SCHEDULE] Error in urgency update loop: {e}")
+                await asyncio.sleep(300)  # Continue even if error occurs
 
     async def create_schedule_board(self, guild_id: int, channel_id: int, board_type: str,
                                     target_channel_id: int, creator_id: int, settings: dict) -> tuple:
