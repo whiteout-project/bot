@@ -1063,11 +1063,18 @@ class CreateBoardTypeView(discord.ui.View):
     async def proceed_to_channel_selection(self, interaction: discord.Interaction, board_type: str):
         """Proceed to Step 2: Channel selection"""
         view = CreateBoardChannelSelectView(self.cog, self.guild_id, board_type)
+
+        # Build step description based on board type
+        if board_type == 'channel':
+            step_description = "**Step 2a:** Select which channel to track notifications for\n**Step 2b:** Select where to post the board"
+        else:
+            step_description = "**Step 2:** Select where to post the board"
+
         embed = discord.Embed(
             title="📅 Create Schedule Board - Step 2",
             description=(
                 f"**Board Type:** {board_type.capitalize()}\n\n"
-                f"{'**Step 2a:** Select which channel to track notifications for\n**Step 2b:** Select where to post the board' if board_type == 'channel' else '**Step 2:** Select where to post the board'}"
+                f"{step_description}"
             ),
             color=discord.Color.blue()
         )
