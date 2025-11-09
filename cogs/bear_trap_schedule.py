@@ -1530,7 +1530,7 @@ class BoardManagementView(discord.ui.View):
                     f"**Posted in:** <#{display_channel_id}>\n\n"
                     f"**Settings:**\n"
                     f"• Max Events: {max_events}\n"
-                    f"• Timezone: {timezone}\n"
+                    f"• Timezone: {self.cog._format_timezone_display(timezone)}\n"
                     f"• Show Disabled: {'Yes' if show_disabled else 'No'}\n"
                     f"• Auto-pin: {'Yes' if auto_pin else 'No'}\n\n"
                     f"Created: {created_at}"
@@ -1660,8 +1660,10 @@ class EditBoardSettingsModal(discord.ui.Modal):
             self.add_item(self.max_events)
 
             self.timezone = discord.ui.TextInput(
-                label="Timezone",
-                default=timezone,
+                label="Timezone (UTC, UTC+3, UTC-5, etc.)",
+                placeholder="e.g., UTC, UTC+3, UTC-5",
+                default=cog._format_timezone_display(timezone),
+                max_length=10,
                 required=False
             )
             self.add_item(self.timezone)
@@ -1684,12 +1686,38 @@ class EditBoardSettingsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            # Validate timezone
+            # Parse and validate timezone (support UTC+X format)
+            tz_input = self.timezone.value.strip()
             try:
-                tz = pytz.timezone(self.timezone.value.strip())
-            except pytz.exceptions.UnknownTimeZoneError:
+                if tz_input.upper() == "UTC":
+                    tz = pytz.UTC
+                elif tz_input.upper().startswith("UTC+") or tz_input.upper().startswith("UTC-"):
+                    # Parse UTC offset
+                    offset_str = tz_input[3:]
+                    offset = int(offset_str)
+
+                    if offset < -12 or offset > 14:
+                        await interaction.response.send_message(
+                            "❌ Timezone offset must be between UTC-12 and UTC+14!",
+                            ephemeral=True
+                        )
+                        return
+
+                    # Convert to Etc/GMT (inverted)
+                    inverted_offset = -offset
+                    if inverted_offset == 0:
+                        tz = pytz.UTC
+                    else:
+                        tz = pytz.timezone(f"Etc/GMT{inverted_offset:+d}")
+                else:
+                    await interaction.response.send_message(
+                        "❌ Invalid timezone format! Use UTC, UTC+3, UTC-5, etc.",
+                        ephemeral=True
+                    )
+                    return
+            except (ValueError, pytz.exceptions.UnknownTimeZoneError) as e:
                 await interaction.response.send_message(
-                    "❌ Invalid timezone!",
+                    f"❌ Invalid timezone: {str(e)}",
                     ephemeral=True
                 )
                 return
