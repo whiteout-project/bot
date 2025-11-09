@@ -18,13 +18,13 @@ pinIcon = "<:pinkRings:1436281348670361650>"
 giftIcon = "<:pinkGift:1436281337005735988>"
 giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
-alertIcon = "<:pinkWarn:1436281359290073118>"
+alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
 anounceIcon = "<:pinkTrumpet:1436281356274372648>"
-hashtagIcon = "<:pinkHashtag:1436281341493903370>"
-settingsIcon = "<:pinkCog:1436281334589947914>"
+hashtagIcon = "<:pinkGiftHashtag:1437015068268171367>"
+settingsIcon = "<:pinkGiftCog:1437015067152482426>"
 settings2Icon = "<:pinkSettings:1436281352612745226>"
 hourglassIcon = "<:pinkHourglass:1436281342533963796>"
 alarmClockIcon = "<:pinkGiftLoop:1436991292973256937>"
@@ -247,17 +247,17 @@ class GNCommands(commands.Cog):
 
                         for page_num, page in enumerate(pages, 1):
                             alliance_embed = discord.Embed(
-                                title=f"{allianceIcon} Alliance Information (Page {page_num}/{len(pages)})",
-                                color=discord.Color.blue()
+                                title = f"{allianceIcon} Alliance Information (Page {page_num}/{len(pages)})",
+                                color = emColor1
                             )
                             alliance_embed.description = "\n".join(page)
                             await admin_user.send(embed=alliance_embed)
 
                     else:
                         alliance_embed = discord.Embed(
-                            title=f"{allianceIcon} Alliance Information",
-                            description="No alliances currently registered.",
-                            color=discord.Color.blue()
+                            title = f"{allianceIcon} Alliance Information",
+                            description = "No alliances currently registered.",
+                            color = emColor1
                         )
                         await admin_user.send(embed=alliance_embed)
 
