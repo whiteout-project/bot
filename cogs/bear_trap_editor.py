@@ -918,7 +918,19 @@ class NotificationEditor(commands.Cog):
              view.next_notification, view.notification_type, view.notification_id)
         )
         conn.commit()
+
+        # Get guild_id for schedule board update
+        cursor.execute("SELECT guild_id FROM bear_notifications WHERE id = ?", (view.notification_id,))
+        result = cursor.fetchone()
+        guild_id = result[0] if result else None
+
         conn.close()
+
+        # Notify schedule boards of update
+        if guild_id:
+            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                await schedule_cog.on_notification_updated(guild_id, view.channel_id)
 
     async def update_embed_notification(self, view):
         conn = sqlite3.connect("db/beartime.sqlite")
@@ -930,7 +942,20 @@ class NotificationEditor(commands.Cog):
              view.author, view.mention_message, view.notification_id)
         )
         conn.commit()
+
+        # Get guild_id and channel_id for schedule board update
+        cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (view.notification_id,))
+        result = cursor.fetchone()
+
         conn.close()
+
+        if result:
+            guild_id, channel_id = result
+
+            # Notify schedule boards of update
+            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                await schedule_cog.on_notification_updated(guild_id, channel_id)
 
 async def setup(bot):
     await bot.add_cog(NotificationEditor(bot))
