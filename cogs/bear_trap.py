@@ -264,12 +264,7 @@ class BearTrap(commands.Cog):
             (id, guild_id, channel_id, hour, minute, timezone, description,
              notification_type, mention_type, repeat_enabled, repeat_minutes,
              is_enabled, created_at, created_by, last_notification,
-             next_notification, repeat_days) = notification
-
-            weekly_repeat_days = []
-            if repeat_enabled and repeat_minutes == 0:
-                self.cursor.execute("SELECT weekday FROM notification_days WHERE notification_id = ?", (id,))
-                weekly_repeat_days = [row[0] for row in self.cursor.fetchall()]
+             next_notification) = notification
 
             if not is_enabled:
                 return
