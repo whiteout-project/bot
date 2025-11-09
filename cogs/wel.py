@@ -3,6 +3,124 @@ from discord.ext import commands
 from discord import app_commands
 import sqlite3
 
+allianceIcon = "<:pinkRings:1436281348670361650>"
+avatarIcon = "<:pinkCrown:1436281335546118164>"   
+stoveIcon = "<:pinkCarriage:1436281331515396198>"
+stateIcon = "<:pinkCastle:1436281332949975040>"
+listIcon = "<:pinkScroll:1436281353678360616>"
+fidIcon = "<:pinkRoyalHeart:1436281349605429424>"
+timeIcon = "<:pinkHourglass:1436281342533963796>"
+homeIcon = "<:pinkLargeCastle:1436281344769527808>"
+num1Icon = "<:pink1:1436671751303069808>"
+num2Icon = "<:pink2:1436671752016236646>"
+num3Icon = "<:pink3:1436671753060483122>"
+pinIcon = "<:pinkRings:1436281348670361650>"
+giftIcon = "<:pinkGift:1436281337005735988>"
+giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
+heartIcon = "<:HotPinkHeart:1436291474898550864>"
+alertIcon = "<:pinkWarn:1436281359290073118>"
+totalIcon = "<:pinkTotal:1436281354684989500>"
+redeemIcon = "<:pinkWand:1436281358430376047>"
+membersIcon = "<:pinkUnicorn:1436983641669374105>"
+anounceIcon = "<:pinkTrumpet:1436281356274372648>"
+hashtagIcon = "<:pinkHashtag:1436281341493903370>"
+settingsIcon = "<:pinkCog:1436281334589947914>"
+settings2Icon = "<:pinkSettings:1436281352612745226>"
+hourglassIcon = "<:pinkHourglass:1436281342533963796>"
+alarmClockIcon = "<:pinkGiftLoop:1436991292973256937>"
+magnifyingIcon = "<:pinkMirror:1436281345033637929>"
+checkGiftCodeIcon = "<:pinkGiftCheck:1436994529562595400>"
+deleteGiftCodeIcon = "<:pinkGiftX:1436991294348988446>"
+addGiftCodeIcon = "<:pinkGiftPlus:1436281340403122196>"
+processingIcon = "<:pinkProcessing:1436281345956642880>"
+verifiedIcon = "<:pinkVerified:1436281357017022486>"
+questionIcon = "<:pinkQuestion:1436680546335068233>"
+deniedIcon = "<:pinkDenied:1436281336406216776>"
+deleteIcon = "<:pinkGiftMinus:1436281337794527264>"
+retryIcon = "<:pinkRetrying:1436281347181252618>"
+infoIcon = "<:pinkInfo:1436281343603507264>"
+
+dividerEmojiStart1 = "<:pinkBow:1436293647590232146>", "•"
+dividerEmojiPattern1 = "<:HotPinkHeart:1436291474898550864>", "•", "<:BarbiePinkHeart:1436291473917083778>", "•"
+dividerEmojiEnd1 = ["<:pinkBow:1436293647590232146>"]
+dividerEmojiCombined1 = []
+for emoji in dividerEmojiStart1:
+    dividerEmojiCombined1.append(emoji)
+for emoji in dividerEmojiPattern1:
+    dividerEmojiCombined1.append(emoji)
+for emoji in dividerEmojiEnd1:
+    dividerEmojiCombined1.append(emoji)
+divider1 = ""
+dividerMaxLength1 = 99
+dividerLength1 = 19
+if dividerLength1 > dividerMaxLength1:
+    dividerLength1 = dividerMaxLength1
+dividerLength2 = 47
+if int(dividerLength1) >= len(dividerEmojiCombined1):
+    i = 1
+    while i <= dividerLength1:
+        if i == 1:
+            for emoji in dividerEmojiStart1:
+                divider1 += emoji
+                i += 1
+        elif i == dividerLength1:
+            for emoji in dividerEmojiEnd1:
+                divider1 += emoji
+                i += 1
+        else :
+            for emoji in dividerEmojiPattern1:
+                divider1 += emoji
+                i += 1
+                if i > dividerLength1:
+                    break
+else :
+    for emoji in dividerEmojiCombined1:
+        divider1 += emoji
+
+dividerEmojiStart2 = "<:pinkBow:1436293647590232146>", "•"
+dividerEmojiPattern2 = ["•"]
+dividerEmojiEnd2 = ["<:pinkBow:1436293647590232146>"]
+dividerEmojiCombined2 = []
+for emoji in dividerEmojiStart2:
+    dividerEmojiCombined2.append(emoji)
+for emoji in dividerEmojiPattern2:
+    dividerEmojiCombined2.append(emoji)
+for emoji in dividerEmojiEnd2:
+    dividerEmojiCombined2.append(emoji)
+divider2 = ""
+dividerMaxLength2 = 99
+dividerLength2 = 47
+if dividerLength2 > dividerMaxLength2:
+    dividerLength2 = dividerMaxLength2
+if int(dividerLength2) >= len(dividerEmojiCombined2):
+    i = 1
+    while i <= dividerLength2:
+        if i == 1:
+            for emoji in dividerEmojiStart2:
+                divider2 += emoji
+                i += 1
+        elif i == dividerLength2:
+            for emoji in dividerEmojiEnd2:
+                divider2 += emoji
+                i += 1
+        else :
+            for emoji in dividerEmojiPattern2:
+                divider2 += emoji
+                i += 1
+                if i > dividerLength2:
+                    break
+else :
+    for emoji in dividerEmojiCombined2:
+        divider2 += emoji
+
+emColorString1 = "#FFBDE4" #Baby Pink
+emColor1 = int(emColorString1.lstrip('#'), 16) #to replace .blue()
+emColorString2 = "#FF0080" #Hot Pink
+emColor2 = int(emColorString2.lstrip('#'), 16) #to replace .red()
+emColorString3 = "#FF69B4" #Barbie Pink
+emColor3 = int(emColorString3.lstrip('#'), 16) #to replace .green()
+emColorString4 = "#FF8FCC" #Pinkie Pink
+emColor4 = int(emColorString4.lstrip('#'), 16) #to replace .orange() and .yellow() and .gold()
 class GNCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -31,13 +149,13 @@ class GNCommands(commands.Cog):
                     auto_value = auto_result[0] if auto_result else 1
                     
                     # Check OCR initialization status
-                    ocr_status = "❌"
+                    ocr_status = f"{deniedIcon}"
                     ocr_details = "Not initialized"
                     try:
                         gift_operations_cog = self.bot.get_cog('GiftOperations')
                         if gift_operations_cog and hasattr(gift_operations_cog, 'captcha_solver'):
                             if gift_operations_cog.captcha_solver and gift_operations_cog.captcha_solver.is_initialized:
-                                ocr_status = "✅"
+                                ocr_status = f"{verifiedIcon}"
                                 ocr_details = "Gift Code Redeemer (OCR) ready"
                             else:
                                 ocr_details = "Solver not initialized"
@@ -47,32 +165,28 @@ class GNCommands(commands.Cog):
                         ocr_details = f"Error checking OCR: {str(e)[:30]}..."
                     
                     status_embed = discord.Embed(
-                        title="🤖 Bot Successfully Activated",
+                        title=f"🤖 Bot Successfully Activated",
                         description=(
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            "**System Status**\n"
-                            "✅ Bot is now online and operational\n"
-                            "✅ Database connections established\n"
-                            "✅ Command systems initialized\n"
-                            f"{'✅' if auto_value == 1 else '❌'} Alliance Control Messages\n"
+                            f"{divider1}\n"
+                            f"### **System Status**\n"
+                            f"{verifiedIcon} Bot is now online and operational\n"
+                            f"{verifiedIcon} Database connections established\n"
+                            f"{verifiedIcon} Command systems initialized\n"
+                            f"{verifiedIcon if auto_value == 1 else deniedIcon} Alliance Control Messages\n"
                             f"{ocr_status} {ocr_details}\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        ),
-                        color=discord.Color.green()
+                            f"\n"
+                            f"{divider1}\n"
+                            f"### {pinIcon} Community & Support\n"
+                            f"**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
+                            f"**Discord Community:** [Join our Discord](https://discord.gg/apYByj6K2m)\n"
+                            f"**Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n"
+                            f"\n"
+                            f"{divider1}\n"
+                       ),
+                        color = emColor3
                     )
 
-                    status_embed.add_field(
-                        name="📌 Community & Support",
-                        value=(
-                            "**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
-                            "**Discord Community:** [Join our Discord](https://discord.gg/apYByj6K2m)\n"
-                            "**Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
-                        ),
-                        inline=False
-                    )
-
-                    status_embed.set_footer(text="Thanks for using the bot! Maintained with ❤️ by the WOSLand Bot Team.")
+                    status_embed.set_footer(text = f"Thanks for using the bot! Maintained with ❤︎ by the WOSLand Bot Team.")
 
                     await admin_user.send(embed=status_embed)
 
@@ -92,39 +206,40 @@ class GNCommands(commands.Cog):
                                 cursor = users_db.cursor()
                                 cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
                                 user_count = cursor.fetchone()[0]
-                                info_parts.append(f"👥 Members: {user_count}")
+                                info_parts.append(f"{membersIcon} Members: {user_count}")
                             
                             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                                 cursor = alliance_db.cursor()
                                 cursor.execute("SELECT discord_server_id FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                                 discord_server = cursor.fetchone()
                                 if discord_server and discord_server[0]:
-                                    info_parts.append(f"🌐 Server ID: {discord_server[0]}")
+                                    info_parts.append(f"{stateIcon} Server ID: {discord_server[0]}")
                             
                                 cursor.execute("SELECT channel_id, interval FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
                                 settings = cursor.fetchone()
                                 if settings:
                                     if settings[0]:
-                                        info_parts.append(f"📢 Channel: <#{settings[0]}>")
-                                    interval_text = f"⏱️ Auto Check: {settings[1]} minutes" if settings[1] > 0 else "⏱️ No Auto Check"
+                                        info_parts.append(f"{anounceIcon} Channel: <#{settings[0]}>")
+                                    interval_text = f"{alarmClockIcon} Auto Check: {settings[1]} minutes" if settings[1] > 0 else f"{deleteGiftCodeIcon}  No Auto Check"
                                     info_parts.append(interval_text)
                             
                             with sqlite3.connect('db/giftcode.sqlite') as gift_db:
                                 cursor = gift_db.cursor()
                                 cursor.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
                                 gift_status = cursor.fetchone()
-                                gift_text = "🎁 Gift System: Active" if gift_status and gift_status[0] == 1 else "🎁 Gift System: Inactive"
+                                gift_text = f"{checkGiftCodeIcon} Gift System: Active" if gift_status and gift_status[0] == 1 else f"{deleteGiftCodeIcon} Gift System: Inactive"
                                 info_parts.append(gift_text)
                                 
                                 cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
                                 gift_channel = cursor.fetchone()
                                 if gift_channel and gift_channel[0]:
-                                    info_parts.append(f"🎉 Gift Channel: <#{gift_channel[0]}>")
+                                    info_parts.append(f"{giftsIcon} Gift Channel: <#{gift_channel[0]}>")
                             
                             alliance_info.append(
                                 f"**{name}**\n" + 
-                                "\n".join(f"> {part}" for part in info_parts) +
-                                "\n━━━━━━━━━━━━━━━━━━━━━━"
+                                f"{divider1}\n\n" +
+                                f"\n".join(f"> {part}" for part in info_parts) +
+                                f"\n\n{divider1}"
                             )
 
                         pages = [alliance_info[i:i + ALLIANCES_PER_PAGE] 
@@ -132,7 +247,7 @@ class GNCommands(commands.Cog):
 
                         for page_num, page in enumerate(pages, 1):
                             alliance_embed = discord.Embed(
-                                title=f"📊 Alliance Information (Page {page_num}/{len(pages)})",
+                                title=f"{allianceIcon} Alliance Information (Page {page_num}/{len(pages)})",
                                 color=discord.Color.blue()
                             )
                             alliance_embed.description = "\n".join(page)
@@ -140,7 +255,7 @@ class GNCommands(commands.Cog):
 
                     else:
                         alliance_embed = discord.Embed(
-                            title="📊 Alliance Information",
+                            title=f"{allianceIcon} Alliance Information",
                             description="No alliances currently registered.",
                             color=discord.Color.blue()
                         )
