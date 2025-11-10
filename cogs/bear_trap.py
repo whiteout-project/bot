@@ -240,7 +240,10 @@ class BearTrap(commands.Cog):
             try:
 
                 self.cursor.execute("""
-                    SELECT * FROM bear_notifications 
+                    SELECT id, guild_id, channel_id, hour, minute, timezone, description,
+                           notification_type, mention_type, repeat_enabled, repeat_minutes,
+                           is_enabled, created_at, created_by, last_notification, next_notification
+                    FROM bear_notifications
                     WHERE is_enabled = 1 AND next_notification IS NOT NULL
                 """)
                 notifications = self.cursor.fetchall()
@@ -602,12 +605,15 @@ class BearTrap(commands.Cog):
     async def get_notifications(self, guild_id: int) -> list:
         try:
             self.cursor.execute("""
-                SELECT * FROM bear_notifications 
-                WHERE guild_id = ? 
-                ORDER BY 
-                    CASE 
-                        WHEN next_notification >= CURRENT_TIMESTAMP THEN 0 
-                        ELSE 1 
+                SELECT id, guild_id, channel_id, hour, minute, timezone, description,
+                       notification_type, mention_type, repeat_enabled, repeat_minutes,
+                       is_enabled, created_at, created_by, last_notification, next_notification
+                FROM bear_notifications
+                WHERE guild_id = ?
+                ORDER BY
+                    CASE
+                        WHEN next_notification >= CURRENT_TIMESTAMP THEN 0
+                        ELSE 1
                     END,
                     next_notification
             """, (guild_id,))
