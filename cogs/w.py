@@ -7,6 +7,7 @@ import time
 import asyncio
 import sqlite3
 
+allianceIconOld = "<:pinkCrownOld:1437374294551429297>"
 allianceIcon = "<:pinkRings:1436281348670361650>"
 avatarIcon = "<:pinkCrown:1436281335546118164>"   
 stoveIcon = "<:pinkCarriage:1436281331515396198>"
@@ -24,9 +25,11 @@ giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
 alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
+robotIcon = "<:pinkKnightHelmet:1437569343293493360>"
+shieldIcon = "<:pinkShield:1437535908193636413>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
-anounceIcon = "<:pinkTrumpet:1436281356274372648>"
+anounceIcon = "<:pinkTrumpet:1437570141490778112>"
 hashtagIcon = "<:pinkGiftHashtag:1437015068268171367>"
 settingsIcon = "<:pinkGiftCog:1437015067152482426>"
 settings2Icon = "<:pinkSettings:1436281352612745226>"
@@ -116,15 +119,6 @@ if int(dividerLength2) >= len(dividerEmojiCombined2):
 else :
     for emoji in dividerEmojiCombined2:
         divider2 += emoji
-
-emColorString1 = "#FFBDE4" #Baby Pink
-emColor1 = int(emColorString1.lstrip('#'), 16) #to replace .blue()
-emColorString2 = "#FF0080" #Hot Pink
-emColor2 = int(emColorString2.lstrip('#'), 16) #to replace .red()
-emColorString3 = "#FF69B4" #Barbie Pink
-emColor3 = int(emColorString3.lstrip('#'), 16) #to replace .green()
-emColorString4 = "#FF8FCC" #Pinkie Pink
-emColor4 = int(emColorString4.lstrip('#'), 16) #to replace .orange() and .yellow() and .gold()
 
 furnnaceLevelImageDefaultURL = "https://cdn-icons-png.freepik.com/512/12388/12388244.png"
 furnaceLevelImageHostURL = "https://cdn-icons-png.freepik.com/"
