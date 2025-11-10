@@ -10,6 +10,128 @@ import logging
 from logging.handlers import RotatingFileHandler
 from .login_handler import LoginHandler
 
+allianceIconOld = "<:pinkCrownOld:1437374294551429297>"
+allianceIcon = "<:pinkRings:1436281348670361650>"
+avatarIcon = "<:pinkCrown:1436281335546118164>"   
+stoveIcon = "<:pinkCarriage:1436281331515396198>"
+stateIcon = "<:pinkCastle:1436281332949975040>"
+listIcon = "<:pinkScroll:1436281353678360616>"
+fidIcon = "<:pinkRoyalHeart:1436281349605429424>"
+timeIcon = "<:pinkHourglass:1436281342533963796>"
+homeIcon = "<:pinkLargeCastle:1436281344769527808>"
+num1Icon = "<:pink1:1436671751303069808>"
+num2Icon = "<:pink2:1436671752016236646>"
+num3Icon = "<:pink3:1436671753060483122>"
+pinIcon = "<:pinkRings:1436281348670361650>"
+giftIcon = "<:pinkGift:1436281337005735988>"
+giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
+heartIcon = "<:HotPinkHeart:1436291474898550864>"
+alertIcon = "<:pinkGiftWarn:1437015069723459604>"
+totalIcon = "<:pinkTotal:1436281354684989500>"
+robotIcon = "<:pinkKnightHelmet:1437569343293493360>"
+shieldIcon = "<:pinkShield:1437535908193636413>"
+redeemIcon = "<:pinkWand:1436281358430376047>"
+membersIcon = "<:pinkUnicorn:1436983641669374105>"
+anounceIcon = "<:pinkTrumpet:1437570141490778112>"
+hashtagIcon = "<:pinkGiftHashtag:1437015068268171367>"
+settingsIcon = "<:pinkGiftCog:1437015067152482426>"
+settings2Icon = "<:pinkSettings:1436281352612745226>"
+hourglassIcon = "<:pinkHourglass:1436281342533963796>"
+alarmClockIcon = "<:pinkGiftLoop:1436991292973256937>"
+magnifyingIcon = "<:pinkMirror:1436281345033637929>"
+checkGiftCodeIcon = "<:pinkGiftCheck:1436994529562595400>"
+deleteGiftCodeIcon = "<:pinkGiftX:1436991294348988446>"
+addGiftCodeIcon = "<:pinkGiftPlus:1436281340403122196>"
+processingIcon = "<:pinkProcessing:1436281345956642880>"
+verifiedIcon = "<:pinkVerified:1436281357017022486>"
+questionIcon = "<:pinkQuestion:1436680546335068233>"
+deniedIcon = "<:pinkDenied:1436281336406216776>"
+deleteIcon = "<:pinkGiftMinus:1436281337794527264>"
+retryIcon = "<:pinkRetrying:1436281347181252618>"
+infoIcon = "<:pinkInfo:1436281343603507264>"
+
+dividerEmojiStart1 = "<:pinkBow:1436293647590232146>", "•"
+dividerEmojiPattern1 = "<:HotPinkHeart:1436291474898550864>", "•", "<:BarbiePinkHeart:1436291473917083778>", "•"
+dividerEmojiEnd1 = ["<:pinkBow:1436293647590232146>"]
+dividerEmojiCombined1 = []
+for emoji in dividerEmojiStart1:
+    dividerEmojiCombined1.append(emoji)
+for emoji in dividerEmojiPattern1:
+    dividerEmojiCombined1.append(emoji)
+for emoji in dividerEmojiEnd1:
+    dividerEmojiCombined1.append(emoji)
+divider1 = ""
+dividerMaxLength1 = 99
+dividerLength1 = 19
+if dividerLength1 > dividerMaxLength1:
+    dividerLength1 = dividerMaxLength1
+dividerLength2 = 47
+if int(dividerLength1) >= len(dividerEmojiCombined1):
+    i = 1
+    while i <= dividerLength1:
+        if i == 1:
+            for emoji in dividerEmojiStart1:
+                divider1 += emoji
+                i += 1
+        elif i == dividerLength1:
+            for emoji in dividerEmojiEnd1:
+                divider1 += emoji
+                i += 1
+        else :
+            for emoji in dividerEmojiPattern1:
+                divider1 += emoji
+                i += 1
+                if i > dividerLength1:
+                    break
+else :
+    for emoji in dividerEmojiCombined1:
+        divider1 += emoji
+
+dividerEmojiStart2 = "<:pinkBow:1436293647590232146>", "•"
+dividerEmojiPattern2 = ["•"]
+dividerEmojiEnd2 = ["<:pinkBow:1436293647590232146>"]
+dividerEmojiCombined2 = []
+for emoji in dividerEmojiStart2:
+    dividerEmojiCombined2.append(emoji)
+for emoji in dividerEmojiPattern2:
+    dividerEmojiCombined2.append(emoji)
+for emoji in dividerEmojiEnd2:
+    dividerEmojiCombined2.append(emoji)
+divider2 = ""
+dividerMaxLength2 = 99
+dividerLength2 = 47
+if dividerLength2 > dividerMaxLength2:
+    dividerLength2 = dividerMaxLength2
+if int(dividerLength2) >= len(dividerEmojiCombined2):
+    i = 1
+    while i <= dividerLength2:
+        if i == 1:
+            for emoji in dividerEmojiStart2:
+                divider2 += emoji
+                i += 1
+        elif i == dividerLength2:
+            for emoji in dividerEmojiEnd2:
+                divider2 += emoji
+                i += 1
+        else :
+            for emoji in dividerEmojiPattern2:
+                divider2 += emoji
+                i += 1
+                if i > dividerLength2:
+                    break
+else :
+    for emoji in dividerEmojiCombined2:
+        divider2 += emoji
+
+emColorString1 = "#FFBDE4" #Baby Pink
+emColor1 = int(emColorString1.lstrip('#'), 16) #to replace .blue()
+emColorString2 = "#FF0080" #Hot Pink
+emColor2 = int(emColorString2.lstrip('#'), 16) #to replace .red()
+emColorString3 = "#FF69B4" #Barbie Pink
+emColor3 = int(emColorString3.lstrip('#'), 16) #to replace .green()
+emColorString4 = "#FF8FCC" #Pinkie Pink
+emColor4 = int(emColorString4.lstrip('#'), 16) #to replace .orange() and .yellow() and .gold()
+
 level_mapping = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
     35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
@@ -195,31 +317,35 @@ class Control(commands.Cog):
                 if is_batch and batch_info:
                     # For batch processing (all alliances)
                     status_embed = discord.Embed(
-                        title="🔄 Alliance Control Operation",
+                        title=f"{allianceIcon} Alliance Control Operation",
                         description=(
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"{divider1}\n"
+                            f"\n"
                             f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
-                            f"🏰 **Currently Processing:** {alliance_name}\n"
+                            f"{allianceIcon} **Currently Processing:** {alliance_name}\n"
                             f"📍 **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
-                            f"⏰ **Started:** <t:{int(start_time.timestamp())}:R>\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"{timeIcon} **Started:** <t:{int(start_time.timestamp())}:R>\n"
+                            f"\n"
+                            f"{divider1}\n"
                         ),
-                        color=discord.Color.blue()
+                        color = emColor1
                     )
                 else:
                     # For single alliance processing
                     status_embed = discord.Embed(
-                        title="🔄 Alliance Control Operation",
+                        title=f"{allianceIcon} Alliance Control Operation",
                         description=(
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"{divider1}\n"
+                            f"\n"
                             f"📊 **Type:** Single Alliance\n"
-                            f"🏰 **Alliance:** {alliance_name}\n"
+                            f"{allianceIcon} **Alliance:** {alliance_name}\n"
                             f"📍 **Status:** In Progress\n"
-                            f"⏰ **Started:** <t:{int(start_time.timestamp())}:R>\n"
+                            f"{timeIcon} **Started:** <t:{int(start_time.timestamp())}:R>\n"
                             f"📢 **Results Channel:** {channel.mention}\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"\n"
+                            f"{divider1}\n"
                         ),
-                        color=discord.Color.blue()
+                        color = emColor1
                     )
                 await interaction_message.edit(embed=status_embed)
             except Exception as e:
@@ -233,21 +359,24 @@ class Control(commands.Cog):
                 auto_value = result[0] if result else 1
         
         embed = discord.Embed(
-            title=f"🏰 {alliance_name} Alliance Control",
-            description="🔍 Checking for changes in member status...",
-            color=discord.Color.blue()
+            title=f"{allianceIcon} {alliance_name} Alliance Control",
+            description=(
+                f"{magnifyingIcon} Checking for changes in member status...\n"
+                f"{divider1}\n\n"
+            ),
+            color = emColor1
         )
         embed.add_field(
             name="📊 Status",
-            value=f"⏳ Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
+            value=f"{hourglassIcon} Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n{divider2}\n",
             inline=False
         )
         embed.add_field(
-            name="📈 Progress",
-            value=f"✨ Members checked: {checked_users}/{total_users}",
+            name=f"{allianceIcon} Progress",
+            value=f"{avatarIcon} Members checked: {checked_users}/{total_users}\n\n{divider2}\n",
             inline=False
         )
-        embed.set_footer(text="⚡ Automatic Alliance Control System")
+        embed.set_footer(text="⟳ Automatic Alliance Control System")
         
         message = None
         if auto_value == 1:
@@ -271,15 +400,15 @@ class Control(commands.Cog):
                     # Get wait time from login handler
                     wait_time = self.login_handler._get_wait_time()
                     
-                    embed.description = f"⚠️ API Rate Limit! Waiting {wait_time:.1f} seconds...\n📊 Progress: {checked_users}/{total_users} members"
+                    embed.description = f"{alertIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n📊 Progress: {checked_users}/{total_users} members"
                     embed.color = discord.Color.orange()
                     if message:
                         await message.edit(embed=embed)
                     
                     await asyncio.sleep(wait_time)
                     
-                    embed.description = "🔍 Checking for changes in member status..."
-                    embed.color = discord.Color.blue()
+                    embed.description = f"{magnifyingIcon} Checking for changes in member status..."
+                    embed.color = emColor1
                     if message:
                         await message.edit(embed=embed)
                     data = await self.fetch_user_data(fid)
@@ -293,10 +422,10 @@ class Control(commands.Cog):
                         if error_msg == 'not_found':
                             # Mark for removal (will check bulk threshold later)
                             members_to_remove.append((fid, old_nickname, "Player does not exist (error 40004)"))
-                            check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Pending removal)")
+                            check_fail_list.append(f"{deniedIcon} `{fid}` ({old_nickname}) - Player not found (Pending removal)")
                         else:
                             # For other errors, just report without removing
-                            check_fail_list.append(f"❌ `{fid}` - {error_msg}")
+                            check_fail_list.append(f"{deniedIcon} `{fid}` - {error_msg}")
                             self.logger.warning(f"Failed to check ID {fid}: {error_msg}")
                         
                         checked_users += 1
@@ -315,7 +444,7 @@ class Control(commands.Cog):
                                 self.conn_users.commit()
 
                             if old_kid != new_kid:
-                                kid_changes.append(f"👤 {old_nickname} has transferred to a new state\n🔄 Old State: {old_kid}\n🆕 New State: {new_kid}")
+                                kid_changes.append(f"{avatarIcon} {old_nickname} has transferred to a new state\n{stateIcon} Old State: {old_kid}\n{homeIcon} New State: {new_kid}")
                                 
                                 # Check if auto-removal is enabled for this alliance
                                 auto_remove = self.get_auto_remove_setting(alliance_id)
@@ -334,7 +463,7 @@ class Control(commands.Cog):
                                         if admin_data:
                                             user = await self.bot.fetch_user(admin_data[0])
                                             if user:
-                                                await user.send(f"❌ {old_nickname} ({fid}) was removed from the users table due to state transfer.")
+                                                await user.send(f"{deniedIcon} {old_nickname} ({fid}) was removed from the users table due to state transfer.")
                                 else:
                                     # Just update kid without removing (default behavior)
                                     self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
@@ -348,7 +477,7 @@ class Control(commands.Cog):
                                 self.conn_changes.commit()
                                 self.cursor_users.execute("UPDATE users SET furnace_lv = ? WHERE fid = ?", (new_furnace_lv, fid))
                                 self.conn_users.commit()
-                                furnace_changes.append(f"👤 **{old_nickname}**\n🔥 `{old_furnace_display}` ➡️ `{new_furnace_display}`")
+                                furnace_changes.append(f"{avatarIcon} **{old_nickname}**\n{allianceIconOld} `{old_furnace_display}` {stoveIcon} `{new_furnace_display}`")
 
                             if new_nickname.lower() != old_nickname.lower().strip():
                                 self.cursor_changes.execute("INSERT INTO nickname_changes (fid, old_nickname, new_nickname, change_date) VALUES (?, ?, ?, ?)",
@@ -356,13 +485,13 @@ class Control(commands.Cog):
                                 self.conn_changes.commit()
                                 self.cursor_users.execute("UPDATE users SET nickname = ? WHERE fid = ?", (new_nickname, fid))
                                 self.conn_users.commit()
-                                nickname_changes.append(f"📝 `{old_nickname}` ➡️ `{new_nickname}`")
+                                nickname_changes.append(f"{avatarIcon} `{old_nickname}` {avatarIcon} `{new_nickname}`")
 
                         checked_users += 1
                 embed.set_field_at(
                     1,
-                    name="📈 Progress",
-                    value=f"✨ Members checked: {checked_users}/{total_users}",
+                    name=f"{allianceIcon} Progress",
+                    value=f"{avatarIcon} Members checked: {checked_users}/{total_users}\n\n{divider2}\n",
                     inline=False
                 )
                 if message:
@@ -380,24 +509,24 @@ class Control(commands.Cog):
 
             # Send alert to channel
             alert_embed = discord.Embed(
-                title="⚠️ BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
+                title=f"{alertIcon} BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
                 description=(
                     f"**Alliance Check Safety System Activated**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🏰 **Alliance:** {alliance_name}\n"
+                    f"{divider1}\n"
+                    f"{allianceIcon} **Alliance:** {alliance_name}\n"
                     f"👥 **Total Members:** {total_users}\n"
-                    f"❌ **Attempted Removals:** {removal_count}\n"
+                    f"{deniedIcon} **Attempted Removals:** {removal_count}\n"
                     f"📊 **Percentage:** {removal_percentage:.1f}%\n"
-                    f"🛡️ **Threshold:** 20%\n\n"
+                    f"{shieldIcon} **Threshold:** 20%\n\n"
                     f"**Reason:** Removing more than 20% of members suggests a potential API issue.\n\n"
                     f"**Members that would have been removed:**\n"
                     + "\n".join([f"• `{fid}` ({nickname})" for fid, nickname, _ in members_to_remove[:10]])
                     + (f"\n• ... and {removal_count - 10} more" if removal_count > 10 else "")
-                    + f"\n\n⚠️ **Action Required:** Please verify these members manually or wait for API issues to resolve."
+                    + f"\n\n{alertIcon} **Action Required:** Please verify these members manually or wait for API issues to resolve."
                 ),
                 color=discord.Color.red()
             )
-            alert_embed.set_footer(text="🛡️ Automatic Safety System | No members were removed")
+            alert_embed.set_footer(text=f"{shieldIcon} Automatic Safety System | No members were removed")
             await channel.send(embed=alert_embed)
 
             # Update check_fail_list to show blocked status instead of pending
@@ -428,7 +557,7 @@ class Control(commands.Cog):
             if furnace_changes:
                 await self.send_embed(
                     channel=channel,
-                    title=f"🔥 **{alliance_name}** Furnace Level Changes",
+                    title=f"{stoveIcon} **{alliance_name}** Furnace Level Changes",
                     description=safe_list(furnace_changes),
                     color=discord.Color.orange(),
                     footer=f"📊 Total Changes: {len(furnace_changes)}"
@@ -437,18 +566,18 @@ class Control(commands.Cog):
             if nickname_changes:
                 await self.send_embed(
                     channel=channel,
-                    title=f"📝 **{alliance_name}** Nickname Changes",
+                    title=f"{avatarIcon} **{alliance_name}** Nickname Changes",
                     description=safe_list(nickname_changes),
-                    color=discord.Color.blue(),
+                    color = emColor1,
                     footer=f"📊 Total Changes: {len(nickname_changes)}"
                 )
 
             if kid_changes:
                 await self.send_embed(
                     channel=channel,
-                    title=f"🌍 **{alliance_name}** State Transfer Notifications",
+                    title=f"{stateIcon} **{alliance_name}** State Transfer Notifications",
                     description=safe_list(kid_changes),
-                    color=discord.Color.green(),
+                    color=emColor3,
                     footer=f"📊 Total Changes: {len(kid_changes)}"
                 )
 
@@ -458,26 +587,26 @@ class Control(commands.Cog):
                 
                 footer_text = f"📊 Total Issues: {len(check_fail_list)}"
                 if auto_removed_count > 0:
-                    footer_text += f" | 🗑️ Auto-removed: {auto_removed_count}"
+                    footer_text += f" | {deniedIcon} Auto-removed: {auto_removed_count}"
                 
                 await self.send_embed(
                     channel=channel,
-                    title=f"❌ **{alliance_name}** Invalid Members Detected",
+                    title=f"{deniedIcon} **{alliance_name}** Invalid Members Detected",
                     description=safe_list(check_fail_list),
                     color=discord.Color.red(),
                     footer=footer_text
                 )
 
-            embed.color = discord.Color.green()
+            embed.color = emColor3
             embed.set_field_at(
                 0,
                 name="📊 Final Status",
-                value=f"✅ Control completed with changes\n⏰ {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                value=f"{verifiedIcon} Control completed with changes\n{timeIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
                 inline=False
             )
             embed.add_field(
-                name="⏱️ Duration",
-                value=str(duration),
+                name=f"{timeIcon} Duration",
+                value=f"{str(duration)}\n\n{divider1}\n",
                 inline=True
             )
             # Build the value string without nested f-strings for Python 3.9+ compatibility
@@ -487,29 +616,29 @@ class Control(commands.Cog):
             # Add auto-removed count if any
             auto_removed_count = sum(1 for item in check_fail_list if 'Auto-removed' in item)
             if auto_removed_count > 0:
-                changes_text += f"\n🗑️ {auto_removed_count} invalid IDs removed"
+                changes_text += f"\n{deniedIcon} {auto_removed_count} invalid IDs removed"
 
             # Add check failures count if any
             check_failure_count = sum(1 for item in check_fail_list if 'Auto-removed' not in item)
             if check_failure_count > 0:
-                changes_text += f"\n❌ {check_failure_count} check failures"
+                changes_text += f"\n{deniedIcon} {check_failure_count} check failures"
 
             embed.add_field(
-                name="📈 Total Changes",
+                name=f"{allianceIcon} Total Changes",
                 value=changes_text,
                 inline=True
             )
         else:
-            embed.color = discord.Color.green()
+            embed.color = emColor3
             embed.set_field_at(
                 0,
                 name="📊 Final Status",
-                value=f"✅ Control completed successfully\n⏰ {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n📝 No changes detected",
+                value=f"{verifiedIcon} Control completed successfully\n{timeIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{deniedIcon} No changes detected\n\n{divider2}\n",
                 inline=False
             )
             embed.add_field(
-                name="⏱️ Duration",
-                value=str(duration),
+                name=f"{timeIcon} Duration",
+                value=f"{str(duration)}\n\n{divider1}\n",
                 inline=True
             )
 
@@ -528,46 +657,52 @@ class Control(commands.Cog):
                     if batch_info['current'] == batch_info['total']:
                         # Final completion message for all alliances
                         status_embed = discord.Embed(
-                            title="✅ Alliance Control Complete",
+                            title=f"{verifiedIcon} Alliance Control Complete",
                             description=(
-                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"{divider1}\n"
+                                f"\n"
                                 f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
-                                f"🏰 **Alliances:** {batch_info['total']} processed\n"
-                                f"✅ **Status:** Completed\n"
-                                f"📈 **Latest Alliance:** {alliance_name}\n"
-                                f"⏱️ **Duration:** {duration.total_seconds():.1f} seconds\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━"
+                                f"{allianceIcon} **Alliances:** {batch_info['total']} processed\n"
+                                f"{verifiedIcon} **Status:** Completed\n"
+                                f"{allianceIcon} **Latest Alliance:** {alliance_name}\n"
+                                f"{timeIcon} **Duration:** {duration.total_seconds():.1f} seconds\n"
+                                f"\n"
+                                f"{divider1}\n"
                             ),
-                            color=discord.Color.green()
+                            color=emColor3
                         )
                     else:
                         # Still processing other alliances - just update progress
                         status_embed = discord.Embed(
-                            title="🔄 Alliance Control Operation",
+                            title=f"{allianceIcon} Alliance Control Operation",
                             description=(
-                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"{divider1}\n"
+                                f"\n"
                                 f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
-                                f"🏰 **Completed:** {alliance_name}\n"
+                                f"{allianceIcon} **Completed:** {alliance_name}\n"
                                 f"📍 **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
-                                f"📈 **Changes in {alliance_name}:** {'Yes' if changes_detected else 'No'}\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━"
+                                f"{allianceIcon} **Changes in {alliance_name}:** {'Yes' if changes_detected else 'No'}\n"
+                                f"\n"
+                                f"{divider1}\n"
                             ),
-                            color=discord.Color.blue()
+                            color = emColor1
                         )
                 else:
                     # Single alliance completion
                     status_embed = discord.Embed(
-                        title="✅ Alliance Control Complete",
+                        title=f"{verifiedIcon} Alliance Control Complete",
                         description=(
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"📊 **Type:** Single Alliance\n"
-                            f"🏰 **Alliance:** {alliance_name}\n"
-                            f"✅ **Status:** Completed\n"
-                            f"📈 **Changes Detected:** {'Yes' if changes_detected else 'No'}\n"
-                            f"⏱️ **Duration:** {duration.total_seconds():.1f} seconds\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"{divider1}\n"
+                            f"\n"
+                            f"{allianceIcon} **Type:** Single Alliance\n"
+                            f"{allianceIcon} **Alliance:** {alliance_name}\n"
+                            f"{verifiedIcon} **Status:** Completed\n"
+                            f"{allianceIcon} **Changes Detected:** {'Yes' if changes_detected else 'No'}\n"
+                            f"{timeIcon} **Duration:** {duration.total_seconds():.1f} seconds\n"
+                            f"\n"
+                            f"{divider1}\n"
                         ),
-                        color=discord.Color.green()
+                        color=emColor3
                     )
                 
                 await interaction_message.edit(embed=status_embed)
