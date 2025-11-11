@@ -43,13 +43,17 @@ magnifyingIcon = "<:pinkMirror:1436281345033637929>"
 checkGiftCodeIcon = "<:pinkGiftCheck:1436994529562595400>"
 deleteGiftCodeIcon = "<:pinkGiftX:1436991294348988446>"
 addGiftCodeIcon = "<:pinkGiftPlus:1436281340403122196>"
-processingIcon = "<:pinkProcessing:1436281345956642880>"
-verifiedIcon = "<:pinkVerified:1436281357017022486>"
-questionIcon = "<:pinkQuestion:1436680546335068233>"
-deniedIcon = "<:pinkDenied:1436281336406216776>"
-deleteIcon = "<:pinkGiftMinus:1436281337794527264>"
-retryIcon = "<:pinkRetrying:1436281347181252618>"
-infoIcon = "<:pinkInfo:1436281343603507264>"
+processingIcon = "<:pinkScollopProcessing:1437690329691197590>"
+verifiedIcon = "<:pinkScollopVerified:1437690336305483807>"
+questionIcon = "<:pinkScollopQuestion:1437690329959628955>"
+transferIcon = "<:pinkScollopTransfer:1437690334409785416>"
+multiplyIcon = "<:pinkScollopMultiply:1437690328541958185>"
+deniedIcon = "<:pinkScollopDenied:1437690326063120446>"
+deleteIcon = "<:pinkScollopMinus:1437690327975723028>"
+retryIcon = "<:pinkScollopRetrying:1437690331545206875>"
+totalIcon = "<:pinkScollopTotal:1437690333801484308>"
+infoIcon = "<:pinkScollopInfo:1437690327128477776>"
+addIcon = "<:pinkScollopAdd:1437690325694156800>"
 
 dividerEmojiStart1 = "<:pinkBow:1436293647590232146>", "•"
 dividerEmojiPattern1 = "<:HotPinkHeart:1436291474898550864>", "•", "<:BarbiePinkHeart:1436291473917083778>", "•"
@@ -245,9 +249,9 @@ class AllianceMemberOperations(commands.Cog):
             description=(
                 f"Please select an operation from below:\n\n"
                 f"**Available Operations:**\n"
-                f"➕ `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
-                f"🔄 `Transfer Members` - Transfer members to another alliance\n"
-                f"➖ `Remove Members` - Remove members from alliance\n"
+                f"{addIcon} `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
+                f"{transferIcon} `Transfer Members` - Transfer members to another alliance\n"
+                f"{deleteIcon} `Remove Members` - Remove members from alliance\n"
                 f"{magnifyingIcon} `View Members` - View alliance member list\n"
                 f"{allianceIcon} `Export Members` - Export member data to CSV/TSV\n"
                 f"{homeIcon} `Main Menu` - Return to main menu"
@@ -265,7 +269,7 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Add Members",
-                emoji=f"➕",
+                emoji=f"{addIcon}",
                 style=discord.ButtonStyle.success,
                 custom_id="add_member",
                 row=0
@@ -312,7 +316,7 @@ class AllianceMemberOperations(commands.Cog):
                         special_alliance_text += f"{divider2}\n"
 
                     select_embed = discord.Embed(
-                        title=f"📋 Alliance Selection",
+                        title=f"{allianceIcon} Alliance Selection",
                         description=(
                             f"Please select an alliance to add members:\n\n"
                             f"**Permission Details**\n"
@@ -356,7 +360,7 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Remove Members",
-                emoji=f"➖",
+                emoji=f"{deleteIcon}",
                 style=discord.ButtonStyle.danger,
                 custom_id="remove_member",
                 row=0
@@ -972,7 +976,7 @@ class AllianceMemberOperations(commands.Cog):
             async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await self.cog.show_main_menu(interaction)
 
-            @discord.ui.button(label="Transfer Members", emoji=f"🔄", style=discord.ButtonStyle.primary, row=0)
+            @discord.ui.button(label="Transfer Members", emoji=f"{transferIcon}", style=discord.ButtonStyle.primary, row=0)
             async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
                     with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -1010,7 +1014,7 @@ class AllianceMemberOperations(commands.Cog):
                         special_alliance_text += f"{divider2}\n"
 
                     select_embed = discord.Embed(
-                        title=f"🔄 Alliance Selection - Member Transfer",
+                        title=f"{transferIcon} Alliance Selection - Member Transfer",
                         description=(
                             f"Select the **source** alliance from which you want to transfer members:\n\n"
                             f"**Permission Details**\n"

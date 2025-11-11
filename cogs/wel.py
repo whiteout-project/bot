@@ -35,13 +35,17 @@ magnifyingIcon = "<:pinkMirror:1436281345033637929>"
 checkGiftCodeIcon = "<:pinkGiftCheck:1436994529562595400>"
 deleteGiftCodeIcon = "<:pinkGiftX:1436991294348988446>"
 addGiftCodeIcon = "<:pinkGiftPlus:1436281340403122196>"
-processingIcon = "<:pinkProcessing:1436281345956642880>"
-verifiedIcon = "<:pinkVerified:1436281357017022486>"
-questionIcon = "<:pinkQuestion:1436680546335068233>"
-deniedIcon = "<:pinkDenied:1436281336406216776>"
-deleteIcon = "<:pinkGiftMinus:1436281337794527264>"
-retryIcon = "<:pinkRetrying:1436281347181252618>"
-infoIcon = "<:pinkInfo:1436281343603507264>"
+processingIcon = "<:pinkScollopProcessing:1437690329691197590>"
+verifiedIcon = "<:pinkScollopVerified:1437690336305483807>"
+questionIcon = "<:pinkScollopQuestion:1437690329959628955>"
+transferIcon = "<:pinkScollopTransfer:1437690334409785416>"
+multiplyIcon = "<:pinkScollopMultiply:1437690328541958185>"
+deniedIcon = "<:pinkScollopDenied:1437690326063120446>"
+deleteIcon = "<:pinkScollopMinus:1437690327975723028>"
+retryIcon = "<:pinkScollopRetrying:1437690331545206875>"
+totalIcon = "<:pinkScollopTotal:1437690333801484308>"
+infoIcon = "<:pinkScollopInfo:1437690327128477776>"
+addIcon = "<:pinkScollopAdd:1437690325694156800>"
 
 dividerEmojiStart1 = "<:pinkBow:1436293647590232146>", "•"
 dividerEmojiPattern1 = "<:HotPinkHeart:1436291474898550864>", "•", "<:BarbiePinkHeart:1436291473917083778>", "•"
@@ -172,11 +176,11 @@ class GNCommands(commands.Cog):
                         description=(
                             f"{divider1}\n"
                             f"### **System Status**\n"
-                            f"{verifiedIcon} Bot is now online and operational\n"
-                            f"{verifiedIcon} Database connections established\n"
-                            f"{verifiedIcon} Command systems initialized\n"
-                            f"{verifiedIcon if auto_value == 1 else deniedIcon} Alliance Control Messages\n"
-                            f"{ocr_status} {ocr_details}\n"
+                            f"{verifiedIcon} ***Bot is now online and operational***\n"
+                            f"{verifiedIcon} ***Database connections established***\n"
+                            f"{verifiedIcon} ***Command systems initialized***\n"
+                            f"{verifiedIcon if auto_value == 1 else deniedIcon} ***Alliance Control Messages automated***\n"
+                            f"{ocr_status} ***{ocr_details}***\n"
                             f"\n"
                             f"{divider1}\n"
                             f"### {pinIcon} Community & Support\n"
@@ -222,7 +226,7 @@ class GNCommands(commands.Cog):
                                 settings = cursor.fetchone()
                                 if settings:
                                     if settings[0]:
-                                        info_parts.append(f"{anounceIcon} **Channel:** <#{settings[0]}>")
+                                        info_parts.append(f"{anounceIcon} **Alliance Channel:** <#{settings[0]}>")
                                     interval_text = f"{alarmClockIcon} **Auto Check:** {settings[1]} minutes" if settings[1] > 0 else f"{deleteGiftCodeIcon}  No Auto Check"
                                     info_parts.append(interval_text)
                             
@@ -236,12 +240,12 @@ class GNCommands(commands.Cog):
                                 cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
                                 gift_channel = cursor.fetchone()
                                 if gift_channel and gift_channel[0]:
-                                    info_parts.append(f"{giftsIcon} **Gift Channel:** <#{gift_channel[0]}>")
+                                    info_parts.append(f"{giftIcon} **Gift Codes Channel:** <#{gift_channel[0]}>")
                             
                             alliance_info.append(
                                 f"**{name}**\n" + 
                                 f"{divider1}\n\n" +
-                                f"\n".join(f"> {part}" for part in info_parts) +
+                                f"\n".join(f"{part}" for part in info_parts) +
                                 f"\n\n{divider1}"
                             )
 
