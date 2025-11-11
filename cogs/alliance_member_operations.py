@@ -29,7 +29,7 @@ giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
 alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
-robotIcon = "<:pinkKnightHelmet:1437674905989681162>"
+robotIcon = "<:pinkKnightHelmet:1437767323674083419>"
 shieldIcon = "<:pinkShield:1437535908193636413>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
@@ -46,10 +46,11 @@ addGiftCodeIcon = "<:pinkGiftPlus:1436281340403122196>"
 processingIcon = "<:pinkScollopProcessing:1437690329691197590>"
 verifiedIcon = "<:pinkScollopVerified:1437690336305483807>"
 questionIcon = "<:pinkScollopQuestion:1437690329959628955>"
-transferIcon = "<:pinkScollopTransfer:1437690334409785416>"
+transferIcon = "<:pinkScollopTransfer:1437763382538272779>"
 multiplyIcon = "<:pinkScollopMultiply:1437690328541958185>"
 deniedIcon = "<:pinkScollopDenied:1437690326063120446>"
 deleteIcon = "<:pinkScollopMinus:1437690327975723028>"
+exportIcon = "<:pinkScollopExport:1437763381569392802>"
 retryIcon = "<:pinkScollopRetrying:1437690331545206875>"
 totalIcon = "<:pinkScollopTotal:1437690333801484308>"
 infoIcon = "<:pinkScollopInfo:1437690327128477776>"
@@ -247,14 +248,28 @@ class AllianceMemberOperations(commands.Cog):
         embed = discord.Embed(
             title=f"{allianceIcon} Alliance Member Operations",
             description=(
-                f"Please select an operation from below:\n\n"
-                f"**Available Operations:**\n"
-                f"{addIcon} `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
-                f"{transferIcon} `Transfer Members` - Transfer members to another alliance\n"
-                f"{deleteIcon} `Remove Members` - Remove members from alliance\n"
-                f"{magnifyingIcon} `View Members` - View alliance member list\n"
-                f"{allianceIcon} `Export Members` - Export member data to CSV/TSV\n"
-                f"{homeIcon} `Main Menu` - Return to main menu"
+                f"### **Available Operations:**\n"
+                f"\n{divider1}\n"
+                f"\n"
+                f"{addIcon} **Add Members**\n"
+                f"└ Add new members (supports IDs, CSV/TSV imports)\n"
+                f"{divider2}\n"
+                f"{transferIcon} **Transfer Members**\n"
+                f"└ Transfer members to another alliance\n"
+                f"{divider2}\n"
+                f"{deleteIcon} **Remove Members**\n"
+                f"└ Remove members from alliance\n"
+                f"{divider2}\n"
+                f"{magnifyingIcon} **View Members**\n"
+                f"└ View alliance member list\n"
+                f"{divider2}\n"
+                f"{allianceIcon} **Export Members**\n"
+                f"└ Export member data to CSV/TSV\n"
+                f"{divider2}\n"
+                f"{homeIcon} **Main Menu**\n"
+                f"└ Return to main menu\n"
+                f"\n"
+                f"{divider1}"
             ),
             color=emColor1
         )
@@ -270,7 +285,7 @@ class AllianceMemberOperations(commands.Cog):
             @discord.ui.button(
                 label="Add Members",
                 emoji=f"{addIcon}",
-                style=discord.ButtonStyle.success,
+                style=discord.ButtonStyle.secondary,
                 custom_id="add_member",
                 row=0
             )
@@ -361,7 +376,7 @@ class AllianceMemberOperations(commands.Cog):
             @discord.ui.button(
                 label="Remove Members",
                 emoji=f"{deleteIcon}",
-                style=discord.ButtonStyle.danger,
+                style=discord.ButtonStyle.secondary,
                 custom_id="remove_member",
                 row=0
             )
@@ -494,7 +509,7 @@ class AllianceMemberOperations(commands.Cog):
                                 confirm_view = discord.ui.View()
                                 confirm_button = discord.ui.Button(
                                     label=f"{verifiedIcon} Confirm", 
-                                    style=discord.ButtonStyle.danger, 
+                                    style=discord.ButtonStyle.secondary, 
                                     custom_id="confirm_all"
                                 )
                                 cancel_button = discord.ui.Button(
@@ -667,8 +682,8 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="View Members",
-                emoji=f"{allianceIcon}",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{magnifyingIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="view_members",
                 row=1
             )
@@ -831,8 +846,8 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Export Members",
-                emoji=f"{allianceIcon}",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{exportIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="export_members",
                 row=1
             )
@@ -976,7 +991,7 @@ class AllianceMemberOperations(commands.Cog):
             async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await self.cog.show_main_menu(interaction)
 
-            @discord.ui.button(label="Transfer Members", emoji=f"{transferIcon}", style=discord.ButtonStyle.primary, row=0)
+            @discord.ui.button(label="Transfer Members", emoji=f"{transferIcon}", style=discord.ButtonStyle.secondary, row=0)
             async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
                     with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -2211,7 +2226,7 @@ class IDSearchModal(discord.ui.Modal):
                     view = discord.ui.View()
                     confirm_button = discord.ui.Button(
                         label=f"{verifiedIcon} Confirm Delete",
-                        style=discord.ButtonStyle.danger
+                        style=discord.ButtonStyle.secondary
                     )
                     cancel_button = discord.ui.Button(
                         label=f"{deniedIcon} Cancel",
@@ -2438,7 +2453,7 @@ class ExportColumnSelectView(discord.ui.View):
             self.selected_columns['alliance'] = True
             alliance_btn = discord.ui.Button(
                 label=f"{verifiedIcon} Alliance", 
-                style=discord.ButtonStyle.primary, 
+                style=discord.ButtonStyle.secondary, 
                 custom_id="toggle_alliance", 
                 row=0
             )
@@ -2446,27 +2461,27 @@ class ExportColumnSelectView(discord.ui.View):
             self.add_item(alliance_btn)
         
         # Add other column buttons
-        id_btn = discord.ui.Button(label=f"{verifiedIcon} ID", style=discord.ButtonStyle.primary, custom_id="toggle_id", row=0)
+        id_btn = discord.ui.Button(label=f"{verifiedIcon} ID", style=discord.ButtonStyle.secondary, custom_id="toggle_id", row=0)
         id_btn.callback = self.toggle_id_button
         self.add_item(id_btn)
         
-        name_btn = discord.ui.Button(label=f"{verifiedIcon} Name", style=discord.ButtonStyle.primary, custom_id="toggle_name", row=0)
+        name_btn = discord.ui.Button(label=f"{verifiedIcon} Name", style=discord.ButtonStyle.secondary, custom_id="toggle_name", row=0)
         name_btn.callback = self.toggle_name_button
         self.add_item(name_btn)
         
-        fc_btn = discord.ui.Button(label=f"{verifiedIcon} FC Level", style=discord.ButtonStyle.primary, custom_id="toggle_fc", row=0 if not include_alliance else 1)
+        fc_btn = discord.ui.Button(label=f"{verifiedIcon} FC Level", style=discord.ButtonStyle.secondary, custom_id="toggle_fc", row=0 if not include_alliance else 1)
         fc_btn.callback = self.toggle_fc_button
         self.add_item(fc_btn)
         
-        state_btn = discord.ui.Button(label=f"{verifiedIcon} State", style=discord.ButtonStyle.primary, custom_id="toggle_state", row=0 if not include_alliance else 1)
+        state_btn = discord.ui.Button(label=f"{verifiedIcon} State", style=discord.ButtonStyle.secondary, custom_id="toggle_state", row=0 if not include_alliance else 1)
         state_btn.callback = self.toggle_state_button
         self.add_item(state_btn)
         
-        next_btn = discord.ui.Button(label=f"Next ➡️", style=discord.ButtonStyle.success, custom_id="next_step", row=1 if not include_alliance else 2)
+        next_btn = discord.ui.Button(label=f"Next ➡️", style=discord.ButtonStyle.secondary, custom_id="next_step", row=1 if not include_alliance else 2)
         next_btn.callback = self.next_button
         self.add_item(next_btn)
         
-        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel", row=1 if not include_alliance else 2)
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="cancel", row=1 if not include_alliance else 2)
         cancel_btn.callback = self.cancel_button
         self.add_item(cancel_btn)
         
@@ -2477,19 +2492,19 @@ class ExportColumnSelectView(discord.ui.View):
         for item in self.children:
             if isinstance(item, discord.ui.Button):
                 if item.custom_id == 'toggle_alliance' and self.include_alliance:
-                    item.style = discord.ButtonStyle.primary if self.selected_columns.get('alliance', False) else discord.ButtonStyle.secondary
+                    item.style = discord.ButtonStyle.secondary if self.selected_columns.get('alliance', False) else discord.ButtonStyle.secondary
                     item.label = f"{verifiedIcon} Alliance" if self.selected_columns.get('alliance', False) else f"{deniedIcon} Alliance"
                 elif item.custom_id == 'toggle_id':
-                    item.style = discord.ButtonStyle.primary if self.selected_columns['id'] else discord.ButtonStyle.secondary
+                    item.style = discord.ButtonStyle.secondary if self.selected_columns['id'] else discord.ButtonStyle.secondary
                     item.label = f"{verifiedIcon} ID" if self.selected_columns['id'] else f"{deniedIcon} ID"
                 elif item.custom_id == 'toggle_name':
-                    item.style = discord.ButtonStyle.primary if self.selected_columns['name'] else discord.ButtonStyle.secondary
+                    item.style = discord.ButtonStyle.secondary if self.selected_columns['name'] else discord.ButtonStyle.secondary
                     item.label = f"{verifiedIcon} Name" if self.selected_columns['name'] else f"{deniedIcon} Name"
                 elif item.custom_id == 'toggle_fc':
-                    item.style = discord.ButtonStyle.primary if self.selected_columns['fc_level'] else discord.ButtonStyle.secondary
+                    item.style = discord.ButtonStyle.secondary if self.selected_columns['fc_level'] else discord.ButtonStyle.secondary
                     item.label = f"{verifiedIcon} FC Level" if self.selected_columns['fc_level'] else f"{deniedIcon} FC Level"
                 elif item.custom_id == 'toggle_state':
-                    item.style = discord.ButtonStyle.primary if self.selected_columns['state'] else discord.ButtonStyle.secondary
+                    item.style = discord.ButtonStyle.secondary if self.selected_columns['state'] else discord.ButtonStyle.secondary
                     item.label = f"{verifiedIcon} State" if self.selected_columns['state'] else f"{deniedIcon} State"
     
     async def toggle_alliance_button(self, interaction: discord.Interaction):
@@ -2606,7 +2621,7 @@ class ExportFormatSelectView(discord.ui.View):
         self.selected_columns = selected_columns
         self.cog = cog
     
-    @discord.ui.button(label="CSV (Comma-separated)", emoji=f"{allianceIcon}", style=discord.ButtonStyle.primary, custom_id="csv")
+    @discord.ui.button(label="CSV (Comma-separated)", emoji=f"{allianceIcon}", style=discord.ButtonStyle.secondary, custom_id="csv")
     async def csv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.process_member_export(
             interaction,
@@ -2616,7 +2631,7 @@ class ExportFormatSelectView(discord.ui.View):
             'csv'
         )
     
-    @discord.ui.button(label="TSV (Tab-separated)", emoji=f"📋", style=discord.ButtonStyle.primary, custom_id="tsv")
+    @discord.ui.button(label="TSV (Tab-separated)", emoji=f"📋", style=discord.ButtonStyle.secondary, custom_id="tsv")
     async def tsv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.process_member_export(
             interaction,
@@ -2661,7 +2676,7 @@ class ExportFormatSelectView(discord.ui.View):
         column_view = ExportColumnSelectView(self.alliance_id, self.alliance_name, self.cog, include_alliance)
         await interaction.response.edit_message(embed=column_embed, view=column_view)
     
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel")
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="cancel")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             content=f"{deniedIcon} Export cancelled.",
@@ -2848,7 +2863,7 @@ class MemberSelectView(discord.ui.View):
                 ephemeral=True
             )
 
-    @discord.ui.button(label="Process Selected", emoji=f"{verifiedIcon}", style=discord.ButtonStyle.success, row=2, disabled=True)
+    @discord.ui.button(label="Process Selected", emoji=f"{verifiedIcon}", style=discord.ButtonStyle.secondary, row=2, disabled=True)
     async def _process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process selected members (delete or transfer)"""
         if not self.pending_selections:
@@ -2866,7 +2881,7 @@ class MemberSelectView(discord.ui.View):
         self.update_action_buttons()
         await self.update_main_embed(interaction)
 
-    @discord.ui.button(label="Delete All", emoji=f"⚠️", style=discord.ButtonStyle.danger, row=2)
+    @discord.ui.button(label="Delete All", emoji=f"⚠️", style=discord.ButtonStyle.secondary, row=2)
     async def _delete_all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Delete all members in the alliance (only shown for remove operations)"""
         if not self.is_remove_operation:
@@ -2883,7 +2898,7 @@ class DeleteAllConfirmView(discord.ui.View):
         super().__init__(timeout=60)
         self.parent_view = parent_view
 
-    @discord.ui.button(label=f"{verifiedIcon} Confirm Delete All", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label=f"{verifiedIcon} Confirm Delete All", style=discord.ButtonStyle.secondary)
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Call the parent's delete all callback
         if self.parent_view.callback:

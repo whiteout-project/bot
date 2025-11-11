@@ -41,7 +41,7 @@ giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
 alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
-robotIcon = "<:pinkKnightHelmet:1437674905989681162>"
+robotIcon = "<:pinkKnightHelmet:1437767323674083419>"
 shieldIcon = "<:pinkShield:1437535908193636413>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
@@ -58,10 +58,11 @@ addGiftCodeIcon = "<:pinkGiftPlus:1436281340403122196>"
 processingIcon = "<:pinkScollopProcessing:1437690329691197590>"
 verifiedIcon = "<:pinkScollopVerified:1437690336305483807>"
 questionIcon = "<:pinkScollopQuestion:1437690329959628955>"
-transferIcon = "<:pinkScollopTransfer:1437690334409785416>"
+transferIcon = "<:pinkScollopTransfer:1437763382538272779>"
 multiplyIcon = "<:pinkScollopMultiply:1437690328541958185>"
 deniedIcon = "<:pinkScollopDenied:1437690326063120446>"
 deleteIcon = "<:pinkScollopMinus:1437690327975723028>"
+exportIcon = "<:pinkScollopExport:1437763381569392802>"
 retryIcon = "<:pinkScollopRetrying:1437690331545206875>"
 totalIcon = "<:pinkScollopTotal:1437690333801484308>"
 infoIcon = "<:pinkScollopInfo:1437690327128477776>"
@@ -2528,7 +2529,8 @@ class GiftOperations(commands.Cog):
             title=f"{giftIcon} Gift Code Operations",
             description=(
                 f"### **Available Operations:**\n"
-                f"\n{divider1}\n\n"
+                f"\n{divider1}\n"
+                f"\n"
                 f"{addGiftCodeIcon} **Add Gift Code**\n"
                 f"└ Input a new gift code\n"
                 f"{divider2}\n"
@@ -2543,7 +2545,8 @@ class GiftOperations(commands.Cog):
                 f"{divider2}\n"
                 f"{settings2Icon} **Gift Code Settings**\n"
                 f"└ Edit automatic usage settings\n"
-                f"\n{divider1}"
+                f"\n"
+                f"{divider1}"
             ),
             color=emColor4,
         )
@@ -2713,7 +2716,7 @@ class GiftOperations(commands.Cog):
                 selected_code = select_interaction.data["values"][0]
                 
                 confirm = discord.ui.Button(
-                    style=discord.ButtonStyle.danger,
+                    style=discord.ButtonStyle.secondary,
                     label="Confirm Delete",
                     custom_id="confirm"
                 )
@@ -2963,7 +2966,7 @@ class GiftOperations(commands.Cog):
                 confirm_button = discord.ui.Button(
                     label="Confirm",
                     emoji=f"{verifiedIcon}",
-                    style=discord.ButtonStyle.danger,
+                    style=discord.ButtonStyle.secondary,
                     custom_id="confirm_remove"
                 )
                 confirm_button.callback = confirm_callback
@@ -3088,7 +3091,7 @@ class GiftOperations(commands.Cog):
             confirm_button = discord.ui.Button(
                 label="Remove Setting",
                 emoji=f"{deleteIcon}",
-                style=discord.ButtonStyle.danger
+                style=discord.ButtonStyle.secondary
             )
             confirm_button.callback = confirm_removal
             
@@ -3395,7 +3398,7 @@ class GiftOperations(commands.Cog):
                     
                     confirm_button = discord.ui.Button(
                         label="Yes, Remove",
-                        style=discord.ButtonStyle.danger,
+                        style=discord.ButtonStyle.secondary,
                         emoji=f"{verifiedIcon}"
                     )
                     
@@ -3610,7 +3613,7 @@ class GiftOperations(commands.Cog):
             
             confirm_button = discord.ui.Button(
                 label="Start Scan",
-                style=discord.ButtonStyle.success,
+                style=discord.ButtonStyle.secondary,
                 emoji=f"{verifiedIcon}"
             )
             
@@ -3868,7 +3871,7 @@ class GiftOperations(commands.Cog):
                 confirm_button = discord.ui.Button(
                     label="Enable",
                     emoji=f"{verifiedIcon}",
-                    style=discord.ButtonStyle.success,
+                    style=discord.ButtonStyle.secondary,
                     custom_id="confirm"
                 )
                 confirm_button.callback = button_callback
@@ -3876,7 +3879,7 @@ class GiftOperations(commands.Cog):
                 deny_button = discord.ui.Button(
                     label="Disable",
                     emoji=f"{deniedIcon}",
-                    style=discord.ButtonStyle.danger,
+                    style=discord.ButtonStyle.secondary,
                     custom_id="deny"
                 )
                 deny_button.callback = button_callback
@@ -4879,7 +4882,7 @@ class GiftView(discord.ui.View):
                             confirm_button = discord.ui.Button(
                                 label="Confirm",
                                 emoji=f"{verifiedIcon}",
-                                style=discord.ButtonStyle.success,
+                                style=discord.ButtonStyle.secondary,
                                 custom_id="confirm"
                             )
                             confirm_button.callback = confirm_callback
@@ -4887,7 +4890,7 @@ class GiftView(discord.ui.View):
                             cancel_button = discord.ui.Button(
                                 label="Cancel",
                                 emoji=f"{deniedIcon}",
-                                style=discord.ButtonStyle.danger,
+                                style=discord.ButtonStyle.secondary,
                                 custom_id="cancel"
                             )
                             cancel_button.callback = cancel_callback
@@ -5034,7 +5037,7 @@ class ClearCacheConfirmView(discord.ui.View):
         super().__init__(timeout=60)
         self.parent_cog = parent_cog
 
-    @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger, emoji=f"{verifiedIcon}")
+    @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.secondary, emoji=f"{verifiedIcon}")
     async def confirm_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         try: # Clear the user_giftcodes table
             self.parent_cog.cursor.execute("DELETE FROM user_giftcodes")
@@ -5099,7 +5102,7 @@ class OCRSettingsView(discord.ui.View):
             emoji=f"{verifiedIcon}" if self.enabled == 1 else "🚫",
             custom_id="enable_ocr", row=0,
             label="Disable CAPTCHA Solver" if self.enabled == 1 else "Enable CAPTCHA Solver",
-            style=discord.ButtonStyle.danger if self.enabled == 1 else discord.ButtonStyle.success,
+            style=discord.ButtonStyle.secondary if self.enabled == 1 else discord.ButtonStyle.secondary,
             disabled=self.disable_controls
         )
         self.enable_ocr_button_item.callback = self.enable_ocr_button
@@ -5124,7 +5127,7 @@ class OCRSettingsView(discord.ui.View):
 
         # Add the Clear Redemption Cache Button
         self.clear_cache_button_item = discord.ui.Button(
-            label="Clear Redemption Cache", style=discord.ButtonStyle.danger, emoji=f"{deleteIcon}",
+            label="Clear Redemption Cache", style=discord.ButtonStyle.secondary, emoji=f"{deleteIcon}",
             custom_id="clear_redemption_cache", row=1,
             disabled=self.disable_controls
         )

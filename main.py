@@ -921,6 +921,7 @@ if __name__ == "__main__":
         "conn_changes": "db/changes.sqlite",
         "conn_users": "db/users.sqlite",
         "conn_settings": "db/settings.sqlite",
+        "conn_stylesettings":"db/stylesettings.sqlite",
     }
 
     connections = {name: sqlite3.connect(path) for name, path in databases.items()}
@@ -928,6 +929,68 @@ if __name__ == "__main__":
     print(F.GREEN + "Database connections have been successfully established." + R)
 
     def create_tables():
+
+        with connections["conn_stylesettings"] as conn_stylesettings:
+            conn_users.execute("""CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY, 
+                VARIABLENAME1 TEXT,
+                allianceIconOld TEXT,
+                allianceIcon TEXT,
+                avatarIcon TEXT,   
+                stoveIcon TEXT,
+                stateIcon TEXT,
+                listIcon TEXT,
+                fidIcon TEXT,
+                timeIcon TEXT,
+                homeIcon TEXT,
+                num1Icon TEXT,
+                num2Icon TEXT,
+                num3Icon TEXT,
+                pinIcon TEXT,
+                giftIcon TEXT,
+                giftsIcon TEXT,
+                heartIcon TEXT,
+                alertIcon TEXT,
+                totalIcon TEXT,
+                robotIcon TEXT,
+                shieldIcon TEXT,
+                redeemIcon TEXT,
+                membersIcon TEXT,
+                anounceIcon TEXT,
+                hashtagIcon TEXT,
+                settingsIcon TEXT,
+                settings2Icon TEXT,
+                hourglassIcon TEXT,
+                alarmClockIcon TEXT,
+                magnifyingIcon TEXT,
+                checkGiftCodeIcon TEXT,
+                deleteGiftCodeIcon TEXT,
+                addGiftCodeIcon TEXT,
+                processingIcon TEXT,
+                verifiedIcon TEXT,
+                questionIcon TEXT,
+                transferIcon TEXT,
+                multiplyIcon TEXT,
+                deniedIcon TEXT,
+                deleteIcon TEXT,
+                retryIcon TEXT,
+                totalIcon TEXT,
+                infoIcon TEXT,
+                addIcon TEXT,
+                dividerEmojiStart1 TEXT,
+                dividerEmojiPattern1 TEXT,
+                dividerEmojiEnd1 TEXT,
+                dividerLength1 INTEGER,
+                dividerEmojiStart2 TEXT,
+                dividerEmojiPattern2 TEXT,
+                dividerEmojiEnd2 TEXT,
+                dividerLength2 INTEGER,
+                emColorString1 TEXT,
+                emColorString2 TEXT,
+                emColorString3 TEXT,
+                emColorString4 TEXT
+            )""")
+
         with connections["conn_changes"] as conn_changes:
             conn_changes.execute("""CREATE TABLE IF NOT EXISTS nickname_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, 
