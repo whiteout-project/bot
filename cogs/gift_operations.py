@@ -41,7 +41,7 @@ giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
 alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
-robotIcon = "<:pinkKnightHelmet:1437569343293493360>"
+robotIcon = "<:pinkKnightHelmet:1437674905989681162>"
 shieldIcon = "<:pinkShield:1437535908193636413>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
@@ -2034,7 +2034,7 @@ class GiftOperations(commands.Cog):
                         f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
                         f"**Current Settings**\n"
                         f"{divider1}\n"
-                        f"🤖 **OCR Enabled:** {f'{verifiedIcon} Yes' if enabled == 1 else f'{deniedIcon} No'}\n"
+                        f"{robotIcon} **OCR Enabled:** {f'{verifiedIcon} Yes' if enabled == 1 else f'{deniedIcon} No'}\n"
                         f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
                         f"{fidIcon} **Test ID:** `{current_test_fid}`\n"
                         f"📦 **ONNX Runtime:** {f'{verifiedIcon} Found' if onnx_available else f'{deniedIcon} Missing'}\n"
@@ -4077,7 +4077,7 @@ class GiftOperations(commands.Cog):
                             f"TIMEOUT_RETRY": f"{timeIcon} **{count}** members were staring into the void, until the void finally timed out on them.",
                             f"LOGIN_EXPIRED_MID_PROCESS": f"🔒 **{count}** members login failed mid-process. How'd that even happen?",
                             f"LOGIN_FAILED": f"🔐 **{count}** members failed due to login issues. Try logging it off and on again!",
-                            f"CAPTCHA_SOLVING_FAILED": f"🤖 **{count}** members lost the battle against CAPTCHA. You sure those weren't just bots?",
+                            f"CAPTCHA_SOLVING_FAILED": f"{robotIcon} **{count}** members lost the battle against CAPTCHA. You sure those weren't just bots?",
                             f"CAPTCHA_SOLVER_ERROR": f"🔧 **{count}** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
                             f"OCR_DISABLED": f"🚫 **{count}** members failed since OCR is disabled. Try turning it on first!",
                             f"SIGN_ERROR": f"🔐 **{count}** members failed due to a signature error. Something went wrong.",
@@ -5254,7 +5254,7 @@ class OCRSettingsView(discord.ui.View):
                 description=(
                     f"**Test Summary**"
                     f"\n{divider1}\n"
-                    f"🤖 **OCR Success:** {'{verifiedIcon} Yes' if success else '{deniedIcon} No'}\n"
+                    f"{robotIcon} **OCR Success:** {'{verifiedIcon} Yes' if success else '{deniedIcon} No'}\n"
                     f"{magnifyingIcon} **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
                     f"{anounceIcon} **Confidence:** `{confidence_str}`\n"
                     f"{timeIcon} **Solve Time:** `{solve_duration:.2f}s`\n"

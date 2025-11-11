@@ -21,7 +21,7 @@ giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
 alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
-robotIcon = "<:pinkKnightHelmet:1437569343293493360>"
+robotIcon = "<:pinkKnightHelmet:1437674905989681162>"
 shieldIcon = "<:pinkShield:1437535908193636413>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
@@ -115,6 +115,15 @@ if int(dividerLength2) >= len(dividerEmojiCombined2):
 else :
     for emoji in dividerEmojiCombined2:
         divider2 += emoji
+
+emColorString1 = "#FFBDE4" #Baby Pink
+emColor1 = int(emColorString1.lstrip('#'), 16) #to replace .blue()
+emColorString2 = "#FF0080" #Hot Pink
+emColor2 = int(emColorString2.lstrip('#'), 16) #to replace .red()
+emColorString3 = "#FF69B4" #Barbie Pink
+emColor3 = int(emColorString3.lstrip('#'), 16) #to replace .green()
+emColorString4 = "#FF8FCC" #Pinkie Pink
+emColor4 = int(emColorString4.lstrip('#'), 16) #to replace .orange() and .yellow() and .gold()
 class GNCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -159,7 +168,7 @@ class GNCommands(commands.Cog):
                         ocr_details = f"Error checking OCR: {str(e)[:30]}..."
                     
                     status_embed = discord.Embed(
-                        title=f"🤖 Bot Successfully Activated",
+                        title=f"{robotIcon} Bot Successfully Activated",
                         description=(
                             f"{divider1}\n"
                             f"### **System Status**\n"
@@ -200,34 +209,34 @@ class GNCommands(commands.Cog):
                                 cursor = users_db.cursor()
                                 cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
                                 user_count = cursor.fetchone()[0]
-                                info_parts.append(f"{membersIcon} Members: {user_count}")
+                                info_parts.append(f"{avatarIcon} **Members:** {user_count}")
                             
                             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                                 cursor = alliance_db.cursor()
                                 cursor.execute("SELECT discord_server_id FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                                 discord_server = cursor.fetchone()
                                 if discord_server and discord_server[0]:
-                                    info_parts.append(f"{stateIcon} Server ID: {discord_server[0]}")
+                                    info_parts.append(f"{stateIcon} **Server ID:** {discord_server[0]}")
                             
                                 cursor.execute("SELECT channel_id, interval FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
                                 settings = cursor.fetchone()
                                 if settings:
                                     if settings[0]:
-                                        info_parts.append(f"{anounceIcon} Channel: <#{settings[0]}>")
-                                    interval_text = f"{alarmClockIcon} Auto Check: {settings[1]} minutes" if settings[1] > 0 else f"{deleteGiftCodeIcon}  No Auto Check"
+                                        info_parts.append(f"{anounceIcon} **Channel:** <#{settings[0]}>")
+                                    interval_text = f"{alarmClockIcon} **Auto Check:** {settings[1]} minutes" if settings[1] > 0 else f"{deleteGiftCodeIcon}  No Auto Check"
                                     info_parts.append(interval_text)
                             
                             with sqlite3.connect('db/giftcode.sqlite') as gift_db:
                                 cursor = gift_db.cursor()
                                 cursor.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
                                 gift_status = cursor.fetchone()
-                                gift_text = f"{checkGiftCodeIcon} Gift System: Active" if gift_status and gift_status[0] == 1 else f"{deleteGiftCodeIcon} Gift System: Inactive"
+                                gift_text = f"{checkGiftCodeIcon} **Gift System:** Active" if gift_status and gift_status[0] == 1 else f"{deleteGiftCodeIcon} **Gift System:** Inactive"
                                 info_parts.append(gift_text)
                                 
                                 cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
                                 gift_channel = cursor.fetchone()
                                 if gift_channel and gift_channel[0]:
-                                    info_parts.append(f"{giftsIcon} Gift Channel: <#{gift_channel[0]}>")
+                                    info_parts.append(f"{giftsIcon} **Gift Channel:** <#{gift_channel[0]}>")
                             
                             alliance_info.append(
                                 f"**{name}**\n" + 

@@ -29,7 +29,7 @@ giftsIcon = "<:pinkGiftOpen:1436281339556134922>"
 heartIcon = "<:HotPinkHeart:1436291474898550864>"
 alertIcon = "<:pinkGiftWarn:1437015069723459604>"
 totalIcon = "<:pinkTotal:1436281354684989500>"
-robotIcon = "<:pinkKnightHelmet:1437569343293493360>"
+robotIcon = "<:pinkKnightHelmet:1437674905989681162>"
 shieldIcon = "<:pinkShield:1437535908193636413>"
 redeemIcon = "<:pinkWand:1436281358430376047>"
 membersIcon = "<:pinkUnicorn:1436983641669374105>"
@@ -241,14 +241,14 @@ class AllianceMemberOperations(commands.Cog):
 
     async def handle_member_operations(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="{allianceIcon} Alliance Member Operations",
+            title=f"{allianceIcon} Alliance Member Operations",
             description=(
                 f"Please select an operation from below:\n\n"
                 f"**Available Operations:**\n"
                 f"➕ `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
                 f"🔄 `Transfer Members` - Transfer members to another alliance\n"
                 f"➖ `Remove Members` - Remove members from alliance\n"
-                f"{allianceIcon} `View Members` - View alliance member list\n"
+                f"{magnifyingIcon} `View Members` - View alliance member list\n"
                 f"{allianceIcon} `Export Members` - Export member data to CSV/TSV\n"
                 f"{homeIcon} `Main Menu` - Return to main menu"
             ),
