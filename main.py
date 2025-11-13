@@ -921,7 +921,7 @@ if __name__ == "__main__":
         "conn_changes": "db/changes.sqlite",
         "conn_users": "db/users.sqlite",
         "conn_settings": "db/settings.sqlite",
-        "conn_stylesettings":"db/stylesettings.sqlite",
+        "conn_pimpsettings":"db/pimpsettings.sqlite",
     }
 
     connections = {name: sqlite3.connect(path) for name, path in databases.items()}
@@ -930,8 +930,8 @@ if __name__ == "__main__":
 
     def create_tables():
 
-        with connections["conn_stylesettings"] as conn_stylesettings:
-            conn_users.execute("""CREATE TABLE IF NOT EXISTS settings (
+        with connections["conn_pimpsettings"] as conn_pimpsettings:
+            conn_pimpsettings.execute("""CREATE TABLE IF NOT EXISTS pimpsettings (
                 id INTEGER PRIMARY KEY, 
                 VARIABLENAME1 TEXT,
                 allianceIconOld TEXT,
@@ -951,7 +951,7 @@ if __name__ == "__main__":
                 giftsIcon TEXT,
                 heartIcon TEXT,
                 alertIcon TEXT,
-                totalIcon TEXT,
+                total2Icon TEXT,
                 robotIcon TEXT,
                 shieldIcon TEXT,
                 redeemIcon TEXT,
