@@ -1,3 +1,16 @@
+import sqlite3
+
+themeName = "Pink Pricess Theme"
+
+with sqlite3.connect('db/pimpsettings.sqlite') as pimpsettings_db:
+    cursor = pimpsettings_db.cursor()
+    cursor.execute("SELECT allianceIconOld FROM pimpsettings")
+    allianceIconOld = cursor.fetchone()
+    if allianceIconOld is not None:
+        allianceIconOld = allianceIconOld
+    if allianceIconOld is None: 
+        allianceIconOld = allianceIconOld
+
 allianceIconOld = "<:pinkCrownOld:1437374294551429297>"
 allianceIcon = "<:pinkRings:1436281348670361650>"
 avatarIcon = "<:pinkCrown:1436281335546118164>"   
@@ -43,8 +56,8 @@ totalIcon = "<:pinkScollopTotal:1437690333801484308>"
 infoIcon = "<:pinkScollopInfo:1437690327128477776>"
 addIcon = "<:pinkScollopAdd:1437690325694156800>"
 
-dividerEmojiStart1 = "<:pinkBow:1436293647590232146>", "•"
-dividerEmojiPattern1 = "<:HotPinkHeart:1436291474898550864>", "•", "<:BarbiePinkHeart:1436291473917083778>", "•"
+dividerEmojiStart1 = ["<:pinkBow:1436293647590232146>", "•"]
+dividerEmojiPattern1 = ["<:HotPinkHeart:1436291474898550864>", "•", "<:BarbiePinkHeart:1436291473917083778>", "•"]
 dividerEmojiEnd1 = ["<:pinkBow:1436293647590232146>"]
 dividerEmojiCombined1 = []
 for emoji in dividerEmojiStart1:
@@ -80,7 +93,7 @@ else :
     for emoji in dividerEmojiCombined1:
         divider1 += emoji
 
-dividerEmojiStart2 = "<:pinkBow:1436293647590232146>", "•"
+dividerEmojiStart2 = ["<:pinkBow:1436293647590232146>", "•"]
 dividerEmojiPattern2 = ["•"]
 dividerEmojiEnd2 = ["<:pinkBow:1436293647590232146>"]
 dividerEmojiCombined2 = []

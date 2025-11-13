@@ -152,75 +152,78 @@ class Alliance(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title=f"⚙️ Settings Menu",
+                title=f"{pimp.settingsIcon} Settings Menu",
                 description=(
-                    f"Please select a category:\n\n"
-                    f"**Menu Categories**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🏰 **Alliance Operations**\n"
+                    f"### **Menu Categories**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"{pimp.allianceIcon} **Alliance Operations**\n"
                     f"└ Manage alliances and settings\n\n"
-                    f"👥 **Alliance Member Operations**\n"
+                    f"{pimp.avatarIcon} **Member Operations**\n"
                     f"└ Add, remove, and view members\n\n"
                     f"{pimp.robotIcon} **Bot Operations**\n"
                     f"└ Configure bot settings\n\n"
-                    f"🎁 **Gift Code Operations**\n"
+                    f"{pimp.giftIcon} **Gift Code Operations**\n"
                     f"└ Manage gift codes and rewards\n\n"
-                    f"📜 **Alliance History**\n"
+                    f"{pimp.listIcon} **Alliance History**\n"
                     f"└ View alliance changes and history\n\n"
-                    f"🆘 **Support Operations**\n"
-                    f"└ Access support features\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{pimp.settingsIcon} **Support Operations**\n"
+                    f"└ Access support features\n\n"
+                    f"{pimp.settings2Icon} Other Features\n"
+                    f"└ Access additional features\n"
+                    f"\n"
+                    f"{pimp.divider1}"
                 ),
-                color=discord.Color.blue()
+                color = pimp.emColor1
             )
             
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji="🏰",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.allianceIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Member Operations",
-                emoji="👥",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.avatarIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="member_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Operations",
                 emoji=f"{pimp.robotIcon}",
-                style=discord.ButtonStyle.primary,
+                style=discord.ButtonStyle.secondary,
                 custom_id="bot_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Gift Operations",
-                emoji="🎁",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.giftIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance History",
-                emoji="📜",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.listIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_history",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji="🆘",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.settingsIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji="🔧",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.settings2Icon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
             ))
@@ -243,75 +246,78 @@ class Alliance(commands.Cog):
         """Display the main settings menu - can be called by other cogs"""
         try:
             embed = discord.Embed(
-                title="⚙️ Settings Menu",
+                title=f"{pimp.settingsIcon} Settings Menu",
                 description=(
-                    f"Please select a category:\n\n"
-                    f"**Menu Categories**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🏰 **Alliance Operations**\n"
+                    f"### **Menu Categories**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"{pimp.allianceIcon} **Alliance Operations**\n"
                     f"└ Manage alliances and settings\n\n"
-                    f"👥 **Alliance Member Operations**\n"
+                    f"{pimp.avatarIcon} **Member Operations**\n"
                     f"└ Add, remove, and view members\n\n"
                     f"{pimp.robotIcon} **Bot Operations**\n"
                     f"└ Configure bot settings\n\n"
-                    f"🎁 **Gift Code Operations**\n"
+                    f"{pimp.giftIcon} **Gift Code Operations**\n"
                     f"└ Manage gift codes and rewards\n\n"
-                    f"📜 **Alliance History**\n"
+                    f"{pimp.listIcon} **Alliance History**\n"
                     f"└ View alliance changes and history\n\n"
-                    f"🆘 **Support Operations**\n"
-                    f"└ Access support features\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{pimp.settingsIcon} **Support Operations**\n"
+                    f"└ Access support features\n\n"
+                    f"{pimp.settings2Icon} Other Features\n"
+                    f"└ Access additional features\n"
+                    f"\n"
+                    f"{pimp.divider1}"
                 ),
-                color=discord.Color.blue()
+                color = pimp.emColor1
             )
             
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji=f"🏰",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.allianceIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Member Operations",
-                emoji=f"👥",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.avatarIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="member_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Operations",
                 emoji=f"{pimp.robotIcon}",
-                style=discord.ButtonStyle.primary,
+                style=discord.ButtonStyle.secondary,
                 custom_id="bot_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Gift Operations",
-                emoji=f"🎁",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.giftIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance History",
-                emoji=f"📜",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.listIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_history",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji=f"🆘",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.settingsIcon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji=f"🔧",
-                style=discord.ButtonStyle.primary,
+                emoji=f"{pimp.settings2Icon}",
+                style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
             ))
@@ -339,22 +345,24 @@ class Alliance(commands.Cog):
             try:
                 if custom_id == "alliance_operations":
                     embed = discord.Embed(
-                        title=f"🏰 Alliance Operations",
+                        title=f"{pimp.allianceIcon} Alliance Operations",
                         description=(
                             f"Please select an operation:\n\n"
                             f"**Available Operations**\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"➕ **Add Alliance**\n"
+                            f"{pimp.divider1}\n"
+                            f"\n"
+                            f"{pimp.addIcon} **Add Alliance**\n"
                             f"└ Create a new alliance\n\n"
-                            f"✏️ **Edit Alliance**\n"
+                            f"{pimp.processingIcon} **Edit Alliance**\n"
                             f"└ Modify existing alliance settings\n\n"
-                            f"🗑️ **Delete Alliance**\n"
+                            f"{pimp.deleteIcon} **Delete Alliance**\n"
                             f"└ Remove an existing alliance\n\n"
-                            f"👀 **View Alliances**\n"
+                            f"{pimp.magnifyingIcon} **View Alliances**\n"
                             f"└ List all available alliances\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━"
+                            f"\n"
+                            f"{pimp.divider1}"
                         ),
-                        color=discord.Color.blue()
+                        color = pimp.emColor1
                     )
                     
                     view = discord.ui.View()

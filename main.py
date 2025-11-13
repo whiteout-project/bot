@@ -933,7 +933,7 @@ if __name__ == "__main__":
         with connections["conn_pimpsettings"] as conn_pimpsettings:
             conn_pimpsettings.execute("""CREATE TABLE IF NOT EXISTS pimpsettings (
                 id INTEGER PRIMARY KEY, 
-                VARIABLENAME1 TEXT,
+                themeName TEXT,
                 allianceIconOld TEXT,
                 allianceIcon TEXT,
                 avatarIcon TEXT,   
@@ -949,10 +949,9 @@ if __name__ == "__main__":
                 pinIcon TEXT,
                 giftIcon TEXT,
                 giftsIcon TEXT,
-                heartIcon TEXT,
                 alertIcon TEXT,
-                total2Icon TEXT,
                 robotIcon TEXT,
+                total2Icon TEXT,
                 shieldIcon TEXT,
                 redeemIcon TEXT,
                 membersIcon TEXT,
@@ -973,6 +972,7 @@ if __name__ == "__main__":
                 multiplyIcon TEXT,
                 deniedIcon TEXT,
                 deleteIcon TEXT,
+                exportIcon TEXT,
                 retryIcon TEXT,
                 totalIcon TEXT,
                 infoIcon TEXT,

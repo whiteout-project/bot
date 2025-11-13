@@ -137,7 +137,7 @@ class AllianceMemberOperations(commands.Cog):
                 f"{pimp.magnifyingIcon} **View Members**\n"
                 f"└ View alliance member list\n"
                 f"{pimp.divider2}\n"
-                f"{pimp.allianceIcon} **Export Members**\n"
+                f"{pimp.exportIcon} **Export Members**\n"
                 f"└ Export member data to CSV/TSV\n"
                 f"{pimp.divider2}\n"
                 f"{pimp.homeIcon} **Main Menu**\n"
@@ -158,7 +158,7 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Add Members",
-                emoji=f"{addIcon}",
+                emoji=f"{pimp.addIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="add_member",
                 row=0
@@ -665,7 +665,7 @@ class AllianceMemberOperations(commands.Cog):
                                 f"### **Member List**\n"
                                 f"{pimp.divider2}\n"
                             ),
-                            color=emColor1
+                            color=pimp.emColor1
                         )
 
                         members_per_page = 15
@@ -2495,7 +2495,7 @@ class ExportFormatSelectView(discord.ui.View):
         self.selected_columns = selected_columns
         self.cog = cog
     
-    @discord.ui.button(label="CSV (Comma-separated)", emoji=f"{allianceIcon}", style=discord.ButtonStyle.secondary, custom_id="csv")
+    @discord.ui.button(label="CSV (Comma-separated)", emoji=f"{pimp.allianceIcon}", style=discord.ButtonStyle.secondary, custom_id="csv")
     async def csv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.process_member_export(
             interaction,
@@ -2737,7 +2737,7 @@ class MemberSelectView(discord.ui.View):
                 ephemeral=True
             )
 
-    @discord.ui.button(label="Process Selected", emoji=f"{verifiedIcon}", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    @discord.ui.button(label="Process Selected", emoji=f"{pimp.verifiedIcon}", style=discord.ButtonStyle.secondary, row=2, disabled=True)
     async def _process_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Process selected members (delete or transfer)"""
         if not self.pending_selections:
@@ -2747,7 +2747,7 @@ class MemberSelectView(discord.ui.View):
         if self.callback:
             await self.callback(interaction, list(self.pending_selections))
 
-    @discord.ui.button(label="Clear Selection", emoji=f"{deniedIcon}", style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    @discord.ui.button(label="Clear Selection", emoji=f"{pimp.deniedIcon}", style=discord.ButtonStyle.secondary, row=2, disabled=True)
     async def _clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Clear all selected members"""
         self.pending_selections.clear()
