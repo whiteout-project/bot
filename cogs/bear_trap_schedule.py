@@ -67,6 +67,18 @@ class BearTrapSchedule(commands.Cog):
             )
         """)
 
+        # Add show_repeating_events column if it doesn't exist
+        try:
+            self.cursor.execute("SELECT show_repeating_events FROM notification_schedule_boards LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE notification_schedule_boards ADD COLUMN show_repeating_events INTEGER DEFAULT 1")
+
+        # Add use_user_timezone column if it doesn't exist
+        try:
+            self.cursor.execute("SELECT use_user_timezone FROM notification_schedule_boards LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE notification_schedule_boards ADD COLUMN use_user_timezone INTEGER DEFAULT 0")
+
         self.conn.commit()
         self.logger.info("[SCHEDULE] Cog initialized successfully")
 
@@ -75,6 +87,10 @@ class BearTrapSchedule(commands.Cog):
         self.logger.info("[SCHEDULE] Starting background tasks...")
         self.refresh_task = asyncio.create_task(self.daily_refresh_loop())
         self.urgency_task = asyncio.create_task(self.urgency_update_loop())
+
+        # Refresh all boards on startup
+        self.logger.info("[SCHEDULE] Refreshing all boards on startup...")
+        asyncio.create_task(self._refresh_all_boards_on_startup())
 
     async def cog_unload(self):
         """Cleanup when cog is unloaded"""
@@ -89,6 +105,32 @@ class BearTrapSchedule(commands.Cog):
         if hasattr(self, 'conn'):
             self.conn.close()
         self.logger.info("[SCHEDULE] Cog unloaded")
+
+    async def _refresh_all_boards_on_startup(self):
+        """Refresh all schedule boards on bot startup"""
+        await self.bot.wait_until_ready()
+
+        try:
+            # Get all board IDs
+            self.cursor.execute("SELECT id FROM notification_schedule_boards")
+            board_ids = [row[0] for row in self.cursor.fetchall()]
+
+            self.logger.info(f"[SCHEDULE] Found {len(board_ids)} board(s) to refresh on startup")
+
+            # Refresh each board
+            refreshed = 0
+            for board_id in board_ids:
+                try:
+                    await self.update_schedule_board(board_id)
+                    refreshed += 1
+                except Exception as e:
+                    self.logger.error(f"[SCHEDULE] Failed to refresh board {board_id} on startup: {e}")
+                    continue
+
+            self.logger.info(f"[SCHEDULE] Startup refresh complete: {refreshed}/{len(board_ids)} boards updated")
+
+        except Exception as e:
+            self.logger.error(f"[SCHEDULE] Error during startup refresh: {e}")
 
     async def daily_refresh_loop(self):
         """Background task that refreshes all boards daily at midnight in their timezone"""
@@ -232,7 +274,7 @@ class BearTrapSchedule(commands.Cog):
                 guild_id, board_type, target_channel_id, settings
             )
 
-            # Post message to Discord without view initially
+            # Post message to Discord with placeholder
             message = await channel.send(embed=embed)
 
             # Auto-pin if enabled
@@ -246,8 +288,8 @@ class BearTrapSchedule(commands.Cog):
             self.cursor.execute("""
                 INSERT INTO notification_schedule_boards
                 (guild_id, channel_id, message_id, board_type, target_channel_id,
-                 max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, created_by, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone, created_by, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 guild_id, channel_id, message.id, board_type, target_channel_id,
                 settings.get('max_events', 15),
@@ -256,12 +298,19 @@ class BearTrapSchedule(commands.Cog):
                 settings.get('timezone', 'UTC'),
                 settings.get('filter_name'),
                 settings.get('filter_time_range'),
+                1 if settings.get('show_repeating_events', True) else 0,
+                1 if settings.get('use_user_timezone', False) else 0,
                 creator_id,
                 datetime.now(pytz.UTC).isoformat()
             ))
 
             self.conn.commit()
             board_id = self.cursor.lastrowid
+
+            # Attach pagination view with the board_id
+            total_pages = self._get_total_pages_from_footer(embed.footer.text if embed.footer else "")
+            view = ScheduleBoardPaginationView(self, board_id, current_page=0, total_pages=total_pages)
+            await message.edit(view=view)
 
             self.logger.info(f"[SCHEDULE] Board created - ID: {board_id}, Type: {board_type}, Guild: {guild_id}, "
                            f"Channel: {channel_id}, Creator: {creator_id}, Target: {target_channel_id}")
@@ -333,7 +382,7 @@ class BearTrapSchedule(commands.Cog):
             # Fetch board info
             self.cursor.execute("""
                 SELECT guild_id, channel_id, message_id, board_type, target_channel_id,
-                       max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range
+                       max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events
                 FROM notification_schedule_boards
                 WHERE id = ?
             """, (board_id,))
@@ -343,7 +392,7 @@ class BearTrapSchedule(commands.Cog):
                 return (False, "Board not found!")
 
             (guild_id, old_channel_id, old_message_id, board_type, target_channel_id,
-             max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range) = result
+             max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events) = result
 
             # Get new channel
             new_channel = self.bot.get_channel(new_channel_id)
@@ -361,15 +410,18 @@ class BearTrapSchedule(commands.Cog):
                 'auto_pin': bool(auto_pin),
                 'timezone': timezone,
                 'filter_name': filter_name,
-                'filter_time_range': filter_time_range
+                'filter_time_range': filter_time_range,
+                'show_repeating_events': bool(show_repeating_events) if show_repeating_events is not None else True
             }
 
             embed = await self.generate_schedule_embed_for_new_board(
                 guild_id, board_type, target_channel_id, settings
             )
 
-            # Post to new channel
-            new_message = await new_channel.send(embed=embed)
+            # Post to new channel with pagination view
+            total_pages = self._get_total_pages_from_footer(embed.footer.text if embed.footer else "")
+            view = ScheduleBoardPaginationView(self, board_id, current_page=0, total_pages=total_pages)
+            new_message = await new_channel.send(embed=embed, view=view)
 
             # Auto-pin if enabled
             if auto_pin:
@@ -427,7 +479,7 @@ class BearTrapSchedule(commands.Cog):
             # Fetch board settings
             self.cursor.execute("""
                 SELECT guild_id, board_type, target_channel_id, max_events,
-                       show_disabled, timezone, filter_name, filter_time_range
+                       show_disabled, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone
                 FROM notification_schedule_boards
                 WHERE id = ?
             """, (board_id,))
@@ -437,14 +489,16 @@ class BearTrapSchedule(commands.Cog):
                 return self._create_error_embed("Board not found!")
 
             (guild_id, board_type, target_channel_id, max_events,
-             show_disabled, timezone, filter_name, filter_time_range) = result
+             show_disabled, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone) = result
 
             settings = {
                 'max_events': max_events,
                 'show_disabled': bool(show_disabled),
                 'timezone': timezone,
                 'filter_name': filter_name,
-                'filter_time_range': filter_time_range
+                'filter_time_range': filter_time_range,
+                'show_repeating_events': bool(show_repeating_events) if show_repeating_events is not None else True,
+                'use_user_timezone': use_user_timezone if use_user_timezone is not None else 0
             }
 
             return await self._generate_schedule_embed_internal(
@@ -463,7 +517,7 @@ class BearTrapSchedule(commands.Cog):
             # Query notifications based on board type
             query = """
                 SELECT id, channel_id, hour, minute, timezone, description,
-                       notification_type, next_notification, is_enabled
+                       notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes
                 FROM bear_notifications
                 WHERE guild_id = ?
             """
@@ -501,69 +555,192 @@ class BearTrapSchedule(commands.Cog):
             if not notifications:
                 return self._create_empty_schedule_embed(board_type, target_channel_id, settings)
 
-            # Pagination
-            max_events = settings.get('max_events', 15)
-            total_notifications = len(notifications)
-            total_pages = math.ceil(total_notifications / max_events) if total_notifications > 0 else 1
+            # Expand repeating events if enabled
+            show_repeating = settings.get('show_repeating_events', True)
+            expanded_events = []
+            now = datetime.now(pytz.UTC)
+
+            # Determine time window for expanding repeating events (30 days)
+            max_future_time = now + timedelta(days=30)
+
+            for notif in notifications:
+                (notif_id, channel_id, hour, minute, notif_timezone, description,
+                 notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes) = notif
+
+                next_time = datetime.fromisoformat(next_notification)
+
+                # Add the first occurrence
+                expanded_events.append((next_time, notif))
+
+                # If repeating events are enabled and this event repeats, generate future occurrences
+                if show_repeating and repeat_enabled:
+                    if isinstance(repeat_minutes, int) and repeat_minutes > 0:
+                        # Handle interval-based repeating (every X minutes)
+                        current_time = next_time
+                        while True:
+                            current_time = current_time + timedelta(minutes=repeat_minutes)
+                            if current_time > max_future_time:
+                                break
+                            # Create a modified notification tuple with updated next_notification
+                            modified_notif = list(notif)
+                            modified_notif[7] = current_time.isoformat()  # Update next_notification
+                            expanded_events.append((current_time, tuple(modified_notif)))
+
+                    elif repeat_minutes == "fixed":
+                        # Handle fixed weekday repeating
+                        self.cursor.execute("""
+                            SELECT weekday FROM notification_days
+                            WHERE notification_id = ?
+                        """, (notif_id,))
+                        rows = self.cursor.fetchall()
+                        notification_days = set()
+
+                        for row in rows:
+                            parts = row[0].split('|')
+                            notification_days.update(int(p) for p in parts)
+
+                        # Generate occurrences for each matching weekday
+                        current_date = next_time.date()
+                        event_tz = pytz.timezone(notif_timezone)
+
+                        for day_offset in range(1, 31):  # Check next 30 days
+                            check_date = current_date + timedelta(days=day_offset)
+                            if check_date.weekday() in notification_days:
+                                occurrence_time = event_tz.localize(
+                                    datetime.combine(check_date, datetime.min.time()).replace(hour=hour, minute=minute)
+                                )
+                                occurrence_time_utc = occurrence_time.astimezone(pytz.UTC)
+
+                                if occurrence_time_utc > max_future_time:
+                                    break
+
+                                # Create a modified notification tuple
+                                modified_notif = list(notif)
+                                modified_notif[7] = occurrence_time_utc.isoformat()
+                                expanded_events.append((occurrence_time_utc, tuple(modified_notif)))
+
+            # Sort all events by time
+            expanded_events.sort(key=lambda x: x[0])
+
+            # Filter to only future events
+            future_events = [(time, notif) for time, notif in expanded_events if time > now]
+
+            if not future_events:
+                return self._create_empty_schedule_embed(board_type, target_channel_id, settings)
+
+            # Pagination (cap at 30 events per page)
+            max_events = min(settings.get('max_events', 15), 30)
+            total_events = len(future_events)
+            total_pages = math.ceil(total_events / max_events) if total_events > 0 else 1
             page = max(0, min(page, total_pages - 1))  # Clamp page
 
             start_idx = page * max_events
-            end_idx = min(start_idx + max_events, total_notifications)
-            page_notifications = notifications[start_idx:end_idx]
+            end_idx = min(start_idx + max_events, total_events)
+            page_events = future_events[start_idx:end_idx]
 
             # Format notifications by urgency
-            now = datetime.now(pytz.UTC)
             tz_string = settings.get('timezone', 'UTC')
             tz = self._get_timezone_object(tz_string)
 
             sections = {
-                'imminent': [],  # < 1 hour
-                'soon': [],      # < 6 hours
-                'upcoming': [],  # < 24 hours
-                'scheduled': []  # > 24 hours
+                'imminent': [],   # < 1 hour
+                'soon': [],       # 1-6 hours
+                'upcoming': [],   # 6-24 hours
+                'this_week': [],  # 1-7 days
+                'next_week': [],  # 7-14 days
+                'later': []       # 14-30 days
             }
 
-            for notif in page_notifications:
-                (notif_id, channel_id, hour, minute, notif_timezone, description,
-                 notification_type, next_notification, is_enabled) = notif
-
-                next_time = datetime.fromisoformat(next_notification)
-                time_until = next_time - now
+            for event_time, notif in page_events:
+                time_until = event_time - now
                 hours_until = time_until.total_seconds() / 3600
+                days_until = hours_until / 24
 
-                # Skip past events (defensive - shouldn't happen due to query filter)
-                if hours_until < 0:
-                    continue
-
-                line = await self._format_event_line(notif, tz, tz_string, board_type == 'server')
+                # Store event with its time for later grouping by date
+                event_data = (event_time, notif)
 
                 if hours_until < 1:
-                    sections['imminent'].append(line)
+                    sections['imminent'].append(event_data)
                 elif hours_until < 6:
-                    sections['soon'].append(line)
+                    sections['soon'].append(event_data)
                 elif hours_until < 24:
-                    sections['upcoming'].append(line)
+                    sections['upcoming'].append(event_data)
+                elif days_until < 7:
+                    sections['this_week'].append(event_data)
+                elif days_until < 14:
+                    sections['next_week'].append(event_data)
                 else:
-                    sections['scheduled'].append(line)
+                    sections['later'].append(event_data)
 
             # Build embed
-            description = "📅 **Upcoming Event Schedule**\n\n"
+            if board_type == 'channel':
+                channel_text = f"from <#{target_channel_id}> "
+            else:
+                channel_text = ""
+
+            if settings.get('use_user_timezone', 0):
+                tz_info = f"Showing all upcoming events {channel_text}in your local timezone."
+            else:
+                tz_display = self._format_timezone_display(settings.get('timezone', 'UTC'))
+                tz_info = f"Showing all upcoming events {channel_text}in {tz_display}."
+            description = f"📅 **Upcoming Event Schedule**\n{tz_info}\n\n"
+
+            # Helper function to format section with day grouping
+            async def format_section_with_days(events, show_channel):
+                from collections import defaultdict
+                days_dict = defaultdict(list)
+
+                # Group events by date
+                for event_time, notif in events:
+                    event_time_tz = event_time.astimezone(tz)
+                    date_key = event_time_tz.date()
+                    days_dict[date_key].append((event_time, notif))
+
+                # Build formatted output
+                output_lines = []
+                one_year_from_now = now.date() + timedelta(days=365)
+
+                for date in sorted(days_dict.keys()):
+                    # Date header
+                    if date <= one_year_from_now:
+                        # "27 November - Saturday"
+                        date_str = date.strftime('%d %B - %A')
+                    else:
+                        # "27 November 2025 - Saturday"
+                        date_str = date.strftime('%d %B %Y - %A')
+
+                    output_lines.append(f"- **{date_str}**")
+
+                    # Format events for this day
+                    for event_time, notif in days_dict[date]:
+                        line = await self._format_event_line(notif, tz, show_channel, settings.get('use_user_timezone', 0), time_only=True)
+                        output_lines.append(f"└ {line}")
+
+                return "\n".join(output_lines)
 
             if sections['imminent']:
                 description += "🔴 **IMMINENT** (< 1 hour)\n"
-                description += "\n".join(sections['imminent']) + "\n\n"
+                description += await format_section_with_days(sections['imminent'], board_type == 'server') + "\n\n"
 
             if sections['soon']:
-                description += "🟡 **SOON** (< 6 hours)\n"
-                description += "\n".join(sections['soon']) + "\n\n"
+                description += "🟡 **SOON** (1-6 hours)\n"
+                description += await format_section_with_days(sections['soon'], board_type == 'server') + "\n\n"
 
             if sections['upcoming']:
-                description += "🟢 **UPCOMING** (< 24 hours)\n"
-                description += "\n".join(sections['upcoming']) + "\n\n"
+                description += "🟢 **UPCOMING** (6-24 hours)\n"
+                description += await format_section_with_days(sections['upcoming'], board_type == 'server') + "\n\n"
 
-            if sections['scheduled']:
-                description += "📋 **SCHEDULED** (> 24 hours)\n"
-                description += "\n".join(sections['scheduled']) + "\n\n"
+            if sections['this_week']:
+                description += "📅 **2-7 DAYS**\n"
+                description += await format_section_with_days(sections['this_week'], board_type == 'server') + "\n\n"
+
+            if sections['next_week']:
+                description += "📆 **1-2 WEEKS**\n"
+                description += await format_section_with_days(sections['next_week'], board_type == 'server') + "\n\n"
+
+            if sections['later']:
+                description += "🗓️ **FUTURE** (14+ days)\n"
+                description += await format_section_with_days(sections['later'], board_type == 'server') + "\n\n"
 
             description += "━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -583,8 +760,12 @@ class BearTrapSchedule(commands.Cog):
             )
 
             # Footer with pagination
-            tz_display = self._format_timezone_display(settings.get('timezone', 'UTC'))
-            footer_text = f"Last updated: {now.astimezone(tz).strftime('%b %d, %I:%M %p')} {tz_display}"
+            if settings.get('use_user_timezone', 0):
+                tz_indicator = "(Local Time)"
+            else:
+                tz_indicator = f"({self._format_timezone_display(settings.get('timezone', 'UTC'))})"
+
+            footer_text = f"Last updated: {now.astimezone(tz).strftime('%b %d, %I:%M %p')} {tz_indicator}"
             if total_pages > 1:
                 footer_text += f" | Page {page + 1} of {total_pages}"
             embed.set_footer(text=footer_text)
@@ -596,36 +777,50 @@ class BearTrapSchedule(commands.Cog):
             traceback.print_exc()
             return self._create_error_embed(f"Error: {str(e)}")
 
-    async def _format_event_line(self, notification, timezone_obj, timezone_string: str, show_channel: bool) -> str:
+    async def _format_event_line(self, notification, timezone_obj, show_channel: bool, use_user_timezone: int = 0, time_only: bool = False) -> str:
         """Formats a single notification as a line in the schedule
 
         Args:
             notification: The notification tuple
             timezone_obj: Timezone object for calculations
-            timezone_string: Timezone string for display (e.g., "UTC+5:30", "Etc/GMT-3")
             show_channel: Whether to show channel info
+            use_user_timezone: Whether to use Discord timestamps for local timezone (1) or custom format (0)
+            time_only: Whether to show only time (not date), used when date is shown in header
         """
         try:
             (notif_id, channel_id, hour, minute, notif_timezone, description,
-             notification_type, next_notification, is_enabled) = notification
+             notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes) = notification
 
             # Parse next notification time
             next_time = datetime.fromisoformat(next_notification)
             next_time_tz = next_time.astimezone(timezone_obj)
 
-            # Format time
-            now = datetime.now(pytz.UTC)
-
-            # Get current date in the board's timezone
-            now_in_tz = now.astimezone(timezone_obj)
-            next_date = next_time_tz.date()
-            today_date = now_in_tz.date()
-
-            # Determine date format
-            if next_date == today_date:
-                time_str = f"Today {next_time_tz.strftime('%H:%M')}"
+            # Format time based on user timezone setting and time_only flag
+            if time_only:
+                # When grouped by date, show only the time
+                if use_user_timezone:
+                    timestamp = int(next_time.timestamp())
+                    time_str = f"<t:{timestamp}:t>"  # :t = short time only
+                else:
+                    time_str = next_time_tz.strftime('%H:%M')
             else:
-                time_str = next_time_tz.strftime("%d-%m-%y %H:%M")
+                # Full format with date
+                if use_user_timezone:
+                    # Use Discord timestamp for automatic local timezone conversion
+                    timestamp = int(next_time.timestamp())
+                    time_str = f"<t:{timestamp}:f>"  # :f = full date/time format
+                else:
+                    # Use custom format in board timezone
+                    now = datetime.now(pytz.UTC)
+                    now_in_tz = now.astimezone(timezone_obj)
+                    next_date = next_time_tz.date()
+                    today_date = now_in_tz.date()
+
+                    # Determine date format
+                    if next_date == today_date:
+                        time_str = f"Today {next_time_tz.strftime('%H:%M')}"
+                    else:
+                        time_str = next_time_tz.strftime("%d-%m-%y %H:%M")
 
             # Extract notification name
             if "EMBED_MESSAGE:" in description:
@@ -644,12 +839,17 @@ class BearTrapSchedule(commands.Cog):
             else:
                 name = description[:30] if len(description) > 30 else description
 
-            # Build line - convert timezone to friendly format
-            tz_display = self._format_timezone_display(timezone_string)
-            line = f"• {time_str} {tz_display} | {name}"
-
-            if show_channel:
-                line += f" in <#{channel_id}>"
+            # Build line with bold time (or simple format if time_only)
+            if time_only:
+                # For day-grouped display: **time** - name
+                line = f"**{time_str}** - {name}"
+                if show_channel:
+                    line += f" <#{channel_id}>"
+            else:
+                # For regular display: • **time** | name
+                line = f"• **{time_str}** | {name}"
+                if show_channel:
+                    line += f" in <#{channel_id}>"
 
             if not is_enabled:
                 line += " ⚠️ [DISABLED]"
@@ -662,7 +862,17 @@ class BearTrapSchedule(commands.Cog):
 
     def _create_empty_schedule_embed(self, board_type: str, target_channel_id: int, settings: dict) -> discord.Embed:
         """Creates an embed for when no events are scheduled"""
-        description = "📅 **Upcoming Event Schedule**\n\n"
+        if board_type == 'channel':
+            channel_text = f"from <#{target_channel_id}> "
+        else:
+            channel_text = ""
+
+        if settings.get('use_user_timezone', 0):
+            tz_info = f"Showing all upcoming events {channel_text}in your local timezone."
+        else:
+            tz_display = self._format_timezone_display(settings.get('timezone', 'UTC'))
+            tz_info = f"Showing all upcoming events {channel_text}in {tz_display}."
+        description = f"📅 **Upcoming Event Schedule**\n{tz_info}\n\n"
 
         if settings.get('filter_time_range'):
             description += f"No events in the next {settings['filter_time_range']} hours.\n\n"
@@ -678,8 +888,13 @@ class BearTrapSchedule(commands.Cog):
             description=description,
             color=0x808080  # Gray
         )
-        tz_display = self._format_timezone_display(settings.get('timezone', 'UTC'))
-        embed.set_footer(text=f"Last updated: {now.strftime('%b %d, %I:%M %p')} {tz_display}")
+
+        if settings.get('use_user_timezone', 0):
+            tz_indicator = "(Local Time)"
+        else:
+            tz_indicator = f"({self._format_timezone_display(settings.get('timezone', 'UTC'))})"
+
+        embed.set_footer(text=f"Last updated: {now.strftime('%b %d, %I:%M %p')} {tz_indicator}")
 
         return embed
 
@@ -769,6 +984,18 @@ class BearTrapSchedule(commands.Cog):
             # For other timezones, just return as-is
             return tz_zone
 
+    def _get_total_pages_from_footer(self, footer_text: str) -> int:
+        """Extract total pages from embed footer text"""
+        try:
+            if "Page" in footer_text:
+                import re
+                match = re.search(r'Page \d+ of (\d+)', footer_text)
+                if match:
+                    return int(match.group(1))
+        except:
+            pass
+        return 1
+
     async def update_schedule_board(self, board_id: int) -> bool:
         """
         Updates a schedule board by regenerating and editing the Discord message.
@@ -810,8 +1037,12 @@ class BearTrapSchedule(commands.Cog):
             # Generate new embed
             embed = await self.generate_schedule_embed(board_id, page=0)
 
+            # Create pagination view
+            total_pages = self._get_total_pages_from_footer(embed.footer.text if embed.footer else "")
+            view = ScheduleBoardPaginationView(self, board_id, current_page=0, total_pages=total_pages)
+
             # Edit message
-            await message.edit(embed=embed)
+            await message.edit(embed=embed, view=view)
 
             # Update last_updated timestamp
             self.cursor.execute("""
@@ -970,6 +1201,81 @@ class BearTrapSchedule(commands.Cog):
                     "❌ An error occurred while loading the menu.",
                     ephemeral=True
                 )
+
+class ScheduleBoardPaginationView(discord.ui.View):
+    """Persistent pagination view for schedule boards"""
+    def __init__(self, cog, board_id: int, current_page: int = 0, total_pages: int = 1):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.board_id = board_id
+        self.current_page = current_page
+        self.total_pages = total_pages
+
+        # Remove buttons if not needed
+        if current_page <= 0:
+            self.remove_item(self.previous_button)
+        if current_page >= total_pages - 1:
+            self.remove_item(self.next_button)
+
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.secondary, custom_id="schedule_prev", row=0)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Go to previous page
+            new_page = max(0, self.current_page - 1)
+
+            # Generate new embed
+            embed = await self.cog.generate_schedule_embed(self.board_id, page=new_page)
+
+            # Get total pages from footer
+            total_pages = self._get_total_pages_from_embed(embed)
+
+            # Create new view with updated page
+            new_view = ScheduleBoardPaginationView(self.cog, self.board_id, new_page, total_pages)
+
+            # Update message
+            await interaction.response.edit_message(embed=embed, view=new_view)
+
+        except Exception as e:
+            print(f"[ERROR] Pagination error: {e}")
+            traceback.print_exc()
+            await interaction.response.send_message("❌ An error occurred!", ephemeral=True)
+
+    @discord.ui.button(label="▶️ Next", style=discord.ButtonStyle.secondary, custom_id="schedule_next", row=0)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Go to next page
+            new_page = self.current_page + 1
+
+            # Generate new embed
+            embed = await self.cog.generate_schedule_embed(self.board_id, page=new_page)
+
+            # Get total pages from footer
+            total_pages = self._get_total_pages_from_embed(embed)
+
+            # Create new view with updated page
+            new_view = ScheduleBoardPaginationView(self.cog, self.board_id, new_page, total_pages)
+
+            # Update message
+            await interaction.response.edit_message(embed=embed, view=new_view)
+
+        except Exception as e:
+            print(f"[ERROR] Pagination error: {e}")
+            traceback.print_exc()
+            await interaction.response.send_message("❌ An error occurred!", ephemeral=True)
+
+    def _get_total_pages_from_embed(self, embed) -> int:
+        """Extract total pages from embed footer"""
+        try:
+            footer = embed.footer.text
+            if "Page" in footer:
+                # Extract "Page X of Y"
+                import re
+                match = re.search(r'Page \d+ of (\d+)', footer)
+                if match:
+                    return int(match.group(1))
+        except:
+            pass
+        return 1
 
 class ScheduleBoardMainView(discord.ui.View):
     """Main menu for schedule board management"""
@@ -1166,7 +1472,8 @@ class CreateBoardChannelSelectView(discord.ui.View):
                 f"• Max Events: {view.max_events}\n"
                 f"• Timezone: {view.timezone}\n"
                 f"• Show Disabled: {'Yes' if view.show_disabled else 'No'}\n"
-                f"• Auto-pin: {'Yes' if view.auto_pin else 'No'}\n\n"
+                f"• Pin Message: {'Yes' if view.auto_pin else 'No'}\n"
+                f"• Show Repeating: {'Yes' if view.show_repeating_events else 'No'}\n\n"
                 "Use the buttons below to adjust settings, then click **Create Board**."
             ),
             color=discord.Color.blue()
@@ -1190,6 +1497,8 @@ class CreateBoardSettingsView(discord.ui.View):
         self.timezone = "UTC"
         self.show_disabled = False
         self.auto_pin = True
+        self.show_repeating_events = True
+        self.use_user_timezone = False
 
     @discord.ui.button(label="Max Events (15)", emoji="🔢", style=discord.ButtonStyle.secondary, row=0)
     async def max_events_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1202,10 +1511,10 @@ class CreateBoardSettingsView(discord.ui.View):
                     self.parent = parent
 
                     self.max_events_input = discord.ui.TextInput(
-                        label="Max Events (1-50)",
-                        placeholder="Enter a number between 1 and 50",
+                        label="Max Events (1-100)",
+                        placeholder="Enter a number between 1 and 100",
                         default=str(parent.max_events),
-                        max_length=2,
+                        max_length=3,
                         required=True
                     )
                     self.add_item(self.max_events_input)
@@ -1213,9 +1522,9 @@ class CreateBoardSettingsView(discord.ui.View):
                 async def on_submit(self, modal_interaction: discord.Interaction):
                     try:
                         value = int(self.max_events_input.value.strip())
-                        if value < 1 or value > 50:
+                        if value < 1 or value > 100:
                             await modal_interaction.response.send_message(
-                                "❌ Max events must be between 1 and 50!",
+                                "❌ Max events must be between 1 and 100!",
                                 ephemeral=True
                             )
                             return
@@ -1382,15 +1691,26 @@ class CreateBoardSettingsView(discord.ui.View):
             print(f"[ERROR] Error in show disabled button: {e}")
             traceback.print_exc()
 
-    @discord.ui.button(label="Auto-pin: Yes", emoji="📌", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Pin Message: Yes", emoji="📌", style=discord.ButtonStyle.primary, row=1)
     async def auto_pin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.auto_pin = not self.auto_pin
-            button.label = f"Auto-pin: {'Yes' if self.auto_pin else 'No'}"
+            button.label = f"Pin Message: {'Yes' if self.auto_pin else 'No'}"
             button.style = discord.ButtonStyle.primary if self.auto_pin else discord.ButtonStyle.secondary
             await self.refresh_embed(interaction)
         except Exception as e:
             print(f"[ERROR] Error in auto pin button: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Show Repeating: Yes", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
+    async def show_repeating_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            self.show_repeating_events = not self.show_repeating_events
+            button.label = f"Show Repeating: {'Yes' if self.show_repeating_events else 'No'}"
+            button.style = discord.ButtonStyle.primary if self.show_repeating_events else discord.ButtonStyle.secondary
+            await self.refresh_embed(interaction)
+        except Exception as e:
+            print(f"[ERROR] Error in show repeating button: {e}")
             traceback.print_exc()
 
     @discord.ui.button(label="Create Board", emoji="✅", style=discord.ButtonStyle.success, row=2)
@@ -1401,7 +1721,8 @@ class CreateBoardSettingsView(discord.ui.View):
                 'max_events': self.max_events,
                 'timezone': self.timezone,
                 'show_disabled': self.show_disabled,
-                'auto_pin': self.auto_pin
+                'auto_pin': self.auto_pin,
+                'show_repeating_events': self.show_repeating_events
             }
 
             # Defer while creating board
@@ -1436,7 +1757,7 @@ class CreateBoardSettingsView(discord.ui.View):
                     f"• Max Events: {self.max_events}\n"
                     f"• Timezone: {timezone_display}\n"
                     f"• Show Disabled: {'Yes' if self.show_disabled else 'No'}\n"
-                    f"• Auto-pin: {'Yes' if self.auto_pin else 'No'}"
+                    f"• Pin Message: {'Yes' if self.auto_pin else 'No'}"
                 ),
                 color=discord.Color.green()
             )
@@ -1474,7 +1795,8 @@ class CreateBoardSettingsView(discord.ui.View):
                     f"• Max Events: {self.max_events}\n"
                     f"• Timezone: {timezone_display}\n"
                     f"• Show Disabled: {'Yes' if self.show_disabled else 'No'}\n"
-                    f"• Auto-pin: {'Yes' if self.auto_pin else 'No'}\n\n"
+                    f"• Pin Message: {'Yes' if self.auto_pin else 'No'}\n"
+                    f"• Show Repeating: {'Yes' if self.show_repeating_events else 'No'}\n\n"
                     "Use the buttons below to adjust settings, then click **Create Board**."
                 ),
                 color=discord.Color.blue()
@@ -1538,7 +1860,7 @@ class CreateBoardSettingsModal(discord.ui.Modal):
         self.add_item(self.show_disabled)
 
         self.auto_pin = discord.ui.TextInput(
-            label="Auto-pin Board? (yes/no)",
+            label="Pin Message? (yes/no)",
             placeholder="Default: yes",
             default="yes",
             max_length=3,
@@ -1561,11 +1883,11 @@ class CreateBoardSettingsModal(discord.ui.Modal):
             # Validate max events
             try:
                 max_events = int(self.max_events.value.strip()) if self.max_events.value.strip() else 15
-                if max_events < 1 or max_events > 50:
-                    raise ValueError("Max events must be between 1 and 50")
+                if max_events < 1 or max_events > 100:
+                    raise ValueError("Max events must be between 1 and 100")
             except ValueError:
                 await interaction.response.send_message(
-                    "❌ Invalid max events! Please enter a number between 1 and 50.",
+                    "❌ Invalid max events! Please enter a number between 1 and 100.",
                     ephemeral=True
                 )
                 return
@@ -1721,7 +2043,7 @@ class BoardManagementView(discord.ui.View):
         try:
             self.cog.cursor.execute("""
                 SELECT board_type, target_channel_id, channel_id, max_events,
-                       show_disabled, auto_pin, timezone, created_at
+                       show_disabled, auto_pin, timezone, created_at, show_repeating_events
                 FROM notification_schedule_boards
                 WHERE id = ?
             """, (self.board_id,))
@@ -1735,7 +2057,7 @@ class BoardManagementView(discord.ui.View):
                 )
 
             (board_type, target_channel_id, display_channel_id, max_events,
-             show_disabled, auto_pin, timezone, created_at) = result
+             show_disabled, auto_pin, timezone, created_at, show_repeating_events) = result
 
             target_info = f"<#{target_channel_id}>" if board_type == "channel" else "All channels"
 
@@ -1749,7 +2071,8 @@ class BoardManagementView(discord.ui.View):
                     f"• Max Events: {max_events}\n"
                     f"• Timezone: {self.cog._format_timezone_display(timezone)}\n"
                     f"• Show Disabled: {'Yes' if show_disabled else 'No'}\n"
-                    f"• Auto-pin: {'Yes' if auto_pin else 'No'}\n\n"
+                    f"• Pin Message: {'Yes' if auto_pin else 'No'}\n"
+                    f"• Show Repeating: {'Yes' if show_repeating_events else 'No'}\n\n"
                     f"Created: {created_at}"
                 ),
                 color=discord.Color.blue()
@@ -1769,8 +2092,9 @@ class BoardManagementView(discord.ui.View):
     @discord.ui.button(label="Edit Settings", emoji="✏️", style=discord.ButtonStyle.primary, row=0)
     async def edit_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            modal = EditBoardSettingsModal(self.cog, self.board_id)
-            await interaction.response.send_modal(modal)
+            view = EditBoardSettingsView(self.cog, self.board_id, self.guild_id)
+            embed = await view._create_settings_embed()
+            await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
             print(f"[ERROR] Error in edit settings: {e}")
             traceback.print_exc()
@@ -1903,6 +2227,394 @@ class BoardManagementView(discord.ui.View):
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_main_menu(interaction)
 
+class EditBoardSettingsView(discord.ui.View):
+    """Interactive view to edit board settings with buttons"""
+    def __init__(self, cog, board_id: int, guild_id: int):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.board_id = board_id
+        self.guild_id = guild_id
+
+        # Load current settings
+        self._load_settings()
+        self._update_button_labels()
+        self._update_button_styles()
+
+    def _load_settings(self):
+        """Load current settings from database"""
+        self.cog.cursor.execute("""
+            SELECT max_events, timezone, show_disabled, auto_pin, show_repeating_events, use_user_timezone
+            FROM notification_schedule_boards
+            WHERE id = ?
+        """, (self.board_id,))
+        result = self.cog.cursor.fetchone()
+
+        if result:
+            self.max_events, self.timezone, self.show_disabled, self.auto_pin, self.show_repeating_events, self.use_user_timezone = result
+            # Handle NULL values
+            self.use_user_timezone = self.use_user_timezone if self.use_user_timezone is not None else 0
+        else:
+            # Defaults if not found
+            self.max_events = 15
+            self.timezone = "UTC"
+            self.show_disabled = 0
+            self.auto_pin = 1
+            self.show_repeating_events = 1
+            self.use_user_timezone = 0
+
+    def _update_button_labels(self):
+        """Update button labels to show current values"""
+        # Update max events button
+        self.max_events_button.label = f"Max Events ({self.max_events})"
+
+        # Update timezone button
+        tz_display = self.cog._format_timezone_display(self.timezone)
+        self.timezone_button.label = f"Timezone ({tz_display})"
+
+    def _update_button_styles(self):
+        """Update toggle button styles based on current settings"""
+        # Update show_disabled button
+        self.show_disabled_button.label = f"Show Disabled: {'Yes' if self.show_disabled else 'No'}"
+        self.show_disabled_button.style = discord.ButtonStyle.primary if self.show_disabled else discord.ButtonStyle.secondary
+
+        # Update auto_pin button
+        self.auto_pin_button.label = f"Pin Message: {'Yes' if self.auto_pin else 'No'}"
+        self.auto_pin_button.style = discord.ButtonStyle.primary if self.auto_pin else discord.ButtonStyle.secondary
+
+        # Update show_repeating_events button
+        self.show_repeating_button.label = f"Show Repeating: {'Yes' if self.show_repeating_events else 'No'}"
+        self.show_repeating_button.style = discord.ButtonStyle.primary if self.show_repeating_events else discord.ButtonStyle.secondary
+
+        # Update use_user_timezone button
+        self.use_user_timezone_button.label = f"User Timezone: {'Yes' if self.use_user_timezone else 'No'}"
+        self.use_user_timezone_button.style = discord.ButtonStyle.primary if self.use_user_timezone else discord.ButtonStyle.secondary
+
+        # Update button visibility based on use_user_timezone
+        self.timezone_button.disabled = bool(self.use_user_timezone)
+
+    async def _create_settings_embed(self) -> discord.Embed:
+        """Create embed showing current settings"""
+        tz_display = self.cog._format_timezone_display(self.timezone)
+
+        # Build timezone description based on use_user_timezone
+        if self.use_user_timezone:
+            tz_line = f"🌍 **Timezone:** {tz_display} (not used for display)\n└ Event calculations use this timezone"
+        else:
+            tz_line = f"🌍 **Timezone:** {tz_display}\n└ Times displayed in this timezone"
+
+        embed = discord.Embed(
+            title=f"⚙️ Edit Board Settings - Board #{self.board_id}",
+            description=(
+                "🔢 **Max Events:** {max}\n"
+                "└ Maximum number of events to display per page\n\n"
+                "{tz_line}\n\n"
+                "🌐 **User Timezone:** {user_tz}\n"
+                "└ Show times in each user's local timezone\n\n"
+                "👁️ **Show Disabled:** {disabled}\n"
+                "└ Include disabled events in schedule\n\n"
+                "📌 **Pin Message:** {pin}\n"
+                "└ Keep this message pinned in channel\n\n"
+                "🔄 **Show Repeating:** {repeat}\n"
+                "└ Display future occurrences of repeating events\n\n"
+                "Click the buttons below to adjust settings."
+            ).format(
+                max=self.max_events,
+                tz_line=tz_line,
+                user_tz='Yes' if self.use_user_timezone else 'No',
+                disabled='Yes' if self.show_disabled else 'No',
+                pin='Yes' if self.auto_pin else 'No',
+                repeat='Yes' if self.show_repeating_events else 'No'
+            ),
+            color=discord.Color.blue()
+        )
+        return embed
+
+    @discord.ui.button(label="Max Events (15)", emoji="🔢", style=discord.ButtonStyle.secondary, row=0)
+    async def max_events_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Edit max events through modal"""
+        try:
+            parent_view = self
+
+            class MaxEventsModal(discord.ui.Modal, title="Edit Max Events"):
+                def __init__(self):
+                    super().__init__()
+                    self.max_events_input = discord.ui.TextInput(
+                        label="Max Events to Show (1-100)",
+                        default=str(parent_view.max_events),
+                        max_length=3,
+                        required=True
+                    )
+                    self.add_item(self.max_events_input)
+
+                async def on_submit(self, modal_interaction: discord.Interaction):
+                    try:
+                        max_events = int(self.max_events_input.value.strip())
+                        if max_events < 1 or max_events > 100:
+                            raise ValueError()
+
+                        # Update database
+                        parent_view.cog.cursor.execute("""
+                            UPDATE notification_schedule_boards
+                            SET max_events = ?
+                            WHERE id = ?
+                        """, (max_events, parent_view.board_id))
+                        parent_view.cog.conn.commit()
+
+                        # Update view state
+                        parent_view.max_events = max_events
+                        parent_view.max_events_button.label = f"Max Events ({max_events})"
+
+                        # Refresh embed
+                        embed = await parent_view._create_settings_embed()
+                        await modal_interaction.response.edit_message(embed=embed, view=parent_view)
+
+                        # Update the board
+                        await parent_view.cog.update_schedule_board(parent_view.board_id)
+
+                    except ValueError:
+                        await modal_interaction.response.send_message(
+                            "❌ Max events must be a number between 1 and 100!",
+                            ephemeral=True
+                        )
+
+            await interaction.response.send_modal(MaxEventsModal())
+
+        except Exception as e:
+            print(f"[ERROR] Error in max events button: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Timezone (UTC)", emoji="🌍", style=discord.ButtonStyle.secondary, row=0)
+    async def timezone_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Edit timezone through modal"""
+        try:
+            parent_view = self
+
+            class TimezoneModal(discord.ui.Modal, title="Edit Timezone"):
+                def __init__(self):
+                    super().__init__()
+                    self.timezone_input = discord.ui.TextInput(
+                        label="Timezone (UTC±X or UTC±H:MM)",
+                        placeholder="e.g., UTC+3, UTC-5, UTC+5:30",
+                        default=parent_view.cog._format_timezone_display(parent_view.timezone),
+                        max_length=12,
+                        required=True
+                    )
+                    self.add_item(self.timezone_input)
+
+                async def on_submit(self, modal_interaction: discord.Interaction):
+                    try:
+                        tz_input = self.timezone_input.value.strip()
+
+                        # Parse timezone (same logic as before)
+                        if tz_input.upper() == "UTC":
+                            tz_name = "UTC"
+                        elif tz_input.upper().startswith("UTC+") or tz_input.upper().startswith("UTC-"):
+                            offset_str = tz_input[3:]
+                            if ':' in offset_str:
+                                parts = offset_str.split(':')
+                                hours = int(parts[0])
+                                minutes = int(parts[1])
+                                offset_hours = hours + (minutes / 60.0) if hours >= 0 else hours - (minutes / 60.0)
+                            else:
+                                offset_hours = float(offset_str)
+
+                            if offset_hours >= 0:
+                                tz_name = f"Etc/GMT-{int(offset_hours)}"
+                            else:
+                                tz_name = f"Etc/GMT+{int(abs(offset_hours))}"
+                        else:
+                            raise ValueError("Invalid timezone format")
+
+                        # Validate timezone
+                        pytz.timezone(tz_name)
+
+                        # Update database
+                        parent_view.cog.cursor.execute("""
+                            UPDATE notification_schedule_boards
+                            SET timezone = ?
+                            WHERE id = ?
+                        """, (tz_name, parent_view.board_id))
+                        parent_view.cog.conn.commit()
+
+                        # Update view state
+                        parent_view.timezone = tz_name
+                        tz_display = parent_view.cog._format_timezone_display(tz_name)
+                        parent_view.timezone_button.label = f"Timezone ({tz_display})"
+
+                        # Refresh embed
+                        embed = await parent_view._create_settings_embed()
+                        await modal_interaction.response.edit_message(embed=embed, view=parent_view)
+
+                        # Update the board
+                        await parent_view.cog.update_schedule_board(parent_view.board_id)
+
+                    except Exception as e:
+                        await modal_interaction.response.send_message(
+                            f"❌ Invalid timezone format! Use UTC±X format (e.g., UTC+3, UTC-5).",
+                            ephemeral=True
+                        )
+
+            await interaction.response.send_modal(TimezoneModal())
+
+        except Exception as e:
+            print(f"[ERROR] Error in timezone button: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="User Timezone: No", emoji="🌐", style=discord.ButtonStyle.secondary, row=0)
+    async def use_user_timezone_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Toggle user timezone setting"""
+        try:
+            # Toggle value
+            self.use_user_timezone = 0 if self.use_user_timezone else 1
+
+            # Update database
+            self.cog.cursor.execute("""
+                UPDATE notification_schedule_boards
+                SET use_user_timezone = ?
+                WHERE id = ?
+            """, (self.use_user_timezone, self.board_id))
+            self.cog.conn.commit()
+
+            # Update button styles (this will also update timezone button visibility)
+            self._update_button_styles()
+
+            # Refresh embed
+            embed = await self._create_settings_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+            # Update the board
+            await self.cog.update_schedule_board(self.board_id)
+
+        except Exception as e:
+            print(f"[ERROR] Error toggling user timezone: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Show Disabled: No", emoji="👁️", style=discord.ButtonStyle.secondary, row=1)
+    async def show_disabled_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Toggle show disabled events"""
+        try:
+            # Toggle value
+            self.show_disabled = 0 if self.show_disabled else 1
+
+            # Update database
+            self.cog.cursor.execute("""
+                UPDATE notification_schedule_boards
+                SET show_disabled = ?
+                WHERE id = ?
+            """, (self.show_disabled, self.board_id))
+            self.cog.conn.commit()
+
+            # Update button style
+            self._update_button_styles()
+
+            # Refresh embed
+            embed = await self._create_settings_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+            # Update the board
+            await self.cog.update_schedule_board(self.board_id)
+
+        except Exception as e:
+            print(f"[ERROR] Error toggling show disabled: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Pin Message: Yes", emoji="📌", style=discord.ButtonStyle.primary, row=1)
+    async def auto_pin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Toggle pin message"""
+        try:
+            # Toggle value
+            self.auto_pin = 0 if self.auto_pin else 1
+
+            # Update database
+            self.cog.cursor.execute("""
+                UPDATE notification_schedule_boards
+                SET auto_pin = ?
+                WHERE id = ?
+            """, (self.auto_pin, self.board_id))
+            self.cog.conn.commit()
+
+            # Get the board's message to pin/unpin it
+            self.cog.cursor.execute("""
+                SELECT channel_id, message_id FROM notification_schedule_boards
+                WHERE id = ?
+            """, (self.board_id,))
+            result = self.cog.cursor.fetchone()
+
+            if result:
+                channel_id, message_id = result
+                channel = self.cog.bot.get_channel(channel_id)
+
+                if channel:
+                    try:
+                        message = await channel.fetch_message(message_id)
+
+                        if self.auto_pin:
+                            # Pin the message
+                            if not message.pinned:
+                                await message.pin()
+                        else:
+                            # Unpin the message
+                            if message.pinned:
+                                await message.unpin()
+                    except discord.Forbidden:
+                        # Bot lacks pin/unpin permissions
+                        pass
+                    except discord.NotFound:
+                        # Message not found
+                        pass
+                    except Exception as e:
+                        print(f"[ERROR] Error pinning/unpinning message: {e}")
+
+            # Update button style
+            self._update_button_styles()
+
+            # Refresh embed
+            embed = await self._create_settings_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+        except Exception as e:
+            print(f"[ERROR] Error toggling pin message: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Show Repeating: Yes", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
+    async def show_repeating_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Toggle show repeating events"""
+        try:
+            # Toggle value
+            self.show_repeating_events = 0 if self.show_repeating_events else 1
+
+            # Update database
+            self.cog.cursor.execute("""
+                UPDATE notification_schedule_boards
+                SET show_repeating_events = ?
+                WHERE id = ?
+            """, (self.show_repeating_events, self.board_id))
+            self.cog.conn.commit()
+
+            # Update button style
+            self._update_button_styles()
+
+            # Refresh embed
+            embed = await self._create_settings_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+            # Update the board
+            await self.cog.update_schedule_board(self.board_id)
+
+        except Exception as e:
+            print(f"[ERROR] Error toggling show repeating: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Done", emoji="✅", style=discord.ButtonStyle.success, row=2)
+    async def done_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Return to board management view"""
+        try:
+            view = BoardManagementView(self.cog, self.guild_id, self.board_id)
+            embed = await view.create_embed()
+            await interaction.response.edit_message(embed=embed, view=view)
+        except Exception as e:
+            print(f"[ERROR] Error in done button: {e}")
+            traceback.print_exc()
 
 class EditBoardSettingsModal(discord.ui.Modal):
     """Modal to edit board settings"""
@@ -1913,14 +2625,14 @@ class EditBoardSettingsModal(discord.ui.Modal):
 
         # Load current settings
         cog.cursor.execute("""
-            SELECT max_events, timezone, show_disabled, auto_pin
+            SELECT max_events, timezone, show_disabled, auto_pin, show_repeating_events
             FROM notification_schedule_boards
             WHERE id = ?
         """, (board_id,))
         result = cog.cursor.fetchone()
 
         if result:
-            max_events, timezone, show_disabled, auto_pin = result
+            max_events, timezone, show_disabled, auto_pin, show_repeating_events = result
 
             self.max_events = discord.ui.TextInput(
                 label="Max Events to Show",
@@ -1947,13 +2659,13 @@ class EditBoardSettingsModal(discord.ui.Modal):
             )
             self.add_item(self.show_disabled)
 
-            self.auto_pin = discord.ui.TextInput(
-                label="Auto-pin Board? (yes/no)",
-                default="yes" if auto_pin else "no",
+            self.show_repeating_events = discord.ui.TextInput(
+                label="Show Repeating Events? (yes/no)",
+                default="yes" if show_repeating_events else "no",
                 max_length=3,
                 required=False
             )
-            self.add_item(self.auto_pin)
+            self.add_item(self.show_repeating_events)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
@@ -2043,18 +2755,18 @@ class EditBoardSettingsModal(discord.ui.Modal):
             # Validate max events
             try:
                 max_events = int(self.max_events.value.strip())
-                if max_events < 1 or max_events > 50:
+                if max_events < 1 or max_events > 100:
                     raise ValueError()
             except ValueError:
                 await interaction.response.send_message(
-                    "❌ Max events must be between 1 and 50!",
+                    "❌ Max events must be between 1 and 100!",
                     ephemeral=True
                 )
                 return
 
             # Parse yes/no
             show_disabled = self.show_disabled.value.strip().lower() in ["yes", "y", "true", "1"]
-            auto_pin = self.auto_pin.value.strip().lower() in ["yes", "y", "true", "1"]
+            show_repeating_events = self.show_repeating_events.value.strip().lower() in ["yes", "y", "true", "1"]
 
             # Defer the response while we update
             await interaction.response.defer()
@@ -2062,9 +2774,9 @@ class EditBoardSettingsModal(discord.ui.Modal):
             # Update database
             self.cog.cursor.execute("""
                 UPDATE notification_schedule_boards
-                SET max_events = ?, timezone = ?, show_disabled = ?, auto_pin = ?
+                SET max_events = ?, timezone = ?, show_disabled = ?, show_repeating_events = ?
                 WHERE id = ?
-            """, (max_events, tz_name, 1 if show_disabled else 0, 1 if auto_pin else 0, self.board_id))
+            """, (max_events, tz_name, 1 if show_disabled else 0, 1 if show_repeating_events else 0, self.board_id))
             self.cog.conn.commit()
 
             # Update the board
@@ -2083,7 +2795,6 @@ class EditBoardSettingsModal(discord.ui.Modal):
             print(f"[ERROR] Error updating settings: {e}")
             traceback.print_exc()
             await interaction.response.send_message("❌ An error occurred!", ephemeral=True)
-
 
 class ConfirmDeleteView(discord.ui.View):
     """Confirmation view for deleting a board"""
