@@ -199,7 +199,7 @@ class Control(commands.Cog):
                         description=(
                             f"{pimp.divider1}\n"
                             f"\n"
-                            f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
+                            f"{pimp.totalIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
                             f"{pimp.allianceIcon} **Currently Processing:** {alliance_name}\n"
                             f"{pimp.pinIcon} **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
                             f"{pimp.timeIcon} **Started:** <t:{int(start_time.timestamp())}:R>\n"
@@ -215,7 +215,7 @@ class Control(commands.Cog):
                         description=(
                             f"{pimp.divider1}\n"
                             f"\n"
-                            f"📊 **Type:** Single Alliance\n"
+                            f"{pimp.totalIcon} **Type:** Single Alliance\n"
                             f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                             f"{pimp.pinIcon} **Status:** In Progress\n"
                             f"{pimp.timeIcon} **Started:** <t:{int(start_time.timestamp())}:R>\n"
@@ -245,7 +245,7 @@ class Control(commands.Cog):
             color = pimp.emColor1
         )
         embed.add_field(
-            name="📊 Status",
+            name=f"{pimp.totalIcon} Status",
             value=f"{pimp.hourglassIcon} Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n{pimp.divider2}\n",
             inline=False
         )
@@ -278,7 +278,7 @@ class Control(commands.Cog):
                     # Get wait time from login handler
                     wait_time = self.login_handler._get_wait_time()
                     
-                    embed.description = f"{pimp.alertIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n📊 Progress: {checked_users}/{total_users} members"
+                    embed.description = f"{pimp.alertIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n{pimp.totalIcon} Progress: {checked_users}/{total_users} members"
                     embed.color = discord.Color.orange()
                     if message:
                         await message.edit(embed=embed)
@@ -394,7 +394,7 @@ class Control(commands.Cog):
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                     f"👥 **Total Members:** {total_users}\n"
                     f"{pimp.deniedIcon} **Attempted Removals:** {removal_count}\n"
-                    f"📊 **Percentage:** {removal_percentage:.1f}%\n"
+                    f"{pimp.totalIcon} **Percentage:** {removal_percentage:.1f}%\n"
                     f"{pimp.shieldIcon} **Threshold:** 20%\n\n"
                     f"**Reason:** Removing more than 20% of members suggests a potential API issue.\n\n"
                     f"**Members that would have been removed:**\n"
@@ -402,7 +402,7 @@ class Control(commands.Cog):
                     + (f"\n• ... and {removal_count - 10} more" if removal_count > 10 else "")
                     + f"\n\n{pimp.alertIcon} **Action Required:** Please verify these members manually or wait for API issues to resolve."
                 ),
-                color=discord.Color.red()
+                color=pimp.emColor2
             )
             alert_embed.set_footer(text=f"{pimp.shieldIcon} Automatic Safety System | No members were removed")
             await channel.send(embed=alert_embed)
@@ -433,37 +433,43 @@ class Control(commands.Cog):
 
         if furnace_changes or nickname_changes or kid_changes or check_fail_list:
             if furnace_changes:
+                furnace_changes.append(f"-# {pimp.stoveIcon} {pimp.totalIcon} **Total Changes:** {len(furnace_changes)}\n")
                 await self.send_embed(
-                    channel=channel,
-                    title=f"{pimp.stoveIcon} **{alliance_name}** Furnace Level Changes",
-                    description=safe_list(furnace_changes),
-                    color=discord.Color.orange(),
-                    footer=f"📊 Total Changes: {len(furnace_changes)}"
+                    channel = channel,
+                    title = f"{pimp.stoveIcon} **{alliance_name}** Furnace Level Changes",
+                    description = safe_list(furnace_changes),
+                    footer = "",
+                    color = pimp.emColor4
                 )
 
             if nickname_changes:
+                description = safe_list(nickname_changes) + "\n-# " + pimp.totalIcon + " **Total Changes:** " + len(nickname_changes) + "\n"
                 await self.send_embed(
                     channel=channel,
                     title=f"{pimp.avatarIcon} **{alliance_name}** Nickname Changes",
-                    description=safe_list(nickname_changes),
-                    color = pimp.emColor1,
-                    footer=f"📊 Total Changes: {len(nickname_changes)}"
+                    description = description,
+                    footer = "",
+                    color = pimp.emColor1
                 )
 
             if kid_changes:
+                description = safe_list(nickname_changes) + "\n-# " + pimp.totalIcon + " **Total Changes:** " + len(nickname_changes) + "\n"
                 await self.send_embed(
                     channel=channel,
                     title=f"{pimp.stateIcon} **{alliance_name}** State Transfer Notifications",
-                    description=safe_list(kid_changes),
-                    color = pimp.emColor3,
-                    footer=f"📊 Total Changes: {len(kid_changes)}"
+                    description = (
+                        f"{safe_list(kid_changes)}\n"
+                        f"-# {pimp.totalIcon} Total Changes: {len(kid_changes)}\n"
+                    ),
+                    footer = "",
+                    color = pimp.emColor3
                 )
 
             if check_fail_list:
                 # Count auto-removed entries
                 auto_removed_count = sum(1 for item in check_fail_list if "Auto-removed" in item)
                 
-                footer_text = f"📊 Total Issues: {len(check_fail_list)}"
+                footer_text = f"{pimp.totalIcon} Total Issues: {len(check_fail_list)}"
                 if auto_removed_count > 0:
                     footer_text += f" | {pimp.deniedIcon} Auto-removed: {auto_removed_count}"
                 
@@ -471,14 +477,14 @@ class Control(commands.Cog):
                     channel=channel,
                     title=f"{pimp.deniedIcon} **{alliance_name}** Invalid Members Detected",
                     description=safe_list(check_fail_list),
-                    color=discord.Color.red(),
+                    color=pimp.emColor2,
                     footer=footer_text
                 )
 
             embed.color = pimp.emColor3
             embed.set_field_at(
                 0,
-                name="📊 Final Status",
+                name=f"{pimp.totalIcon} Final Status",
                 value=f"{pimp.verifiedIcon} Control completed with changes\n{pimp.timeIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
                 inline=False
             )
@@ -489,7 +495,7 @@ class Control(commands.Cog):
             )
             # Build the value string without nested f-strings for Python 3.9+ compatibility
             total_changes = len(furnace_changes) + len(nickname_changes) + len(kid_changes)
-            changes_text = f"🔄 {total_changes} changes detected"
+            changes_text = f"{pimp.processingIcon} {total_changes} changes detected"
 
             # Add auto-removed count if any
             auto_removed_count = sum(1 for item in check_fail_list if 'Auto-removed' in item)
@@ -510,7 +516,7 @@ class Control(commands.Cog):
             embed.color = pimp.emColor3
             embed.set_field_at(
                 0,
-                name="📊 Final Status",
+                name=f"{pimp.totalIcon} Final Status",
                 value=f"{pimp.verifiedIcon} Control completed successfully\n{pimp.timeIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{pimp.deniedIcon} No changes detected\n\n{pimp.divider2}\n",
                 inline=False
             )
@@ -539,7 +545,7 @@ class Control(commands.Cog):
                             description=(
                                 f"{pimp.divider1}\n"
                                 f"\n"
-                                f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
+                                f"{pimp.totalIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
                                 f"{pimp.allianceIcon} **Alliances:** {batch_info['total']} processed\n"
                                 f"{pimp.verifiedIcon} **Status:** Completed\n"
                                 f"{pimp.allianceIcon} **Latest Alliance:** {alliance_name}\n"
@@ -556,7 +562,7 @@ class Control(commands.Cog):
                             description=(
                                 f"{pimp.divider1}\n"
                                 f"\n"
-                                f"📊 **Type:** All Alliances ({batch_info['total']} total)\n"
+                                f"{pimp.totalIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
                                 f"{pimp.allianceIcon} **Completed:** {alliance_name}\n"
                                 f"{pimp.pinIcon} **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
                                 f"{pimp.allianceIcon} **Changes in {alliance_name}:** {'Yes' if changes_detected else 'No'}\n"

@@ -26,11 +26,11 @@ class PaginationView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(emoji=f"⬅️", style=discord.ButtonStyle.blurple, disabled=True)
+    @discord.ui.button(emoji=f"⬅️", style=discord.ButtonStyle.secondary, disabled=True)
     async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_page_change(interaction, -1)
 
-    @discord.ui.button(emoji=f"➡️", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(emoji=f"➡️", style=discord.ButtonStyle.secondary)
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_page_change(interaction, 1)
 
@@ -120,7 +120,7 @@ class AllianceMemberOperations(commands.Cog):
 
     async def handle_member_operations(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title=f"{pimp.allianceIcon} Alliance Member Operations",
+            title=f"{pimp.avatarIcon} Member Operations",
             description=(
                 f"### **Available Operations:**\n"
                 f"\n{pimp.divider1}\n"
@@ -128,17 +128,17 @@ class AllianceMemberOperations(commands.Cog):
                 f"{pimp.addIcon} **Add Members**\n"
                 f"└ Add new members (supports IDs, CSV/TSV imports)\n"
                 f"{pimp.divider2}\n"
-                f"{pimp.transferIcon} **Transfer Members**\n"
-                f"└ Transfer members to another alliance\n"
-                f"{pimp.divider2}\n"
                 f"{pimp.deleteIcon} **Remove Members**\n"
                 f"└ Remove members from alliance\n"
                 f"{pimp.divider2}\n"
-                f"{pimp.magnifyingIcon} **View Members**\n"
-                f"└ View alliance member list\n"
+                f"{pimp.transferIcon} **Transfer Members**\n"
+                f"└ Transfer members to another alliance\n"
                 f"{pimp.divider2}\n"
                 f"{pimp.exportIcon} **Export Members**\n"
                 f"└ Export member data to CSV/TSV\n"
+                f"{pimp.divider2}\n"
+                f"{pimp.magnifyingIcon} **View Members**\n"
+                f"└ View alliance member list\n"
                 f"{pimp.divider2}\n"
                 f"{pimp.homeIcon} **Main Menu**\n"
                 f"└ Return to main menu\n"
@@ -216,7 +216,7 @@ class AllianceMemberOperations(commands.Cog):
                             f"{pimp.divider2}"
                             f"{special_alliance_text}"
                         ),
-                        color=discord.Color.green()
+                        color=pimp.emColor3
                     )
 
                     alliances_with_counts = []
@@ -349,9 +349,9 @@ class AllianceMemberOperations(commands.Cog):
                                 f"### **Alliance Statistics**\n"
                                 f"{pimp.divider1}\n"
                                 f"\n"
-                                f"{pimp.allianceIcon} Total Member     : {len(members)}\n"
-                                f"{pimp.stoveIcon}️ Highest Level    : {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                f"📈 Average Level    : {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
+                                f"{pimp.allianceIcon} Total Member: {len(members)}\n"
+                                f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
+                                f"📈 Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
                                 f"\n"
                                 f"{pimp.divider1}\n"
                                 f"\n"
@@ -444,7 +444,7 @@ class AllianceMemberOperations(commands.Cog):
                                         success_embed = discord.Embed(
                                             title=f"{pimp.verifiedIcon} Members Deleted",
                                             description=f"A total of **{len(removed_members)}** members have been successfully deleted.",
-                                            color=discord.Color.green()
+                                            color=pimp.emColor3
                                         )
                                         await confirm_interaction.response.edit_message(embed=success_embed, view=None)
                                     else:
@@ -515,7 +515,7 @@ class AllianceMemberOperations(commands.Cog):
                                     success_embed = discord.Embed(
                                         title=f"{pimp.verifiedIcon} Members Deleted",
                                         description=f"Successfully deleted **{len(removed_members)}** member(s).",
-                                        color=discord.Color.green()
+                                        color=pimp.emColor3
                                     )
                                     try:
                                         await member_interaction.response.edit_message(embed=success_embed, view=None)
@@ -555,317 +555,11 @@ class AllianceMemberOperations(commands.Cog):
                     )
 
             @discord.ui.button(
-                label="View Members",
-                emoji=f"{pimp.magnifyingIcon}",
-                style=discord.ButtonStyle.secondary,
-                custom_id="view_members",
+                label="Transfer Members", 
+                emoji=f"{pimp.transferIcon}", 
+                style=discord.ButtonStyle.secondary, 
                 row=1
             )
-            async def view_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                try:
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        admin_result = cursor.fetchone()
-                        
-                        if not admin_result:
-                            await button_interaction.response.send_message(
-                                f"{pimp.deniedIcon} You do not have permission to use this command.", 
-                                ephemeral=True
-                            )
-                            return
-                            
-                        is_initial = admin_result[0]
-
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
-                        button_interaction.guild_id
-                    )
-                    
-                    if not alliances:
-                        await button_interaction.response.send_message(
-                            f"{pimp.deniedIcon} No alliance found that you have permission for.", 
-                            ephemeral=True
-                        )
-                        return
-
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = f"\n\n**Special Access Alliances**\n"
-                        special_alliance_text += f"{pimp.divider2}\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += f"{pimp.divider2}\n"
-
-                    select_embed = discord.Embed(
-                        title=f"{pimp.allianceIcon} Alliance Selection",
-                        description=(
-                            f"Please select an alliance to view members:\n\n"
-                            f"**Permission Details**\n"
-                            f"{pimp.divider2}\n"
-                            f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
-                            f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{pimp.divider2}"
-                            f"{special_alliance_text}"
-                        ),
-                        color=emColor1
-                    )
-
-                    alliances_with_counts = []
-                    for alliance_id, name in alliances:
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                            member_count = cursor.fetchone()[0]
-                            alliances_with_counts.append((alliance_id, name, member_count))
-
-                    view = AllianceSelectView(alliances_with_counts, self.cog)
-                    
-                    async def select_callback(interaction: discord.Interaction):
-                        alliance_id = int(view.current_select.values[0])
-                        
-                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                            cursor = alliance_db.cursor()
-                            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                            alliance_name = cursor.fetchone()[0]
-                        
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("""
-                                SELECT fid, nickname, furnace_lv, kid
-                                FROM users 
-                                WHERE alliance = ? 
-                                ORDER BY furnace_lv DESC, nickname
-                            """, (alliance_id,))
-                            members = cursor.fetchall()
-                        
-                        if not members:
-                            await interaction.response.send_message(
-                                f"{pimp.deniedIcon} No members found in this alliance.", 
-                                ephemeral=True
-                            )
-                            return
-
-                        max_fl = max(member[2] for member in members)
-                        avg_fl = sum(member[2] for member in members) / len(members)
-
-                        public_embed = discord.Embed(
-                            title=f"{pimp.allianceIcon} {alliance_name} - Member List",
-                            description=(
-                                f"### **Alliance Statistics**\n"
-                                f"{pimp.divider1}\n"
-                                f"\n"
-                                f"{pimp.allianceIcon} Total Members: {len(members)}\n"
-                                f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                f"📈 Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                                f"\n"
-                                f"{pimp.divider1}\n"
-                                f"\n"
-                                f"### **Member List**\n"
-                                f"{pimp.divider2}\n"
-                            ),
-                            color=pimp.emColor1
-                        )
-
-                        members_per_page = 15
-                        member_chunks = [members[i:i + members_per_page] for i in range(0, len(members), members_per_page)]
-                        embeds = []
-
-                        for page, chunk in enumerate(member_chunks):
-                            embed = public_embed.copy()
-                            
-                            member_list = ""
-                            for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
-                                level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
-                                member_list += f"{pimp.avatarIcon} {nickname}\n└ {pimp.stoveIcon} FC: {level}\n└ {pimp.fidIcon} FID: {fid}\n└ {pimp.stateIcon} State: {kid}\n\n"
-
-                            embed.description += member_list
-                            
-                            if len(member_chunks) > 1:
-                                embed.set_footer(text=f"Page {page + 1}/{len(member_chunks)}")
-                            
-                            embeds.append(embed)
-
-                        pagination_view = PaginationView(embeds, interaction.user.id)
-                        
-                        await interaction.response.edit_message(
-                            content=f"{pimp.verifiedIcon} Member list has been generated and posted below.",
-                            embed=None,
-                            view=None
-                        )
-                        
-                        message = await interaction.channel.send(
-                            embed=embeds[0],
-                            view=pagination_view if len(embeds) > 1 else None
-                        )
-                        
-                        if pagination_view:
-                            pagination_view.message = message
-
-                    view.callback = select_callback
-                    await button_interaction.response.send_message(
-                        embed=select_embed,
-                        view=view,
-                        ephemeral=True
-                    )
-
-                except Exception as e:
-                    self.log_message(f"Error in view_members_button: {e}")
-                    if not button_interaction.response.is_done():
-                        await button_interaction.response.send_message(
-                            f"{pimp.deniedIcon} An error occurred while displaying the member list.",
-                            ephemeral=True
-                        )
-
-            @discord.ui.button(
-                label="Export Members",
-                emoji=f"{pimp.exportIcon}",
-                style=discord.ButtonStyle.secondary,
-                custom_id="export_members",
-                row=1
-            )
-            async def export_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                try:
-                    # Check admin permissions
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        admin_result = cursor.fetchone()
-                        
-                        if not admin_result:
-                            await button_interaction.response.send_message(
-                                f"{pimp.deniedIcon} You do not have permission to use this command.", 
-                                ephemeral=True
-                            )
-                            return
-                            
-                        is_initial = admin_result[0]
-
-                    # Get available alliances
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
-                        button_interaction.guild_id
-                    )
-                    
-                    if not alliances:
-                        await button_interaction.response.send_message(
-                            f"{pimp.deniedIcon} No alliance found with your permissions.", 
-                            ephemeral=True
-                        )
-                        return
-
-                    # Create special alliance text for display
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = f"\n\n**Special Access Alliances**\n"
-                        special_alliance_text += f"{pimp.divider2}\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += f"{pimp.divider2}\n"
-
-                    select_embed = discord.Embed(
-                        title=f"{pimp.allianceIcon} Alliance Selection - Export Members",
-                        description=(
-                            f"Select the alliance to export members from:\n\n"
-                            f"**Permission Details**\n"
-                            f"{pimp.divider2}\n"
-                            f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
-                            f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{pimp.divider2}\n"
-                            f"{special_alliance_text}"
-                        ),
-                        color=pimp.emColor1
-                    )
-
-                    # Get member counts for alliances
-                    alliances_with_counts = []
-                    for alliance_id, name in alliances:
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                            member_count = cursor.fetchone()[0]
-                            alliances_with_counts.append((alliance_id, name, member_count))
-
-                    # Create view for alliance selection with ALL option
-                    view = AllianceSelectViewWithAll(alliances_with_counts, self.cog)
-                    
-                    async def select_callback(interaction: discord.Interaction):
-                        selected_value = view.current_select.values[0]
-                        
-                        if selected_value == "all":
-                            alliance_id = "all"
-                            alliance_name = "ALL ALLIANCES"
-                            
-                            # Show column selection with alliance name column
-                            column_embed = discord.Embed(
-                                title=f"{pimp.allianceIcon} Select Export Columns",
-                                description=(
-                                    f"**Export Type:** ALL ALLIANCES\n"
-                                    f"**Total Alliances:** {len(alliances_with_counts)}\n\n"
-                                    "Click the buttons to toggle columns on/off.\n"
-                                    "All columns are selected by default.\n\n"
-                                    "**Available Columns:**\n"
-                                    "• **Alliance** - Alliance name\n"
-                                    "• **ID** - Member ID\n"
-                                    "• **Name** - Member's nickname\n"
-                                    "• **FC Level** - Furnace level\n"
-                                    "• **State** - State ID"
-                                ),
-                                color=pimp.emColor1
-                            )
-                            
-                            column_view = ExportColumnSelectView(alliance_id, alliance_name, self.cog, include_alliance=True)
-                        else:
-                            alliance_id = int(selected_value)
-                            # Get alliance name
-                            alliance_name = next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), "Unknown")
-                            
-                            # Show column selection view for single alliance
-                            column_embed = discord.Embed(
-                                title=f"{pimp.allianceIcon} Select Export Columns",
-                                description=(
-                                    f"**Alliance:** {alliance_name}\n\n"
-                                    "Click the buttons to toggle columns on/off.\n"
-                                    "All columns are selected by default.\n\n"
-                                    "**Available Columns:**\n"
-                                    "• **ID** - Member ID\n"
-                                    "• **Name** - Member's nickname\n"
-                                    "• **FC Level** - Furnace level\n"
-                                    "• **State** - State ID"
-                                ),
-                                color=pimp.emColor1
-                            )
-                            
-                            column_view = ExportColumnSelectView(alliance_id, alliance_name, self.cog, include_alliance=False)
-                        
-                        await interaction.response.edit_message(embed=column_embed, view=column_view)
-
-                    view.callback = select_callback
-                    await button_interaction.response.send_message(
-                        embed=select_embed,
-                        view=view,
-                        ephemeral=True
-                    )
-
-                except Exception as e:
-                    self.cog.log_message(f"Error in export_members_button: {e}")
-                    await button_interaction.response.send_message(
-                        f"{pimp.deniedIcon} An error occurred during the export process.",
-                        ephemeral=True
-                    )
-            
-            @discord.ui.button(
-                label="Main Menu", 
-                emoji=f"{pimp.homeIcon}", 
-                style=discord.ButtonStyle.secondary,
-                row=2
-            )
-            async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await self.cog.show_main_menu(interaction)
-
-            @discord.ui.button(label="Transfer Members", emoji=f"{pimp.transferIcon}", style=discord.ButtonStyle.secondary, row=0)
             async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
                     with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -1058,7 +752,7 @@ class AllianceMemberOperations(commands.Cog):
                                                 f"📥 **Target:** {target_alliance_name}\n\n"
                                                 f"**Transferred Members:**\n{member_list}"
                                             ),
-                                            color=discord.Color.green()
+                                            color=pimp.emColor3
                                         )
 
                                         await target_interaction.response.edit_message(
@@ -1122,6 +816,317 @@ class AllianceMemberOperations(commands.Cog):
                         f"{pimp.deniedIcon} An error occurred during the transfer operation.",
                         ephemeral=True
                     )
+
+            @discord.ui.button(
+                label="Export Members",
+                emoji=f"{pimp.exportIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="export_members",
+                row=1
+            )
+            async def export_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                try:
+                    # Check admin permissions
+                    with sqlite3.connect('db/settings.sqlite') as settings_db:
+                        cursor = settings_db.cursor()
+                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
+                        admin_result = cursor.fetchone()
+                        
+                        if not admin_result:
+                            await button_interaction.response.send_message(
+                                f"{pimp.deniedIcon} You do not have permission to use this command.", 
+                                ephemeral=True
+                            )
+                            return
+                            
+                        is_initial = admin_result[0]
+
+                    # Get available alliances
+                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
+                        button_interaction.user.id, 
+                        button_interaction.guild_id
+                    )
+                    
+                    if not alliances:
+                        await button_interaction.response.send_message(
+                            f"{pimp.deniedIcon} No alliance found with your permissions.", 
+                            ephemeral=True
+                        )
+                        return
+
+                    # Create special alliance text for display
+                    special_alliance_text = ""
+                    if special_alliances:
+                        special_alliance_text = f"\n\n**Special Access Alliances**\n"
+                        special_alliance_text += f"{pimp.divider2}\n"
+                        for _, name in special_alliances:
+                            special_alliance_text += f"🔸 {name}\n"
+                        special_alliance_text += f"{pimp.divider2}\n"
+
+                    select_embed = discord.Embed(
+                        title=f"{pimp.allianceIcon} Alliance Selection - Export Members",
+                        description=(
+                            f"Select the alliance to export members from:\n\n"
+                            f"**Permission Details**\n"
+                            f"{pimp.divider2}\n"
+                            f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
+                            f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
+                            f"{pimp.divider2}\n"
+                            f"{special_alliance_text}"
+                        ),
+                        color=pimp.emColor1
+                    )
+
+                    # Get member counts for alliances
+                    alliances_with_counts = []
+                    for alliance_id, name in alliances:
+                        with sqlite3.connect('db/users.sqlite') as users_db:
+                            cursor = users_db.cursor()
+                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                            member_count = cursor.fetchone()[0]
+                            alliances_with_counts.append((alliance_id, name, member_count))
+
+                    # Create view for alliance selection with ALL option
+                    view = AllianceSelectViewWithAll(alliances_with_counts, self.cog)
+                    
+                    async def select_callback(interaction: discord.Interaction):
+                        selected_value = view.current_select.values[0]
+                        
+                        if selected_value == "all":
+                            alliance_id = "all"
+                            alliance_name = "ALL ALLIANCES"
+                            
+                            # Show column selection with alliance name column
+                            column_embed = discord.Embed(
+                                title=f"{pimp.allianceIcon} Select Export Columns",
+                                description=(
+                                    f"**Export Type:** ALL ALLIANCES\n"
+                                    f"**Total Alliances:** {len(alliances_with_counts)}\n\n"
+                                    "Click the buttons to toggle columns on/off.\n"
+                                    "All columns are selected by default.\n\n"
+                                    "**Available Columns:**\n"
+                                    "• **Alliance** - Alliance name\n"
+                                    "• **ID** - Member ID\n"
+                                    "• **Name** - Member's nickname\n"
+                                    "• **FC Level** - Furnace level\n"
+                                    "• **State** - State ID"
+                                ),
+                                color=pimp.emColor1
+                            )
+                            
+                            column_view = ExportColumnSelectView(alliance_id, alliance_name, self.cog, include_alliance=True)
+                        else:
+                            alliance_id = int(selected_value)
+                            # Get alliance name
+                            alliance_name = next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), "Unknown")
+                            
+                            # Show column selection view for single alliance
+                            column_embed = discord.Embed(
+                                title=f"{pimp.allianceIcon} Select Export Columns",
+                                description=(
+                                    f"**Alliance:** {alliance_name}\n\n"
+                                    "Click the buttons to toggle columns on/off.\n"
+                                    "All columns are selected by default.\n\n"
+                                    "**Available Columns:**\n"
+                                    "• **ID** - Member ID\n"
+                                    "• **Name** - Member's nickname\n"
+                                    "• **FC Level** - Furnace level\n"
+                                    "• **State** - State ID"
+                                ),
+                                color=pimp.emColor1
+                            )
+                            
+                            column_view = ExportColumnSelectView(alliance_id, alliance_name, self.cog, include_alliance=False)
+                        
+                        await interaction.response.edit_message(embed=column_embed, view=column_view)
+
+                    view.callback = select_callback
+                    await button_interaction.response.send_message(
+                        embed=select_embed,
+                        view=view,
+                        ephemeral=True
+                    )
+
+                except Exception as e:
+                    self.cog.log_message(f"Error in export_members_button: {e}")
+                    await button_interaction.response.send_message(
+                        f"{pimp.deniedIcon} An error occurred during the export process.",
+                        ephemeral=True
+                    )
+            
+            @discord.ui.button(
+                label="View Members",
+                emoji=f"{pimp.magnifyingIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="view_members",
+                row=2
+            )
+            async def view_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
+                try:
+                    with sqlite3.connect('db/settings.sqlite') as settings_db:
+                        cursor = settings_db.cursor()
+                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
+                        admin_result = cursor.fetchone()
+                        
+                        if not admin_result:
+                            await button_interaction.response.send_message(
+                                f"{pimp.deniedIcon} You do not have permission to use this command.", 
+                                ephemeral=True
+                            )
+                            return
+                            
+                        is_initial = admin_result[0]
+
+                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
+                        button_interaction.user.id, 
+                        button_interaction.guild_id
+                    )
+                    
+                    if not alliances:
+                        await button_interaction.response.send_message(
+                            f"{pimp.deniedIcon} No alliance found that you have permission for.", 
+                            ephemeral=True
+                        )
+                        return
+
+                    special_alliance_text = ""
+                    if special_alliances:
+                        special_alliance_text = f"\n\n**Special Access Alliances**\n"
+                        special_alliance_text += f"{pimp.divider2}\n"
+                        for _, name in special_alliances:
+                            special_alliance_text += f"🔸 {name}\n"
+                        special_alliance_text += f"{pimp.divider2}\n"
+
+                    select_embed = discord.Embed(
+                        title=f"{pimp.allianceIcon} Alliance Selection",
+                        description=(
+                            f"Please select an alliance to view members:\n\n"
+                            f"**Permission Details**\n"
+                            f"{pimp.divider2}\n"
+                            f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
+                            f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
+                            f"{pimp.divider2}"
+                            f"{special_alliance_text}"
+                        ),
+                        color=emColor1
+                    )
+
+                    alliances_with_counts = []
+                    for alliance_id, name in alliances:
+                        with sqlite3.connect('db/users.sqlite') as users_db:
+                            cursor = users_db.cursor()
+                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                            member_count = cursor.fetchone()[0]
+                            alliances_with_counts.append((alliance_id, name, member_count))
+
+                    view = AllianceSelectView(alliances_with_counts, self.cog)
+                    
+                    async def select_callback(interaction: discord.Interaction):
+                        alliance_id = int(view.current_select.values[0])
+                        
+                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                            cursor = alliance_db.cursor()
+                            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                            alliance_name = cursor.fetchone()[0]
+                        
+                        with sqlite3.connect('db/users.sqlite') as users_db:
+                            cursor = users_db.cursor()
+                            cursor.execute("""
+                                SELECT fid, nickname, furnace_lv, kid
+                                FROM users 
+                                WHERE alliance = ? 
+                                ORDER BY furnace_lv DESC, nickname
+                            """, (alliance_id,))
+                            members = cursor.fetchall()
+                        
+                        if not members:
+                            await interaction.response.send_message(
+                                f"{pimp.deniedIcon} No members found in this alliance.", 
+                                ephemeral=True
+                            )
+                            return
+
+                        max_fl = max(member[2] for member in members)
+                        avg_fl = sum(member[2] for member in members) / len(members)
+
+                        public_embed = discord.Embed(
+                            title=f"{pimp.allianceIcon} {alliance_name} - Member List",
+                            description=(
+                                f"### **Alliance Statistics**\n"
+                                f"{pimp.divider1}\n"
+                                f"\n"
+                                f"{pimp.allianceIcon} Total Members: {len(members)}\n"
+                                f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
+                                f"📈 Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
+                                f"\n"
+                                f"{pimp.divider1}\n"
+                                f"\n"
+                                f"### **Member List**\n"
+                                f"{pimp.divider2}\n"
+                            ),
+                            color=pimp.emColor1
+                        )
+
+                        members_per_page = 15
+                        member_chunks = [members[i:i + members_per_page] for i in range(0, len(members), members_per_page)]
+                        embeds = []
+
+                        for page, chunk in enumerate(member_chunks):
+                            embed = public_embed.copy()
+                            
+                            member_list = ""
+                            for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
+                                level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
+                                member_list += f"{pimp.avatarIcon} {nickname}\n└ {pimp.stoveIcon} FC: {level}\n└ {pimp.fidIcon} FID: {fid}\n└ {pimp.stateIcon} State: {kid}\n\n"
+
+                            embed.description += member_list
+                            
+                            if len(member_chunks) > 1:
+                                embed.set_footer(text=f"Page {page + 1}/{len(member_chunks)}")
+                            
+                            embeds.append(embed)
+
+                        pagination_view = PaginationView(embeds, interaction.user.id)
+                        
+                        await interaction.response.edit_message(
+                            content=f"{pimp.verifiedIcon} Member list has been generated and posted below.",
+                            embed=None,
+                            view=None
+                        )
+                        
+                        message = await interaction.channel.send(
+                            embed=embeds[0],
+                            view=pagination_view if len(embeds) > 1 else None
+                        )
+                        
+                        if pagination_view:
+                            pagination_view.message = message
+
+                    view.callback = select_callback
+                    await button_interaction.response.send_message(
+                        embed=select_embed,
+                        view=view,
+                        ephemeral=True
+                    )
+
+                except Exception as e:
+                    self.log_message(f"Error in view_members_button: {e}")
+                    if not button_interaction.response.is_done():
+                        await button_interaction.response.send_message(
+                            f"{pimp.deniedIcon} An error occurred while displaying the member list.",
+                            ephemeral=True
+                        )
+
+            @discord.ui.button(
+                label="Main Menu", 
+                emoji=f"{pimp.homeIcon}", 
+                style=discord.ButtonStyle.secondary,
+                row=2
+            )
+            async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                await self.cog.show_main_menu(interaction)
 
         view = MemberOperationsView(self)
         await interaction.response.edit_message(embed=embed, view=view)
@@ -1547,7 +1552,7 @@ class AllianceMemberOperations(commands.Cog):
                                 f"**Added IDs:**\n"
                                 f"```\n{', '.join(ids_list)}\n```"
                             ),
-                            color=discord.Color.green()
+                            color=pimp.emColor3
                         )
 
                         try:
@@ -1590,7 +1595,7 @@ class AllianceMemberOperations(commands.Cog):
             f"Process completed for {total_users} members.\n"
             f"**Processing Time:** {processing_time:.1f} seconds{queue_info}\n\n"
         )
-        embed.color = discord.Color.green()
+        embed.color = pimp.emColor3
         await message.edit(embed=embed)
 
     async def is_admin(self, user_id):
@@ -1793,7 +1798,7 @@ class AllianceMemberOperations(commands.Cog):
                     f"**Columns Included:** {', '.join(headers)}\n\n"
                     "Attempting to send the file via DM..."
                 ),
-                color=discord.Color.green()
+                color=pimp.emColor3
             )
             
             # Try to DM the user
@@ -1831,7 +1836,7 @@ class AllianceMemberOperations(commands.Cog):
                 
                 # Update summary embed with success
                 summary_embed.description += f"\n\n{pimp.verifiedIcon} **File successfully sent via DM!**"
-                summary_embed.color = discord.Color.green()
+                summary_embed.color = pimp.emColor3
                 
                 # Log the export
                 self.log_message(
@@ -1961,7 +1966,7 @@ class AllianceSelectView(discord.ui.View):
             )
 
         select = discord.ui.Select(
-            placeholder=f"🏰 Select an alliance... (Page {self.page + 1}/{self.max_page + 1})",
+            placeholder = f"Select an alliance... (Page {self.page + 1}/{self.max_page + 1})",
             options=options
         )
         
@@ -2121,7 +2126,7 @@ class IDSearchModal(discord.ui.Modal):
                                     f"{pimp.fidIcon} **ID:** {fid}\n"
                                     f"🏰 **Alliance:** {current_alliance_name}"
                                 ),
-                                color=discord.Color.green()
+                                color=pimp.emColor3
                             )
 
                             await confirm_interaction.response.edit_message(
@@ -2225,7 +2230,7 @@ class IDSearchModal(discord.ui.Modal):
                                 f"📤 **Source:** {current_alliance_name}\n"
                                 f"📥 **Target:** {target_alliance_name}"
                             ),
-                            color=discord.Color.green()
+                            color=pimp.emColor3
                         )
 
                         await select_interaction.response.edit_message(
@@ -2277,7 +2282,7 @@ class AllianceSelectViewWithAll(discord.ui.View):
                 label="ALL ALLIANCES",
                 value="all",
                 description=f"Export all {total_members} members from {len(alliances_with_counts)} alliances",
-                emoji=f"🌍"
+                emoji=f"{pimp.stateIcon}"
             )
         ]
         
@@ -2288,12 +2293,12 @@ class AllianceSelectViewWithAll(discord.ui.View):
                     label=f"{name[:50]}",
                     value=str(alliance_id),
                     description=f"ID: {alliance_id} | Members: {count}",
-                    emoji=f"🏰"
+                    emoji=f"{pimp.allianceIcon}"
                 )
             )
         
         select = discord.ui.Select(
-            placeholder=f"🏰 Select an alliance or ALL...",
+            placeholder = "Select an alliance or ALL...",
             options=options
         )
         
