@@ -2343,7 +2343,7 @@ class GiftOperations(commands.Cog):
                             description=(
                                 f"Successfully set gift code channel:\n\n"
                                 f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                f"{pimp.listIcon} **Channel:** <#{channel_id}>\n\n"
+                                f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
                                 f"{pimp.verifiedIcon} Channel has been configured for gift code monitoring.\n"
                                 f"Use **Channel History Scan** in Gift Code Settings to scan historical messages on-demand.\n"
                                 f"**Tip:** Follow the official WOS #giftcodes channel in your gift code channel to easily find new codes."
@@ -2618,7 +2618,7 @@ class GiftOperations(commands.Cog):
                                         f"{pimp.divider1}\n"
                                         f"{pimp.giftIcon} **Gift Code:** `{selected_code}`\n"
                                         f"{avatarIcon} **Deleted by:** {button_interaction.user.mention}\n"
-                                        f"{timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                                        f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
                                         f"{pimp.divider1}\n"
                                     ),
                                     color=pimp.emColor3,
@@ -2794,7 +2794,7 @@ class GiftOperations(commands.Cog):
                     description=(
                         f"Are you sure you want to remove the gift code channel for:\n\n"
                         f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                        f"{pimp.listIcon} **Channel:** <#{channel_id}>\n\n"
+                        f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
                         "This action cannot be undone!"
                     ),
                     color=pimp.emColor4,
@@ -2812,7 +2812,7 @@ class GiftOperations(commands.Cog):
                             description=(
                                 f"Successfully removed gift code channel for:\n\n"
                                 f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                f"{pimp.listIcon} **Channel:** <#{channel_id}>"
+                                f"{pimp.anounceIcon} **Channel:** <#{channel_id}>"
                             ),
                             color = pimp.emColor3,
                         )
@@ -2917,7 +2917,7 @@ class GiftOperations(commands.Cog):
                 description=(
                     f"Are you sure you want to remove the gift code channel setting?\n\n"
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                    f"{pimp.listIcon} **Current Channel:** <#{channel_id}>\n\n"
+                    f"{pimp.anounceIcon} **Current Channel:** <#{channel_id}>\n\n"
                     "This action cannot be undone!"
                 ),
                 color=emColor4,
@@ -2936,7 +2936,7 @@ class GiftOperations(commands.Cog):
                         description=(
                             f"Successfully removed gift code channel setting:\n\n"
                             f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                            f"{pimp.listIcon} **Channel:** <#{channel_id}>\n\n"
+                            f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
                             "You can set a new channel anytime by selecting a channel from the list above."
                         ),
                         color = pimp.emColor3,
@@ -3067,7 +3067,7 @@ class GiftOperations(commands.Cog):
             post_text = ""
             description_text = ""
             pre_text = f"Manage gift code channels for your alliances.\n"
-            pre_text += f"### {pimp.listIcon} **Current Configurations**\n"
+            pre_text += f"### {pimp.anounceIcon} **Current Configurations**\n"
             pre_text += f"{pimp.divider1}\n\n"
             post_text += f"\n{pimp.divider1}\n"
             for alliance_id, channel_id in channel_configs:
@@ -3103,7 +3103,7 @@ class GiftOperations(commands.Cog):
         async def config_callback(config_interaction: discord.Interaction):
             # Show alliance selection for configuration
             alliance_embed = discord.Embed(
-                title = f"{anounceIcon} Select Alliance to Configure",
+                title = f"{pimp.anounceIcon} Select Alliance to Configure",
                 description="Choose an alliance to set up or change its gift code channel:",
                 color = pimp.emColor1,
             )
@@ -3478,7 +3478,7 @@ class GiftOperations(commands.Cog):
                     f"{pimp.divider1}\n"
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                     f"{pimp.anounceIcon} **Channel:** #{channel.name}\n"
-                    f"{pimp.anounceIcon} **Scan Limit:** Up to 75 historical messages\n\n"
+                    f"{pimp.listIcon} **Scan Limit:** Up to 75 historical messages\n\n"
                     f"{pimp.alertIcon} **Note:** This will scan historical messages in the channel to find "
                     f"potential gift codes. Use this carefully in channels with lots of non-gift-code messages.\n\n"
                     f"Do you want to proceed with the historical scan?"
@@ -3521,7 +3521,7 @@ class GiftOperations(commands.Cog):
                 results_text += f"{pimp.divider1}\n"
                 results_text += f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                 results_text += f"{pimp.anounceIcon} **Channel:** #{channel.name}\n"
-                results_text += f"{pimp.anounceIcon} **Messages Scanned:** {messages_scanned}\n"
+                results_text += f"{pimp.listIcon} **Messages Scanned:** {messages_scanned}\n"
                 results_text += f"{pimp.giftIcon} **Total Codes Found:** {total_found}\n\n"
                 
                 if total_found > 0:
@@ -4660,13 +4660,13 @@ class GiftView(discord.ui.View):
                             selected_code = giftcode_interaction.data["values"][0]
                             
                             confirm_embed = discord.Embed(
-                                title = f"{alertIcon} Confirm Gift Code Usage",
+                                title = f"{pimp.alertIcon} Confirm Gift Code Usage",
                                 description=(
                                     f"Are you sure you want to use this gift code?\n"
                                     f"### **Details**\n"
                                     f"\n{pimp.divider1}\n\n"
                                     f"{pimp.giftIcon} **Gift Code:** `{selected_code}`\n"
-                                    f"{allianceIcon} **Alliances:** {'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')}\n"
+                                    f"{pimp.allianceIcon} **Alliances:** {'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')}\n"
                                     f"\n{pimp.divider1}\n"
                                 ),
                                 color = pimp.emColor4,
@@ -4716,8 +4716,8 @@ class GiftView(discord.ui.View):
                                             f"**Full Queue Details**\n"
                                             f"{queue_info}\n\n"
                                             f"{pimp.anounceIcon} **Total items in queue:** {queue_status['queue_length']}\n"
-                                            f"📍 **Your position:** #{your_position if your_position else 'Processing'}\n\n"
-                                            f"💡 You'll receive notifications as each alliance is processed."
+                                            f"{pimp.pinIcon} **Your position:** #{your_position if your_position else 'Processing'}\n\n"
+                                            f"{pimp.anounceIcon} You'll receive notifications as each alliance is processed."
                                         ),
                                         color = pimp.emColor3,
                                     )
@@ -4901,7 +4901,7 @@ class SettingsMenuView(discord.ui.View):
         await self.cog.show_ocr_settings(interaction)
     
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"{pimp.importIcon} Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main",
         row=2
@@ -4958,9 +4958,9 @@ class ClearCacheConfirmView(discord.ui.View):
             item.disabled = True
         try:
             timeout_embed = discord.Embed(
-                title = f"{timeIcon} Timeout",
+                title = f"{pimp.timeIcon} Timeout",
                 description="Confirmation timed out. Redemption cache was not cleared.",
-                color=emColor4,
+                color=pimp.emColor4,
             )
         except:
             pass
@@ -5138,10 +5138,10 @@ class OCRSettingsView(discord.ui.View):
                 description=(
                     f"**Test Summary**"
                     f"\n{pimp.divider1}\n"
-                    f"{robotIcon} **OCR Success:** {'{pimp.verifiedIcon} Yes' if success else '{pimp.deniedIcon} No'}\n"
-                    f"{magnifyingIcon} **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
-                    f"{anounceIcon} **Confidence:** `{confidence_str}`\n"
-                    f"{timeIcon} **Solve Time:** `{solve_duration:.2f}s`\n"
+                    f"{pimp.robotIcon} **OCR Success:** {'{pimp.verifiedIcon} Yes' if success else '{pimp.deniedIcon} No'}\n"
+                    f"{pimp.magnifyingIcon} **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
+                    f"{pimp.anounceIcon} **Confidence:** `{confidence_str}`\n"
+                    f"{pimp.timeIcon} **Solve Time:** `{solve_duration:.2f}s`\n"
                     f"{pimp.divider1}\n"
                 ), color=pimp.emColor3 if success else emColor2,
             )

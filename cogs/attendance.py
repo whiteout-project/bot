@@ -7,6 +7,7 @@ import os
 import re
 from io import BytesIO
 import uuid
+from cogs import prettification_is_my_purpose as pimp
 
 try:
     import matplotlib.pyplot as plt
@@ -164,7 +165,7 @@ class AttendanceSettingsView(discord.ui.View):
         }.get(sort_type, sort_type)
 
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"{pimp.importIcon} Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main"
     )
@@ -202,7 +203,7 @@ class ReportTypeSelectView(discord.ui.View):
         await self.set_report_preference(interaction, "matplotlib")
 
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"{pimp.importIcon} Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_settings"
     )
@@ -292,7 +293,7 @@ class ReportSortSelectView(discord.ui.View):
         await self.set_sort_preference(interaction, "last_attended_first")
 
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"{pimp.importIcon} Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_settings"
     )
@@ -502,7 +503,7 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=None)
 
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"{pimp.importIcon} Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_other_features"
     )
@@ -530,7 +531,7 @@ class EventTypeSelectView(discord.ui.View):
         self.add_item(self.create_event_type_select())
         
         # Add back button
-        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label=f"{pimp.importIcon} Back", style=discord.ButtonStyle.secondary)
         back_button.callback = self.back_to_sessions
         self.add_item(back_button)
     
@@ -707,7 +708,7 @@ class AllianceSelectView(discord.ui.View):
         await interaction.response.edit_message(view=self)
 
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"{pimp.importIcon} Back",
         style=discord.ButtonStyle.secondary,
         row=1
     )
@@ -961,7 +962,7 @@ class ConfirmDeleteView(discord.ui.View):
             # Create back button to return to session list
             back_view = discord.ui.View(timeout=7200)
             back_button = discord.ui.Button(
-                label="⬅️ Back",
+                label=f"{pimp.importIcon} Back",
                 style=discord.ButtonStyle.secondary
             )
             async def back_callback(i: discord.Interaction):
@@ -1314,7 +1315,7 @@ class PlayerSelectView(discord.ui.View):
             )
             back_view = discord.ui.View(timeout=7200)
             back_button = discord.ui.Button(
-                label="⬅️ Close",
+                label=f"{pimp.deniedIcon} Close",
                 style=discord.ButtonStyle.secondary
             )
             back_button.callback = lambda i: self.update_main_embed(i)
@@ -1336,7 +1337,7 @@ class PlayerSelectView(discord.ui.View):
                 )
                 back_view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="⬅️ Close",
+                    label=f"{pimp.deniedIcon} Close",
                     style=discord.ButtonStyle.secondary
                 )
                 back_button.callback = lambda i: self.update_main_embed(i)
@@ -1367,7 +1368,7 @@ class PlayerSelectView(discord.ui.View):
                 view=None
             )
 
-    @discord.ui.button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label=f"{pimp.importIcon} Back", style=discord.ButtonStyle.secondary, row=3)
     async def back_to_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_attendance_menu(interaction)
     
@@ -1798,7 +1799,7 @@ class PlayerAttendanceView(discord.ui.View):
     async def not_recorded_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._mark_attendance(interaction, "not_recorded")
 
-    @discord.ui.button(label="⬅️ Back to List", style=discord.ButtonStyle.secondary, custom_id="back_to_list")
+    @discord.ui.button(label=f"{pimp.importIcon} Back to List", style=discord.ButtonStyle.secondary, custom_id="back_to_list")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.parent_view.update_main_embed(interaction)
 
@@ -1927,7 +1928,7 @@ class Attendance(commands.Cog):
     def _create_back_view(self, callback):
         """Helper to create back button view"""
         view = discord.ui.View(timeout=7200)
-        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label=f"{pimp.importIcon} Back", style=discord.ButtonStyle.secondary)
         back_button.callback = callback
         view.add_item(back_button)
         return view
@@ -2608,7 +2609,7 @@ class SessionSelectView(discord.ui.View):
         
         # Back button (always shown)
         back_button = discord.ui.Button(
-            label="⬅️ Back",
+            label=f"{pimp.importIcon} Back",
             style=discord.ButtonStyle.secondary,
             row=1
         )

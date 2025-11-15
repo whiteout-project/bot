@@ -809,7 +809,7 @@ class MemberListView(discord.ui.View):
         if self.total_pages > 1:
             previous_button = discord.ui.Button(
                 label="Previous",
-                emoji="⬅️",
+                emoji=f"{pimp.importIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="previous",
                 disabled=self.current_page == 0,
@@ -820,7 +820,7 @@ class MemberListView(discord.ui.View):
 
             next_button = discord.ui.Button(
                 label="Next",
-                emoji="➡️",
+                emoji=f"{pimp.exportIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="next",
                 disabled=self.current_page == self.total_pages - 1,
@@ -1035,7 +1035,7 @@ class MemberListViewNickname(discord.ui.View):
         if self.total_pages > 1:
             previous_button = discord.ui.Button(
                 label="Previous",
-                emoji="⬅️",
+                emoji=f"{pimp.importIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="previous_nick",
                 disabled=self.current_page == 0,
@@ -1046,7 +1046,7 @@ class MemberListViewNickname(discord.ui.View):
 
             next_button = discord.ui.Button(
                 label="Next",
-                emoji="➡️",
+                emoji=f"{pimp.exportIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="next_nick",
                 disabled=self.current_page == self.total_pages - 1,
@@ -1261,13 +1261,13 @@ class RecentChangesView(discord.ui.View):
         self.previous_button.disabled = self.current_page == 0
         self.next_button.disabled = self.current_page == self.total_pages - 1
 
-    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="previous")
+    @discord.ui.button(label="Previous", emoji=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, custom_id="previous")
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = max(0, self.current_page - 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
-    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="next")
+    @discord.ui.button(label="Next", emoji=f"{pimp.exportIcon}", style=discord.ButtonStyle.secondary, custom_id="next")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self.update_buttons()
@@ -1314,13 +1314,13 @@ class RecentNicknameChangesView(discord.ui.View):
         self.previous_button.disabled = self.current_page == 0
         self.next_button.disabled = self.current_page == self.total_pages - 1
 
-    @discord.ui.button(label="Previous", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="previous_nick_recent")
+    @discord.ui.button(label="Previous", emoji=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, custom_id="previous_nick_recent")
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = max(0, self.current_page - 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
-    @discord.ui.button(label="Next", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="next_nick_recent")
+    @discord.ui.button(label="Next", emoji=f"{pimp.exportIcon}", style=discord.ButtonStyle.secondary, custom_id="next_nick_recent")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self.update_buttons()

@@ -6,6 +6,7 @@ import time
 import hashlib
 import aiohttp
 from aiohttp_socks import ProxyConnector
+from cogs import prettification_is_my_purpose as pimp
 
 SECRET = 'tB87#kPtkxqOS2'
 
@@ -185,7 +186,7 @@ class FilteredUserSelectView(discord.ui.View):
     async def list_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_current_schedule_list(interaction, self.activity_name)
     
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_minister_channel_menu(interaction)
     
@@ -336,7 +337,7 @@ class ActivitySelectView(discord.ui.View):
         elif self.action_type == "clear_reservations":
             await self.cog.show_clear_confirmation(interaction, activity_name)
     
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
@@ -411,7 +412,7 @@ class MinisterSettingsView(discord.ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed to delete server ID: {e}", ephemeral=True)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=3)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=3)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_minister_channel_menu(interaction)
 
@@ -463,7 +464,7 @@ class MinisterChannelView(discord.ui.View):
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             other_features_cog = self.cog.bot.get_cog("OtherFeatures")
@@ -544,7 +545,7 @@ class ChannelConfigurationView(discord.ui.View):
     async def log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._handle_channel_selection(interaction, "minister log channel", "general logging")
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_minister_channel_menu(interaction)
 
@@ -567,7 +568,7 @@ class ChannelConfigurationView(discord.ui.View):
                 self.cog = cog
                 self.add_item(ChannelSelect(bot, context))
                 
-            @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
+            @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=1)
             async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 # Restore the menu with embed
                 embed = discord.Embed(
@@ -673,7 +674,7 @@ class TimeSelectView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.secondary,
-            emoji="⬅️",
+            emoji=f"{pimp.importIcon}",
             row=2 if self.max_page > 0 else 1
         )
         back_button.callback = self.back_button_callback
@@ -1720,7 +1721,7 @@ class MinisterMenu(commands.Cog):
         select.callback = select_callback
         view.add_item(select)
 
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
 
         async def back_callback(interaction: discord.Interaction):
             await self.show_settings_menu(interaction)
@@ -1902,7 +1903,7 @@ class MinisterMenu(commands.Cog):
         select.callback = select_callback
         view.add_item(select)
 
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
 
         async def back_callback(interaction: discord.Interaction):
             await self.show_settings_menu(interaction)

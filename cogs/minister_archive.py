@@ -33,7 +33,7 @@ class ArchiveDetailsView(discord.ui.View):
     async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_delete_archive_confirmation(interaction, self.archive_id, self.archive_info)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=2)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=2)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_list(interaction)
 
@@ -87,7 +87,7 @@ class ArchiveAppointmentsView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            emoji="⬅️",
+            emoji=f"{pimp.importIcon}",
             row=1 if self.max_page > 0 else 0
         )
         back_button.callback = self.back_button_callback
@@ -172,7 +172,7 @@ class ArchiveListView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            emoji="⬅️",
+            emoji=f"{pimp.importIcon}",
             row=2 if self.max_page > 0 else 1
         )
         back_button.callback = self.back_button_callback
@@ -210,7 +210,7 @@ class ClearAfterSaveView(discord.ui.View):
     async def no_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_menu(interaction)
 
-    @discord.ui.button(label="Back to Main Menu", style=discord.ButtonStyle.primary, emoji="⬅️")
+    @discord.ui.button(label="Back to Main Menu", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if minister_menu_cog:
@@ -266,7 +266,7 @@ class PostArchiveChannelView(discord.ui.View):
         # Add channel select
         self.add_item(PostArchiveChannelSelect(cog, archive_id, appointment_type, appointments))
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️", row=1)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}", row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_archive_appointments(interaction, self.archive_id, self.appointment_type)
 
@@ -313,7 +313,7 @@ class ArchiveMenuView(discord.ui.View):
     async def view_history(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_change_history(interaction)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
         if minister_menu_cog:
@@ -356,7 +356,7 @@ class ChangeHistoryView(discord.ui.View):
         back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.primary,
-            emoji="⬅️",
+            emoji=f"{pimp.importIcon}",
             row=1 if self.max_page > 0 else 0
         )
         back_button.callback = self.back_button_callback
@@ -679,7 +679,7 @@ class MinisterArchive(commands.Cog):
                     color=discord.Color.blue()
                 )
                 view = discord.ui.View(timeout=7200)
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
 
                 async def back_callback(inter: discord.Interaction):
                     await self.show_archive_menu(inter)
@@ -787,7 +787,7 @@ class MinisterArchive(commands.Cog):
                     color=discord.Color.blue()
                 )
                 view = discord.ui.View(timeout=7200)
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
 
                 async def back_callback(inter: discord.Interaction):
                     await self.show_archive_details(inter, archive_id)
@@ -1120,7 +1120,7 @@ class MinisterArchive(commands.Cog):
                     color=discord.Color.blue()
                 )
                 view = discord.ui.View(timeout=7200)
-                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji="⬅️")
+                back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{pimp.importIcon}")
 
                 async def back_callback(inter: discord.Interaction):
                     if archive_id:

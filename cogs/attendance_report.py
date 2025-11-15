@@ -8,6 +8,7 @@ import io
 from io import BytesIO
 import os
 from .attendance import SessionSelectView
+from cogs import prettification_is_my_purpose as pimp
 
 try:
     import matplotlib.pyplot as plt
@@ -146,7 +147,7 @@ class AttendanceReport(commands.Cog):
     def _create_back_view(self, callback):
         """Helper to create back button view"""
         view = discord.ui.View()
-        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label=f"{pimp.importIcon} Back", style=discord.ButtonStyle.secondary)
         back_button.callback = callback
         view.add_item(back_button)
         return view
@@ -881,7 +882,7 @@ class AttendanceReport(commands.Cog):
                 # Preview mode - create a simple back button that clears attachments
                 view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="⬅️ Back",
+                    label=f"{pimp.importIcon} Back",
                     style=discord.ButtonStyle.secondary
                 )
                 
@@ -901,7 +902,7 @@ class AttendanceReport(commands.Cog):
                 
                 # Back button
                 back_button = discord.ui.Button(
-                    label="⬅️ Back",
+                    label=f"{pimp.importIcon} Back",
                     style=discord.ButtonStyle.secondary
                 )
                 
@@ -1303,7 +1304,7 @@ class AttendanceReport(commands.Cog):
             # Back button - different behavior for preview vs regular mode
             if is_preview and marking_view:
                 back_button = discord.ui.Button(
-                    label="⬅️ Back to Marking",
+                    label=f"{pimp.importIcon} Back to Marking",
                     style=discord.ButtonStyle.secondary
                 )
 
@@ -1314,7 +1315,7 @@ class AttendanceReport(commands.Cog):
                 view.add_item(back_button)
             else:
                 back_button = discord.ui.Button(
-                    label="⬅️ Back to Sessions",
+                    label=f"{pimp.importIcon} Back to Sessions",
                     style=discord.ButtonStyle.secondary
                 )
 
@@ -1456,7 +1457,7 @@ class AttendanceReport(commands.Cog):
                 # Add back button
                 back_view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="⬅️ Back to Alliance Selection",
+                    label=f"{pimp.importIcon} Back to Alliance Selection",
                     style=discord.ButtonStyle.secondary
                 )
                 

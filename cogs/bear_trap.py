@@ -8,7 +8,7 @@ import asyncio
 import json
 import traceback
 import time
-
+from cogs import prettification_is_my_purpose as pimp
 class BearTrap(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1574,11 +1574,11 @@ class NotificationTypeView(discord.ui.View):
             embed = discord.Embed(
                 title="📢 Select Mention Type",
                 description=(
-                    "Choose how to mention users:\n\n"
-                    "1️⃣ @everyone\n"
-                    "2️⃣ Specific Role\n"
-                    "3️⃣ Specific Member\n"
-                    "4️⃣ No Mention"
+                    f"Choose how to mention users:\n\n"
+                    f"{pimp.num1Icon} @everyone\n"
+                    f"{pimp.num2Icon} Specific Role\n"
+                    f"{pimp.num3Icon} Specific Member\n"
+                    f"{pimp.num4Icon} No Mention"
                 ),
                 color=discord.Color.blue()
             )
@@ -1646,11 +1646,11 @@ class CustomTimesModal(discord.ui.Modal):
             embed = discord.Embed(
                 title="📢 Select Mention Type",
                 description=(
-                    "Choose how to mention users:\n\n"
-                    "1️⃣ @everyone\n"
-                    "2️⃣ Specific Role\n"
-                    "3️⃣ Specific Member\n"
-                    "4️⃣ No Mention"
+                    f"Choose how to mention users:\n\n"
+                    f"{pimp.num1Icon} @everyone\n"
+                    f"{pimp.num2Icon} Specific Role\n"
+                    f"{pimp.num3Icon} Specific Member\n"
+                    f"{pimp.num4Icon} No Mention"
                 ),
                 color=discord.Color.blue()
             )
@@ -2069,9 +2069,9 @@ class BearTrapView(discord.ui.View):
                             view=view
                         )
 
-            prev_button = PaginationButton(label="⬅️ Previous", page_change=-1)
+            prev_button = PaginationButton(label=f"{pimp.importIcon} Previous", page_change=-1)
             prev_button.disabled = current_page == 0
-            next_button = PaginationButton(label="Next ➡️", page_change=1)
+            next_button = PaginationButton(label=f"Next {pimp.exportIcon}", page_change=1)
 
             class SearchButton(discord.ui.Button):
                 def __init__(self, label, cog):

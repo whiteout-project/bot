@@ -50,7 +50,7 @@ class GNCommands(commands.Cog):
                         title=f"{pimp.robotIcon} Bot Successfully Activated",
                         description=(
                             f"{pimp.divider1}\n"
-                            f"### **System Status**\n"
+                            f"### {pimp.homeIcon} System Status\n"
                             f"{pimp.verifiedIcon} ***Bot is now online and operational***\n"
                             f"{pimp.verifiedIcon} ***Database connections established***\n"
                             f"{pimp.verifiedIcon} ***Command systems initialized***\n"

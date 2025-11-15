@@ -1397,7 +1397,7 @@ class ControlSettingsView(discord.ui.View):
         self.back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.secondary,
-            emoji="⬅️",
+            emoji=f"{pimp.importIcon}",
             row=2
         )
         self.back_button.callback = self.back_to_bot_operations

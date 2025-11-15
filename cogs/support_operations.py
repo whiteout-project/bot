@@ -94,13 +94,12 @@ class SupportView(discord.ui.View):
             title=f"{pimp.infoIcon} About Whiteout Project",
             description=(
                 f"{pimp.divider1}\n"
-                f"\n"
                 f"### **Open Source Bot**\n"
                 f"{pimp.divider2}\n"
                 f"This is an open source Discord bot for Whiteout Survival.\n"
                 f"The project is community-driven and freely available for everyone.\n"
                 f"**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
-                f"**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"
+                f"**Community:** [Discord](https://discord.gg/apYByj6K2m)\n"
                 f"### **Features**\n"
                 f"{pimp.divider2}\n"
                 f"- Alliance member management\n"
@@ -108,7 +107,7 @@ class SupportView(discord.ui.View):
                 f"- Automated member tracking\n"
                 f"- Bear trap notifications\n"
                 f"- ID channel verification\n"
-                f"- and more...\n\n"
+                f"- and more...\n"
                 f"### **Contributing**\n"
                 f"{pimp.divider2}\n"
                 f"Contributions are welcome! Please check our GitHub repository "
