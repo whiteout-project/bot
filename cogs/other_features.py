@@ -112,59 +112,11 @@ class OtherFeaturesView(discord.ui.View):
             )
 
     @discord.ui.button(
-        label="Minister Scheduling",
-        emoji=f"{pimp.hourglassIcon}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="minister_channels",
-        row=1
-    )
-    async def minister_channels_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            minister_menu_cog = self.cog.bot.get_cog("MinisterMenu")
-            if minister_menu_cog:
-                await minister_menu_cog.show_minister_channel_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{pimp.deniedIcon} Minister Scheduling module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            print(f"Error loading Minister Scheduling menu: {e}")
-            await interaction.response.send_message(
-                f"{pimp.deniedIcon} An error occurred while loading Minister Scheduling menu.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Backup System",
-        emoji=f"{pimp.listIcon}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="backup_system",
-        row=2
-    )
-    async def backup_system_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            backup_cog = self.cog.bot.get_cog("BackupOperations")
-            if backup_cog:
-                await backup_cog.show_backup_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{pimp.deniedIcon} Backup System module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            print(f"Error loading Backup System menu: {e}")
-            await interaction.response.send_message(
-                f"{pimp.deniedIcon} An error occurred while loading Backup System menu.",
-                ephemeral=True
-            )
-            
-    @discord.ui.button(
         label="Registration System",
         emoji=f"{pimp.listIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="registration_system",
-        row=0
+        row=1
     )
     async def registration_system_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -208,11 +160,59 @@ class OtherFeaturesView(discord.ui.View):
             )
 
     @discord.ui.button(
+        label="Minister Scheduling",
+        emoji=f"{pimp.hourglassIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="minister_channels",
+        row=2
+    )
+    async def minister_channels_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            minister_menu_cog = self.cog.bot.get_cog("MinisterMenu")
+            if minister_menu_cog:
+                await minister_menu_cog.show_minister_channel_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} Minister Scheduling module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Minister Scheduling menu: {e}")
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} An error occurred while loading Minister Scheduling menu.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Backup System",
+        emoji=f"{pimp.listIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="backup_system",
+        row=2
+    )
+    async def backup_system_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            backup_cog = self.cog.bot.get_cog("BackupOperations")
+            if backup_cog:
+                await backup_cog.show_backup_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} Backup System module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Backup System menu: {e}")
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} An error occurred while loading Backup System menu.",
+                ephemeral=True
+            )
+            
+    @discord.ui.button(
         label="Main Menu",
         emoji=f"{pimp.homeIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="main_menu",
-        row=2
+        row=3
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
