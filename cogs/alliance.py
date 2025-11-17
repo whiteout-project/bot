@@ -200,7 +200,7 @@ class Alliance(commands.Cog):
                 row=1
             ))
             view.add_item(discord.ui.Button(
-                label="Gift Operations",
+                label="Gift Code Operations",
                 emoji=f"{pimp.giftIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
@@ -294,7 +294,7 @@ class Alliance(commands.Cog):
                 row=1
             ))
             view.add_item(discord.ui.Button(
-                label="Gift Operations",
+                label="Gift Code Operations",
                 emoji=f"{pimp.giftIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
