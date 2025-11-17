@@ -221,6 +221,13 @@ class Alliance(commands.Cog):
                 row=2
             ))
             view.add_item(discord.ui.Button(
+                label="PIMP my Bot",
+                emoji=f"{pimp.pinIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="pimp_my_bot",
+                row=3
+            ))
+            view.add_item(discord.ui.Button(
                 label="Other Features",
                 emoji=f"{pimp.settings2Icon}",
                 style=discord.ButtonStyle.secondary,
@@ -313,6 +320,13 @@ class Alliance(commands.Cog):
                 style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
+            ))
+            view.add_item(discord.ui.Button(
+                label="PIMP my Bot",
+                emoji=f"{pimp.pinIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="pimp_my_bot",
+                row=3
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
@@ -605,7 +619,7 @@ class Alliance(commands.Cog):
                             await bot_ops_cog.show_bot_operations_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "{pimp.multiplyIcon} Bot Operations module not found.",
+                                f"{pimp.multiplyIcon} Bot Operations module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -619,6 +633,30 @@ class Alliance(commands.Cog):
                         else:
                             await interaction.followup.send(
                                 "An error occurred while loading Bot Operations.",
+                                ephemeral=True
+                            )
+
+                elif custom_id == "pimp_my_bot":
+                    try:
+                        pimp_cog = interaction.client.get_cog("PIMP")
+                        if pimp_cog:
+                            await pimp_cog.show_pimp_cog_menu(interaction)
+                        else:
+                            await interaction.response.send_message(
+                                f"{pimp.multiplyIcon} PIMP module not found.",
+                                ephemeral=True
+                            )
+                    except Exception as e:
+                        if not any(error_code in str(e) for error_code in ["10062", "40060"]):
+                            print(f"PIMP error: {e}")
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(
+                                "An error occurred while loading PIMP.",
+                                ephemeral=True
+                            )
+                        else:
+                            await interaction.followup.send(
+                                "An error occurred while loading PIMP.",
                                 ephemeral=True
                             )
 

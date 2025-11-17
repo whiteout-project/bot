@@ -703,7 +703,7 @@ class BotOperations(commands.Cog):
                             await alliance_cog.show_main_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                f"{pimp.deniedIcon} Ana menüye dönüş sırasında bir hata oluştu.",
+                                f"{pimp.deniedIcon} An error occurred while returning to the main menu.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -1162,20 +1162,6 @@ class BotOperations(commands.Cog):
                 emoji=f"{pimp.avatarIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="view_administrators",
-                row=0
-            ))
-            view.add_item(discord.ui.Button(
-                label="Add Admin",
-                emoji=f"{pimp.addIcon}",
-                style=discord.ButtonStyle.secondary,
-                custom_id="add_admin",
-                row=0
-            ))
-            view.add_item(discord.ui.Button(
-                label="Remove Admin",
-                emoji=f"{pimp.deleteIcon}",
-                style=discord.ButtonStyle.secondary,
-                custom_id="remove_admin",
                 row=0
             ))
             view.add_item(discord.ui.Button(

@@ -14,7 +14,6 @@ class WCommand(commands.Cog):
         self.conn = sqlite3.connect('db/changes.sqlite')
         self.c = self.conn.cursor()
         self.SECRET = "tB87#kPtkxqOS2"
-        
         self.level_mapping = {
             31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
             35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",

@@ -1166,10 +1166,45 @@ class BotOperations(commands.Cog):
                 row=0
             ))
             view.add_item(discord.ui.Button(
+                label="View Administrators",
+                emoji=f"{pimp.avatarIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="view_administrators",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Add Admin",
+                emoji=f"{pimp.addIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="add_admin",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Remove Admin",
+                emoji=f"{pimp.deleteIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="remove_admin",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
                 label="Admin Permissions",
                 emoji=f"{pimp.avatarIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="admin_permissions",
+                row=1
+            ))
+            view.add_item(discord.ui.Button(
+                label="Assign Alliance to Admin",
+                emoji=f"{pimp.exportIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="assign_alliance",
+                row=1
+            ))
+            view.add_item(discord.ui.Button(
+                label="Delete Admin Permissions",
+                emoji=f"{pimp.deleteIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="view_admin_permissions",
                 row=1
             ))
             view.add_item(discord.ui.Button(
@@ -1180,10 +1215,45 @@ class BotOperations(commands.Cog):
                 row=2
             ))
             view.add_item(discord.ui.Button(
+                label="Edit Control Settings",
+                emoji=f"{pimp.settings2Icon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="edit_control_settings",
+                row=2
+            ))
+            view.add_item(discord.ui.Button(
+                label="Alliance Control Messages",
+                emoji=f"{pimp.messageIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="alliance_control_messages",
+                row=2
+            ))
+            view.add_item(discord.ui.Button(
+                label="Log System",
+                emoji=f"{pimp.listIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="log_system",
+                row=2
+            ))
+            view.add_item(discord.ui.Button(
+                label="Transfer Old Database",
+                emoji=f"{pimp.exportIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="transfer_old_database",
+                row=2
+            ))
+            view.add_item(discord.ui.Button(
                 label="Bot Updates",
                 emoji=f"{pimp.robotIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="bot_updates",
+                row=3
+            ))
+            view.add_item(discord.ui.Button(
+                label="Check for Updates",
+                emoji=f"{pimp.robotIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="check_updates",
                 row=3
             ))
             view.add_item(discord.ui.Button(

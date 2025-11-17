@@ -703,7 +703,7 @@ class BotOperations(commands.Cog):
                             await alliance_cog.show_main_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                f"{pimp.deniedIcon} An error occurred while returning to the main menu.",
+                                f"{pimp.deniedIcon} Ana menüye dönüş sırasında bir hata oluştu.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -1138,18 +1138,16 @@ class BotOperations(commands.Cog):
     async def show_bot_operations_menu(self, interaction: discord.Interaction):
         try:
             embed = discord.Embed(
-                title=f"{pimp.robotIcon} Bot Operations",
+                title=f"{pimp.avatarIcon} Admin Management",
                 description=(
                     f"Please choose an operation:\n\n"
                     f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
-                    f"{pimp.avatarIcon} **Admin Management**\n"
-                    f"└ Manage bot administrators\n\n"
-                    f"{pimp.shieldIcon} **Admin Permissions**\n"
+                    f"{pimp.shieldIcon} **View Administrators**\n"
                     f"└ View and manage admin permissions\n\n"
-                    f"{pimp.settings2Icon} **Control Settings**\n"
+                    f"{pimp.settings2Icon} **Add Administrator**\n"
                     f"└ Configure alliance control behaviors\n\n"
-                    f"{pimp.robotIcon} **Bot Updates**\n"
+                    f"{pimp.robotIcon} **Remove Administrator**\n"
                     f"└ Check and manage updates\n\n"
                     f"{pimp.divider1}\n"
                 ),
@@ -1159,39 +1157,35 @@ class BotOperations(commands.Cog):
             view = discord.ui.View()
 
             view.add_item(discord.ui.Button(
-                label="Admin Management",
+                label="View Administrators",
                 emoji=f"{pimp.avatarIcon}",
                 style=discord.ButtonStyle.secondary,
-                custom_id="admin_management",
+                custom_id="view_administrators",
+                disabled=True,
                 row=0
             ))
             view.add_item(discord.ui.Button(
-                label="Admin Permissions",
-                emoji=f"{pimp.avatarIcon}",
+                label="Add Administrator",
+                emoji=f"{pimp.addIcon}",
                 style=discord.ButtonStyle.secondary,
-                custom_id="admin_permissions",
-                row=1
+                custom_id="add_admin",
+                disabled=True,
+                row=0
             ))
             view.add_item(discord.ui.Button(
-                label="Control Settings",
-                emoji=f"{pimp.settings2Icon}",
+                label="Remove Administrator",
+                emoji=f"{pimp.deleteIcon}",
                 style=discord.ButtonStyle.secondary,
-                custom_id="control_settings",
-                row=2
-            ))
-            view.add_item(discord.ui.Button(
-                label="Bot Updates",
-                emoji=f"{pimp.robotIcon}",
-                style=discord.ButtonStyle.secondary,
-                custom_id="bot_updates",
-                row=3
+                custom_id="remove_admin",
+                disabled=True,
+                row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Main Menu",
                 emoji=f"{pimp.homeIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="main_menu",
-                row=4
+                row=1
             ))
 
             await interaction.response.edit_message(embed=embed, view=view)

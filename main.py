@@ -932,7 +932,7 @@ if __name__ == "__main__":
 
         with connections["conn_pimpsettings"] as conn_pimpsettings:
             conn_pimpsettings.execute("""CREATE TABLE IF NOT EXISTS pimpsettings (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 themeName TEXT,
                 allianceOldIcon TEXT,
                 avatarOldIcon TEXT,

@@ -80,10 +80,12 @@ class GNCommands(commands.Cog):
                     if alliances:
                         ALLIANCES_PER_PAGE = 5
                         alliance_info = []
+                        i = 0
                         
                         for alliance_id, name in alliances:
                             info_parts = []
-                            
+                            i += 1
+
                             with sqlite3.connect('db/users.sqlite') as users_db:
                                 cursor = users_db.cursor()
                                 cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
@@ -117,12 +119,20 @@ class GNCommands(commands.Cog):
                                 if gift_channel and gift_channel[0]:
                                     info_parts.append(f"{pimp.giftIcon} **Gift Codes Channel:** <#{gift_channel[0]}>")
                             
+                            if i == 1:
+                                alliance_info.append(
+                                    f"{pimp.divider1}\n"
+                                )
                             alliance_info.append(
-                                f"**{name}**\n" + 
-                                f"{pimp.divider1}\n\n" +
+                                f"### {pimp.allianceIcon} {name} {pimp.allianceIcon}\n" + 
+                                f"{pimp.divider2}\n" +
                                 f"\n".join(f"{part}" for part in info_parts) +
-                                f"\n\n{pimp.divider1}"
+                                f"\n{pimp.divider2}\n"
                             )
+                            if i == len(alliances):
+                                alliance_info.append(
+                                    f"{pimp.divider1}"
+                                )
 
                         pages = [alliance_info[i:i + ALLIANCES_PER_PAGE] 
                                 for i in range(0, len(alliance_info), ALLIANCES_PER_PAGE)]
