@@ -167,7 +167,7 @@ class Alliance(commands.Cog):
                     f"└ Manage gift codes and rewards\n\n"
                     f"{pimp.listIcon} **Alliance History**\n"
                     f"└ View alliance changes and history\n\n"
-                    f"{pimp.settingsIcon} **Support Operations**\n"
+                    f"{pimp.supportIcon} **Support Operations**\n"
                     f"└ Access support features\n\n"
                     f"{pimp.settings2Icon} Other Features\n"
                     f"└ Access additional features\n"
@@ -215,7 +215,7 @@ class Alliance(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji=f"{pimp.settingsIcon}",
+                emoji=f"{pimp.supportIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
@@ -261,7 +261,7 @@ class Alliance(commands.Cog):
                     f"└ Manage gift codes and rewards\n\n"
                     f"{pimp.listIcon} **Alliance History**\n"
                     f"└ View alliance changes and history\n\n"
-                    f"{pimp.settingsIcon} **Support Operations**\n"
+                    f"{pimp.supportIcon} **Support Operations**\n"
                     f"└ Access support features\n\n"
                     f"{pimp.settings2Icon} Other Features\n"
                     f"└ Access additional features\n"
@@ -309,7 +309,7 @@ class Alliance(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji=f"{pimp.settingsIcon}",
+                emoji=f"{pimp.supportIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
@@ -670,7 +670,7 @@ class Alliance(commands.Cog):
                             await support_ops_cog.show_support_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                f"{pimp.multiplyIcon} Support Operations module not found.",
+                                f"{pimp.supportIcon} Support Operations module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:

@@ -355,7 +355,7 @@ class Control(commands.Cog):
                                 self.conn_changes.commit()
                                 self.cursor_users.execute("UPDATE users SET furnace_lv = ? WHERE fid = ?", (new_furnace_lv, fid))
                                 self.conn_users.commit()
-                                furnace_changes.append(f"{pimp.avatarIcon} **{old_nickname}**\n{pimp.allianceIconOld} `{old_furnace_display}` {pimp.stoveIcon} `{new_furnace_display}`")
+                                furnace_changes.append(f"{pimp.avatarOldIcon} **{old_nickname}**\n{pimp.stoveOldIcon} `{old_furnace_display}` {pimp.stoveIcon} `{new_furnace_display}`")
 
                             if new_nickname.lower() != old_nickname.lower().strip():
                                 self.cursor_changes.execute("INSERT INTO nickname_changes (fid, old_nickname, new_nickname, change_date) VALUES (?, ?, ?, ?)",
@@ -363,7 +363,7 @@ class Control(commands.Cog):
                                 self.conn_changes.commit()
                                 self.cursor_users.execute("UPDATE users SET nickname = ? WHERE fid = ?", (new_nickname, fid))
                                 self.conn_users.commit()
-                                nickname_changes.append(f"{pimp.avatarIcon} `{old_nickname}` {pimp.avatarIcon} `{new_nickname}`")
+                                nickname_changes.append(f"{pimp.avatarOldIcon} `{old_nickname}` {pimp.avatarIcon} `{new_nickname}`")
 
                         checked_users += 1
                 embed.set_field_at(
@@ -443,7 +443,7 @@ class Control(commands.Cog):
                 )
 
             if nickname_changes:
-                description = safe_list(nickname_changes) + "\n-# " + pimp.totalIcon + " **Total Changes:** " + len(nickname_changes) + "\n"
+                description = safe_list(nickname_changes) + f"\n-# {pimp.totalIcon } **Total Changes:** " + len(nickname_changes) + "\n"
                 await self.send_embed(
                     channel=channel,
                     title=f"{pimp.avatarIcon} **{alliance_name}** Nickname Changes",
@@ -546,7 +546,7 @@ class Control(commands.Cog):
                                 f"{pimp.divider1}\n"
                                 f"\n"
                                 f"{pimp.totalIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
-                                f"{pimp.allianceIcon} **Alliances:** {batch_info['total']} processed\n"
+                                f"{pimp.listIcon} **Alliances:** {batch_info['total']} processed\n"
                                 f"{pimp.verifiedIcon} **Status:** Completed\n"
                                 f"{pimp.allianceIcon} **Latest Alliance:** {alliance_name}\n"
                                 f"{pimp.timeIcon} **Duration:** {duration.total_seconds():.1f} seconds\n"

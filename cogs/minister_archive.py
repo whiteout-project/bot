@@ -3,7 +3,7 @@ from discord.ext import commands
 import sqlite3
 from datetime import datetime
 import json
-
+from cogs import prettification_is_my_purpose as pimp
 class ArchiveDetailsView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, archive_info, type_counts):
         super().__init__(timeout=7200)

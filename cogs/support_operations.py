@@ -7,13 +7,13 @@ class SupportOperations(commands.Cog):
 
     async def show_support_menu(self, interaction: discord.Interaction):
         support_menu_embed = discord.Embed(
-            title=f"{pimp.robotIcon} Support Operations",
+            title=f"{pimp.supportIcon} Support Operations",
             description=(
                 f"Please select an operation:\n\n"
                 f"**Available Operations**\n"
                 f"{pimp.divider1}\n"
                 f"\n"
-                f"{pimp.listIcon} **Request Support**\n"
+                f"{pimp.supportIcon} **Request Support**\n"
                 f"└ Get help and support\n\n"
                 f"{pimp.infoIcon} **About Project**\n"
                 f"└ Project information\n"
@@ -32,7 +32,7 @@ class SupportOperations(commands.Cog):
 
     async def show_support_info(self, interaction: discord.Interaction):
         support_embed = discord.Embed(
-            title=f"{pimp.robotIcon} Bot Support Information",
+            title=f"{pimp.supportIcon} Support Information",
             description=(
                 f"{pimp.divider1}\n"
                 f"\n"
@@ -74,7 +74,7 @@ class SupportView(discord.ui.View):
 
     @discord.ui.button(
         label="Request Support",
-        emoji=f"{pimp.listIcon}",
+        emoji=f"{pimp.supportIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="request_support",
         row=0
