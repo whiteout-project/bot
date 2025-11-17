@@ -480,23 +480,23 @@ class BearTrap(commands.Cog):
                                 else:
                                     if rounded_time > 0:
                                         await channel.send(
-                                            f"{mention_text} ⏰ **Notification** will start in **{time_text}**!")
+                                            f"{mention_text} {pimp.hourglassIcon} **Notification** will start in **{time_text}**!")
                                     else:
-                                        await channel.send(f"{mention_text} ⏰ **Notification**")
+                                        await channel.send(f"{mention_text} {pimp.hourglassIcon} **Notification**")
                             except Exception as e:
                                 print(f"Error creating embed: {e}")
                                 if rounded_time > 0:
                                     await channel.send(
-                                        f"{mention_text} ⏰ **Error sending embed notification** will start in **{time_text}**!")
+                                        f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification** will start in **{time_text}**!")
                                 else:
-                                    await channel.send(f"{mention_text} ⏰ **Error sending embed notification**")
+                                    await channel.send(f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification**")
                     except Exception as e:
                         print(f"Error creating embed: {e}")
                         if rounded_time > 0:
                             await channel.send(
-                                f"{mention_text} ⏰ **Error sending embed notification** will start in **{time_text}**!")
+                                f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification** will start in **{time_text}**!")
                         else:
-                            await channel.send(f"{mention_text} ⏰ **Error sending embed notification**")
+                            await channel.send(f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification**")
                 else:
                     actual_description = description
                     if description.startswith("CUSTOM_TIMES:"):
@@ -519,9 +519,9 @@ class BearTrap(commands.Cog):
                     else:
                         if rounded_time > 0:
                             await channel.send(
-                                f"{mention_text} ⏰ **{actual_description}** will start in **{time_text}**!")
+                                f"{mention_text} {pimp.hourglassIcon} **{actual_description}** will start in **{time_text}**!")
                         else:
-                            await channel.send(f"{mention_text} ⏰ **{actual_description}**")
+                            await channel.send(f"{mention_text} {pimp.hourglassIcon} **{actual_description}**")
 
                 current_time_str = now.strftime('%Y-%m-%d %H:%M:%S')
                 self.cursor.execute("""
@@ -644,22 +644,22 @@ class BearTrap(commands.Cog):
     async def show_bear_trap_menu(self, interaction: discord.Interaction):
         try:
             embed = discord.Embed(
-                title="🔔 Notification System",
-                description=(
-                    "The Notification System can be used to create notifications that will alert players of upcoming events. "
-                    "It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n\n"
-                    "**Available Operations**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "⏰ **Create Notification**\n"
-                    "└ Set up a new notification with custom time, message, mentions, and repeat options\n"
-                    "└ Supports both plain messages and rich embeds\n"
-                    "└ Perfect for Bear Trap, Crazy Joe, Kill Event, Frostfire and more...\n\n"
-                    "📋 **Manage Notifications**\n"
-                    "└ View all existing notifications\n"
-                    "└ Edit, enable/disable or delete them\n\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                title=f"{pimp.membersIcon} Notification System",
+                description=(  
+                    f"The Notification System can be used to create notifications that will alert players of upcoming events. "
+                    f"It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n\n"
+                    f"### Available Operations\n"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.addIcon} **Create Notification**\n"
+                    f"└ Set up a new notification with custom time, message, mentions, and repeat options\n"
+                    f"└ Supports both plain messages and rich embeds\n"
+                    f"└ Perfect for Bear Trap, Crazy Joe, Kill Event, Frostfire and more...\n\n"
+                    f"{pimp.retryIcon} **Manage Notifications**\n"
+                    f"└ View all existing notifications\n"
+                    f"└ Edit, enable/disable or delete them\n\n"
+                    f"{pimp.divider1}\n"
                 ),
-                color=discord.Color.gold()
+                color=pimp.emColor4
             )
 
             embed.set_footer(text="Last Updated")
@@ -676,7 +676,7 @@ class BearTrap(commands.Cog):
             print(f"Error in show_bear_trap_menu: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ An error occurred. Please try again.",
+                    f"{pimp.deniedIcon} An error occurred. Please try again.",
                     ephemeral=True
                 )
 
@@ -689,7 +689,7 @@ class BearTrap(commands.Cog):
             conn.close()
 
             if not is_admin:
-                await interaction.response.send_message("❌ You don't have permission to use this command!",
+                await interaction.response.send_message(f"{pimp.deniedIcon} You don't have permission to use this command!",
                                                         ephemeral=True)
                 return False
             return True
@@ -701,7 +701,7 @@ class BearTrap(commands.Cog):
                                      message_data, channels):
         try:
             embed = discord.Embed(
-                title="📢 Select Channel",
+                title=f"{pimp.anounceIcon} Select Channel",
                 description=(
                     "Choose a channel to send notifications:\n\n"
                     "Select a text channel from the dropdown menu below.\n"
@@ -729,7 +729,7 @@ class BearTrap(commands.Cog):
         except Exception as e:
             print(f"Error in show_channel_selection: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while showing channel selection!",
+                f"{pimp.deniedIcon} An error occurred while showing channel selection!",
                 ephemeral=True
             )
 
@@ -748,16 +748,16 @@ class RepeatOptionView(discord.ui.View):
         self.mention_type = mention_type
         self.original_message = original_message
 
-    @discord.ui.button(label="No Repeat", style=discord.ButtonStyle.danger, custom_id="no_repeat")
+    @discord.ui.button(label="No Repeat", style=discord.ButtonStyle.secondary, custom_id="no_repeat")
     async def no_repeat_button(self, interaction, button):
         await self.save_notification(interaction, False)
 
-    @discord.ui.button(label="Custom Interval", style=discord.ButtonStyle.primary, custom_id="custom_interval")
+    @discord.ui.button(label="Custom Interval", style=discord.ButtonStyle.secondary, custom_id="custom_interval")
     async def custom_interval_button(self, interaction, button):
         modal = RepeatIntervalModal(self)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Specific days", style=discord.ButtonStyle.primary, custom_id="fixed_days")
+    @discord.ui.button(label="Specific days", style=discord.ButtonStyle.secondary, custom_id="fixed_days")
     async def fixed_days_button(self, interaction, button):
         view = DaysMenu(self)
         await interaction.response.edit_message(content="🗓️ Select the days you'd like to get notifications on:", view=view)
@@ -803,36 +803,36 @@ class RepeatOptionView(discord.ui.View):
                 mention_display = "No Mention"
 
             if not repeat:
-                repeat_text = "❌ No repeat"
+                repeat_text = f"{pimp.deniedIcon} No repeat"
             elif interval_text:
-                repeat_text = f"🔄 Repeats every {interval_text}"
+                repeat_text = f"{pimp.processingIcon} Repeats every {interval_text}"
             else:
                 minutes = repeat_minutes
                 if minutes == 1:
-                    repeat_text = "🔄 Repeats every minute"
+                    repeat_text = f"{pimp.processingIcon} Repeats every minute"
                 elif minutes == 60:
-                    repeat_text = "🔄 Repeats every hour"
+                    repeat_text = f"{pimp.processingIcon} Repeats every hour"
                 elif minutes == 1440:
-                    repeat_text = "🔄 Repeats daily"
+                    repeat_text = f"{pimp.processingIcon} Repeats daily"
                 elif minutes == 2880:
-                    repeat_text = "🔄 Repeats every 2 days"
+                    repeat_text = f"{pimp.processingIcon} Repeats every 2 days"
                 elif minutes == 4320:
-                    repeat_text = "🔄 Repeats every 3 days"
+                    repeat_text = f"{pimp.processingIcon} Repeats every 3 days"
                 elif minutes == 10080:
-                    repeat_text = "🔄 Repeats weekly"
+                    repeat_text = f"{pimp.processingIcon} Repeats weekly"
                 else:
-                    repeat_text = f"🔄 Repeats every {minutes} minutes"
+                    repeat_text = f"{pimp.processingIcon} Repeats every {minutes} minutes"
 
             embed = discord.Embed(
-                title="✅ Notification Set Successfully",
+                title=f"{pimp.verifiedIcon} Notification Set Successfully",
                 description=(
                     f"**📅 Date:** {self.start_date.strftime('%d/%m/%Y')}\n"
-                    f"**⏰ Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
-                    f"**📢 Channel:** <#{self.channel_id}>\n"
-                    f"**📝 Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
-                    f"**⚙️ Notification Type**\n{notification_types[self.notification_type]}\n\n"
+                    f"**{pimp.hourglassIcon} Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
+                    f"**{pimp.anounceIcon} Channel:** <#{self.channel_id}>\n"
+                    f"**{pimp.listIcon} Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
+                    f"**{pimp.settings2Icon} Notification Type**\n{notification_types[self.notification_type]}\n\n"
                     f"**👥 Mentions:** {mention_display}\n"
-                    f"**🔄 Repeat:** {repeat_text}"
+                    f"**{pimp.processingIcon} Repeat:** {repeat_text}"
                 ),
                 color=discord.Color.green()
             )
@@ -849,7 +849,7 @@ class RepeatOptionView(discord.ui.View):
         except Exception as e:
             print(f"Error saving notification: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while saving the notification.",
+                f"{pimp.deniedIcon} An error occurred while saving the notification.",
                 ephemeral=True
             )
 
@@ -921,14 +921,14 @@ class RepeatIntervalModal(discord.ui.Modal):
                 minutes = int(self.minutes.value)
             except ValueError:
                 await interaction.response.send_message(
-                    "❌ Please enter valid numbers for all fields!",
+                    f"{pimp.deniedIcon} Please enter valid numbers for all fields!",
                     ephemeral=True
                 )
                 return
 
             if not any([months > 0, weeks > 0, days > 0, hours > 0, minutes > 0]):
                 await interaction.response.send_message(
-                    "❌ Please enter at least one time interval greater than 0!",
+                    f"{pimp.deniedIcon} Please enter at least one time interval greater than 0!",
                     ephemeral=True
                 )
                 return
@@ -957,7 +957,7 @@ class RepeatIntervalModal(discord.ui.Modal):
         except Exception as e:
             print(f"Error in repeat interval modal: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while setting the repeat interval.",
+                f"{pimp.deniedIcon} An error occurred while setting the repeat interval.",
                 ephemeral=True
             )
 
@@ -993,7 +993,7 @@ class DaysMenu(discord.ui.View):
 
 class ConfirmDaysButton(discord.ui.Button):
     def __init__(self, days_menu_view):
-        super().__init__(label="Confirm", style=discord.ButtonStyle.success)
+        super().__init__(label="Confirm", style=discord.ButtonStyle.secondary)
         self.days_menu_view = days_menu_view
 
     async def callback(self, interaction: discord.Interaction):
@@ -1047,12 +1047,12 @@ class EmbedEditorView(discord.ui.View):
         self.timezone = timezone
         self.original_message = original_message
         self.embed_data = {
-            "title": "⏰ Bear Trap",
-            "description": "Add a description...",
-            "color": discord.Color.blue().value,
-            "footer": "Notification System",
-            "author": "Bear Trap",
-            "mention_message": ""
+            f"title": "{pimp.hourglassIcon} Bear Trap",
+            f"description": "Add a description...",
+            f"color": discord.Color.blue().value,
+            f"footer": "Notification System",
+            f"author": "Bear Trap",
+            f"mention_message": ""
         }
 
     async def update_embed(self, interaction: discord.Interaction):
@@ -1083,7 +1083,7 @@ class EmbedEditorView(discord.ui.View):
                 mention_preview = mention_preview.replace("{time}", example_time)
 
             content = (
-                "📝 **Embed Editor**\n\n"
+                f"{pimp.listIcon} **Embed Editor**\n\n"
                 "**Note:** \n"
                 "• Use `%t` or `{time}` to show the remaining time\n"
                 "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
@@ -1103,7 +1103,7 @@ class EmbedEditorView(discord.ui.View):
         except Exception as e:
             print(f"Error updating embed: {e}")
             try:
-                await interaction.followup.send("❌ An error occurred while updating the embed!", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while updating the embed!", ephemeral=True)
             except:
                 pass
 
@@ -1126,15 +1126,15 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in edit_mention_message: {e}")
-            await interaction.followup.send("❌ An error occurred while editing the mention message!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while editing the mention message!", ephemeral=True)
 
-    @discord.ui.button(label="Title", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Title", style=discord.ButtonStyle.secondary, row=0)
     async def edit_title(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             modal = TextInputModal(
                 title="Edit Title",
                 label="New Title",
-                placeholder="Example: ⏰ Bear starts in {time}!",
+                placeholder=f"Example: {pimp.hourglassIcon} Bear starts in {time}!",
                 default_value=self.embed_data.get("title", ""),
                 max_length=256
             )
@@ -1147,9 +1147,9 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in edit_title: {e}")
-            await interaction.followup.send("❌ An error occurred while editing the title!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while editing the title!", ephemeral=True)
 
-    @discord.ui.button(label="Description", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Description", style=discord.ButtonStyle.secondary, row=0)
     async def edit_description(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             modal = TextInputModal(
@@ -1169,9 +1169,9 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in edit_description: {e}")
-            await interaction.followup.send("❌ An error occurred while editing the description!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while editing the description!", ephemeral=True)
 
-    @discord.ui.button(label="Color", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Color", style=discord.ButtonStyle.secondary, row=0)
     async def edit_color(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             current_color = self.embed_data.get('color', discord.Color.blue().value)
@@ -1194,11 +1194,11 @@ class EmbedEditorView(discord.ui.View):
                     self.embed_data["color"] = color_value
                     await self.update_embed(interaction)
                 except ValueError:
-                    await interaction.followup.send("❌ Invalid color code! Example: #FF0000", ephemeral=True)
+                    await interaction.followup.send(f"{pimp.deniedIcon} Invalid color code! Example: #FF0000", ephemeral=True)
 
         except Exception as e:
             print(f"Error in edit_color: {e}")
-            await interaction.followup.send("❌ An error occurred while editing the color!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while editing the color!", ephemeral=True)
 
     @discord.ui.button(label="Footer", style=discord.ButtonStyle.secondary, row=1)
     async def edit_footer(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1219,7 +1219,7 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in edit_footer: {e}")
-            await interaction.followup.send("❌ An error occurred while editing the footer!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while editing the footer!", ephemeral=True)
 
     @discord.ui.button(label="Author", style=discord.ButtonStyle.secondary, row=1)
     async def edit_author(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1240,7 +1240,7 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in edit_author: {e}")
-            await interaction.followup.send("❌ An error occurred while editing the author!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while editing the author!", ephemeral=True)
 
     @discord.ui.button(label="Add Image", style=discord.ButtonStyle.secondary, row=2)
     async def add_image(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1257,7 +1257,7 @@ class EmbedEditorView(discord.ui.View):
 
             if modal.value:
                 if not modal.value.startswith(('http://', 'https://')):
-                    await interaction.followup.send("❌ Invalid URL! URL must start with 'http://' or 'https://'.",
+                    await interaction.followup.send(f"{pimp.deniedIcon} Invalid URL! URL must start with 'http://' or 'https://'.",
                                                     ephemeral=True)
                     return
 
@@ -1266,7 +1266,7 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in add_image: {e}")
-            await interaction.followup.send("❌ An error occurred while adding the image!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while adding the image!", ephemeral=True)
 
     @discord.ui.button(label="Add Thumbnail", style=discord.ButtonStyle.secondary, row=2)
     async def add_thumbnail(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1283,7 +1283,7 @@ class EmbedEditorView(discord.ui.View):
 
             if modal.value:
                 if not modal.value.startswith(('http://', 'https://')):
-                    await interaction.followup.send("❌ Invalid URL! URL must start with 'http://' or 'https://'.",
+                    await interaction.followup.send(f"{pimp.deniedIcon} Invalid URL! URL must start with 'http://' or 'https://'.",
                                                     ephemeral=True)
                     return
 
@@ -1292,9 +1292,9 @@ class EmbedEditorView(discord.ui.View):
 
         except Exception as e:
             print(f"Error in add_thumbnail: {e}")
-            await interaction.followup.send("❌ An error occurred while adding the thumbnail!", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while adding the thumbnail!", ephemeral=True)
 
-    @discord.ui.button(label="Confirm ✅", style=discord.ButtonStyle.green, row=3)
+    @discord.ui.button(label=f"Confirm {pimp.verifiedIcon}", style=discord.ButtonStyle.green, row=3)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.cog.current_embed_data = self.embed_data
@@ -1315,7 +1315,7 @@ class EmbedEditorView(discord.ui.View):
             print(f"Error in confirm button: {e}")
             try:
                 await interaction.followup.send(
-                    "❌ An error occurred while confirming the embed! Please try again.",
+                    f"{pimp.deniedIcon} An error occurred while confirming the embed! Please try again.",
                     ephemeral=True
                 )
             except:
@@ -1331,7 +1331,7 @@ class MessageTypeView(discord.ui.View):
         self.timezone = timezone
         self.original_message = None
 
-    @discord.ui.button(label="Embed Message", style=discord.ButtonStyle.primary, emoji="📝", row=0)
+    @discord.ui.button(label="Embed Message", style=discord.ButtonStyle.secondary, emoji=f"{pimp.listIcon}", row=0)
     async def embed_message(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             example_time = "30 minutes"
@@ -1344,12 +1344,12 @@ class MessageTypeView(discord.ui.View):
             embed.set_footer(text="Notification System")
 
             content = (
-                "📝 **Embed Editor**\n\n"
-                "**Note:** \n"
-                "• Use `%t` or `{time}` to show the remaining time\n"
-                "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
-                "• You can use these in title, description, footer, and author fields\n"
-                "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
+                f"{pimp.listIcon} **Embed Editor**\n\n"
+                f"**Note:** \n"
+                f"- Use `%t` or `{time}` to show the remaining time\n"
+                f"- Use `@tag` for mentions (will be replaced with the actual mention)\n"
+                f"- You can use these in title, description, footer, and author fields\n"
+                f"- Time will automatically show with appropriate units (minutes/hours/days)\n\n"
                 f"Currently showing '{example_time}' as an example."
             )
 
@@ -1377,7 +1377,7 @@ class MessageTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in embed_message: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while starting the embed editor!",
+                f"{pimp.deniedIcon} An error occurred while starting the embed editor!",
                 ephemeral=True
             )
 
@@ -1460,7 +1460,7 @@ class TimeSelectModal(discord.ui.Modal):
                 timezone = pytz.timezone(self.timezone.value)
             except pytz.exceptions.UnknownTimeZoneError:
                 await interaction.response.send_message(
-                    "❌ Invalid timezone! Please use a valid timezone (e.g., UTC, Europe/Istanbul).",
+                    f"{pimp.deniedIcon} Invalid timezone! Please use a valid timezone (e.g., UTC, Europe/Istanbul).",
                     ephemeral=True
                 )
                 return
@@ -1472,13 +1472,13 @@ class TimeSelectModal(discord.ui.Modal):
 
                 if start_date.date() < now.date():
                     await interaction.response.send_message(
-                        "❌ Start date cannot be in the past for the selected timezone!",
+                        f"{pimp.deniedIcon} Start date cannot be in the past for the selected timezone!",
                         ephemeral=True
                     )
                     return
             except ValueError:
                 await interaction.response.send_message(
-                    "❌ Invalid date format! Please use DD/MM/YYYY format.",
+                    f"{pimp.deniedIcon} Invalid date format! Please use DD/MM/YYYY format.",
                     ephemeral=True
                 )
                 return
@@ -1498,17 +1498,17 @@ class TimeSelectModal(discord.ui.Modal):
             )
 
             embed = discord.Embed(
-                title="📝 Select Message Type",
+                title=f"{pimp.listIcon} Select Message Type",
                 description=(
-                    "How should your notification message look?\n\n"
-                    "**📝 Embed Message**\n"
-                    "• Customizable title\n"
-                    "• Rich text format\n"
-                    "• Custom color selection\n"
-                    "• Footer and author\n\n"
-                    "**✍️ Plain Message**\n"
-                    "• Simple text format\n"
-                    "• Quick creation"
+                    f"How should your notification message look?\n\n"
+                    f"**{pimp.listIcon} Embed Message**\n"
+                    f"- Customizable title\n"
+                    f"- Rich text format\n"
+                    f"- Custom color selection\n"
+                    f"- Footer and author\n\n"
+                    f"**✍️ Plain Message**\n"
+                    f"- Simple text format\n"
+                    f"- Quick creation"
                 ),
                 color=discord.Color.blue()
             )
@@ -1521,13 +1521,13 @@ class TimeSelectModal(discord.ui.Modal):
 
         except ValueError:
             await interaction.response.send_message(
-                "❌ Invalid time format! Please use numbers for hour (0-23) and minute (0-59).",
+                f"{pimp.deniedIcon} Invalid time format! Please use numbers for hour (0-23) and minute (0-59).",
                 ephemeral=True
             )
         except Exception as e:
             print(f"Error in time modal: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while setting the time.",
+                f"{pimp.deniedIcon} An error occurred while setting the time.",
                 ephemeral=True
             )
 
@@ -1543,27 +1543,27 @@ class NotificationTypeView(discord.ui.View):
         self.channel_id = channel_id
         self.original_message = original_message
 
-    @discord.ui.button(label="30m, 10m, 5m & Time", style=discord.ButtonStyle.primary, custom_id="type_1", row=0)
+    @discord.ui.button(label="30m, 10m, 5m & Time", style=discord.ButtonStyle.secondary, custom_id="type_1", row=0)
     async def type_1(self, interaction, button):
         await self.show_mention_type_menu(interaction, 1)
 
-    @discord.ui.button(label="10m, 5m & Time", style=discord.ButtonStyle.primary, custom_id="type_2", row=0)
+    @discord.ui.button(label="10m, 5m & Time", style=discord.ButtonStyle.secondary, custom_id="type_2", row=0)
     async def type_2(self, interaction, button):
         await self.show_mention_type_menu(interaction, 2)
 
-    @discord.ui.button(label="5m & Time", style=discord.ButtonStyle.primary, custom_id="type_3", row=1)
+    @discord.ui.button(label="5m & Time", style=discord.ButtonStyle.secondary, custom_id="type_3", row=1)
     async def type_3(self, interaction, button):
         await self.show_mention_type_menu(interaction, 3)
 
-    @discord.ui.button(label="Only 5m", style=discord.ButtonStyle.primary, custom_id="type_4", row=1)
+    @discord.ui.button(label="Only 5m", style=discord.ButtonStyle.secondary, custom_id="type_4", row=1)
     async def type_4(self, interaction, button):
         await self.show_mention_type_menu(interaction, 4)
 
-    @discord.ui.button(label="Only Time", style=discord.ButtonStyle.primary, custom_id="type_5", row=1)
+    @discord.ui.button(label="Only Time", style=discord.ButtonStyle.secondary, custom_id="type_5", row=1)
     async def type_5(self, interaction, button):
         await self.show_mention_type_menu(interaction, 5)
 
-    @discord.ui.button(label="Custom Times", style=discord.ButtonStyle.success, custom_id="type_6", row=2)
+    @discord.ui.button(label="Custom Times", style=discord.ButtonStyle.secondary, custom_id="type_6", row=2)
     async def type_6(self, interaction, button):
         modal = CustomTimesModal(self.cog, self.start_date, self.hour, self.minute, self.timezone, self.message_data,
                                  self.channel_id, self.original_message)
@@ -1572,7 +1572,7 @@ class NotificationTypeView(discord.ui.View):
     async def show_mention_type_menu(self, interaction, notification_type):
         try:
             embed = discord.Embed(
-                title="📢 Select Mention Type",
+                title=f"{pimp.anounceIcon} Select Mention Type",
                 description=(
                     f"Choose how to mention users:\n\n"
                     f"{pimp.num1Icon} @everyone\n"
@@ -1603,7 +1603,7 @@ class NotificationTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in show_mention_type_menu: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while showing mention options!",
+                f"{pimp.deniedIcon} An error occurred while showing mention options!",
                 ephemeral=True
             )
 
@@ -1644,7 +1644,7 @@ class CustomTimesModal(discord.ui.Modal):
                 raise ValueError("Times must be in descending order")
 
             embed = discord.Embed(
-                title="📢 Select Mention Type",
+                title=f"{pimp.anounceIcon} Select Mention Type",
                 description=(
                     f"Choose how to mention users:\n\n"
                     f"{pimp.num1Icon} @everyone\n"
@@ -1675,13 +1675,13 @@ class CustomTimesModal(discord.ui.Modal):
 
         except ValueError as e:
             await interaction.response.send_message(
-                f"❌ Invalid input: {str(e)}",
+                f"{pimp.deniedIcon} Invalid input: {str(e)}",
                 ephemeral=True
             )
         except Exception as e:
             print(f"Error in custom times modal: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while processing custom times.",
+                f"{pimp.deniedIcon} An error occurred while processing custom times.",
                 ephemeral=True
             )
 
@@ -1702,7 +1702,7 @@ class MentionTypeView(discord.ui.View):
     async def show_mention_type_menu(self, interaction, mention_type):
         try:
             embed = discord.Embed(
-                title="🔄 Repeat Settings",
+                title=f"{pimp.processingIcon} Repeat Settings",
                 description=(
                     "**Configure Notification Repeat**\n\n"
                     "Choose how often you want this notification to repeat:\n\n"
@@ -1734,22 +1734,22 @@ class MentionTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in show_mention_type_menu: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while showing mention options!",
+                f"{pimp.deniedIcon} An error occurred while showing mention options!",
                 ephemeral=True
             )
 
-    @discord.ui.button(label="@everyone", style=discord.ButtonStyle.danger, emoji="📢", row=0)
+    @discord.ui.button(label="@everyone", style=discord.ButtonStyle.secondary, emoji=f"{pimp.anounceIcon}", row=0)
     async def everyone_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await self.show_mention_type_menu(interaction, "everyone")
         except Exception as e:
             print(f"Error in everyone button: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while setting @everyone mention!",
+                f"{pimp.deniedIcon} An error occurred while setting @everyone mention!",
                 ephemeral=True
             )
 
-    @discord.ui.button(label="Select Member", style=discord.ButtonStyle.primary, emoji="👤", row=0)
+    @discord.ui.button(label="Select Member", style=discord.ButtonStyle.secondary, emoji="👤", row=0)
     async def member_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             select = discord.ui.UserSelect(
@@ -1765,7 +1765,7 @@ class MentionTypeView(discord.ui.View):
                 except Exception as e:
                     print(f"Error in user selection: {e}")
                     await select_interaction.followup.send(
-                        "❌ An error occurred while selecting the member!",
+                        f"{pimp.deniedIcon} An error occurred while selecting the member!",
                         ephemeral=True
                     )
 
@@ -1784,11 +1784,11 @@ class MentionTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in member button: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while showing member selection!",
+                f"{pimp.deniedIcon} An error occurred while showing member selection!",
                 ephemeral=True
             )
 
-    @discord.ui.button(label="Select Role", style=discord.ButtonStyle.success, emoji="👥", row=0)
+    @discord.ui.button(label="Select Role", style=discord.ButtonStyle.secondary, emoji="👥", row=0)
     async def role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             select = discord.ui.RoleSelect(
@@ -1804,7 +1804,7 @@ class MentionTypeView(discord.ui.View):
                 except Exception as e:
                     print(f"Error in role selection: {e}")
                     await select_interaction.followup.send(
-                        "❌ An error occurred while selecting the role!",
+                        f"{pimp.deniedIcon} An error occurred while selecting the role!",
                         ephemeral=True
                     )
 
@@ -1823,7 +1823,7 @@ class MentionTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in role button: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while showing role selection!",
+                f"{pimp.deniedIcon} An error occurred while showing role selection!",
                 ephemeral=True
             )
 
@@ -1834,7 +1834,7 @@ class MentionTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in no mention button: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while setting no mention!",
+                f"{pimp.deniedIcon} An error occurred while setting no mention!",
                 ephemeral=True
             )
 
@@ -1849,7 +1849,7 @@ class MentionSelectMenu(discord.ui.Select):
                 label="@everyone",
                 value="everyone",
                 description="Mention everyone in the server",
-                emoji="📢"
+                emoji=f"{pimp.anounceIcon}"
             )
         )
 
@@ -1911,7 +1911,7 @@ class MentionSelectMenu(discord.ui.Select):
         except Exception as e:
             print(f"Error in mention selection: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while processing your selection!",
+                f"{pimp.deniedIcon} An error occurred while processing your selection!",
                 ephemeral=True
             )
 
@@ -1924,8 +1924,8 @@ class BearTrapView(discord.ui.View):
 
     @discord.ui.button(
         label="Create Notification",
-        emoji="⏰",
-        style=discord.ButtonStyle.primary,
+        emoji=f"{pimp.hourglassIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="set_time",
         row=0
     )
@@ -1944,12 +1944,12 @@ class BearTrapView(discord.ui.View):
             try:
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ An error occurred!",
+                        f"{pimp.deniedIcon} An error occurred!",
                         ephemeral=True
                     )
                 else:
                     await interaction.followup.send(
-                        "❌ An error occurred!",
+                        f"{pimp.deniedIcon} An error occurred!",
                         ephemeral=True
                     )
             except Exception as notify_error:
@@ -1957,7 +1957,7 @@ class BearTrapView(discord.ui.View):
 
     @discord.ui.button(
         label="Main Menu",
-        emoji="🏠",
+        emoji=f"{pimp.homeIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="main_menu",
         row=2
@@ -1972,14 +1972,14 @@ class BearTrapView(discord.ui.View):
         except Exception as e:
             print(f"Error returning to main menu: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while returning to main menu.",
+                f"{pimp.deniedIcon} An error occurred while returning to main menu.",
                 ephemeral=True
             )
 
     @discord.ui.button(
         label="Manage Notifications",
-        emoji="📋",
-        style=discord.ButtonStyle.primary,
+        emoji=f"{pimp.listIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="manage_notification",
         row=0
     )
@@ -1992,7 +1992,7 @@ class BearTrapView(discord.ui.View):
             search_keywords = []
             if not notifications:
                 await interaction.response.send_message(
-                    "❌ No notifications found in this server.",
+                    f"{pimp.deniedIcon} No notifications found in this server.",
                     ephemeral=True
                 )
                 return
@@ -2008,7 +2008,7 @@ class BearTrapView(discord.ui.View):
 
                 options = []
                 for notif in page_notifications:
-                    status = "🟢 Enabled" if notif[11] else "🔴 Disabled"
+                    status = f"{pimp.messageIcon} Enabled" if notif[11] else f"{pimp.messageNoIcon} Disabled"
 
                     # Check if channel exists
                     channel = interaction.guild.get_channel(notif[2])
@@ -2023,9 +2023,9 @@ class BearTrapView(discord.ui.View):
                         embed_data = self.cog.cursor.fetchone()
 
                         if embed_data and embed_data[0]:
-                            display_description = f"📝 Embed: {embed_data[0]}"
+                            display_description = f"{pimp.listIcon} Embed: {embed_data[0]}"
                         else:
-                            display_description = "📝 Embed Message"
+                            display_description = f"{pimp.listIcon} Embed Message"
                     else:
                         display_description = notif[6].split('|')[-1] if '|' in notif[6] else notif[6]
                         if display_description.startswith("PLAIN_MESSAGE:"):
@@ -2049,7 +2049,7 @@ class BearTrapView(discord.ui.View):
 
             class PaginationButton(discord.ui.Button):
                 def __init__(self, label, page_change):
-                    super().__init__(label=label, style=discord.ButtonStyle.primary)
+                    super().__init__(label=label, style=discord.ButtonStyle.secondary)
                     self.page_change = page_change
 
                 async def callback(self, interaction: discord.Interaction):
@@ -2075,7 +2075,7 @@ class BearTrapView(discord.ui.View):
 
             class SearchButton(discord.ui.Button):
                 def __init__(self, label, cog):
-                    super().__init__(label=label, style=discord.ButtonStyle.primary)
+                    super().__init__(label=label, style=discord.ButtonStyle.secondary)
                     self.cog = cog
 
                 async def callback(self, interaction: discord.Interaction):
@@ -2109,11 +2109,11 @@ class BearTrapView(discord.ui.View):
                                 if search_keywords:
                                     prev_keywords_display = " and ".join(f"`{k}`" for k in search_keywords)
                                     message = (
-                                        f"❌ No notifications found with `{keyword_value}` "
+                                        f"{pimp.deniedIcon} No notifications found with `{keyword_value}` "
                                         f"among those already filtered by: {prev_keywords_display}"
                                     )
                                 else:
-                                    message = f"❌ No notifications found for keyword `{keyword_value}`."
+                                    message = f"{pimp.deniedIcon} No notifications found for keyword `{keyword_value}`."
 
                                 await interaction.response.send_message(message, ephemeral=True)
                                 return
@@ -2164,7 +2164,7 @@ class BearTrapView(discord.ui.View):
 
                     await interaction.response.edit_message(content="Showing all notifications.", view=view)
 
-            reset_button = ResetButton(label="🔄 Reset Filter")
+            reset_button = ResetButton(label=f"{pimp.processingIcon} Reset Filter")
             reset_button.disabled = not search_keywords
 
             async def select_callback(select_interaction):
@@ -2204,7 +2204,7 @@ class BearTrapView(discord.ui.View):
                         ("minute", 1),
                     ]
 
-                    formatted_repeat = "❌ No repeat"
+                    formatted_repeat = f"{pimp.deniedIcon} No repeat"
                     if isinstance(repeat_minutes, int) and repeat_minutes > 0:
                         result = []
                         for name, unit in time_units:
@@ -2244,15 +2244,15 @@ class BearTrapView(discord.ui.View):
                         channel_display = f"⚠️ #unknown-channel (Deleted or Inaccessible)"
 
                     details_embed = discord.Embed(
-                        title=f"📋 Notification Details",
+                        title=f"{pimp.listIcon} Notification Details",
                         description=(
                             f"**📅 Next Notification date:** {datetime.fromisoformat(selected_notif[15]).strftime('%d/%m/%Y')}\n"
-                            f"**⏰ Time:** {selected_notif[3]:02d}:{selected_notif[4]:02d} ({selected_notif[5]})\n"
-                            f"**📢 Channel:** {channel_display}\n"
-                            f"**📝 Description:** {selected_notif[6]}\n\n"
-                            f"**⚙️ Notification Type:** \n{notification_type_desc}\n\n"
+                            f"**{pimp.hourglassIcon} Time:** {selected_notif[3]:02d}:{selected_notif[4]:02d} ({selected_notif[5]})\n"
+                            f"**{pimp.anounceIcon} Channel:** {channel_display}\n"
+                            f"**{pimp.listIcon} Description:** {selected_notif[6]}\n\n"
+                            f"**{pimp.settings2Icon} Notification Type:** \n{notification_type_desc}\n\n"
                             f"**👥 Mention:** {mention_display}\n"
-                            f"**🔄 Repeat:** {formatted_repeat}\n"),
+                            f"**{pimp.processingIcon} Repeat:** {formatted_repeat}\n"),
                         color=discord.Color.blue()
                     )
 
@@ -2260,7 +2260,7 @@ class BearTrapView(discord.ui.View):
 
                     class PreviewButton(discord.ui.Button):
                         def __init__(self, cog, notification_id):
-                            super().__init__(label="👀 Preview", style=discord.ButtonStyle.primary)
+                            super().__init__(label="👀 Preview", style=discord.ButtonStyle.secondary)
                             self.cog = cog
                             self.notification_id = notification_id
 
@@ -2274,7 +2274,7 @@ class BearTrapView(discord.ui.View):
                                 selected_notif = self.cog.cursor.fetchone()
 
                                 if not selected_notif:
-                                    await interaction.response.send_message("❌ Notification not found.", ephemeral=True)
+                                    await interaction.response.send_message(f"{pimp.deniedIcon} Notification not found.", ephemeral=True)
                                     return
 
                                 channel_id, hours, minutes, description, mention_type, next_notification = selected_notif
@@ -2366,7 +2366,7 @@ class BearTrapView(discord.ui.View):
                             except Exception as e:
                                 print(f"[ERROR] Exception in PreviewButton: {e}")
                                 await interaction.response.send_message(
-                                    "❌ An error occurred while fetching the preview.", ephemeral=True)
+                                    f"{pimp.deniedIcon} An error occurred while fetching the preview.", ephemeral=True)
 
                     class ShowCodeButton(discord.ui.Button):
                         def __init__(self, embed_json):
@@ -2381,7 +2381,7 @@ class BearTrapView(discord.ui.View):
 
                     class DeleteButton(discord.ui.Button):
                         def __init__(self, cog, notification_id):
-                            super().__init__(label="🗑️ Delete", style=discord.ButtonStyle.danger)
+                            super().__init__(label="🗑️ Delete", style=discord.ButtonStyle.secondary)
                             self.cog = cog
                             self.notification_id = notification_id
 
@@ -2389,8 +2389,8 @@ class BearTrapView(discord.ui.View):
                             try:
                                 confirm_view = discord.ui.View()
 
-                                confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.danger)
-                                cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.primary)
+                                confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.secondary)
+                                cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
 
                                 async def confirm_callback(interaction: discord.Interaction):
                                     try:
@@ -2407,31 +2407,31 @@ class BearTrapView(discord.ui.View):
                                                             item)
 
                                             await interaction.response.edit_message(view=new_view)
-                                            await interaction.followup.send("✅ Successfully deleted.", ephemeral=True)
+                                            await interaction.followup.send(f"{pimp.verifiedIcon} Successfully deleted.", ephemeral=True)
 
                                         else:
                                             print(f"[DEBUG] Deletion failed for notification_id {self.notification_id}")
                                             await interaction.response.send_message(
-                                                "❌ Failed to delete the notification.", ephemeral=True
+                                                f"{pimp.deniedIcon} Failed to delete the notification.", ephemeral=True
                                             )
 
                                     except Exception as e:
                                         print(f"[ERROR] Exception in confirm_callback: {e}")
                                         await interaction.response.send_message(
-                                            "❌ An error occurred while deleting the notification.", ephemeral=True
+                                            f"{pimp.deniedIcon} An error occurred while deleting the notification.", ephemeral=True
                                         )
 
                                 async def cancel_callback(interaction: discord.Interaction):
                                     try:
                                         await interaction.response.edit_message(
                                             content=(
-                                                "- **🔍 Search:** Filter the menu options based on specific keywords\n"
-                                                "- **📝 Edit:** Modify notification details.\n"
-                                                "- **🚨 Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
-                                                "  - -# Click to toggle between enabling or disabling.\n"
-                                                "  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
-                                                "- **👀 Preview:** See how the notification will look when it's sent.\n"
-                                                "- **🗑️ Delete:** Remove the selected notification.\n\n"
+                                                f"- **🔍 Search:** Filter the menu options based on specific keywords\n"
+                                                f"- **{pimp.listIcon} Edit:** Modify notification details.\n"
+                                                f"- **🚨 Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
+                                                f"  - -# Click to toggle between enabling or disabling.\n"
+                                                f"  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
+                                                f"- **👀 Preview:** See how the notification will look when it's sent.\n"
+                                                f"- **🗑️ Delete:** Remove the selected notification.\n\n"
                                             ),
                                             view=view
                                         )
@@ -2451,13 +2451,13 @@ class BearTrapView(discord.ui.View):
                             except Exception as e:
                                 print(f"[ERROR] Exception in DeleteButton callback: {e}")
                                 await interaction.response.send_message(
-                                    "❌ An error occurred while attempting to delete the notification.",
+                                    f"{pimp.deniedIcon} An error occurred while attempting to delete the notification.",
                                     ephemeral=True
                                 )
 
                     class EditButton(discord.ui.Button):
                         def __init__(self):
-                            super().__init__(label="📝 Edit", style=discord.ButtonStyle.primary)
+                            super().__init__(label=f"{pimp.listIcon} Edit", style=discord.ButtonStyle.secondary)
 
                         async def callback(self, button_interaction: discord.Interaction):
                             editor_cog = self.view.editor_cog
@@ -2468,7 +2468,7 @@ class BearTrapView(discord.ui.View):
                                     print(f"Error in starting edit process: {e}")
                             else:
                                 await button_interaction.response.send_message(
-                                    "❌ Editor module not found!",
+                                    f"{pimp.deniedIcon} Editor module not found!",
                                     ephemeral=True
                                 )
 
@@ -2484,11 +2484,11 @@ class BearTrapView(discord.ui.View):
                             """, (self.notification_id,))
                             current_status = self.cog.cursor.fetchone()
 
-                            initial_label = "🟢 Notification is active" if current_status and current_status[
-                                0] else "🔴 Notification is inactive"
+                            initial_label = f"{pimp.messageIcon} Notification is active" if current_status and current_status[
+                                0] else f"{pimp.messageNoIcon} Notification is inactive"
                             super().__init__(label=initial_label,
-                                             style=discord.ButtonStyle.success if current_status and current_status[
-                                                 0] else discord.ButtonStyle.danger)
+                                             style=discord.ButtonStyle.secondary if current_status and current_status[
+                                                 0] else discord.ButtonStyle.secondary)
 
                         async def callback(self, interaction: discord.Interaction):
                             try:
@@ -2498,7 +2498,7 @@ class BearTrapView(discord.ui.View):
                                 current_status = self.cog.cursor.fetchone()
 
                                 if current_status is None:
-                                    await interaction.response.send_message("❌ Notification not found.", ephemeral=True)
+                                    await interaction.response.send_message(f"{pimp.deniedIcon} Notification not found.", ephemeral=True)
                                     return
 
                                 new_status = not bool(current_status[0])
@@ -2506,21 +2506,21 @@ class BearTrapView(discord.ui.View):
                                 result = await self.cog.toggle_notification(self.notification_id, new_status)
 
                                 if result:
-                                    new_label = "🟢 Notification is active" if new_status else "🔴 Notification is inactive"
-                                    new_style = discord.ButtonStyle.success if new_status else discord.ButtonStyle.danger
+                                    new_label = f"{pimp.messageIcon} Notification is active" if new_status else f"{pimp.messageNoIcon} Notification is inactive"
+                                    new_style = discord.ButtonStyle.secondary if new_status else discord.ButtonStyle.secondary
                                     self.label = new_label
                                     self.style = new_style
 
                                     await interaction.response.edit_message(view=view)
 
                                 else:
-                                    await interaction.response.send_message("❌ Failed to toggle notification.",
+                                    await interaction.response.send_message(f"{pimp.deniedIcon} Failed to toggle notification.",
                                                                             ephemeral=True)
 
                             except Exception as e:
                                 print(f"[ERROR] Exception in ToggleButton callback: {e}")
                                 await interaction.response.send_message(
-                                    "❌ An error occurred while toggling notification!", ephemeral=True
+                                    f"{pimp.deniedIcon} An error occurred while toggling notification!", ephemeral=True
                                 )
 
                     class ChangeChannelButton(discord.ui.Button):
@@ -2529,9 +2529,9 @@ class BearTrapView(discord.ui.View):
                             self.notification_id = notification_id
                             # Only show button if channel doesn't exist
                             if not channel_exists:
-                                super().__init__(label="📝 Change Channel", style=discord.ButtonStyle.primary)
+                                super().__init__(label=f"{pimp.listIcon} Change Channel", style=discord.ButtonStyle.secondary)
                             else:
-                                super().__init__(label="📝 Change Channel", style=discord.ButtonStyle.secondary)
+                                super().__init__(label=f"{pimp.listIcon} Change Channel", style=discord.ButtonStyle.secondary)
 
                         async def callback(self, interaction: discord.Interaction):
                             try:
@@ -2544,7 +2544,7 @@ class BearTrapView(discord.ui.View):
                                 notif_data = self.cog.cursor.fetchone()
 
                                 if not notif_data:
-                                    await interaction.response.send_message("❌ Notification not found.", ephemeral=True)
+                                    await interaction.response.send_message(f"{pimp.deniedIcon} Notification not found.", ephemeral=True)
                                     return
 
                                 # Create channel selector view
@@ -2563,7 +2563,7 @@ class BearTrapView(discord.ui.View):
                                         # Check if bot has permissions in the new channel
                                         if not new_channel.permissions_for(select_interaction.guild.me).send_messages:
                                             await select_interaction.response.send_message(
-                                                "❌ I don't have permission to send messages in that channel!",
+                                                f"{pimp.deniedIcon} I don't have permission to send messages in that channel!",
                                                 ephemeral=True
                                             )
                                             return
@@ -2577,14 +2577,14 @@ class BearTrapView(discord.ui.View):
                                         self.cog.conn.commit()
 
                                         await select_interaction.response.send_message(
-                                            f"✅ Notification channel updated to <#{new_channel_id}>!",
+                                            f"{pimp.verifiedIcon} Notification channel updated to <#{new_channel_id}>!",
                                             ephemeral=True
                                         )
 
                                     except Exception as e:
                                         print(f"[ERROR] Error updating channel: {e}")
                                         await select_interaction.response.send_message(
-                                            "❌ An error occurred while updating the channel.",
+                                            f"{pimp.deniedIcon} An error occurred while updating the channel.",
                                             ephemeral=True
                                         )
 
@@ -2601,7 +2601,7 @@ class BearTrapView(discord.ui.View):
                             except Exception as e:
                                 print(f"[ERROR] Exception in ChangeChannelButton callback: {e}")
                                 await interaction.response.send_message(
-                                    "❌ An error occurred!",
+                                    f"{pimp.deniedIcon} An error occurred!",
                                     ephemeral=True
                                 )
 
@@ -2622,18 +2622,18 @@ class BearTrapView(discord.ui.View):
 
                     # Build help text - add Change Channel info if channel is missing
                     help_text = (
-                        "- **🔍 Search:** Filter the menu options based on specific keywords\n"
-                        "- **📝 Edit:** Modify notification details.\n"
-                        "- **⚙️ Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
-                        "  - -# Click to toggle between enabling or disabling.\n"
-                        "  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
-                        "- **👀 Preview:** See how the notification will look when it's sent.\n"
+                        f"- **🔍 Search:** Filter the menu options based on specific keywords\n"
+                        f"- **{pimp.listIcon} Edit:** Modify notification details.\n"
+                        f"- **{pimp.settings2Icon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
+                        f"  - -# Click to toggle between enabling or disabling.\n"
+                        f"  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
+                        f"- **👀 Preview:** See how the notification will look when it's sent.\n"
                     )
 
                     if not channel:
-                        help_text += "- **📝 Change Channel:** ⚠️ Update the channel for this notification (current channel is unavailable).\n"
+                        help_text += f"- **{pimp.listIcon} Change Channel:** ⚠️ Update the channel for this notification (current channel is unavailable).\n"
                     else:
-                        help_text += "- **📝 Change Channel:** Update the channel for this notification.\n"
+                        help_text += f"- **{pimp.listIcon} Change Channel:** Update the channel for this notification.\n"
 
                     help_text += "- **🗑️ Delete:** Remove the selected notification.\n\n"
 
@@ -2646,7 +2646,7 @@ class BearTrapView(discord.ui.View):
                 except Exception as e:
                     print(f"[ERROR] Error in select callback: {e}")
                     await select_interaction.response.send_message(
-                        "❌ An error occurred while editing notification!",
+                        f"{pimp.deniedIcon} An error occurred while editing notification!",
                         ephemeral=True
                     )
 
@@ -2668,7 +2668,7 @@ class BearTrapView(discord.ui.View):
         except Exception as e:
             print(f"[ERROR] Error in manage_notification button: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while starting the edit process!",
+                f"{pimp.deniedIcon} An error occurred while starting the edit process!",
                 ephemeral=True
             )
 
@@ -2710,13 +2710,13 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
             actual_channel = interaction.guild.get_channel(channel.id)
             if not actual_channel.permissions_for(interaction.guild.me).send_messages:
                 await interaction.response.send_message(
-                    "❌ I don't have permission to send messages in this channel!",
+                    f"{pimp.deniedIcon} I don't have permission to send messages in this channel!",
                     ephemeral=True
                 )
                 return
 
             embed = discord.Embed(
-                title="⏰ Select Notification Type",
+                title=f"{pimp.hourglassIcon} Select Notification Type",
                 description=(
                     "Choose when to send notifications:\n\n"
                     "**30m, 10m, 5m & Time**\n"
@@ -2762,12 +2762,12 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
             print(f"Error in channel select callback: {e}")
             try:
                 await interaction.response.send_message(
-                    "❌ An error occurred while processing your selection!",
+                    f"{pimp.deniedIcon} An error occurred while processing your selection!",
                     ephemeral=True
                 )
             except discord.InteractionResponded:
                 await interaction.followup.send(
-                    "❌ An error occurred while processing your selection!",
+                    f"{pimp.deniedIcon} An error occurred while processing your selection!",
                     ephemeral=True
                 )
 
