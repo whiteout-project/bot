@@ -1232,7 +1232,7 @@ class BotOperations(commands.Cog):
                 emoji=f"{pimp.homeIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="main_menu",
-                row=3
+                row=4
             ))
 
             await interaction.response.edit_message(embed=embed, view=view)
