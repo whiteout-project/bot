@@ -3,6 +3,43 @@ from discord.ext import commands
 import sqlite3
 from cogs import prettification_is_my_purpose as pimp
 
+class PaginationView(discord.ui.View):
+    def __init__(self, pages, current_page, title, color):
+        super().__init__(timeout=300)
+        self.pages = pages
+        self.current_page = current_page
+        self.title = title
+        self.color = color
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.clear_items()
+        prev_button = discord.ui.Button(label="Previous", style=discord.ButtonStyle.secondary, custom_id="prev")
+        prev_button.callback = self.prev_callback
+        if self.current_page == 0:
+            prev_button.disabled = True
+        self.add_item(prev_button)
+
+        next_button = discord.ui.Button(label="Next", style=discord.ButtonStyle.secondary, custom_id="next")
+        next_button.callback = self.next_callback
+        if self.current_page == len(self.pages) - 1:
+            next_button.disabled = True
+        self.add_item(next_button)
+
+    async def prev_callback(self, interaction: discord.Interaction):
+        self.current_page -= 1
+        self.update_buttons()
+        embed = discord.Embed(title=self.title, description="\n".join(self.pages[self.current_page]), color=self.color)
+        embed.set_footer(text=f"Page {self.current_page+1}/{len(self.pages)}")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def next_callback(self, interaction: discord.Interaction):
+        self.current_page += 1
+        self.update_buttons()
+        embed = discord.Embed(title=self.title, description="\n".join(self.pages[self.current_page]), color=self.color)
+        embed.set_footer(text=f"Page {self.current_page+1}/{len(self.pages)}")
+        await interaction.response.edit_message(embed=embed, view=self)
+
 class PIMP(commands.Cog):
 
     def __init__(self, bot):
@@ -122,110 +159,126 @@ class PIMP(commands.Cog):
                 emColorString3 = theme[69] if theme else "#FFFFFF"
                 emColorString4 = theme[70] if theme else "#FFFFFF"
 
+            lines = [
+                f"**Emoji:** {allianceOldIcon}\n",
+                f"**Name:** allianceOldIcon\n",
+                f"**URL:** \\{allianceOldIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {avatarOldIcon}\n",
+                f"**Name:** avatarOldIcon\n",
+                f"**URL:** \\{avatarOldIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {stoveOldIcon}\n",
+                f"**Name:** stoveOldIcon\n",
+                f"**URL:** \\{stoveOldIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {stateOldIcon}\n",
+                f"**Name:** stateOldIcon\n",
+                f"**URL:** \\{stateOldIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {allianceIcon}\n",
+                f"**Name:** allianceIcon\n",
+                f"**URL:** \\{allianceIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {avatarIcon}\n",
+                f"**Name:** avatarIcon\n",
+                f"**URL:** \\{avatarIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {stoveIcon}\n",
+                f"**Name:** stoveIcon\n",
+                f"**URL:** \\{stoveIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {stateIcon}\n",
+                f"**Name:** stateIcon\n",
+                f"**URL:** \\{stateIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {listIcon}\n",
+                f"**Name:** listIcon\n",
+                f"**URL:** \\{listIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {fidIcon}\n",
+                f"**Name:** fidIcon\n",
+                f"**URL:** \\{fidIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {timeIcon}\n",
+                f"**Name:** timeIcon\n",
+                f"**URL:** \\{timeIcon}\n",
+                f"{pimp.divider2}\n",
+                f"**Emoji:** {homeIcon}\n",
+                f"**Name:** homeIcon\n",
+                f"**URL:** \\{homeIcon}\n",
+                f"{pimp.divider2}\n",
+                f"num1Icon = {num1Icon} = \\{num1Icon}",
+                f"num2Icon = {num2Icon} = \\{num2Icon}",
+                f"num3Icon = {num3Icon} = \\{num3Icon}",
+                f"newIcon = {newIcon} = \\{newIcon}",
+                f"pinIcon = {pinIcon} = \\{pinIcon}",
+                f"giftIcon = {giftIcon} = \\{giftIcon}",
+                f"giftsIcon = {giftsIcon} = \\{giftsIcon}",
+                f"alertIcon = {alertIcon} = \\{alertIcon}",
+                f"robotIcon = {robotIcon} = \\{robotIcon}",
+                f"crossIcon = {crossIcon} = \\{crossIcon}",
+                f"heartIcon = {heartIcon} = \\{heartIcon}",
+                f"total2Icon = {total2Icon} = \\{total2Icon}",
+                f"shieldIcon = {shieldIcon} = \\{shieldIcon}",
+                f"targetIcon = {targetIcon} = \\{targetIcon}",
+                f"redeemIcon = {redeemIcon} = \\{redeemIcon}",
+                f"membersIcon = {membersIcon} = \\{membersIcon}",
+                f"anounceIcon = {anounceIcon} = \\{anounceIcon}",
+                f"averageIcon = {averageIcon} = \\{averageIcon}",
+                f"hashtagIcon = {hashtagIcon} = \\{hashtagIcon}",
+                f"messageIcon = {messageIcon} = \\{messageIcon}",
+                f"supportIcon = {supportIcon} = \\{supportIcon}",
+                f"settingsIcon = {settingsIcon} = \\{settingsIcon}",
+                f"settings2Icon = {settings2Icon} = \\{settings2Icon}",
+                f"hourglassIcon = {hourglassIcon} = \\{hourglassIcon}",
+                f"messageNoIcon = {messageNoIcon} = \\{messageNoIcon}",
+                f"alarmClockIcon = {alarmClockIcon} = \\{alarmClockIcon}",
+                f"magnifyingIcon = {magnifyingIcon} = \\{magnifyingIcon}",
+                f"checkGiftCodeIcon = {checkGiftCodeIcon} = \\{checkGiftCodeIcon}",
+                f"deleteGiftCodeIcon = {deleteGiftCodeIcon} = \\{deleteGiftCodeIcon}",
+                f"addGiftCodeIcon = {addGiftCodeIcon} = \\{addGiftCodeIcon}",
+                f"processingIcon = {processingIcon} = \\{processingIcon}",
+                f"verifiedIcon = {verifiedIcon} = \\{verifiedIcon}",
+                f"questionIcon = {questionIcon} = \\{questionIcon}",
+                f"transferIcon = {transferIcon} = \\{transferIcon}",
+                f"multiplyIcon = {multiplyIcon} = \\{multiplyIcon}",
+                f"divideIcon = {divideIcon} = \\{divideIcon}",
+                f"deniedIcon = {deniedIcon} = \\{deniedIcon}",
+                f"deleteIcon = {deleteIcon} = \\{deleteIcon}",
+                f"exportIcon = {exportIcon} = \\{exportIcon}",
+                f"importIcon = {importIcon} = \\{importIcon}",
+                f"retryIcon = {retryIcon} = \\{retryIcon}",
+                f"totalIcon = {totalIcon} = \\{totalIcon}",
+                f"infoIcon = {infoIcon} = \\{infoIcon}",
+                f"warnIcon = {warnIcon} = \\{warnIcon}",
+                f"addIcon = {addIcon} = \\{addIcon}",
+                f"dividerEmojiStart1 = {dividerEmojiStart1} = \\{dividerEmojiStart1}",
+                f"dividerEmojiPattern1 = {dividerEmojiPattern1} = \\{dividerEmojiPattern1}",
+                f"dividerEmojiEnd1 = {dividerEmojiEnd1} = \\{dividerEmojiEnd1}",
+                f"dividerLength1 = {dividerLength1} = \\{dividerLength1}",
+                f"dividerEmojiStart2 = {dividerEmojiStart2} = \\{dividerEmojiStart2}",
+                f"dividerEmojiPattern2 = {dividerEmojiPattern2} = \\{dividerEmojiPattern2}",
+                f"dividerEmojiEnd2 = {dividerEmojiEnd2} = \\{dividerEmojiEnd2}",
+                f"dividerLength2 = {dividerLength2} = \\{dividerLength2}",
+                f"emColorString1 = {emColorString1}",
+                f"emColorString2 = {emColorString2}",
+                f"emColorString3 = {emColorString3}",
+                f"emColorString4 = {emColorString4}",
+            ]
+
+            pages = [lines[i:i+16] for i in range(0, len(lines), 16)] # 10 lines per page
+            current_page = 0
+
             embed = discord.Embed(
                 title=f"{pimp.pinIcon} {themename}",
-                description=(
-                    f"### {pimp.pinIcon} Theme Settings\n"
-                    f"{pimp.divider1}\n\n"
-                    f"{pimp.divider2}\n"
-                    f"**Variable Name:** allianceOldIcon\n"
-                    f"**Emoji:** {allianceOldIcon}\n"
-                    f"**Emoji URL:** \\{allianceOldIcon}\n"
-                    f"{pimp.divider2}\n"
-                    f"avatarOldIcon = {avatarOldIcon} = \\{avatarOldIcon}\n"
-                    f"stoveOldIcon = {stoveOldIcon} = \\{stoveOldIcon}\n"
-                    f"stateOldIcon = {stateOldIcon} = \\{stateOldIcon}\n"
-                    f"allianceIcon = {allianceIcon} = \\{allianceIcon}\n"
-                    f"avatarIcon = {avatarIcon} = \\{avatarIcon}\n"
-                    f"stoveIcon = {stoveIcon} = \\{stoveIcon}\n"
-                    f"stateIcon = {stateIcon} = \\{stateIcon}\n"
-                    f"listIcon = {listIcon} = \\{listIcon}\n"
-                    f"fidIcon = {fidIcon} = \\{fidIcon}\n"
-                    f"timeIcon = {timeIcon} = \\{timeIcon}\n"
-                    f"homeIcon = {homeIcon} = \\{homeIcon}\n"
-                    f"num1Icon = {num1Icon} = \\{num1Icon}\n"
-                    f"num2Icon = {num2Icon} = \\{num2Icon}\n"
-                    f"num3Icon = {num3Icon} = \\{num3Icon}\n"
-                    f"newIcon = {newIcon} = \\{newIcon}\n"
-                    f"pinIcon = {pinIcon} = \\{pinIcon}\n"
-                    f"giftIcon = {giftIcon} = \\{giftIcon}\n"
-                    f"giftsIcon = {giftsIcon} = \\{giftsIcon}\n"
-                    f"alertIcon = {alertIcon} = \\{alertIcon}\n"
-                    f"robotIcon = {robotIcon} = \\{robotIcon}\n"
-                    f"crossIcon = {crossIcon} = \\{crossIcon}\n"
-                    f"heartIcon = {heartIcon} = \\{heartIcon}\n"
-                    f"total2Icon = {total2Icon} = \\{total2Icon}\n"
-                    f"shieldIcon = {shieldIcon} = \\{shieldIcon}\n"
-                    f"targetIcon = {targetIcon} = \\{targetIcon}\n"
-                    f"redeemIcon = {redeemIcon} = \\{redeemIcon}\n"
-                    f"membersIcon = {membersIcon} = \\{membersIcon}\n"
-                    f"anounceIcon = {anounceIcon} = \\{anounceIcon}\n"
-                    f"averageIcon = {averageIcon} = \\{averageIcon}\n"
-                    f"hashtagIcon = {hashtagIcon} = \\{hashtagIcon}\n"
-                    f"messageIcon = {messageIcon} = \\{messageIcon}\n"
-                    f"supportIcon = {supportIcon} = \\{supportIcon}\n"
-                    f"settingsIcon = {settingsIcon} = \\{settingsIcon}\n"
-                    f"settings2Icon = {settings2Icon} = \\{settings2Icon}\n"
-                    f"hourglassIcon = {hourglassIcon} = \\{hourglassIcon}\n"
-                    f"messageNoIcon = {messageNoIcon} = \\{messageNoIcon}\n"
-                    f"alarmClockIcon = {alarmClockIcon} = \\{alarmClockIcon}\n"
-                    f"magnifyingIcon = {magnifyingIcon} = \\{magnifyingIcon}\n"
-                    f"checkGiftCodeIcon = {checkGiftCodeIcon} = \\{checkGiftCodeIcon}\n"
-                    f"deleteGiftCodeIcon = {deleteGiftCodeIcon} = \\{deleteGiftCodeIcon}\n"
-                    f"addGiftCodeIcon = {addGiftCodeIcon} = \\{addGiftCodeIcon}\n"
-                    f"processingIcon = {processingIcon} = \\{processingIcon}\n"
-                    f"verifiedIcon = {verifiedIcon} = \\{verifiedIcon}\n"
-                    f"questionIcon = {questionIcon} = \\{questionIcon}\n"
-                    f"transferIcon = {transferIcon} = \\{transferIcon}\n"
-                    f"multiplyIcon = {multiplyIcon} = \\{multiplyIcon}\n"
-                    f"divideIcon = {divideIcon} = \\{divideIcon}\n"
-                    f"deniedIcon = {deniedIcon} = \\{deniedIcon}\n"
-                    f"deleteIcon = {deleteIcon} = \\{deleteIcon}\n"
-                    f"exportIcon = {exportIcon} = \\{exportIcon}\n"
-                    f"importIcon = {importIcon} = \\{importIcon}\n"
-                    f"retryIcon = {retryIcon} = \\{retryIcon}\n"
-                    f"totalIcon = {totalIcon} = \\{totalIcon}\n"
-                    f"infoIcon = {infoIcon} = \\{infoIcon}\n"
-                    f"warnIcon = {warnIcon} = \\{warnIcon}\n"
-                    f"addIcon = {addIcon} = \\{addIcon}\n"
-                    f"dividerEmojiStart1 = {dividerEmojiStart1} = \\{dividerEmojiStart1}\n"
-                    f"dividerEmojiPattern1 = {dividerEmojiPattern1} = \\{dividerEmojiPattern1}\n"
-                    f"dividerEmojiEnd1 = {dividerEmojiEnd1} = \\{dividerEmojiEnd1}\n"
-                    f"dividerLength1 = {dividerLength1}\n"
-                    f"dividerEmojiStart2 = {dividerEmojiStart2} = \\{dividerEmojiStart2}\n"
-                    f"dividerEmojiPattern2 = {dividerEmojiPattern2} = \\{dividerEmojiPattern2}\n"
-                    f"dividerEmojiEnd2 = {dividerEmojiEnd2} = \\{dividerEmojiEnd2}\n"
-                    f"dividerLength2 = {dividerLength2}\n"
-                    f"emColorString1 = {emColorString1}\n"
-                    f"emColorString2 = {emColorString2}\n"
-                    f"emColorString3 = {emColorString3}\n"
-                    f"emColorString4 = {emColorString4}\n"
-                    f"{pimp.divider1}\n\n"
-                ),
-                color=pimp.emColor3,
+                description=f"{pimp.divider1}\n\n{pimp.divider2}\n{'\n'.join(pages[current_page])}\n\n{pimp.divider1}\n",
+                color=pimp.emColor3
             )
+            embed.set_footer(text=f"Page {current_page+1}/{len(pages)}")
 
-            # Split description if too long
-            def split_text(text, max_length=2000):
-                parts = []
-                while text:
-                    if len(text) <= max_length:
-                        parts.append(text)
-                        break
-                    split_at = text.rfind('\n', 0, max_length)
-                    if split_at == -1:
-                        split_at = max_length
-                    parts.append(text[:split_at])
-                    text = text[split_at:].lstrip('\n')
-                return parts
-
-            if len(embed.description) > 4096:
-                parts = split_text(embed.description)
-                embeds = [discord.Embed(title=f"{pimp.pinIcon} {themename}" if i == 0 else f"{pimp.pinIcon} {themename} (Part {i+1})", description=part, color=pimp.emColor3) for i, part in enumerate(parts)]
-            else:
-                embeds = [embed]
-
-            await interaction.followup.send(embeds=embeds)
+            view = PaginationView(pages, current_page, embed.title, pimp.emColor3)
+            await interaction.followup.send(embed=embed, view=view)
             
         except Exception as e:
             print(f"An error occurred: {e}")
