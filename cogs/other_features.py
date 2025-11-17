@@ -66,7 +66,7 @@ class OtherFeaturesView(discord.ui.View):
     @discord.ui.button(
         label="Notification System",
         emoji=f"{pimp.anounceIcon}",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="bear_trap",
         row=0
     )
@@ -90,7 +90,7 @@ class OtherFeaturesView(discord.ui.View):
     @discord.ui.button(
         label="ID Channel",
         emoji=f"{pimp.fidIcon}",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="id_channel",
         row=0
     )
@@ -114,7 +114,7 @@ class OtherFeaturesView(discord.ui.View):
     @discord.ui.button(
         label="Minister Scheduling",
         emoji=f"{pimp.hourglassIcon}",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="minister_channels",
         row=1
     )
@@ -138,7 +138,7 @@ class OtherFeaturesView(discord.ui.View):
     @discord.ui.button(
         label="Backup System",
         emoji=f"{pimp.listIcon}",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="backup_system",
         row=2
     )
@@ -162,7 +162,7 @@ class OtherFeaturesView(discord.ui.View):
     @discord.ui.button(
         label="Registration System",
         emoji=f"{pimp.listIcon}",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="registration_system",
         row=0
     )
@@ -186,7 +186,7 @@ class OtherFeaturesView(discord.ui.View):
     @discord.ui.button(
         label="Attendance System",
         emoji=f"{pimp.listIcon}",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="attendance_system",
         row=1
     )
