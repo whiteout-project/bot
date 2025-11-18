@@ -433,7 +433,7 @@ class Control(commands.Cog):
 
         if furnace_changes or nickname_changes or kid_changes or check_fail_list:
             if furnace_changes:
-                furnace_changes.append(f"-# {pimp.stoveIcon} {pimp.totalIcon} **Total Changes:** {len(furnace_changes)}\n")
+                furnace_changes.append(f"-# {pimp.totalIcon} **Total Changes:** {len(furnace_changes)}\n")
                 await self.send_embed(
                     channel = channel,
                     title = f"{pimp.stoveIcon} **{alliance_name}** Furnace Level Changes",
@@ -490,7 +490,7 @@ class Control(commands.Cog):
             )
             embed.add_field(
                 name=f"{pimp.timeIcon} Duration",
-                value=f"{str(duration)}\n\n{pimp.divider1}\n",
+                value=f"{str(duration)}",
                 inline=True
             )
             # Build the value string without nested f-strings for Python 3.9+ compatibility
@@ -508,7 +508,7 @@ class Control(commands.Cog):
                 changes_text += f"\n{pimp.deniedIcon} {check_failure_count} check failures"
 
             embed.add_field(
-                name=f"{pimp.allianceIcon} Total Changes",
+                name=f"{pimp.totalIcon} Total Changes",
                 value=changes_text,
                 inline=True
             )
@@ -522,9 +522,15 @@ class Control(commands.Cog):
             )
             embed.add_field(
                 name=f"{pimp.timeIcon} Duration",
-                value=f"{str(duration)}\n\n{pimp.divider1}\n",
+                value=f"{str(duration)}",
                 inline=True
             )
+        finalEmbedValue = f"{pimp.divider1}"
+        embed.add_field(
+            name="",
+            value=finalEmbedValue,
+            inline=False
+        )
 
         if message:
             await message.edit(embed=embed)

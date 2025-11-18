@@ -19,7 +19,7 @@ class PaginationView(discord.ui.View):
         self.add_item(prev_button)
 
         page_button = discord.ui.Button(label=f"{self.current_page + 1} of {len(self.pages)}", style=discord.ButtonStyle.secondary, custom_id="pages", emoji=f"{pimp.listIcon}")
-        page_button.callback = self.page_callback
+        page_button.callback = PaginationModal.page_callback
         self.add_item(page_button)
   
         next_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="next", emoji=f"{pimp.exportIcon}")
@@ -32,14 +32,27 @@ class PaginationView(discord.ui.View):
         self.current_page -= 1
         self.update_buttons()
         await interaction.response.edit_message(embeds=self.pages[self.current_page], view=self)
-
-    async def page_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
+    
     async def next_callback(self, interaction: discord.Interaction):
         self.current_page += 1
         self.update_buttons()
         await interaction.response.edit_message(embeds=self.pages[self.current_page], view=self)
+
+class PaginationModal(discord.ui.Modal, title="Go to Page #"):
+    name_input = discord.ui.TextInput(
+        label="Enter Page Number",
+        placeholder="1",
+        max_length=3,
+        required=True
+    )
+
+    async def page_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            f"Now going to page {self.name_input.value}.",
+            ephemeral=True
+        )
+        PaginationView.__init__(PaginationView,PaginationView.pages,self.name_input.value)
+        PaginationView.update_buttons(PaginationView)
 
 class PIMP(commands.Cog):
 
