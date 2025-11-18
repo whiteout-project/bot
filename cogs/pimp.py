@@ -3,6 +3,31 @@ from discord.ext import commands
 import sqlite3
 from cogs import prettification_is_my_purpose as pimp
 
+class PageModal(discord.ui.Modal):
+    def __init__(self, view):
+        super().__init__(title="Go to Page")
+        self.view = view
+        self.page_input = discord.ui.TextInput(
+            label="Enter page number",
+            placeholder=f"1 to {len(self.view.pages)}",
+            required=True,
+            min_length=1,
+            max_length=3
+        )
+        self.add_item(self.page_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            page_num = int(self.page_input.value) - 1  # 0-based
+            if 0 <= page_num < len(self.view.pages):
+                self.view.current_page = page_num
+                self.view.update_buttons()
+                await interaction.response.edit_message(embeds=self.view.pages[self.view.current_page], view=self.view)
+            else:
+                await interaction.response.send_message("Invalid page number.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
 class PaginationView(discord.ui.View):
     def __init__(self, pages, current_page):
         super().__init__(timeout=300)
@@ -21,7 +46,7 @@ class PaginationView(discord.ui.View):
         page_button = discord.ui.Button(label=f"{self.current_page + 1} of {len(self.pages)}", style=discord.ButtonStyle.secondary, custom_id="pages", emoji=f"{pimp.listIcon}")
         page_button.callback = self.page_callback
         self.add_item(page_button)
-  
+
         next_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="next", emoji=f"{pimp.exportIcon}")
         next_button.callback = self.next_callback
         if self.current_page == len(self.pages) - 1:
@@ -34,7 +59,8 @@ class PaginationView(discord.ui.View):
         await interaction.response.edit_message(embeds=self.pages[self.current_page], view=self)
 
     async def page_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        modal = PageModal(self)
+        await interaction.response.send_modal(modal)
 
     async def next_callback(self, interaction: discord.Interaction):
         self.current_page += 1
