@@ -28,30 +28,41 @@ class PageModal(discord.ui.Modal):
         except ValueError:
             await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
 
+class PageView(discord.ui.View):
+    def __init__(self, author_id, channel_id, *, timeout=360):
+        super().__init__(timeout=timeout)
+        self.author_id = author_id
+        self.channel_id = channel_id
+        self.response_message = None # To store the user's text input
+
 class PaginationView(discord.ui.View):
     def __init__(self, pages, current_page):
-        super().__init__(timeout=300)
+        super().__init__(timeout=360)
         self.pages = pages
         self.current_page = current_page
         self.update_buttons()
 
     def update_buttons(self):
         self.clear_items()
-        prev_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="prev", emoji=f"{pimp.importIcon}")
+        prev_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="prev", emoji=f"{pimp.importIcon}", row=0)
         prev_button.callback = self.prev_callback
         if self.current_page == 0:
             prev_button.disabled = True
         self.add_item(prev_button)
 
-        page_button = discord.ui.Button(label=f"{self.current_page + 1} of {len(self.pages)}", style=discord.ButtonStyle.secondary, custom_id="pages", emoji=f"{pimp.listIcon}")
+        page_button = discord.ui.Button(label=f"{self.current_page + 1} of {len(self.pages)}", style=discord.ButtonStyle.secondary, custom_id="pages", emoji=f"{pimp.listIcon}", row=0)
         page_button.callback = self.page_callback
         self.add_item(page_button)
 
-        next_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="next", emoji=f"{pimp.exportIcon}")
+        next_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="next", emoji=f"{pimp.exportIcon}", row=0)
         next_button.callback = self.next_callback
         if self.current_page == len(self.pages) - 1:
             next_button.disabled = True
         self.add_item(next_button)
+
+        edit_icons = discord.ui.Button(label="Edit Emoji", style=discord.ButtonStyle.secondary, custom_id="edit", emoji=f"{pimp.retryIcon}", row=1)
+        edit_icons.callback = self.edit_callback
+        self.add_item(edit_icons)
 
     async def prev_callback(self, interaction: discord.Interaction):
         self.current_page -= 1
@@ -66,6 +77,22 @@ class PaginationView(discord.ui.View):
         self.current_page += 1
         self.update_buttons()
         await interaction.response.edit_message(embeds=self.pages[self.current_page], view=self)
+
+    async def edit_callback(self, interaction: discord.Interaction):
+        view = PageView(self)
+        if interaction.user.id != view.author_id:
+            await interaction.response.send_message("This button is not for you!", ephemeral=True)
+            return
+
+        await interaction.response.send_message("Please type the name of the emoji you want to edit.", ephemeral=True)
+        self.stop() # Stop the view to allow wait_for to take over
+
+        async def interaction_check(self, interaction: discord.Interaction) -> bool:
+            return interaction.user.id == view.author_id
+
+        async def on_timeout(self):
+            channel = await self.fetch_channel(view.channel_id)
+            await channel.send("You didn't provide input in time!", reference=self.message)
 
 class PIMP(commands.Cog):
 
