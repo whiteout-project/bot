@@ -180,7 +180,7 @@ class BackupOperations(commands.Cog):
                 f"• View/manage local backups\n"
                 f"• Clean old backups"
             ),
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
         
         if space_info and space_info['free_mb'] < 100: # Warning if space is low
@@ -414,12 +414,12 @@ class BackupView(discord.ui.View):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @discord.ui.button(label="Set Password", emoji=f"{pimp.shieldIcon}", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Set Password", emoji=f"{pimp.shieldIcon}", style=discord.ButtonStyle.secondary, row=0)
     async def set_password(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = BackupPasswordModal(self.cog)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Create Backup", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Create Backup", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.secondary, row=0)
     async def create_backup(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Show choice between DM and local save
         embed = discord.Embed(
@@ -435,13 +435,13 @@ class BackupView(discord.ui.View):
                 f"- No size limit (uses server storage)\n"
                 f"- Permanent until manually deleted"
             ),
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
         
         view = BackupChoiceView(self.cog, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="View Local Backups", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="View Local Backups", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.secondary, row=0)
     async def view_backups(self, interaction: discord.Interaction, button: discord.ui.Button):
         backup_files = self.cog.get_backup_files()
         
@@ -451,7 +451,7 @@ class BackupView(discord.ui.View):
 
         embed = discord.Embed(
             title=f"{pimp.listIcon} Local Backup Files",
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
         
         total_size = 0
@@ -489,7 +489,7 @@ class BackupChoiceView(discord.ui.View):
         self.cog = cog
         self.user_id = user_id
 
-    @discord.ui.button(label="Send to DM", emoji=f"{pimp.messageIcon}", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Send to DM", emoji=f"{pimp.messageIcon}", style=discord.ButtonStyle.secondary)
     async def send_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(f"{pimp.deniedIcon} This is not your menu!", ephemeral=True)
@@ -527,7 +527,7 @@ class BackupChoiceView(discord.ui.View):
         
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="Save Locally", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Save Locally", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.secondary)
     async def save_local(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(f"{pimp.deniedIcon} This is not your menu!", ephemeral=True)

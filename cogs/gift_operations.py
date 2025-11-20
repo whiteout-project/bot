@@ -2408,16 +2408,16 @@ class GiftOperations(commands.Cog):
                 f"{pimp.addGiftCodeIcon} **Add Gift Code**\n"
                 f"└ Input a new gift code\n"
                 f"\n"
-                f"{pimp.listIcon} **List Gift Codes**\n"
-                f"└ View all active, valid codes\n"
-                f"\n"
-                f"{pimp.deleteIcon} **Delete Gift Code**\n"
+                f"{pimp.deleteGiftCodeIcon} **Delete Gift Code**\n"
                 f"└ Remove existing codes\n"
                 f"\n"
-                f"{pimp.redeemIcon} **Use Gift Code**\n"
+                f"{pimp.giftsIcon} **List Gift Codes**\n"
+                f"└ View all active, valid codes\n"
+                f"\n"
+                f"{pimp.checkGiftCodeIcon} **Use Gift Code**\n"
                 f"└ Redeem gift code for alliance(s)\n"
                 f"\n"
-                f"{pimp.settings2Icon} **Gift Code Settings**\n"
+                f"{pimp.settingsIcon} **Gift Code Settings**\n"
                 f"└ Edit automatic usage settings\n"
                 f"\n"
                 f"{pimp.homeIcon} **Main Menu**\n"
@@ -2705,7 +2705,7 @@ class GiftOperations(commands.Cog):
                 )
             
             initial_embed = discord.Embed(
-                title = f"{pimp.deleteIcon} Delete Gift Code",
+                title = f"{pimp.deleteGiftCodeIcon} Delete Gift Code",
                 description=description_text,
                 color = pimp.emColor1,
             )
@@ -2717,7 +2717,7 @@ class GiftOperations(commands.Cog):
             )
 
         except Exception as e:
-            self.logger.exception(f"{pimp.deleteIcon} Delete gift code error: {str(e)}")
+            self.logger.exception(f"{pimp.deleteGiftCodeIcon} Delete gift code error: {str(e)}")
             await interaction.response.send_message(
                 f"{pimp.deniedIcon} An error occurred while processing the request.",
                 ephemeral=True
@@ -3006,7 +3006,7 @@ class GiftOperations(commands.Cog):
             return
         
         settings_embed = discord.Embed(
-            title = f"{pimp.settings2Icon} Gift Code Settings",
+            title = f"{pimp.settingsIcon} Gift Code Settings",
             description=(
                 f"{pimp.divider1}\n\n"
                 f"{pimp.anounceIcon} **Channel Management**\n"
@@ -3613,7 +3613,7 @@ class GiftOperations(commands.Cog):
                 alliances_with_counts.append((alliance_id, name, member_count))
 
         auto_gift_embed = discord.Embed(
-            title = f"{pimp.settings2Icon} Gift Code Settings",
+            title = f"{pimp.settingsIcon} Gift Code Settings",
             description=(
                 "Select an alliance to configure automatic redemption:\n\n"
                 "**Alliance List**\n"
@@ -4399,7 +4399,7 @@ class CreateGiftCodeModal(discord.ui.Modal):
         except Exception as final_edit_err:
             logger.exception(f"[CreateGiftCodeModal] Failed to edit interaction with final result for {code}: {final_edit_err}")
 
-class DeleteGiftCodeModal(discord.ui.Modal, title = f"{pimp.deleteIcon} Delete Gift Code"):
+class DeleteGiftCodeModal(discord.ui.Modal, title = f"{pimp.deleteGiftCodeIcon} Delete Gift Code"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -4509,6 +4509,7 @@ class TestIDModal(discord.ui.Modal, title = f"Change Test ID"):
             await interaction.followup.send(f"{pimp.deniedIcon} An error occurred: {str(e)}", ephemeral=True)
 
 class GiftView(discord.ui.View):
+    
     def __init__(self, cog):
         super().__init__(timeout=7200)
         self.cog = cog
@@ -4520,26 +4521,18 @@ class GiftView(discord.ui.View):
         emoji=f"{pimp.addGiftCodeIcon}",
         row=0
     )
+
     async def create_gift(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.create_gift_code(interaction)
-        
-    @discord.ui.button(
-        label="List Gift Codes",
-        style=discord.ButtonStyle.secondary,
-        custom_id="list_gift",
-        emoji=f"{pimp.listIcon}",
-        row=0
-    )
-    async def list_gift(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.list_gift_codes(interaction)
 
     @discord.ui.button(
         label="Delete Gift Code",
-        emoji=f"{pimp.deleteIcon}",
+        emoji=f"{pimp.deleteGiftCodeIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="delete_gift",
         row=0
     )
+
     async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await self.cog.delete_gift_code(interaction)
@@ -4551,12 +4544,24 @@ class GiftView(discord.ui.View):
             )
 
     @discord.ui.button(
+        label="List Gift Codes",
+        style=discord.ButtonStyle.secondary,
+        custom_id="giftsIcon",
+        emoji=f"{pimp.giftsIcon}",
+        row=1
+    )
+
+    async def list_gift(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.list_gift_codes(interaction)
+
+    @discord.ui.button(
         label="Use Gift Code",
-        emoji=f"{pimp.redeemIcon}",
+        emoji=f"{pimp.checkGiftCodeIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="use_gift_alliance",
         row=1
     )
+
     async def use_gift_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             admin_info = await self.cog.get_admin_info(interaction.user.id)
@@ -4588,7 +4593,7 @@ class GiftView(discord.ui.View):
                     alliances_with_counts.append((alliance_id, name, member_count))
 
             alliance_embed = discord.Embed(
-                title = f"{pimp.redeemIcon} Use Gift Code",
+                title = f"{pimp.checkGiftCodeIcon} Use Gift Code",
                 description=(
                     f"Select an alliance to use gift code:\n"
                     f"### **Alliance List**\n"
@@ -4828,11 +4833,12 @@ class GiftView(discord.ui.View):
 
     @discord.ui.button(
         label="Gift Code Settings",
+        emoji=f"{pimp.settingsIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="gift_code_settings",
-        emoji=f"{pimp.settingsIcon}",
-        row=1
+        row=2
     )
+    
     async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
@@ -4841,8 +4847,9 @@ class GiftView(discord.ui.View):
         emoji = f"{pimp.homeIcon}",
         style = discord.ButtonStyle.secondary,
         custom_id = "main_menu",
-        row=2
+        row=3
     )
+    
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             alliance_cog = self.cog.bot.get_cog("Alliance")
@@ -4901,9 +4908,10 @@ class SettingsMenuView(discord.ui.View):
         await self.cog.show_ocr_settings(interaction)
     
     @discord.ui.button(
-        label=f"{pimp.importIcon} Back",
+        label=f"Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main",
+        emoji=f"{pimp.importIcon}",
         row=2
     )
     async def back_to_main_button(self, interaction: discord.Interaction, button: discord.ui.Button):

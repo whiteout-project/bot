@@ -8,6 +8,7 @@ from datetime import datetime
 import discord
 import ssl
 import logging
+from cogs import prettification_is_my_purpose as pimp
 
 logger = logging.getLogger("gift_operationsapi")
 
@@ -285,7 +286,7 @@ class GiftCodeAPI:
 
                                                         if previous_status_row and previous_status_row[0] == 'invalid':
                                                             # This is a REACTIVATED code - clear all user redemption history
-                                                            self.logger.info(f"🔄 REACTIVATION DETECTED: Code '{code}' was invalid, now valid again")
+                                                            self.logger.info(f"{pimp.retryIcon} REACTIVATION DETECTED: Code '{code}' was invalid, now valid again")
 
                                                             # Count existing redemptions before clearing
                                                             self.cursor.execute(
@@ -302,7 +303,7 @@ class GiftCodeAPI:
                                                             )
                                                             await self._safe_commit(self.conn, f"clear redemption history for reactivated code {code}")
 
-                                                            self.logger.info(f"✅ Cleared {cleared_redemptions} redemption records for reactivated code '{code}'")
+                                                            self.logger.info(f"{pimp.verifiedIcon} Cleared {cleared_redemptions} redemption records for reactivated code '{code}'")
                                                             is_reactivated = True
 
                                                     except Exception as e:
@@ -310,9 +311,9 @@ class GiftCodeAPI:
 
                                                     # Set validation status message
                                                     if is_reactivated:
-                                                        validation_status = f"✅ Validated (🔄 REACTIVATED - {cleared_redemptions} redemptions cleared)"
+                                                        validation_status = f"{pimp.verifiedIcon} Validated (🔄 REACTIVATED - {cleared_redemptions} redemptions cleared)"
                                                     else:
-                                                        validation_status = "✅ Validated"
+                                                        validation_status = f"{pimp.verifiedIcon} Validated"
 
                                                     try:
                                                         await self._execute_with_retry(
@@ -332,43 +333,43 @@ class GiftCodeAPI:
                                                 elif is_valid is False:
                                                     invalid_codes_count += 1
                                                     self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
-                                                    validation_status = f"❌ Invalid: {validation_msg}"
+                                                    validation_status = f"{pimp.deniedIcon} Invalid: {validation_msg}"
                                                     auto_alliances = []
                                                 else:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
-                                                    validation_status = f"⚠️ Pending"
+                                                    validation_status = f"{pimp.alertIcon} Pending"
                                                     auto_alliances = []
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
-                                                validation_status = "❌ Error"
+                                                validation_status = f"{pimp.deniedIcon} Error"
                                                 auto_alliances = []
 
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
                                             admin_ids = self.settings_cursor.fetchall()
                                             if admin_ids:
                                                 embed_description = (
-                                                    f"**Gift Code Details**\n"
-                                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                                    f"🎁 **Code:** `{code}`\n"
-                                                    f"📅 **Date:** `{formatted_date}`\n"
-                                                    f"📝 **Validation Status:** `{validation_status}`\n"
-                                                    f"🌐 **Source:** `Retrieved from Bot API`\n"
-                                                    f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                                                    f"🔄 **Auto Alliance Count:** `{len(auto_alliances)}`\n"
+                                                    f"**{pimp.giftIcon} Gift Code Details**\n"
+                                                    f"{pimp.divider1}\n\n"
+                                                    f"{pimp.hashtagIcon} **Code:** {code}\n"
+                                                    f"{pimp.redeemIcon} **Date:** {formatted_date}\n"
+                                                    f"{pimp.verifiedIcon if validation_status == 'Validated' else pimp.deniedIcon} **Validation Status:** {validation_status}\n"
+                                                    f"{pimp.robotIcon} **Source:** Retrieved from Bot API\n"
+                                                    f"{pimp.hourglassIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                                                    f"{pimp.totalIcon} **Auto Alliance Count:** `{len(auto_alliances)}`\n"
                                                 )
 
                                                 if is_valid is None:
                                                     embed_description += (
-                                                        f"\n⚠️ **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
+                                                        f"\n{pimp.alertIcon} **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
                                                         f"Please wait for periodic validation to complete, after which auto-redemption will begin.\n"
                                                     )
 
-                                                embed_description += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                                embed_description += f"\n{pimp.divider1}\n"
 
                                                 embed_color = discord.Color.green() if is_valid else (discord.Color.red() if is_valid is False else discord.Color.orange())
 
                                                 admin_embed = discord.Embed(
-                                                    title="🎁 New Gift Code Found!",
+                                                    title=f"{pimp.giftsIcon} New Gift Code Found!",
                                                     description=embed_description,
                                                     color=embed_color
                                                 )

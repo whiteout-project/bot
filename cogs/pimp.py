@@ -64,6 +64,15 @@ class PaginationView(discord.ui.View):
         edit_icons.callback = self.edit_callback
         self.add_item(edit_icons)
 
+        update_emoji = discord.ui.Button(label="Update", style=discord.ButtonStyle.secondary, custom_id="update", emoji=f"{pimp.retryIcon}", row=1)
+        update_emoji.callback = self.update_callback
+
+        delete_emoji = discord.ui.Button(label="Delete", style=discord.ButtonStyle.secondary, custom_id="delete", emoji=f"{pimp.deleteIcon}", row=1)
+        delete_emoji.callback = self.delete_callback
+
+        cancel_emoji = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="cancel", emoji=f"{pimp.deniedIcon}", row=1)
+        cancel_emoji.callback = self.cancel_callback
+
     async def prev_callback(self, interaction: discord.Interaction):
         self.current_page -= 1
         self.update_buttons()
@@ -93,6 +102,15 @@ class PaginationView(discord.ui.View):
         async def on_timeout(self):
             channel = await self.fetch_channel(view.channel_id)
             await channel.send("You didn't provide input in time!", reference=self.message)
+    
+    async def update_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+    async def delete_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
 
 class PIMP(commands.Cog):
 
@@ -310,6 +328,46 @@ class PIMP(commands.Cog):
         except Exception as e:
             print(f"An error occurred: {e}")
             await interaction.followup.send("An error occurred while fetching theme info.")
+    
+    async def show_pimp_edit_emoji(self, interaction: discord.Interaction):
+        """Show the PIMP edit emoji menu"""
+        try:
+            with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
+                cursor = pimpSettings_db.cursor()
+                sql_string = f"SELECT {emojiName} FROM pimpsettings WHERE {emojiName} = {emojiValue}"
+                cursor.execute(sql_string)
+                emoji_info = cursor.fetchone()
+
+                if not emoji_info:
+                    error_msg = f"{pimp.deniedIcon} Emoji not found."
+
+                    if emojiValue.startswith('<') and '>' in emojiValue:
+                        emoji_id = emojiValue.split(':')[-1].strip('>')
+
+                    if interaction.response.is_done():
+                        await interaction.followup.send(error_msg, ephemeral=True)
+                    else:
+                        await interaction.response.send_message(error_msg, ephemeral=True)
+                    return
+
+                cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+                admin_info = cursor.fetchone()
+
+                if not admin_info or admin_info[0] != 1:
+                    error_msg = f"{pimp.deniedIcon} You don't have permission to edit emojis."
+                    if interaction.response.is_done():
+                        await interaction.followup.send(error_msg, ephemeral=True)
+                    else:
+                        await interaction.response.send_message(error_msg, ephemeral=True)
+                    return
+
+                embed = discord.Embed(
+                    title=f"{pimp.retryIcon} Edit Emoji",
+                    description=f"Edit the emoji for {emojiName}.",
+                    image=discord.File(f"https://cdn.discordapp.com/emojis/{emoji_id}.png"),
+                    color=pimp.emColor2
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def show_pimp_cog_menu(self, interaction: discord.Interaction):
         """Show the PIMP cog menu (You can add buttons or other interactive elements here)."""
@@ -324,7 +382,6 @@ class PIMP(commands.Cog):
                 ),
                 color=pimp.emColor1
             )
-            
             await interaction.response.edit_message(embed=embed, view=None)
             
         except Exception as e:
@@ -334,6 +391,6 @@ class PIMP(commands.Cog):
                     f"{pimp.deniedIcon} An error occurred while showing the PIMP menu.",
                     ephemeral=True
                 )
-
+        
 async def setup(bot):
     await bot.add_cog(PIMP(bot))

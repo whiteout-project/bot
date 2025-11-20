@@ -1993,13 +1993,13 @@ class AllianceSelectView(discord.ui.View):
         if hasattr(self, 'next_button'):
             self.next_button.disabled = self.page == self.max_page
 
-    @discord.ui.button(label=f"⇦", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label=f"", style=discord.ButtonStyle.secondary, emoji=f"{pimp.importIcon}")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(label=f"⇨", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label=f"", style=discord.ButtonStyle.secondary, emoji=f"{pimp.exportIcon}")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
@@ -2717,13 +2717,13 @@ class MemberSelectView(discord.ui.View):
         if hasattr(self, '_clear_button'):
             self._clear_button.disabled = not has_selections
 
-    @discord.ui.button(label=f"⇦", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=f"", style=discord.ButtonStyle.secondary, emoji=f"{pimp.importIcon}", row=1)
     async def _prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         await self.update_main_embed(interaction)
 
-    @discord.ui.button(label=f"⇨", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=f"", style=discord.ButtonStyle.secondary, emoji=f"{pimp.exportIcon}", row=1)
     async def _next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()

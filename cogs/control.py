@@ -239,7 +239,7 @@ class Control(commands.Cog):
         embed = discord.Embed(
             title=f"{pimp.allianceIcon} {alliance_name} Alliance Control",
             description=(
-                f"{pimp.magnifyingIcon} Checking for changes in member status...\n"
+                f"-# {pimp.magnifyingIcon} Checking for changes in member status...\n"
                 f"{pimp.divider1}\n\n"
             ),
             color = pimp.emColor1
