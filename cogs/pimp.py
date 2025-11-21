@@ -28,50 +28,30 @@ class PageModal(discord.ui.Modal):
         except ValueError:
             await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
 
-class PageView(discord.ui.View):
-    def __init__(self, author_id, channel_id, *, timeout=360):
-        super().__init__(timeout=timeout)
-        self.author_id = author_id
-        self.channel_id = channel_id
-        self.response_message = None # To store the user's text input
-
 class PaginationView(discord.ui.View):
     def __init__(self, pages, current_page):
-        super().__init__(timeout=360)
+        super().__init__(timeout=300)
         self.pages = pages
         self.current_page = current_page
         self.update_buttons()
 
     def update_buttons(self):
         self.clear_items()
-        prev_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="prev", emoji=f"{pimp.importIcon}", row=0)
+        prev_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="prev", emoji=f"{pimp.importIcon}")
         prev_button.callback = self.prev_callback
         if self.current_page == 0:
             prev_button.disabled = True
         self.add_item(prev_button)
 
-        page_button = discord.ui.Button(label=f"{self.current_page + 1} of {len(self.pages)}", style=discord.ButtonStyle.secondary, custom_id="pages", emoji=f"{pimp.listIcon}", row=0)
+        page_button = discord.ui.Button(label=f"{self.current_page + 1} of {len(self.pages)}", style=discord.ButtonStyle.secondary, custom_id="pages", emoji=f"{pimp.listIcon}")
         page_button.callback = self.page_callback
         self.add_item(page_button)
 
-        next_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="next", emoji=f"{pimp.exportIcon}", row=0)
+        next_button = discord.ui.Button(label="", style=discord.ButtonStyle.secondary, custom_id="next", emoji=f"{pimp.exportIcon}")
         next_button.callback = self.next_callback
         if self.current_page == len(self.pages) - 1:
             next_button.disabled = True
         self.add_item(next_button)
-
-        edit_icons = discord.ui.Button(label="Edit Emoji", style=discord.ButtonStyle.secondary, custom_id="edit", emoji=f"{pimp.retryIcon}", row=1)
-        edit_icons.callback = self.edit_callback
-        self.add_item(edit_icons)
-
-        update_emoji = discord.ui.Button(label="Update", style=discord.ButtonStyle.secondary, custom_id="update", emoji=f"{pimp.retryIcon}", row=1)
-        update_emoji.callback = self.update_callback
-
-        delete_emoji = discord.ui.Button(label="Delete", style=discord.ButtonStyle.secondary, custom_id="delete", emoji=f"{pimp.deleteIcon}", row=1)
-        delete_emoji.callback = self.delete_callback
-
-        cancel_emoji = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="cancel", emoji=f"{pimp.deniedIcon}", row=1)
-        cancel_emoji.callback = self.cancel_callback
 
     async def prev_callback(self, interaction: discord.Interaction):
         self.current_page -= 1
@@ -86,31 +66,6 @@ class PaginationView(discord.ui.View):
         self.current_page += 1
         self.update_buttons()
         await interaction.response.edit_message(embeds=self.pages[self.current_page], view=self)
-
-    async def edit_callback(self, interaction: discord.Interaction):
-        view = PageView(self)
-        if interaction.user.id != view.author_id:
-            await interaction.response.send_message("This button is not for you!", ephemeral=True)
-            return
-
-        await interaction.response.send_message("Please type the name of the emoji you want to edit.", ephemeral=True)
-        self.stop() # Stop the view to allow wait_for to take over
-
-        async def interaction_check(self, interaction: discord.Interaction) -> bool:
-            return interaction.user.id == view.author_id
-
-        async def on_timeout(self):
-            channel = await self.fetch_channel(view.channel_id)
-            await channel.send("You didn't provide input in time!", reference=self.message)
-    
-    async def update_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
-    async def delete_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-
-    async def cancel_callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
 
 class PIMP(commands.Cog):
 
@@ -144,7 +99,6 @@ class PIMP(commands.Cog):
         except Exception as e:
             print(f"Autocomplete could not be loaded: {e}")
             return []
-
 
     async def fetch_theme_info(self, interaction: discord.Interaction, themename: str):
         try:
@@ -328,46 +282,6 @@ class PIMP(commands.Cog):
         except Exception as e:
             print(f"An error occurred: {e}")
             await interaction.followup.send("An error occurred while fetching theme info.")
-    
-    async def show_pimp_edit_emoji(self, interaction: discord.Interaction):
-        """Show the PIMP edit emoji menu"""
-        try:
-            with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
-                cursor = pimpSettings_db.cursor()
-                sql_string = f"SELECT {emojiName} FROM pimpsettings WHERE {emojiName} = {emojiValue}"
-                cursor.execute(sql_string)
-                emoji_info = cursor.fetchone()
-
-                if not emoji_info:
-                    error_msg = f"{pimp.deniedIcon} Emoji not found."
-
-                    if emojiValue.startswith('<') and '>' in emojiValue:
-                        emoji_id = emojiValue.split(':')[-1].strip('>')
-
-                    if interaction.response.is_done():
-                        await interaction.followup.send(error_msg, ephemeral=True)
-                    else:
-                        await interaction.response.send_message(error_msg, ephemeral=True)
-                    return
-
-                cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                admin_info = cursor.fetchone()
-
-                if not admin_info or admin_info[0] != 1:
-                    error_msg = f"{pimp.deniedIcon} You don't have permission to edit emojis."
-                    if interaction.response.is_done():
-                        await interaction.followup.send(error_msg, ephemeral=True)
-                    else:
-                        await interaction.response.send_message(error_msg, ephemeral=True)
-                    return
-
-                embed = discord.Embed(
-                    title=f"{pimp.retryIcon} Edit Emoji",
-                    description=f"Edit the emoji for {emojiName}.",
-                    image=discord.File(f"https://cdn.discordapp.com/emojis/{emoji_id}.png"),
-                    color=pimp.emColor2
-                )
-                await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def show_pimp_cog_menu(self, interaction: discord.Interaction):
         """Show the PIMP cog menu (You can add buttons or other interactive elements here)."""
@@ -382,6 +296,7 @@ class PIMP(commands.Cog):
                 ),
                 color=pimp.emColor1
             )
+            
             await interaction.response.edit_message(embed=embed, view=None)
             
         except Exception as e:
@@ -391,6 +306,6 @@ class PIMP(commands.Cog):
                     f"{pimp.deniedIcon} An error occurred while showing the PIMP menu.",
                     ephemeral=True
                 )
-        
+
 async def setup(bot):
     await bot.add_cog(PIMP(bot))
