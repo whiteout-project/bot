@@ -646,8 +646,8 @@ class BearTrap(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.membersIcon} Notification System",
                 description=(  
-                    f"The Notification System can be used to create notifications that will alert players of upcoming events. "
-                    f"It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n\n"
+                    f"-# The Notification System can be used to create notifications that will alert players of upcoming events. "
+                    f"It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n"
                     f"### Available Operations\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.addIcon} **Create Notification**\n"
@@ -1749,7 +1749,7 @@ class MentionTypeView(discord.ui.View):
                 ephemeral=True
             )
 
-    @discord.ui.button(label="Select Member", style=discord.ButtonStyle.secondary, emoji="👤", row=0)
+    @discord.ui.button(label="Select Member", style=discord.ButtonStyle.secondary, emoji=f"{pimp.avatarIcon}", row=0)
     async def member_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             select = discord.ui.UserSelect(
@@ -1775,7 +1775,7 @@ class MentionTypeView(discord.ui.View):
 
             await interaction.response.edit_message(
                 embed=discord.Embed(
-                    title="👤 Select Member",
+                    title="{pimp.avatarIcon} Select Member",
                     description="Choose a member to mention:",
                     color=discord.Color.blue()
                 ),
@@ -1890,12 +1890,12 @@ class MentionSelectMenu(discord.ui.Select):
                     label=member.display_name,
                     value=f"member_{member.id}",
                     description=f"@{member.name}",
-                    emoji="👤"
+                    emoji=f"{pimp.avatarIcon}"
                 )
             )
 
         super().__init__(
-            placeholder="🔍 Search and select who to mention...",
+            placeholder=f"{pimp.magnifyingIcon} Search and select who to mention...",
             min_values=1,
             max_values=1,
             options=options,
@@ -1956,10 +1956,10 @@ class BearTrapView(discord.ui.View):
                 print(f"[ERROR] Failed to notify user about error: {notify_error}")
 
     @discord.ui.button(
-        label="Main Menu",
-        emoji=f"{pimp.homeIcon}",
+        label="Go Back",
+        emoji=f"{pimp.importIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
+        custom_id="main_menu", #This needs to be changed
         row=2
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2141,7 +2141,7 @@ class BearTrapView(discord.ui.View):
                     button_self = self
                     await interaction.response.send_modal(SearchModal())
 
-            search_button = SearchButton(label="🔍 Search", cog=self.cog)
+            search_button = SearchButton(label=f"{pimp.magnifyingIcon} Search", cog=self.cog)
 
             class ResetButton(discord.ui.Button):
                 def __init__(self, label):

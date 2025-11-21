@@ -11,8 +11,8 @@ class OtherFeatures(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.pinIcon} Other Features",
                 description=(
-                    f"This section was created according to users' requests:\n\n"
-                    f"**Available Operations**\n"
+                    f"-# This section was created according to users' requests\n"
+                    f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.anounceIcon} **Notification System**\n"
                     f"└ Event notification system\n"
@@ -40,7 +40,7 @@ class OtherFeatures(commands.Cog):
                     f"└ Only for Global Admin\n\n"
                     f"{pimp.divider1}"
                 ),
-                color=discord.Color.blue()
+                color=pimp.emColor1
             )
             
             view = OtherFeaturesView(self)

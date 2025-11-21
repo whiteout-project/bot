@@ -169,7 +169,7 @@ class BackupOperations(commands.Cog):
                 f"### **System Status**\n"
                 f"{pimp.divider1}\n"
                 f'\n'
-                f"{pimp.listIcon} **Free Space:** {space_info['free_mb']:.1f} MB\n" if space_info else "{pimp.listIcon} **Free Space:** Unknown\n"
+                f"{pimp.listIcon} **Free Space:** {space_info['free_mb']:.1f} MB\n" if space_info else f"{pimp.listIcon} **Free Space:** Unknown\n"
                 f"{pimp.pinIcon} **Estimated Backup Size:** {estimated_backup_size:.1f} MB\n"
                 f"{pimp.listIcon} **Local Backups:** {len(backup_files)} files\n"
                 f"{pimp.hourglassIcon} **Auto Backup:** Every 3 hours (local)\n"
@@ -441,7 +441,7 @@ class BackupView(discord.ui.View):
         view = BackupChoiceView(self.cog, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="View Local Backups", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="View Local Backups", emoji=f"{pimp.listIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def view_backups(self, interaction: discord.Interaction, button: discord.ui.Button):
         backup_files = self.cog.get_backup_files()
         
@@ -477,7 +477,7 @@ class BackupView(discord.ui.View):
         view = BackupManageView(self.cog)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Main Menu", emoji=f"{pimp.homeIcon}", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Go Back", emoji=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, row=2)
     async def main_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         other_features_cog = self.cog.bot.get_cog("OtherFeatures")
         if other_features_cog:
