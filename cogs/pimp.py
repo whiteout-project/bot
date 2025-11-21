@@ -337,6 +337,8 @@ class PIMP(commands.Cog):
                 name = parts[0]
                 if len(parts) == 3:
                     description = parts[2]
+                    if themename == "default":
+                        description = parts[1]
                     embed = discord.Embed(title=name, description=f"{description}", color=pimp.emColor3)
                     if parts[2].strip('\\').startswith('<') and '>' in parts[2]:
                         emoji_id = parts[2].strip('\\').split(':')[-1].strip('>')
