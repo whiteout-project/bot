@@ -397,7 +397,7 @@ class GiftOperations(commands.Cog):
             f"{pimp.divider1}\n"
             f"\n"
             f"{pimp.avatarIcon} **Sender:** {message.author.mention}\n"
-            f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+            f"{pimp.giftIcon} **Gift Code:** {giftcode}\n"
             f"{pimp.listIcon} **Status:** Already in database.\n"
             f"\n"
             f"{pimp.divider1}\n"
