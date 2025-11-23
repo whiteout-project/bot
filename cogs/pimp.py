@@ -1194,13 +1194,13 @@ class PIMP(commands.Cog):
             pimp = prettification_is_my_purpose
             
             success_embed = discord.Embed(
-                title=f"{prettification_is_my_purpose.verifiedIcon} Theme Activated",
+                title=f"{pimp.verifiedIcon} Theme Activated",
                 description=(
                     f"**Theme:** {themename}\n"
                     f"**Status:** Active and loaded\n\n"
                     f"The bot is now using this theme across all commands."
                 ),
-                color=prettification_is_my_purpose.emColor3
+                color=pimp.emColor3
             )
             
             await interaction.followup.send(embed=success_embed)
