@@ -4,6 +4,7 @@ elseEmoji = "👻"
 
 with sqlite3.connect('db/pimpsettings.sqlite') as pimpsettings_db:
     cursor = pimpsettings_db.cursor()
+
     # Get the active theme (is_active = 1)
     cursor.execute("SELECT * FROM pimpsettings WHERE is_active=1 LIMIT 1")
     theme = cursor.fetchone()
@@ -72,11 +73,11 @@ with sqlite3.connect('db/pimpsettings.sqlite') as pimpsettings_db:
     dividerEmojiStart1 = theme[59].split(",") if theme else [elseEmoji]
     dividerEmojiPattern1 = theme[60].split(",") if theme else [elseEmoji]
     dividerEmojiEnd1 = theme[61].split(",") if theme else [elseEmoji]
-    dividerLength1 = theme[62] if theme else 9
+    dividerLength1 = theme[62] if theme else 12
     dividerEmojiStart2 = theme[63].split(",") if theme else [elseEmoji]
     dividerEmojiPattern2 = theme[64].split(",") if theme else [elseEmoji]
     dividerEmojiEnd2 = theme[65].split(",") if theme else [elseEmoji]
-    dividerLength2 = theme[66] if theme else 9
+    dividerLength2 = theme[66] if theme else 12
     emColorString1 = theme[67] if theme else "#FFFFFF"
     emColorString2 = theme[68] if theme else "#FFFFFF"
     emColorString3 = theme[69] if theme else "#FFFFFF"
@@ -93,7 +94,7 @@ divider1 = ""
 dividerMaxLength1 = 99
 if dividerLength1 > dividerMaxLength1:
     dividerLength1 = dividerMaxLength1
-if int(dividerLength1) >= len(dividerEmojiCombined1):
+if dividerLength1 >= len(dividerEmojiCombined1):
     i = 1
     while i <= dividerLength1:
         if i == 1:
@@ -108,7 +109,7 @@ if int(dividerLength1) >= len(dividerEmojiCombined1):
             for emoji in dividerEmojiPattern1:
                 divider1 += emoji
                 i += 1
-                if i > dividerLength1:
+                if i == dividerLength1:
                     break
 else :
     for emoji in dividerEmojiCombined1:
@@ -140,7 +141,7 @@ if int(dividerLength2) >= len(dividerEmojiCombined2):
             for emoji in dividerEmojiPattern2:
                 divider2 += emoji
                 i += 1
-                if i > dividerLength2:
+                if i == dividerLength2:
                     break
 else :
     for emoji in dividerEmojiCombined2:

@@ -83,10 +83,10 @@ class CreateThemeModal(discord.ui.Modal):
                 default_emojis = ['⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏', 
                                  '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '🆕',
                                  '📍', '🎁', '🛍️', '⚠️', '🤖', '⚔️', '💗', '🟰',
-                                 '🛡️', '🎯', '🔄', '👥', '📢', '📈', '🔢', '🔊',
+                                 '🛡️', '🎯', '🔃', '👥', '📢', '📈', '🔢', '🔊',
                                  '🆘', '⚙️', '⚙️', '⏳', '🔇', '⏰', '🔍', '✅',
                                  '🗑️', '➕', '🔄', '✅', '❓', '↔️', '✖️', '➗',
-                                 '❌', '➖', '➡️', '⬅️', '🔄', '🟰', 'ℹ️', '⚠️', '➕']
+                                 '❌', '➖', '➡️', '⬅️', '🔁', '🟰', 'ℹ️', '⚠️', '➕']
                 
                 divider_values = ['━', '━━━━━━━━━━━━━━━━━━━━━━', '━', 9, '━', '━━━━━━━━━━━━━━━━━━━━━━', '━', 9]
                 color_values = ['#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF']
@@ -792,7 +792,7 @@ class PIMP(commands.Cog):
                     print(f"Failed to update original message: {e}")
             
             if context_message:
-                await context_message.add_reaction("✅")
+                await context_message.add_reaction(f"{pimp.verifiedIcon}")
                 await context_message.reply(f"{pimp.verifiedIcon} Emoji **{emoji_name}** updated successfully!")
             
             return True
@@ -802,7 +802,7 @@ class PIMP(commands.Cog):
             print(f"Edit emoji error: {e}")
             traceback.print_exc()
             if context_message:
-                await context_message.add_reaction("❌")
+                await context_message.add_reaction(f"{pimp.deniedIcon}")
                 await context_message.reply(f"{pimp.deniedIcon} Error updating emoji: {str(e)}")
             return False
 
@@ -1016,14 +1016,14 @@ class PIMP(commands.Cog):
             'num1Icon': '31-20e3', 'num2Icon': '32-20e3', 'num3Icon': '33-20e3', 'newIcon': '1f195',
             'pinIcon': '1f4cd', 'giftIcon': '1f381', 'giftsIcon': '1f6cd', 'alertIcon': '26a0',
             'robotIcon': '1f916', 'crossIcon': '2694', 'heartIcon': '1f497', 'total2Icon': '1f7f0',
-            'shieldIcon': '1f6e1', 'targetIcon': '1f3af', 'redeemIcon': '1f504', 'membersIcon': '1f465',
+            'shieldIcon': '1f6e1', 'targetIcon': '1f3af', 'redeemIcon': '1f503', 'membersIcon': '1f465',
             'anounceIcon': '1f4e2', 'averageIcon': '1f4c8', 'hashtagIcon': '1f522', 'messageIcon': '1f50a',
             'supportIcon': '1f198', 'settingsIcon': '2699', 'settings2Icon': '2699', 'hourglassIcon': '23f3',
             'messageNoIcon': '1f507', 'alarmClockIcon': '23f0', 'magnifyingIcon': '1f50d', 'checkGiftCodeIcon': '2705',
             'deleteGiftCodeIcon': '1f5d1', 'addGiftCodeIcon': '2795', 'processingIcon': '1f504', 'verifiedIcon': '2705',
             'questionIcon': '2753', 'transferIcon': '2194', 'multiplyIcon': '2716', 'divideIcon': '2797',
             'deniedIcon': '274c', 'deleteIcon': '2796', 'exportIcon': '27a1', 'importIcon': '2b05',
-            'retryIcon': '1f504', 'totalIcon': '1f7f0', 'infoIcon': '2139', 'warnIcon': '26a0', 'addIcon': '2795'
+            'retryIcon': '1f501', 'totalIcon': '1f7f0', 'infoIcon': '2139', 'warnIcon': '26a0', 'addIcon': '2795'
         }
         
         cdn_base = "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/"
