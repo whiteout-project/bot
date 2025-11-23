@@ -992,11 +992,11 @@ class PIMP(commands.Cog):
             # Extract divider and color data
             icons.update({
                 'dividerEmojiStart1': theme[59] if theme else "━",
-                'dividerEmojiPattern1': theme[60] if theme else "━━━━━━━━━━━━━━━━━━━━━━",
+                'dividerEmojiPattern1': theme[60] if theme else "━",
                 'dividerEmojiEnd1': theme[61] if theme else "━",
                 'dividerLength1': theme[62] if theme else 9,
                 'dividerEmojiStart2': theme[63] if theme else "━",
-                'dividerEmojiPattern2': theme[64] if theme else "━━━━━━━━━━━━━━━━━━━━━━",
+                'dividerEmojiPattern2': theme[64] if theme else "━",
                 'dividerEmojiEnd2': theme[65] if theme else "━",
                 'dividerLength2': theme[66] if theme else 9,
                 'emColorString1': theme[67] if theme else "#FFFFFF",
@@ -1034,8 +1034,8 @@ class PIMP(commands.Cog):
         
         # Add non-icon fields
         lines.extend([
-            "dividerEmojiStart1 = ━", "dividerEmojiPattern1 = ━━━━━━━━━━━━━━━━━━━━━━", "dividerEmojiEnd1 = ━", 
-            "dividerLength1 = 9", "dividerEmojiStart2 = ━", "dividerEmojiPattern2 = ━━━━━━━━━━━━━━━━━━━━━━", 
+            "dividerEmojiStart1 = ━", "dividerEmojiPattern1 = ━", "dividerEmojiEnd1 = ━", 
+            "dividerLength1 = 9", "dividerEmojiStart2 = ━", "dividerEmojiPattern2 = ━", 
             "dividerEmojiEnd2 = ━", "dividerLength2 = 9",
             "emColorString1 = #FFFFFF", "emColorString2 = #FFFFFF", "emColorString3 = #FFFFFF", "emColorString4 = #FFFFFF"
         ])
