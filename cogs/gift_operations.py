@@ -2480,16 +2480,23 @@ class GiftOperations(commands.Cog):
 
         embed = discord.Embed(
             title=f"{pimp.giftIcon} Active Gift Codes",
-            description="This is the current list of active and valid gift codes.",
+            description="-# This is the current list of active and valid gift codes.",
             color = pimp.emColor1,
         )
 
+        embed.add_field(name="", value=f"{pimp.divider1}\n", inline=False)
+
         for code, date, used_count in codes:
             embed.add_field(
-                name=f"{pimp.giftIcon}{pimp.hashtagIcon}: {code}",
-                value=f"Created: {date}\nUsed by: {used_count} users",
+                name=f"{pimp.hashtagIcon} {code}",
+                value=(
+                    f"Created: {date}\nUsed by: {used_count} users\n"
+                    f"{'\n' + pimp.divider2 if code != codes[-1][0] else ''}"
+                ),
                 inline=False
             )
+
+        embed.add_field(name="", value=f"\n{pimp.divider1}", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
