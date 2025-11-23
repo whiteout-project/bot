@@ -1001,7 +1001,8 @@ if __name__ == "__main__":
                 emColorString1 TEXT,
                 emColorString2 TEXT,
                 emColorString3 TEXT,
-                emColorString4 TEXT
+                emColorString4 TEXT,
+                is_active INTEGER DEFAULT 0
             )""")
 
         with connections["conn_changes"] as conn_changes:

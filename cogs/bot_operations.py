@@ -65,6 +65,117 @@ class BotOperations(commands.Cog):
         custom_id = interaction.data.get("custom_id", "")
         
         if custom_id == "bot_operations":
+            try:
+                await self.show_bot_operations_menu(interaction)
+            except Exception as e:
+                print(f"Bot operations menu error: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} An error occurred while showing bot operations menu.",
+                        ephemeral=True
+                    )
+            return
+        
+        if custom_id == "admin_management":
+            try:
+                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+                result = self.settings_cursor.fetchone()
+                
+                if not result or result[0] != 1:
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} Only global administrators can use this command.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                await self.show_admin_management_menu(interaction)
+                
+            except Exception as e:
+                print(f"Admin management error: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} An error occurred while opening admin management.",
+                        ephemeral=True
+                    )
+            return
+        
+        elif custom_id == "admin_permissions":
+            try:
+                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+                result = self.settings_cursor.fetchone()
+                
+                if not result or result[0] != 1:
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} Only global administrators can use this command.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                await self.show_admin_permissions_menu(interaction)
+                
+            except Exception as e:
+                print(f"Admin permissions error: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} An error occurred while opening admin permissions.",
+                        ephemeral=True
+                    )
+            return
+        
+        elif custom_id == "bot_updates":
+            try:
+                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+                result = self.settings_cursor.fetchone()
+                
+                if not result or result[0] != 1:
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} Only global administrators can use this command.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                await self.show_bot_updates_menu(interaction)
+                
+            except Exception as e:
+                print(f"Bot updates error: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} An error occurred while opening bot updates.",
+                        ephemeral=True
+                    )
+            return
+        
+        elif custom_id == "log_system":
+            try:
+                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+                result = self.settings_cursor.fetchone()
+                
+                if not result or result[0] != 1:
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} Only global administrators can use this command.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                # Call the LogSystem cog's handler
+                log_cog = self.bot.get_cog("LogSystem")
+                if log_cog:
+                    # Manually trigger the log system interaction
+                    interaction.data["custom_id"] = "log_system"
+                    await log_cog.on_interaction(interaction)
+                else:
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} Log system is not available.",
+                        ephemeral=True
+                    )
+                
+            except Exception as e:
+                print(f"Log system error: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} An error occurred while opening log system.",
+                        ephemeral=True
+                    )
             return
         
         if custom_id == "alliance_control_messages":
@@ -981,13 +1092,13 @@ class BotOperations(commands.Cog):
                             alliance_text = "\n".join([f"- {name}" for name in alliance_names[:5]])
                             if len(alliance_names) > 5:
                                 alliance_text += f"\n• ... and {len(alliance_names) - 5} more"
-                            admin_info += f"\n**Managing Alliances**\n{alliance_text}\n{'' if i == len(admins) else f'{pimp.divider2}\n'}"
+                            admin_info += f"\n**Managing Alliances**\n{alliance_text}\n{'' if i == len(admins) else f'{pimp.divider2}{chr(10)}'}"
                         else:
-                            admin_info += f"\n**Managing Alliances**\nNo alliances assigned\n{'' if i == len(admins) else f'{pimp.divider2}\n'}"
+                            admin_info += f"\n**Managing Alliances**\nNo alliances assigned\n{'' if i == len(admins) else f'{pimp.divider2}{chr(10)}'}"
 
                         admin_list_embed.add_field(
                             name=f"{admin_name}",
-                            value=f"{f'{pimp.divider2}\n{admin_info}\n{pimp.divider1}\n' if i == len(admins) else f'{pimp.divider2}\n{admin_info}'}",
+                            value=f"{f'{pimp.divider2}{chr(10)}{admin_info}{chr(10)}{pimp.divider1}{chr(10)}' if i == len(admins) else f'{pimp.divider2}{chr(10)}{admin_info}'}",
                             inline=False
                         )
 
@@ -1144,13 +1255,13 @@ class BotOperations(commands.Cog):
                     f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.avatarIcon} **Admin Management**\n"
-                    f"└ Manage bot administrators\n\n"
+                    f"└ Add, remove, and view administrators\n\n"
                     f"{pimp.shieldIcon} **Admin Permissions**\n"
-                    f"└ View and manage admin permissions\n\n"
+                    f"└ Assign alliances and manage permissions\n\n"
                     f"{pimp.settings2Icon} **Control Settings**\n"
                     f"└ Configure alliance control behaviors\n\n"
                     f"{pimp.robotIcon} **Bot Updates**\n"
-                    f"└ Check and manage updates\n\n"
+                    f"└ Check updates, transfer database, logs\n\n"
                     f"{pimp.divider1}\n"
                 ),
                 color=pimp.emColor1
@@ -1167,34 +1278,37 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Admin Permissions",
-                emoji=f"{pimp.avatarIcon}",
+                emoji=f"{pimp.shieldIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="admin_permissions",
-                row=1
+                row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Control Settings",
                 emoji=f"{pimp.settings2Icon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="control_settings",
-                row=2
+                row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Updates",
                 emoji=f"{pimp.robotIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="bot_updates",
-                row=3
+                row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Main Menu",
                 emoji=f"{pimp.homeIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="main_menu",
-                row=4
+                row=2
             ))
 
-            await interaction.response.edit_message(embed=embed, view=view)
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
             if not any(error_code in str(e) for error_code in ["10062", "40060"]):
@@ -1286,6 +1400,189 @@ class BotOperations(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{pimp.deniedIcon} An error occurred while showing control settings.",
+                    ephemeral=True
+                )
+
+    async def show_admin_management_menu(self, interaction: discord.Interaction):
+        """Show the admin management submenu with add, remove, view options"""
+        try:
+            embed = discord.Embed(
+                title=f"{pimp.avatarIcon} Admin Management",
+                description=(
+                    f"Manage bot administrators:\n\n"
+                    f"### **Available Actions**\n"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.listIcon} **View Administrators**\n"
+                    f"└ View all bot administrators\n\n"
+                    f"{pimp.addIcon} **Add Administrator**\n"
+                    f"└ Add a new administrator\n\n"
+                    f"{pimp.deleteIcon} **Remove Administrator**\n"
+                    f"└ Remove an existing administrator\n\n"
+                    f"{pimp.divider1}\n"
+                ),
+                color=pimp.emColor1
+            )
+            
+            view = discord.ui.View()
+            
+            view.add_item(discord.ui.Button(
+                label="View Administrators",
+                emoji=f"{pimp.listIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="view_administrators",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Add Administrator",
+                emoji=f"{pimp.addIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="add_admin",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Remove Administrator",
+                emoji=f"{pimp.deleteIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="remove_admin",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Back",
+                emoji=f"{pimp.importIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="bot_operations",
+                row=1
+            ))
+            
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
+                
+        except Exception as e:
+            print(f"Show admin management menu error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} An error occurred while showing admin management menu.",
+                    ephemeral=True
+                )
+    
+    async def show_admin_permissions_menu(self, interaction: discord.Interaction):
+        """Show the admin permissions submenu with assign and remove options"""
+        try:
+            embed = discord.Embed(
+                title=f"{pimp.shieldIcon} Admin Permissions",
+                description=(
+                    f"Manage administrator permissions:\n\n"
+                    f"### **Available Actions**\n"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.exportIcon} **Assign Alliance to Admin**\n"
+                    f"└ Grant alliance access to an administrator\n\n"
+                    f"{pimp.deleteIcon} **Remove Admin Permissions**\n"
+                    f"└ Revoke alliance access from an administrator\n\n"
+                    f"{pimp.divider1}\n"
+                ),
+                color=pimp.emColor1
+            )
+            
+            view = discord.ui.View()
+            
+            view.add_item(discord.ui.Button(
+                label="Assign Alliance to Admin",
+                emoji=f"{pimp.exportIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="assign_alliance",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Remove Admin Permissions",
+                emoji=f"{pimp.deleteIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="view_admin_permissions",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Back",
+                emoji=f"{pimp.importIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="bot_operations",
+                row=1
+            ))
+            
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
+                
+        except Exception as e:
+            print(f"Show admin permissions menu error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} An error occurred while showing admin permissions menu.",
+                    ephemeral=True
+                )
+    
+    async def show_bot_updates_menu(self, interaction: discord.Interaction):
+        """Show the bot updates submenu with check updates, transfer db, and log system"""
+        try:
+            embed = discord.Embed(
+                title=f"{pimp.robotIcon} Bot Updates & Maintenance",
+                description=(
+                    f"Bot maintenance and system tools:\n\n"
+                    f"### **Available Actions**\n"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.robotIcon} **Check for Updates**\n"
+                    f"└ Check for new bot versions\n\n"
+                    f"{pimp.exportIcon} **Transfer Old Database**\n"
+                    f"└ Migrate data from old database\n\n"
+                    f"{pimp.listIcon} **Log System**\n"
+                    f"└ Configure alliance logging\n\n"
+                    f"{pimp.divider1}\n"
+                ),
+                color=pimp.emColor1
+            )
+            
+            view = discord.ui.View()
+            
+            view.add_item(discord.ui.Button(
+                label="Check for Updates",
+                emoji=f"{pimp.robotIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="check_updates",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Transfer Old Database",
+                emoji=f"{pimp.exportIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="transfer_old_database",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Log System",
+                emoji=f"{pimp.listIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="log_system",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Back",
+                emoji=f"{pimp.importIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="bot_operations",
+                row=1
+            ))
+            
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=view)
+            else:
+                await interaction.response.edit_message(embed=embed, view=view)
+                
+        except Exception as e:
+            print(f"Show bot updates menu error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} An error occurred while showing bot updates menu.",
                     ephemeral=True
                 )
 

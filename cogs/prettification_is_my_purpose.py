@@ -1,12 +1,17 @@
 import sqlite3
 
-themeName = "Pink Pricess Theme"
 elseEmoji = "👻"
 
 with sqlite3.connect('db/pimpsettings.sqlite') as pimpsettings_db:
     cursor = pimpsettings_db.cursor()
-    cursor.execute("SELECT * FROM pimpsettings WHERE themeName=?", (themeName,))
+    # Get the active theme (is_active = 1)
+    cursor.execute("SELECT * FROM pimpsettings WHERE is_active=1 LIMIT 1")
     theme = cursor.fetchone()
+    
+    # If no active theme, fall back to "default" theme
+    if not theme:
+        cursor.execute("SELECT * FROM pimpsettings WHERE themeName=?", ("default",))
+        theme = cursor.fetchone()
     allianceOldIcon = theme[2] if theme else elseEmoji
     avatarOldIcon = theme [3] if theme else elseEmoji
     stoveOldIcon = theme[4] if theme else elseEmoji
