@@ -50,7 +50,6 @@ class Changes(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.listIcon} Alliance History Menu",
                 description=(
-                    f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.stoveIcon} **Furnace Changes**\n"
                     f"└ View furnace level changes\n\n"

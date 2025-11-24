@@ -648,7 +648,6 @@ class BearTrap(commands.Cog):
                 description=(  
                     f"-# The Notification System can be used to create notifications that will alert players of upcoming events. "
                     f"It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n"
-                    f"### Available Operations\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.addIcon} **Create Notification**\n"
                     f"└ Set up a new notification with custom time, message, mentions, and repeat options\n"
@@ -1956,23 +1955,25 @@ class BearTrapView(discord.ui.View):
                 print(f"[ERROR] Failed to notify user about error: {notify_error}")
 
     @discord.ui.button(
-        label="Go Back",
+        label="Back",
         emoji=f"{pimp.importIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu", #This needs to be changed
+        custom_id="back_to_other_features",
         row=2
     )
-    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                await alliance_cog.show_main_menu(interaction)
+            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
+            if other_features_cog:
+                await other_features_cog.show_other_features_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} Other Features module not found.",
+                    ephemeral=True
+                )
         except Exception as e:
-            print(f"Error returning to main menu: {e}")
             await interaction.response.send_message(
-                f"{pimp.deniedIcon} An error occurred while returning to main menu.",
+                f"{pimp.deniedIcon} An error occurred while returning to Other Features menu.",
                 ephemeral=True
             )
 
@@ -2718,27 +2719,33 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
             embed = discord.Embed(
                 title=f"{pimp.hourglassIcon} Select Notification Type",
                 description=(
-                    "Choose when to send notifications:\n\n"
-                    "**30m, 10m, 5m & Time**\n"
-                    "• 30 minutes before\n"
-                    "• 10 minutes before\n"
-                    "• 5 minutes before\n"
-                    "• When time's up\n\n"
-                    "**10m, 5m & Time**\n"
-                    "• 10 minutes before\n"
-                    "• 5 minutes before\n"
-                    "• When time's up\n\n"
-                    "**5m & Time**\n"
-                    "• 5 minutes before\n"
-                    "• When time's up\n\n"
-                    "**Only 5m**\n"
-                    "• Only 5 minutes before\n\n"
-                    "**Only Time**\n"
-                    "• Only when time's up\n\n"
-                    "**Custom Times**\n"
-                    "• Set your own notification times"
+                    f"{pimp.divider1}\n\n"
+                    "### 30m, 10m, 5m & Time\n"
+                    "- 30 minutes before\n"
+                    "- 10 minutes before\n"
+                    "- 5 minutes before\n"
+                    "- When time's up\n"
+                    f"{pimp.divider2}\n\n"
+                    "### 10m, 5m & Time\n"
+                    "- 10 minutes before\n"
+                    "- 5 minutes before\n"
+                    "- When time's up\n"
+                    f"{pimp.divider2}\n\n"
+                    "### 5m & Time\n"
+                    "- 5 minutes before\n"
+                    "- When time's up\n"
+                    f"{pimp.divider2}\n\n"
+                    "### Only 5m\n"
+                    "- Only 5 minutes before\n"
+                    f"{pimp.divider2}\n\n"
+                    "### Only Time\n"
+                    "- Only when time's up\n"
+                    f"{pimp.divider2}\n\n"
+                    "### Custom Times\n"
+                    "- Set your own notification times\n\n"
+                    f"{pimp.divider1}\n"
                 ),
-                color=discord.Color.blue()
+                color=pimp.emColor1
             )
 
             view = NotificationTypeView(

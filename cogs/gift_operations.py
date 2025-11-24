@@ -2402,7 +2402,6 @@ class GiftOperations(commands.Cog):
         gift_menu_embed = discord.Embed(
             title=f"{pimp.giftIcon} Gift Code Operations",
             description=(
-                f"### **Available Operations:**\n"
                 f"\n{pimp.divider1}\n"
                 f"\n"
                 f"{pimp.addGiftCodeIcon} **Add Gift Code**\n"

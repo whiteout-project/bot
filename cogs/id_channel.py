@@ -159,14 +159,14 @@ class IDChannel(commands.Cog):
             content = message.content.strip()
 
             if not content.isdigit():
-                await message.add_reaction('❌')
+                await message.add_reaction(f"{pimp.deniedIcon}")
                 return
 
             fid = int(content)
             await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            await message.add_reaction('❌')
+            await message.add_reaction(f"{pimp.deniedIcon}")
 
     async def process_fid(self, message, fid, alliance_id):
         try:
@@ -177,7 +177,7 @@ class IDChannel(commands.Cog):
                 
                 if existing_alliance:
                     if existing_alliance[0] == alliance_id:
-                        await message.add_reaction('⚠️')
+                        await message.add_reaction(f"{pimp.warnIcon}")
                         await message.reply(f"This ID ({fid}) is already registered in this alliance!", delete_after=10)
                         return
                     else:
@@ -186,7 +186,7 @@ class IDChannel(commands.Cog):
                             alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (existing_alliance[0],))
                             alliance_name = alliance_cursor.fetchone()
                         
-                        await message.add_reaction('⚠️')
+                        await message.add_reaction(f"{pimp.warnIcon}")
                         await message.reply(
                             f"This ID ({fid}) is already registered in another alliance: `{alliance_name[0] if alliance_name else 'Unknown Alliance'}`",
                             delete_after=10
@@ -213,7 +213,7 @@ class IDChannel(commands.Cog):
                             if response.status == 429:
                                 if attempt < max_retries - 1:
                                     warning_embed = discord.Embed(
-                                        title="⚠️ API Rate Limit Reached",
+                                        title=f"{pimp.warnIcon} API Rate Limit Reached",
                                         description=(
                                             f"Operation is on hold due to API rate limit.\n"
                                             f"**Remaining Attempts:** `{max_retries - attempt - 1}`\n"
@@ -226,7 +226,7 @@ class IDChannel(commands.Cog):
                                     await asyncio.sleep(retry_delay)
                                     continue
                                 else:
-                                    await message.add_reaction('❌')
+                                    await message.add_reaction(f"{pimp.deniedIcon}")
                                     await message.reply("Operation failed due to API rate limit. Please try again later.", delete_after=10)
                                     return
 
@@ -245,7 +245,7 @@ class IDChannel(commands.Cog):
                                             cursor = users_db.cursor()
                                             cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
                                             if cursor.fetchone():
-                                                await message.add_reaction('⚠️')
+                                                await message.add_reaction(f"{pimp.warnIcon}")
                                                 await message.reply(f"This ID ({fid}) was added by another process!", delete_after=10)
                                                 return
                                                 
@@ -255,11 +255,11 @@ class IDChannel(commands.Cog):
                                             """, (fid, nickname, furnace_lv, kid, stove_lv_content, alliance_id))
                                             users_db.commit()
                                     except sqlite3.IntegrityError:
-                                        await message.add_reaction('⚠️')
+                                        await message.add_reaction(f"{pimp.warnIcon}")
                                         await message.reply(f"This ID ({fid}) was added by another process!", delete_after=10)
                                         return
 
-                                    await message.add_reaction('✅')
+                                    await message.add_reaction(f"{pimp.verifiedIcon}")
 
                                     if furnace_lv > 30:
                                         furnace_level_name = self.level_mapping.get(furnace_lv, f"Level {furnace_lv}")
@@ -267,16 +267,16 @@ class IDChannel(commands.Cog):
                                         furnace_level_name = f"Level {furnace_lv}"
 
                                     success_embed = discord.Embed(
-                                        title=f"✅ Member Successfully Added",
+                                        title=f"{pimp.verifiedIcon} Member Successfully Added",
                                         description=(
-                                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            f"**👤 Name:** `{nickname}`\n"
-                                            f"**🆔 ID:** `{fid}`\n"
-                                            f"**🔥 Furnace Level:** `{furnace_level_name}`\n"
-                                            f"**🌍 State:** `{kid}`\n"
-                                            "━━━━━━━━━━━━━━━━━━━━━━"
+                                            f"{pimp.divider1}\n\n"
+                                            f"**{pimp.avatarIcon} Name:** `{nickname}`\n"
+                                            f"**{pimp.fidIcon} ID:** `{fid}`\n"
+                                            f"**{pimp.stoveIcon} Furnace Level:** `{furnace_level_name}`\n"
+                                            f"**{pimp.stateIcon} State:** `{kid}`\n"
+                                            f"{pimp.divider1}\n"
                                         ),
-                                        color=discord.Color.green()
+                                        color=pimp.emColor3
                                     )
 
                                     if avatar_image:
@@ -299,7 +299,7 @@ class IDChannel(commands.Cog):
                                     )
                                     return
                                 else:
-                                    await message.add_reaction('❌')
+                                    await message.add_reaction(f"{pimp.deniedIcon}")
                                     await message.reply("No player found for this ID!", delete_after=10)
                                     return
 
@@ -307,12 +307,12 @@ class IDChannel(commands.Cog):
                     if attempt < max_retries - 1:
                         continue
                     else:
-                        await message.add_reaction('❌')
+                        await message.add_reaction(f"{pimp.deniedIcon}")
                         await message.reply("An error occurred during the process!", delete_after=10)
                         return
 
         except Exception as e:
-            await message.add_reaction('❌')
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("An error occurred during the process!", delete_after=10)
 
     @tasks.loop(seconds=300)
@@ -354,7 +354,7 @@ class IDChannel(commands.Cog):
 
                     content = message.content.strip()
                     if not content.isdigit():
-                        await message.add_reaction('❌')
+                        await message.add_reaction(f"{pimp.deniedIcon}")
                         continue
 
                     fid = int(content)
@@ -375,23 +375,21 @@ class IDChannel(commands.Cog):
 
             if not is_admin:
                 await interaction.response.send_message(
-                    f"❌ You don't have permission to use this feature.", 
+                    f"{pimp.deniedIcon} You don't have permission to use this feature.", 
                     ephemeral=True
                 )
                 return
 
             embed = discord.Embed(
-                title=f"🆔 ID Channel Management",
+                title=f"{pimp.fidIcon} ID Channel Management",
                 description=(
-                    f"Manage your alliance ID channels here:\n\n"
-                    f"**Available Operations**\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"➕ Create new ID channel\n"
-                    f"🗑️ Delete existing ID channel\n"
-                    f"📋 View active ID channels\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.addIcon} Create new ID channel\n"
+                    f"{pimp.deleteIcon} Delete existing ID channel\n"
+                    f"{pimp.magnifyingIcon} View active ID channels\n\n"
+                    f"{pimp.divider1}\n"
                 ),
-                color=discord.Color.blue()
+                color=pimp.emColor1
             )
             
             view = IDChannelView(self)
@@ -404,7 +402,7 @@ class IDChannel(commands.Cog):
         except Exception as e:
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    f"❌ An error occurred. Please try again.",
+                    f"{pimp.deniedIcon} An error occurred. Please try again.",
                     ephemeral=True
                 )
 
@@ -415,7 +413,7 @@ class IDChannelView(discord.ui.View):
 
     @discord.ui.button(
         label="View Channels",
-        emoji=f"📋",
+        emoji=f"{pimp.magnifyingIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="view_id_channels",
         row=1
@@ -442,14 +440,14 @@ class IDChannelView(discord.ui.View):
 
             if not channels:
                 await interaction.response.send_message(
-                    f"❌ No active ID channels found in this server.",
+                    f"{pimp.deniedIcon} No active ID channels found in this server.",
                     ephemeral=True
                 )
                 return
 
             embed = discord.Embed(
-                title=f"📋 Active ID Channels",
-                color=discord.Color.blue()
+                title=f"{pimp.hashtagIcon} Active ID Channels",
+                color=pimp.emColor1
             )
 
             for channel_id, alliance_name, created_at, created_by in channels:
@@ -478,14 +476,14 @@ class IDChannelView(discord.ui.View):
 
         except Exception as e:
             await interaction.response.send_message(
-                f"❌ An error occurred. Please try again.",
+                f"{pimp.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
             )
 
     @discord.ui.button(
         label="Delete Channel",
-        emoji=f"🗑️",
-        style=discord.ButtonStyle.danger,
+        emoji=f"{pimp.deleteIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="delete_id_channel",
         row=0
     )
@@ -507,7 +505,7 @@ class IDChannelView(discord.ui.View):
 
             if not channels:
                 await interaction.response.send_message(
-                    f"❌ No active ID channels found in this server.",
+                    f"{pimp.deniedIcon} No active ID channels found in this server.",
                     ephemeral=True
                 )
                 return
@@ -554,11 +552,11 @@ class IDChannelView(discord.ui.View):
                         )
 
                         success_embed = discord.Embed(
-                            title=f"✅ ID Channel Deleted",
-                            description=f"**Channel:** {channel.mention if channel else 'Deleted Channel'}\n\n"
-                                      f"This channel will no longer be used as an ID channel.",
-                            color=discord.Color.green()
+                            title=f"{pimp.verifiedIcon} ID Channel Deleted",
+                            description=f"**Channel:** {channel.mention if channel else 'Deleted Channel'}\n\n",
+                            color=pimp.emColor3
                         )
+                        success_embed.set_footer(text="This channel will no longer be used as an ID channel.")
                         
                         if not select_interaction.response.is_done():
                             await select_interaction.response.edit_message(embed=success_embed, view=None)
@@ -567,9 +565,9 @@ class IDChannelView(discord.ui.View):
                             
                     except Exception as e:
                         error_embed = discord.Embed(
-                            title=f"❌ Error",
+                            title=f"{pimp.deniedIcon} Error",
                             description="An error occurred while deleting the channel.",
-                            color=discord.Color.red()
+                            color=pimp.emColor2
                         )
                         if not select_interaction.response.is_done():
                             await select_interaction.response.edit_message(embed=error_embed, view=None)
@@ -581,9 +579,9 @@ class IDChannelView(discord.ui.View):
             view.add_item(ChannelSelect())
             
             select_embed = discord.Embed(
-                title=f"🗑️ Delete ID Channel",
+                title=f"{pimp.deleteIcon} Delete ID Channel",
                 description="Select the ID channel you want to delete:",
-                color=discord.Color.red()
+                color=pimp.emColor2
             )
             
             await interaction.response.send_message(
@@ -594,14 +592,14 @@ class IDChannelView(discord.ui.View):
 
         except Exception as e:
             await interaction.response.send_message(
-                f"❌ An error occurred. Please try again.",
+                f"{pimp.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
             )
 
     @discord.ui.button(
         label="Create Channel",
-        emoji=f"➕",
-        style=discord.ButtonStyle.success,
+        emoji=f"{pimp.addIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="create_id_channel",
         row=0
     )
@@ -614,7 +612,7 @@ class IDChannelView(discord.ui.View):
 
             if not alliances:
                 await interaction.response.send_message(
-                    f"❌ No alliances found.", 
+                    f"{pimp.deniedIcon} No alliances found.", 
                     ephemeral=True
                 )
                 return
@@ -676,26 +674,31 @@ class IDChannelView(discord.ui.View):
                                 )
 
                                 success_embed = discord.Embed(
-                                    title=f"✅ ID Channel Created",
-                                    description=f"**Channel:** {selected_channel.mention}\n"
-                                              f"**Alliance:** {dict(alliances)[alliance_id]}\n\n"
-                                              f"This channel will now automatically check and add IDs to the alliance.",
-                                    color=discord.Color.green()
+                                    title=f"{pimp.verifiedIcon} ID Channel Created",
+                                    description=(
+                                        f"{pimp.divider1}\n\n"
+                                        f"**Channel:** {selected_channel.mention}\n"
+                                        f"**Alliance:** {dict(alliances)[alliance_id]}\n\n"
+                                        f"{pimp.divider1}\n"
+                                    ),
+                                    color=pimp.emColor3
                                 )
+
+                                success_embed.set_footer(text="This channel will now automatically check and add IDs to the alliance.")
                                 await channel_interaction.response.edit_message(embed=success_embed, view=None)
 
                             except sqlite3.IntegrityError:
                                 error_embed = discord.Embed(
-                                    title=f"❌ Error",
+                                    title=f"{pimp.deniedIcon} Error",
                                     description="This channel is already being used as an ID channel!",
-                                    color=discord.Color.red()
+                                    color=pimp.emColor2
                                 )
                                 await channel_interaction.response.edit_message(embed=error_embed, view=None)
                             except Exception as e:
                                 error_embed = discord.Embed(
-                                    title=f"❌ Error",
+                                    title=f"{pimp.deniedIcon} Error",
                                     description="An error occurred while creating the channel.",
-                                    color=discord.Color.red()
+                                    color=pimp.emColor2
                                 )
                                 await channel_interaction.response.edit_message(embed=error_embed, view=None)
 
@@ -704,9 +707,9 @@ class IDChannelView(discord.ui.View):
                     channel_view.add_item(ChannelSelect())
                     
                     select_embed = discord.Embed(
-                        title=f"🔧 ID Channel Setup",
+                        title=f"{pimp.fidIcon} ID Channel Setup",
                         description="Select a channel to use as ID channel:",
-                        color=discord.Color.blue()
+                        color=pimp.emColor1
                     )
                     await select_interaction.response.edit_message(embed=select_embed, view=channel_view)
 
@@ -715,9 +718,9 @@ class IDChannelView(discord.ui.View):
             alliance_view.add_item(AllianceSelect())
             
             initial_embed = discord.Embed(
-                title=f"🔧 ID Channel Setup",
+                title=f"{pimp.fidIcon} ID Channel Setup",
                 description="Select an alliance for the ID channel:",
-                color=discord.Color.blue()
+                color=pimp.emColor1
             )
             await interaction.response.send_message(
                 embed=initial_embed,
@@ -727,13 +730,13 @@ class IDChannelView(discord.ui.View):
 
         except Exception as e:
             await interaction.response.send_message(
-                f"❌ An error occurred. Please try again.",
+                f"{pimp.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
             )
 
     @discord.ui.button(
         label="Back",
-        emoji=f"◀️",
+        emoji=f"{pimp.importIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_other_features",
         row=2
@@ -745,12 +748,12 @@ class IDChannelView(discord.ui.View):
                 await other_features_cog.show_other_features_menu(interaction)
             else:
                 await interaction.response.send_message(
-                    f"❌ Other Features module not found.",
+                    f"{pimp.deniedIcon} Other Features module not found.",
                     ephemeral=True
                 )
         except Exception as e:
             await interaction.response.send_message(
-                f"❌ An error occurred while returning to Other Features menu.",
+                f"{pimp.deniedIcon} An error occurred while returning to Other Features menu.",
                 ephemeral=True
             )
 

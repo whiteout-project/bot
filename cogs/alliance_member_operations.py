@@ -122,7 +122,6 @@ class AllianceMemberOperations(commands.Cog):
         embed = discord.Embed(
             title=f"{pimp.avatarIcon} Member Operations",
             description=(
-                f"### **Available Operations:**\n"
                 f"\n{pimp.divider1}\n"
                 f"\n"
                 f"{pimp.addIcon} **Add Members**\n"
@@ -1123,7 +1122,7 @@ class AllianceMemberOperations(commands.Cog):
                 label="Main Menu", 
                 emoji=f"{pimp.homeIcon}", 
                 style=discord.ButtonStyle.secondary,
-                row=2
+                row=3
             )
             async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await self.cog.show_main_menu(interaction)

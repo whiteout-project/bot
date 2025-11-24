@@ -365,7 +365,7 @@ To restore:
                                 f"• Store this file in a secure location\n"
                                 f"• This backup expires in 30 days from Discord"
                             ),
-                            color=discord.Color.green()
+                            color=pimp.emColor3
                         )
 
                         with open(temp_filepath, 'rb') as f:
@@ -425,15 +425,19 @@ class BackupView(discord.ui.View):
         embed = discord.Embed(
             title=f"{pimp.listIcon} Create Backup",
             description=(
-                f"Choose how you want to receive your backup:\n\n"
-                f"### **{pimp.messageIcon} Direct Message**\n"
+                f"-# Choose how you want to receive your backup\n\n"
+                f"{pimp.divider1}\n"
+                f"### {pimp.messageIcon} Direct Message\n"
+                f"{pimp.divider2}\n"
                 f"- Sent to your DMs immediately\n"
                 f"- Limited to 24MB (Discord limit)\n"
                 f"- Expires in 30 days\n\n"
-                f"- **{pimp.listIcon} Save Locally**\n"
+                f"### {pimp.listIcon} Save Locally\n"
+                f"{pimp.divider2}\n"
                 f"- Saved to server's backup folder\n"
                 f"- No size limit (uses server storage)\n"
-                f"- Permanent until manually deleted"
+                f"- Permanent until manually deleted\n\n"
+                f"{pimp.divider1}\n"
             ),
             color=pimp.emColor1
         )
@@ -453,6 +457,12 @@ class BackupView(discord.ui.View):
             title=f"{pimp.listIcon} Local Backup Files",
             color=pimp.emColor1
         )
+
+        embed.add_field(
+            name="",
+            value=f"{pimp.divider1}",
+            inline=False
+        )
         
         total_size = 0
         for i, filepath in enumerate(backup_files[:10]): # Show last 10
@@ -464,24 +474,51 @@ class BackupView(discord.ui.View):
             
             embed.add_field(
                 name=f"{pimp.listIcon} {filename}",
-                value=f"{pimp.pinIcon} {file_size_mb:.2f} MB\n{pimp.hourglassIcon} {mod_time.strftime('%Y-%m-%d %H:%M:%S')}",
-                inline=True
+                value=(
+                    f"{pimp.pinIcon} {file_size_mb:.2f} MB\n"
+                    f"{pimp.hourglassIcon} {mod_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                    f"{pimp.divider2}\n"
+                ),
+                inline=False
             )
         
         embed.add_field(
-            name=f"{pimp.pinIcon} Summary",
+            name=f"{pimp.listIcon} Summary",
             value=f"Total shown: {total_size / 1024 / 1024:.2f} MB\nFiles displayed: {min(len(backup_files), 10)} of {len(backup_files)}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="",
+            value=f"{pimp.divider1}",
             inline=False
         )
 
         view = BackupManageView(self.cog)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Go Back", emoji=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, row=2)
-    async def main_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-        if other_features_cog:
-            await other_features_cog.show_other_features_menu(interaction)
+    @discord.ui.button(
+        label="Back",
+        emoji=f"{pimp.importIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_other_features",
+        row=2
+    )
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
+            if other_features_cog:
+                await other_features_cog.show_other_features_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} Other Features module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} An error occurred while returning to Other Features menu.",
+                ephemeral=True
+            )
 
 class BackupChoiceView(discord.ui.View):
     def __init__(self, cog, user_id):
@@ -503,7 +540,7 @@ class BackupChoiceView(discord.ui.View):
             embed = discord.Embed(
                 title=f"{pimp.deniedIcon} Cannot Create DM Backup",
                 description=reason,
-                color=discord.Color.red()
+                color=pimp.emColor2
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
@@ -514,14 +551,14 @@ class BackupChoiceView(discord.ui.View):
             embed = discord.Embed(
                 title=f"{pimp.verifiedIcon} Backup Sent",
                 description=f"Backup `{filename}` has been sent to your direct messages!",
-                color=discord.Color.green()
+                color=pimp.emColor3
             )
             self.cog.log_backup(str(self.user_id), True, "Manual Backup", "DM", filename)
         else:
             embed = discord.Embed(
                 title=f"{pimp.deniedIcon} Backup Failed",
                 description="Failed to create or send backup. Check file size and try local save instead.",
-                color=discord.Color.red()
+                color=pimp.emColor2
             )
             self.cog.log_backup(str(self.user_id), False, "Manual Backup", "DM", None, "Creation/send failed")
         
@@ -541,7 +578,7 @@ class BackupChoiceView(discord.ui.View):
             embed = discord.Embed(
                 title=f"{pimp.deniedIcon} Cannot Create Local Backup",
                 description=reason,
-                color=discord.Color.red()
+                color=pimp.emColor2
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
@@ -555,20 +592,23 @@ class BackupChoiceView(discord.ui.View):
             embed = discord.Embed(
                 title=f"{pimp.verifiedIcon} Local Backup Created",
                 description=(
-                    f"**Backup Details:**\n"
+                    f"### Backup Details\n"
+                    f"{pimp.divider1}\n\n"
                     f"{pimp.listIcon} **File:** {filename}\n"
                     f"{pimp.pinIcon} **Size:** {file_size:.2f} MB\n"
-                    f"{pimp.listIcon} **Location:** `{os.path.abspath(file_path)}`\n\n"
-                    f"Use 'View Local Backups' to manage your saved backups."
-                ),
-                color=discord.Color.green()
+                    f"{pimp.listIcon} **Location:** {os.path.abspath(file_path)}\n\n"
+                    f"{pimp.divider1}\n"
+               ),
+                color=pimp.emColor3
             )
+            embed.set_footer(text="Use the [View Local Backups] button to manage your saved backups.")
+
             self.cog.log_backup(str(self.user_id), True, "Manual Backup", "Local", filename)
         else:
             embed = discord.Embed(
                 title=f"{pimp.deniedIcon} Backup Failed",
                 description="Failed to create local backup. Check disk space and try again.",
-                color=discord.Color.red()
+                color=pimp.emColor2
             )
             self.cog.log_backup(str(self.user_id), False, "Manual Backup", "Local", None, "Creation failed")
         
@@ -579,7 +619,7 @@ class BackupManageView(discord.ui.View):
         super().__init__(timeout=60)
         self.cog = cog
 
-    @discord.ui.button(label="Clean Old Backups", emoji="🧹", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Clean Old Backups", emoji=f"{pimp.redeemIcon}", style=discord.ButtonStyle.secondary)
     async def clean_backups(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
@@ -591,15 +631,20 @@ class BackupManageView(discord.ui.View):
         embed = discord.Embed(
             title="🧹 Cleanup Complete",
             description=(
-                f"**Files Removed:**\n"
-                f"• Manual backups: {manual_removed}\n"
-                f"• Automatic backups: {auto_removed}\n\n"
-                f"**Retention Policy:**\n"
-                f"• Kept last 2 manual backups\n"
-                f"• Kept last 2 automatic backups\n\n"
-                f"**Current Free Space:** {space_info['free_mb']:.1f} MB" if space_info else ""
+                f"### Files Removed\n"
+                f"{pimp.divider1}\n\n"
+                f"- Manual backups: {manual_removed}\n"
+                f"- Automatic backups: {auto_removed}\n"
+                f"### Retention Policy\n"
+                f"{pimp.divider1}\n\n"
+                f"- Kept last 2 manual backups\n"
+                f"- Kept last 2 automatic backups\n"
+                f"### Current Free Space\n"
+                f"{pimp.divider1}\n\n"
+                f"- {space_info['free_mb']:.1f} MB\n\n" if space_info else "Information unavailable\n\n"
+                f"{pimp.divider1}"
             ),
-            color=discord.Color.green()
+            color=pimp.emColor3
         )
         
         await interaction.followup.send(embed=embed, ephemeral=True)
@@ -641,7 +686,7 @@ class BackupPasswordModal(discord.ui.Modal, title="Set Backup Password"):
         embed = discord.Embed(
             title=title,
             description=message,
-            color=discord.Color.green()
+            color=pimp.emColor3
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

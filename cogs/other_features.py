@@ -11,8 +11,6 @@ class OtherFeatures(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.pinIcon} Other Features",
                 description=(
-                    f"-# This section was created according to users' requests\n"
-                    f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.anounceIcon} **Notification System**\n"
                     f"└ Event notification system\n"

@@ -5,6 +5,7 @@ import sqlite3
 import aiohttp
 import time
 import ssl
+from cogs import prettification_is_my_purpose as pimp
 
 class RegisterSettingsView(discord.ui.View):
     def __init__(self, cog):
@@ -32,31 +33,31 @@ class RegisterSettingsView(discord.ui.View):
 
     @discord.ui.button(
         label="Enable",
-        emoji="✅",
-        style=discord.ButtonStyle.success,
+        emoji=f"{pimp.verifiedIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="enable_register",
         row=0
     )
     async def enable_register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.change_settings(True)
-            await interaction.response.send_message("✅ Registration has been enabled.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.verifiedIcon} Registration has been enabled.", ephemeral=True)
         except Exception as _:
-            await interaction.response.send_message("❌ An error occurred while enabling registration.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} An error occurred while enabling registration.", ephemeral=True)
             
     @discord.ui.button(
         label="Disable",
-        emoji="❌",
-        style=discord.ButtonStyle.danger,
+        emoji=f"{pimp.deniedIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="disable_register",
         row=0
     )
     async def disable_register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.change_settings(False)
-            await interaction.response.send_message("❌ Registration has been disabled.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Registration has been disabled.", ephemeral=True)
         except Exception as _:
-            await interaction.response.send_message("❌ An error occurred while disabling registration.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} An error occurred while disabling registration.", ephemeral=True)
 
 class Register(commands.Cog):
     def __init__(self, bot):
@@ -75,7 +76,7 @@ class Register(commands.Cog):
     async def show_settings_menu(self, interaction: discord.Interaction):
         if not self.is_global_admin(interaction.user.id):
             await interaction.response.send_message(
-                "❌ You do not have permission to access this command.",
+                f"{pimp.deniedIcon} You do not have permission to access this command.",
                 ephemeral=True
             )
             return
@@ -83,7 +84,7 @@ class Register(commands.Cog):
         view = RegisterSettingsView(self)
         
         await interaction.response.send_message(
-            "Choose an option to enable or disable the registration system:",
+            "### Choose an option to enable or disable the registration system:\n",
             view=view,
             ephemeral=True
         )
@@ -173,14 +174,14 @@ class Register(commands.Cog):
     async def register(self, interaction: discord.Interaction, fid: int, alliance: int):
         if not self.is_registration_enabled():
             await interaction.response.send_message(
-                "❌ Registration is currently disabled.",
+                f"{pimp.deniedIcon} Registration is currently disabled.",
                 ephemeral=True
             )
             return
         
         if self.is_already_in_users(fid):
             await interaction.response.send_message(
-                "❌ You are already registered in the bot's database.",
+                f"{pimp.deniedIcon} You are already registered in the bot's database.",
                 ephemeral=True
             )
             return
@@ -192,9 +193,9 @@ class Register(commands.Cog):
                 error_msg = api_response.get("msg", "Unknown error")
                 
                 if "role not exist" in error_msg.lower():
-                    display_msg = "❌ Invalid FID. Please try again."
+                    display_msg = f"{pimp.deniedIcon} Invalid FID. Please try again."
                 else:
-                    display_msg = f"❌ Invalid FID: {error_msg}"
+                    display_msg = f"{pimp.deniedIcon} Invalid FID: {error_msg}"
                 
                 await interaction.response.send_message(
                     display_msg,
@@ -204,7 +205,7 @@ class Register(commands.Cog):
             
             if "data" not in api_response:
                 await interaction.response.send_message(
-                    "❌ Invalid response from server. Please try again later.",
+                    f"{pimp.deniedIcon} Invalid response from server. Please try again later.",
                     ephemeral=True
                 )
                 return
@@ -220,7 +221,7 @@ class Register(commands.Cog):
             else:
                 print(f"Error fetching user data for FID {fid}: {e}")
                 await interaction.response.send_message(
-                    "❌ Failed to fetch user data. Please try again later.",
+                    f"{pimp.deniedIcon} Failed to fetch user data. Please try again later.",
                     ephemeral=True
                 )
             return

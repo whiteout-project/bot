@@ -365,10 +365,7 @@ class Alliance(commands.Cog):
                     embed = discord.Embed(
                         title=f"{pimp.allianceIcon} Alliance Operations",
                         description=(
-                            f"Please select an operation:\n\n"
-                            f"**Available Operations**\n"
-                            f"{pimp.divider1}\n"
-                            f"\n"
+                            f"{pimp.divider1}\n\n"
                             f"{pimp.addIcon} **Add Alliance**\n"
                             f"└ Create a new alliance\n\n"
                             f"{pimp.processingIcon} **Edit Alliance**\n"
@@ -428,7 +425,7 @@ class Alliance(commands.Cog):
                         emoji=f"{pimp.homeIcon}",
                         style=discord.ButtonStyle.secondary, 
                         custom_id="main_menu",
-                        row = 2
+                        row = 3
                     ))
 
                     await interaction.response.edit_message(embed=embed, view=view)

@@ -9,8 +9,6 @@ class SupportOperations(commands.Cog):
         support_menu_embed = discord.Embed(
             title=f"{pimp.supportIcon} Support Operations",
             description=(
-                f"Please select an operation:\n\n"
-                f"**Available Operations**\n"
                 f"{pimp.divider1}\n"
                 f"\n"
                 f"{pimp.supportIcon} **Request Support**\n"

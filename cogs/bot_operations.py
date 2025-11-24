@@ -1251,8 +1251,6 @@ class BotOperations(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.robotIcon} Bot Operations",
                 description=(
-                    f"Please choose an operation:\n\n"
-                    f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.avatarIcon} **Admin Management**\n"
                     f"└ Add, remove, and view administrators\n\n"
@@ -1409,8 +1407,6 @@ class BotOperations(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.avatarIcon} Admin Management",
                 description=(
-                    f"Manage bot administrators:\n\n"
-                    f"### **Available Actions**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.listIcon} **View Administrators**\n"
                     f"└ View all bot administrators\n\n"
@@ -1473,8 +1469,6 @@ class BotOperations(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.shieldIcon} Admin Permissions",
                 description=(
-                    f"Manage administrator permissions:\n\n"
-                    f"### **Available Actions**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.exportIcon} **Assign Alliance to Admin**\n"
                     f"└ Grant alliance access to an administrator\n\n"
@@ -1528,8 +1522,6 @@ class BotOperations(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.robotIcon} Bot Updates & Maintenance",
                 description=(
-                    f"Bot maintenance and system tools:\n\n"
-                    f"### **Available Actions**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.robotIcon} **Check for Updates**\n"
                     f"└ Check for new bot versions\n\n"
@@ -1690,14 +1682,16 @@ class ControlSettingsView(discord.ui.View):
             embed = discord.Embed(
                 title=f"{pimp.settings2Icon} Control Settings",
                 description=(
-                    "**Please select an alliance from the dropdown menu above.**\n\n"
-                    "Once selected, you can configure:\n"
-                    "• State Transfer Auto-Removal\n"
-                    "• Admin Notifications\n\n"
-                    "These settings control what happens when a user transfers to another state."
+                    f"-# Please select an alliance from the dropdown menu below.\n"
+                    f"{pimp.divider1}\n\n"
+                    f"Once selected, you can configure:\n"
+                    f"- State Transfer Auto-Removal\n"
+                    f"- Admin Notifications\n\n"
+                    f"{pimp.divider1}\n"
                 ),
                 color=pimp.emColor1
             )
+            embed.set_footer(text="These settings control what happens when a user transfers to another state.")
         
         # Update components based on current state
         self.setup_components()

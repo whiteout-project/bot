@@ -1140,8 +1140,6 @@ class BotOperations(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.robotIcon} Bot Operations",
                 description=(
-                    f"Please choose an operation:\n\n"
-                    f"### **Available Operations**\n"
                     f"{pimp.divider1}\n\n"
                     f"{pimp.avatarIcon} **Admin Management**\n"
                     f"└ Manage bot administrators\n\n"
