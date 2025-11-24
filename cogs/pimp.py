@@ -66,7 +66,6 @@ class CreateThemeModal(discord.ui.Modal):
             
             # Check if theme already exists
             with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
-                cursor = pimpSettings_db.cursor()
                 cursor.execute("SELECT COUNT(*) FROM pimpsettings WHERE themeName=?", (new_theme_name,))
                 exists = cursor.fetchone()[0] > 0
                 
@@ -88,7 +87,7 @@ class CreateThemeModal(discord.ui.Modal):
                                  '🗑️', '➕', '🔄', '✅', '❓', '↔️', '✖️', '➗',
                                  '❌', '➖', '➡️', '⬅️', '🔁', '🟰', 'ℹ️', '⚠️', '➕']
                 
-                divider_values = ['━', '━━━━━━━━━━━━━━━━━━━━━━', '━', 9, '━', '━━━━━━━━━━━━━━━━━━━━━━', '━', 9]
+                divider_values = ['━', '━', '━', 22, '━', '━', '━', 22]
                 color_values = ['#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF']
                 
                 # Insert new theme
@@ -615,7 +614,7 @@ class PIMP(commands.Cog):
                             error_msg = f"Failed to download image. Status: {resp.status}"
                             print(error_msg)
                             if context_message:
-                                await context_message.add_reaction("❌")
+                                await context_message.add_reaction(f"{pimp.deniedIcon}")
                                 await context_message.reply(f"{pimp.deniedIcon} {error_msg}")
                             return False
                         image_data = await resp.read()
@@ -628,7 +627,7 @@ class PIMP(commands.Cog):
                                 error_msg = "Image is too large (max 2MB) and PIL is not available for resizing."
                                 print(error_msg)
                                 if context_message:
-                                    await context_message.add_reaction("❌")
+                                    await context_message.add_reaction(f"{pimp.deniedIcon}")
                                     await context_message.reply(f"{pimp.deniedIcon} {error_msg}")
                                 return False
                             
@@ -658,7 +657,7 @@ class PIMP(commands.Cog):
                             except Exception as resize_error:
                                 print(f"Failed to resize image: {resize_error}")
                                 if context_message:
-                                    await context_message.add_reaction("❌")
+                                    await context_message.add_reaction(f"{pimp.deniedIcon}")
                                     await context_message.reply(f"{pimp.deniedIcon} Image is too large (max 2MB) and could not be resized.")
                                 return False
                     
@@ -723,7 +722,7 @@ class PIMP(commands.Cog):
                             error_msg = f"Failed to upload emoji. Status: {resp.status}, Error: {error_text}"
                             print(error_msg)
                             if context_message:
-                                await context_message.add_reaction("❌")
+                                await context_message.add_reaction(f"{pimp.deniedIcon}")
                                 await context_message.reply(f"{pimp.deniedIcon} {error_msg}")
                             return False
             
@@ -1158,7 +1157,7 @@ class PIMP(commands.Cog):
             print(f"Error processing emoji from message: {e}")
             import traceback
             traceback.print_exc()
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply(f"{pimp.deniedIcon} Error: {str(e)}")
 
     async def activate_theme(self, interaction: discord.Interaction, themename: str):
