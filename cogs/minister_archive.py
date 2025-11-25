@@ -1159,7 +1159,7 @@ class MinisterArchive(commands.Cog):
         }
 
         for timestamp, username, action_type, appointment_type, fid, nickname, old_time, new_time, alliance_name, additional_data in page_records:
-            emoji = action_emojis.get(action_type, "📝")
+            emoji = action_emojis.get(action_type, f"📝")
             dt = datetime.fromisoformat(timestamp).strftime("%m/%d %H:%M")
 
             if action_type == "add":

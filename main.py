@@ -963,9 +963,10 @@ if __name__ == "__main__":
                 redeemIcon TEXT,
                 membersIcon TEXT,
                 anounceIcon TEXT,
-                avarageIcon IEXT,
+                averageIcon IEXT,
                 hashtagIcon TEXT,
                 messageIcon TEXT,
+                supportIcon TEXT,
                 settingsIcon TEXT,
                 settings2Icon TEXT,
                 hourglassIcon TEXT,
@@ -1004,6 +1005,44 @@ if __name__ == "__main__":
                 emColorString4 TEXT,
                 is_active INTEGER DEFAULT 0
             )""")
+            cursor = conn_pimpsettings.cursor()
+            cursor.execute("SELECT COUNT(*) FROM pimpsettings")
+            tableIsEmpty = cursor.fetchone()[0] == 0
+            if tableIsEmpty:
+                conn_pimpsettings.execute("""INSERT INTO pimpsettings (
+                    themeName,
+                    allianceOldIcon, avatarOldIcon, stoveOldIcon, stateOldIcon,
+                    allianceIcon, avatarIcon, stoveIcon, stateIcon,
+                    listIcon, fidIcon, timeIcon, homeIcon,
+                    num1Icon, num2Icon, num3Icon, newIcon,
+                    pinIcon, giftIcon, giftsIcon, alertIcon,
+                    robotIcon, crossIcon, heartIcon, total2Icon,
+                    shieldIcon, targetIcon, redeemIcon, membersIcon,
+                    anounceIcon, averageIcon, hashtagIcon, messageIcon,
+                    supportIcon, settingsIcon, settings2Icon, hourglassIcon,
+                    messageNoIcon, alarmClockIcon, magnifyingIcon, checkGiftCodeIcon,
+                    deleteGiftCodeIcon, addGiftCodeIcon, processingIcon, verifiedIcon,
+                    questionIcon, transferIcon, multiplyIcon, divideIcon,
+                    deniedIcon, deleteIcon, exportIcon, importIcon,
+                    retryIcon, totalIcon, infoIcon, warnIcon, addIcon,
+                    dividerEmojiStart1, dividerEmojiPattern1, dividerEmojiEnd1, dividerLength1,
+                    dividerEmojiStart2, dividerEmojiPattern2, dividerEmojiEnd2, dividerLength2,
+                    emColorString1, emColorString2, emColorString3, emColorString4,
+                    is_active
+                ) VALUES (
+                    'default',
+                    '⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏',
+                    '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '🆕',
+                    '📍', '🎁', '🛍️', '⚠️', '🤖', '⚔️', '💗', '🟰',
+                    '🛡️', '🎯', '🔄', '👥', '📢', '📈', '🔢', '🔊',
+                    '🆘', '⚙️', '⚙️', '⏳', '🔇', '⏰', '🔍', '✅',
+                    '🗑️', '➕', '🔄', '✅', '❓', '↔️', '✖️', '➗',
+                    '❌', '➖', '➡️', '⬅️', '🔄', '🟰', 'ℹ️', '⚠️', '➕',
+                    '━', '━', '━', 16,
+                    '━', '━', '━', 16,
+                    '#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF',
+                    1
+                );""")
 
         with connections["conn_changes"] as conn_changes:
             conn_changes.execute("""CREATE TABLE IF NOT EXISTS nickname_changes (

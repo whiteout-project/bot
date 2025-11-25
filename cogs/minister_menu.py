@@ -1864,7 +1864,7 @@ class MinisterMenu(commands.Cog):
         current_label = labels[current_value]
 
         embed = discord.Embed(
-            title="📋 Schedule List Type",
+            title=f"📋 Schedule List Type",
             description=f"Select the type of generated minister list message when adding/removing people:\n\n**Currently showing:** {current_label}",
             color=discord.Color.green()
         )
@@ -1889,7 +1889,7 @@ class MinisterMenu(commands.Cog):
             self.svs_conn.commit()
 
             updated_embed = discord.Embed(
-                title="📋 Schedule List Type",
+                title=f"📋 Schedule List Type",
                 description=f"✅ Schedule list type updated successfully!\n\n**Now showing:** {labels[value]}\n\nNew changes will take effect when you add/remove a person to/from the minister schedule.",
                 color=discord.Color.green()
             )
