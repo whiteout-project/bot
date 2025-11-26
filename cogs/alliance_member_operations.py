@@ -71,7 +71,7 @@ class AllianceMemberOperations(commands.Cog):
         self.c_users = self.conn_users.cursor()
         
         self.level_mapping = {
-            31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
+            31: "F30 - 1", 32: "F30 - 2", 33: "F30 - 3", 34: "F30 - 4",
             35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
             40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
             45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
@@ -662,7 +662,7 @@ class AllianceMemberOperations(commands.Cog):
                             member_list = ""
                             for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
                                 level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
-                                member_list += f"👤 {nickname}\n└ ⚔ FC: {level}\n└ 🆔 FID: {fid}\n└ 👑 State: {kid}\n\n"
+                                member_list += f"👤 {nickname}\n└ ⚔ {level}\n└ 🆔 FID: {fid}\n└ 👑 State: {kid}\n\n"
 
                             embed.description += member_list
                             
