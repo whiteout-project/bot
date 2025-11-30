@@ -88,6 +88,18 @@ class BearTrap(commands.Cog):
         except sqlite3.OperationalError:
             self.cursor.execute("ALTER TABLE bear_notification_embeds ADD COLUMN mention_message TEXT")
 
+        try:
+            self.cursor.execute("SELECT event_type FROM bear_notifications LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN event_type TEXT")
+        try:
+            self.cursor.execute("SELECT wizard_batch_id FROM bear_notifications LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN wizard_batch_id TEXT")
+        try:
+            self.cursor.execute("SELECT instance_identifier FROM bear_notifications LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN instance_identifier TEXT")
         self.conn.commit()
 
     async def cog_load(self):
@@ -112,8 +124,8 @@ class BearTrap(commands.Cog):
     async def save_notification(self, guild_id: int, channel_id: int, start_date: datetime,
                                 hour: int, minute: int, timezone: str, description: str,
                                 created_by: int, notification_type: int, mention_type: str,
-                                repeat_48h: bool, repeat_minutes: int = 0,
-                                selected_weekdays: list[int] = None) -> int:
+                                repeat_enabled: bool, repeat_minutes: int = 0,
+                                selected_weekdays: list[int] = None, event_type: str = None, wizard_batch_id: str = None, instance_identifier: str = None, skip_board_update: bool = False) -> int:
         try:
             embed_data = None
             notification_description = description
@@ -141,13 +153,13 @@ class BearTrap(commands.Cog):
             )
 
             self.cursor.execute("""
-                INSERT INTO bear_notifications 
+                INSERT INTO bear_notifications
                 (guild_id, channel_id, hour, minute, timezone, description, notification_type,
-                mention_type, repeat_enabled, repeat_minutes, created_by, next_notification)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mention_type, repeat_enabled, repeat_minutes, created_by, next_notification, event_type, wizard_batch_id, instance_identifier)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (guild_id, channel_id, hour, minute, timezone, notification_description, notification_type,
-                  mention_type, 1 if repeat_48h else 0, repeat_minutes, created_by,
-                  next_notification.isoformat()))
+                  mention_type, 1 if repeat_enabled else 0, repeat_minutes, created_by,
+                  next_notification.isoformat(), event_type, wizard_batch_id, instance_identifier))
 
             notification_id = self.cursor.lastrowid
 
@@ -158,15 +170,61 @@ class BearTrap(commands.Cog):
 
             self.conn.commit()
 
-            # Notify schedule boards of new notification
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                await schedule_cog.on_notification_created(guild_id, channel_id)
+            # Notify schedule boards of new notification (skip if bulk creating)
+            if not skip_board_update:
+                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                if schedule_cog:
+                    await schedule_cog.on_notification_created(guild_id, channel_id)
 
             return notification_id
         except Exception as e:
             print(f"Error saving notification: {e}")
             raise
+
+    async def update_notification(self, notification_id: int, hour: int, minute: int, timezone: str,
+                                  description: str, notification_type: int, mention_type: str,
+                                  repeat_minutes: int = 0, selected_weekdays: list[int] = None,
+                                  event_type: str = None, embed_data: dict = None) -> bool:
+        """Update an existing notification"""
+        try:
+            notification_description = description
+            if description.startswith("CUSTOM_TIMES:"):
+                notification_description = description
+            elif "EMBED_MESSAGE:" in description:
+                title = embed_data.get("title", "true") if embed_data else "true"
+                notification_description = f"EMBED_MESSAGE:{title}"
+            tz = pytz.timezone(timezone)
+            self.cursor.execute("SELECT next_notification FROM bear_notifications WHERE id = ?", (notification_id,))
+            row = self.cursor.fetchone()
+            if row:
+                current_next = datetime.fromisoformat(row[0])
+                next_notification = current_next.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            else:
+                next_notification = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+            self.cursor.execute("""
+                UPDATE bear_notifications
+                SET hour = ?, minute = ?, timezone = ?, description = ?, notification_type = ?,
+                    mention_type = ?, repeat_minutes = ?, event_type = ?, next_notification = ?
+                WHERE id = ?
+            """, (hour, minute, timezone, notification_description, notification_type,
+                  mention_type, repeat_minutes, event_type, next_notification.isoformat(), notification_id))
+            if embed_data:
+                self.cursor.execute("DELETE FROM bear_notification_embeds WHERE notification_id = ?", (notification_id,))
+                await self.save_notification_embed(notification_id, embed_data)
+            if repeat_minutes == "fixed" and selected_weekdays:
+                self.cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (notification_id,))
+                await self.save_notification_fixed(notification_id, selected_weekdays)
+            self.conn.commit()
+            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            if schedule_cog:
+                self.cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (notification_id,))
+                row = self.cursor.fetchone()
+                if row:
+                    await schedule_cog.on_notification_created(row[0], row[1])
+            return True
+        except Exception as e:
+            print(f"Error updating notification: {e}")
+            return False
 
     async def save_notification_embed(self, notification_id: int, embed_data: dict) -> bool:
         try:
@@ -242,7 +300,7 @@ class BearTrap(commands.Cog):
                 self.cursor.execute("""
                     SELECT id, guild_id, channel_id, hour, minute, timezone, description,
                            notification_type, mention_type, repeat_enabled, repeat_minutes,
-                           is_enabled, created_at, created_by, last_notification, next_notification
+                           is_enabled, created_at, created_by, last_notification, next_notification, event_type, instance_identifier
                     FROM bear_notifications
                     WHERE is_enabled = 1 AND next_notification IS NOT NULL
                 """)
@@ -267,7 +325,7 @@ class BearTrap(commands.Cog):
             (id, guild_id, channel_id, hour, minute, timezone, description,
              notification_type, mention_type, repeat_enabled, repeat_minutes,
              is_enabled, created_at, created_by, last_notification,
-             next_notification) = notification
+             next_notification, event_type, instance_identifier) = notification
 
             if not is_enabled:
                 return
@@ -412,6 +470,33 @@ class BearTrap(commands.Cog):
 
                 time_text = f"{rounded_time} {time_unit}"
 
+                # Calculate event name, date, and time placeholders
+                event_name = event_type if event_type else "Event"
+
+                # Get event emoji from event_types config
+                event_emoji = ""
+                if event_type:
+                    from .bear_event_types import get_event_icon
+                    event_emoji = get_event_icon(event_type)
+
+                # Format event time in user's timezone
+                event_datetime = next_time.astimezone(tz)
+                event_time = event_datetime.strftime("%H:%M")
+
+                # Format event date as "MMM DD" (e.g., "Nov 15")
+                event_date = event_datetime.strftime("%b %d")
+
+                # Check if event has instance-specific descriptions
+                actual_description = description
+                if event_type and instance_identifier and "EMBED_MESSAGE:" not in description:
+                    from .bear_event_types import get_event_config
+                    event_config = get_event_config(event_type)
+                    if event_config and "descriptions" in event_config:
+                        descriptions_dict = event_config["descriptions"]
+                        # instance_identifier could be "legion1", "legion2", "teleport_window", "battle_start", etc.
+                        if instance_identifier in descriptions_dict:
+                            actual_description = descriptions_dict[instance_identifier]
+
                 if "EMBED_MESSAGE:" in description:
                     try:
                         embed_data = await self.get_notification_embed(id)
@@ -433,14 +518,32 @@ class BearTrap(commands.Cog):
                                 if title and isinstance(title, str):
                                     title = title.replace("%t", time_text)
                                     title = title.replace("{time}", time_text)
+                                    title = title.replace("%n", event_name)
+                                    title = title.replace("%e", event_time)
+                                    title = title.replace("%d", event_date)
+                                    title = title.replace("%i", event_emoji)
                                     if "@tag" in title:
                                         title = title.replace("@tag", mention_text)
                                     embed.title = title
 
                                 description = embed_data.get("description", "")
+
+                                # Override with instance-specific description if available
+                                if event_type and instance_identifier:
+                                    from .bear_event_types import get_event_config
+                                    event_config = get_event_config(event_type)
+                                    if event_config and "descriptions" in event_config:
+                                        descriptions_dict = event_config["descriptions"]
+                                        if instance_identifier in descriptions_dict:
+                                            description = descriptions_dict[instance_identifier]
+
                                 if description and isinstance(description, str):
                                     description = description.replace("%t", time_text)
                                     description = description.replace("{time}", time_text)
+                                    description = description.replace("%n", event_name)
+                                    description = description.replace("%e", event_time)
+                                    description = description.replace("%d", event_date)
+                                    description = description.replace("%i", event_emoji)
                                     if "@tag" in description:
                                         description = description.replace("@tag", mention_text)
                                     embed.description = description
@@ -461,6 +564,10 @@ class BearTrap(commands.Cog):
                                 if footer_text and isinstance(footer_text, str):
                                     footer_text = footer_text.replace("%t", time_text)
                                     footer_text = footer_text.replace("{time}", time_text)
+                                    footer_text = footer_text.replace("%n", event_name)
+                                    footer_text = footer_text.replace("%e", event_time)
+                                    footer_text = footer_text.replace("%d", event_date)
+                                    footer_text = footer_text.replace("%i", event_emoji)
                                     if "@tag" in footer_text:
                                         footer_text = footer_text.replace("@tag", mention_text)
                                     embed.set_footer(text=footer_text)
@@ -469,6 +576,10 @@ class BearTrap(commands.Cog):
                                 if author_text and isinstance(author_text, str):
                                     author_text = author_text.replace("%t", time_text)
                                     author_text = author_text.replace("{time}", time_text)
+                                    author_text = author_text.replace("%n", event_name)
+                                    author_text = author_text.replace("%e", event_time)
+                                    author_text = author_text.replace("%d", event_date)
+                                    author_text = author_text.replace("%i", event_emoji)
                                     if "@tag" in author_text:
                                         author_text = author_text.replace("@tag", mention_text)
                                     embed.set_author(name=author_text)
@@ -480,6 +591,10 @@ class BearTrap(commands.Cog):
                                             mention_message = mention_message.replace("@tag", mention_text)
                                             mention_message = mention_message.replace("%t", time_text)
                                             mention_message = mention_message.replace("{time}", time_text)
+                                            mention_message = mention_message.replace("%n", event_name)
+                                            mention_message = mention_message.replace("%e", event_time)
+                                            mention_message = mention_message.replace("%d", event_date)
+                                            mention_message = mention_message.replace("%i", event_emoji)
                                             await channel.send(mention_message)
                                         else:
                                             mention_text = mention_text.replace("%t", time_text)
@@ -516,7 +631,7 @@ class BearTrap(commands.Cog):
                     if actual_description.startswith("PLAIN_MESSAGE:"):
                         actual_description = actual_description.replace("PLAIN_MESSAGE:", "", 1)
 
-                    if "@tag" in actual_description or "%t" in actual_description or "{time}" in actual_description:
+                    if "@tag" in actual_description or "%t" in actual_description or "{time}" in actual_description or "%n" in actual_description or "%e" in actual_description or "%d" in actual_description or "%i" in actual_description:
                         message = actual_description
                         if "@tag" in message:
                             message = message.replace("@tag", mention_text)
@@ -524,6 +639,14 @@ class BearTrap(commands.Cog):
                             message = message.replace("%t", time_text)
                         if "{time}" in message:
                             message = message.replace("{time}", time_text)
+                        if "%n" in message:
+                            message = message.replace("%n", event_name)
+                        if "%e" in message:
+                            message = message.replace("%e", event_time)
+                        if "%d" in message:
+                            message = message.replace("%d", event_date)
+                        if "%i" in message:
+                            message = message.replace("%i", event_emoji)
                         await channel.send(message)
                     else:
                         if rounded_time > 0:
@@ -607,7 +730,7 @@ class BearTrap(commands.Cog):
             self.cursor.execute("""
                 SELECT id, guild_id, channel_id, hour, minute, timezone, description,
                        notification_type, mention_type, repeat_enabled, repeat_minutes,
-                       is_enabled, created_at, created_by, last_notification, next_notification
+                       is_enabled, created_at, created_by, last_notification, next_notification, event_type
                 FROM bear_notifications
                 WHERE guild_id = ?
                 ORDER BY
@@ -645,6 +768,58 @@ class BearTrap(commands.Cog):
         except Exception as e:
             print(f"[ERROR] Error deleting notification {notification_id}: {e}")
             return False
+
+    def get_wizard_notifications_for_channel(self, guild_id: int, channel_id: int) -> dict:
+        """Get all wizard-created notifications for a channel, mapped by event type"""
+        try:
+            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
+            self.cursor.execute("""
+                SELECT id, event_type, hour, minute, timezone, notification_type, mention_type,
+                       repeat_minutes, description
+                FROM bear_notifications
+                WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
+            """, (guild_id, channel_id, wizard_batch_id))
+            notifications = {}
+            for row in self.cursor.fetchall():
+                if row[1]:
+                    notifications[row[1]] = {
+                        "id": row[0],
+                        "event_type": row[1],
+                        "hour": row[2],
+                        "minute": row[3],
+                        "timezone": row[4],
+                        "notification_type": row[5],
+                        "mention_type": row[6],
+                        "repeat_minutes": row[7],
+                        "description": row[8]
+                    }
+            return notifications
+        except Exception as e:
+            print(f"Error getting wizard notifications: {e}")
+            return {}
+
+    def delete_wizard_notifications_for_channel(self, guild_id: int, channel_id: int, event_types_to_keep: list = None) -> int:
+        """Delete wizard notifications that are no longer needed"""
+        try:
+            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
+            if event_types_to_keep:
+                placeholders = ",".join(["?"] * len(event_types_to_keep))
+                self.cursor.execute(f"""
+                    DELETE FROM bear_notifications
+                    WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
+                    AND event_type NOT IN ({placeholders})
+                """, (guild_id, channel_id, wizard_batch_id, *event_types_to_keep))
+            else:
+                self.cursor.execute("""
+                    DELETE FROM bear_notifications
+                    WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
+                """, (guild_id, channel_id, wizard_batch_id))
+            deleted_count = self.cursor.rowcount
+            self.conn.commit()
+            return deleted_count
+        except Exception as e:
+            print(f"Error deleting wizard notifications: {e}")
+            return 0
 
     async def toggle_notification(self, notification_id: int, enabled: bool) -> bool:
         try:
@@ -691,10 +866,16 @@ class BearTrap(commands.Cog):
                     "📋 **Manage Notifications**\n"
                     "└ View all existing notifications\n"
                     "└ Edit, enable/disable or delete them\n\n"
+                    "🧙 **Setup Wizard**\n"
+                    "└ Quick setup for all event notifications\n"
+                    "└ Step-by-step configuration guide\n\n"
                     "📅 **Schedule Boards**\n"
                     "└ Create live schedule boards that display upcoming notifications\n"
                     "└ Auto-updates when notifications are created, edited, or deleted\n"
                     "└ Supports server-wide or per-channel boards with customizable settings\n\n"
+                    "📚 **Browse Templates**\n"
+                    "└ Browse pre-built event templates\n"
+                    "└ Preview notification designs\n\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.gold()
@@ -813,7 +994,7 @@ class RepeatOptionView(discord.ui.View):
                 created_by=interaction.user.id,
                 notification_type=self.notification_type,
                 mention_type=self.mention_type,
-                repeat_48h=repeat,
+                repeat_enabled=repeat,
                 repeat_minutes=repeat_minutes,
                 selected_weekdays=selected_weekdays
             )
@@ -1132,6 +1313,7 @@ class EmbedEditorView(discord.ui.View):
                 "📝 **Embed Editor**\n\n"
                 "**Note:** \n"
                 "• Use `%t` or `{time}` to show the remaining time\n"
+                "• Use `%n` for event name, `%e` for event time, `%d` for event date, `%i` for event emoji\n"
                 "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
                 "• You can use these in title, description, footer, and author fields\n"
                 "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
@@ -1180,7 +1362,7 @@ class EmbedEditorView(discord.ui.View):
             modal = TextInputModal(
                 title="Edit Title",
                 label="New Title",
-                placeholder="Example: ⏰ Bear starts in {time}!",
+                placeholder="Example: %i %n at %e starts in %t!",
                 default_value=self.embed_data.get("title", ""),
                 max_length=256
             )
@@ -1393,6 +1575,7 @@ class MessageTypeView(discord.ui.View):
                 "📝 **Embed Editor**\n\n"
                 "**Note:** \n"
                 "• Use `%t` or `{time}` to show the remaining time\n"
+                "• Use `%n` for event name, `%e` for event time, `%d` for event date, `%i` for event emoji\n"
                 "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
                 "• You can use these in title, description, footer, and author fields\n"
                 "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
@@ -2002,27 +2185,6 @@ class BearTrapView(discord.ui.View):
                 print(f"[ERROR] Failed to notify user about error: {notify_error}")
 
     @discord.ui.button(
-        label="Main Menu",
-        emoji="🏠",
-        style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
-        row=2
-    )
-    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
-        try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                await alliance_cog.show_main_menu(interaction)
-        except Exception as e:
-            print(f"Error returning to main menu: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while returning to main menu.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
         label="Manage Notifications",
         emoji="📋",
         style=discord.ButtonStyle.primary,
@@ -2054,28 +2216,37 @@ class BearTrapView(discord.ui.View):
 
                 options = []
                 for notif in page_notifications:
-                    status = "🟢 Enabled" if notif[11] else "🔴 Disabled"
+                    status_emoji = "🟢" if notif[11] else "🔴"
+                    status = "Enabled" if notif[11] else "Disabled"
 
                     # Check if channel exists
                     channel = interaction.guild.get_channel(notif[2])
                     channel_warning = "⚠️ " if not channel else ""
 
-                    if "EMBED_MESSAGE:" in notif[6]:
-                        self.cog.cursor.execute("""
-                            SELECT title, description
-                            FROM bear_notification_embeds
-                            WHERE notification_id = ?
-                        """, (notif[0],))
-                        embed_data = self.cog.cursor.fetchone()
+                    # Get event type from database column (index 16)
+                    event_type = notif[16] if notif[16] else "Custom"
 
-                        if embed_data and embed_data[0]:
-                            display_description = f"📝 Embed: {embed_data[0]}"
-                        else:
-                            display_description = "📝 Embed Message"
+                    # Get event emoji
+                    from bear_event_types import get_event_icon
+                    event_emoji = get_event_icon(event_type)
+
+                    # Format next occurrence time
+                    import pytz
+                    from datetime import datetime
+                    if notif[15]:  # next_notification
+                        try:
+                            next_time = datetime.fromisoformat(notif[15])
+                            tz = pytz.timezone(notif[5])
+                            next_time_local = next_time.astimezone(tz)
+                            time_display = next_time_local.strftime("%m/%d %H:%M")
+                        except:
+                            time_display = f"{notif[3]:02d}:{notif[4]:02d}"
                     else:
-                        display_description = notif[6].split('|')[-1] if '|' in notif[6] else notif[6]
-                        if display_description.startswith("PLAIN_MESSAGE:"):
-                            display_description = display_description.replace("PLAIN_MESSAGE:", "✍️ ")
+                        time_display = f"{notif[3]:02d}:{notif[4]:02d}"
+
+                    # Build label: [Emoji] [Event Type] - [Time]
+                    label = f"{channel_warning}{event_emoji} {event_type} - {time_display}"
+                    description = f"{status_emoji} {status} | ID: {notif[0]}"
 
                     # Avoid nested f-strings for Python 3.9+ compatibility
                     if "EMBED_MESSAGE:" in notif[6]:
@@ -2085,8 +2256,8 @@ class BearTrapView(discord.ui.View):
 
                     options.append(
                         discord.SelectOption(
-                            label=f"{channel_warning}{notif[3]:02d}:{notif[4]:02d} - {display_description[:30]}",
-                            description=f"ID: {notif[0]} | {status}",
+                            label=label[:100],  # Discord max 100 chars
+                            description=description[:100],
                             value=option_value
                         )
                     )
@@ -2725,6 +2896,32 @@ class BearTrapView(discord.ui.View):
             )
 
     @discord.ui.button(
+        label="Setup Wizard",
+        emoji="🧙",
+        style=discord.ButtonStyle.success,
+        custom_id="setup_wizard",
+        row=0
+    )
+    async def setup_wizard_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.cog.check_admin(interaction):
+            return
+        try:
+            wizard_cog = self.cog.bot.get_cog("BearTrapWizard")
+            if wizard_cog:
+                await wizard_cog.show_wizard(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Setup Wizard module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Setup Wizard: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while loading Setup Wizard.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
         label="Schedule Boards",
         emoji="📅",
         style=discord.ButtonStyle.primary,
@@ -2748,6 +2945,53 @@ class BearTrapView(discord.ui.View):
             traceback.print_exc()
             await interaction.response.send_message(
                 "❌ An error occurred while loading schedule boards!",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Browse Templates",
+        emoji="📚",
+        style=discord.ButtonStyle.secondary,
+        custom_id="browse_templates",
+        row=1
+    )
+    async def notification_templates_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.cog.check_admin(interaction):
+            return
+        try:
+            templates_cog = self.cog.bot.get_cog("BearTrapTemplates")
+            if templates_cog:
+                await templates_cog.show_templates(interaction)
+            else:
+                await interaction.response.send_message(
+                    "❌ Notification Templates module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Notification Templates: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while loading Notification Templates.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Main Menu",
+        emoji="🏠",
+        style=discord.ButtonStyle.secondary,
+        custom_id="main_menu",
+        row=2
+    )
+    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.cog.check_admin(interaction):
+            return
+        try:
+            alliance_cog = self.cog.bot.get_cog("Alliance")
+            if alliance_cog:
+                await alliance_cog.show_main_menu(interaction)
+        except Exception as e:
+            print(f"Error returning to main menu: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while returning to main menu.",
                 ephemeral=True
             )
 
