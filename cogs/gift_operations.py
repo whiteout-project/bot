@@ -1132,7 +1132,7 @@ class GiftOperations(commands.Cog):
             self.giftlog.info(log_entry_redeem.strip())
             
             # Parse response
-            msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
+            msg = str(response_json_redeem.get("msg", "Unknown Error")).strip('.')
             err_code = response_json_redeem.get("err_code")
             
             # Check if this is a rate limit error - these need special handling
