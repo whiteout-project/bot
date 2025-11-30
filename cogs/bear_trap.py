@@ -300,7 +300,7 @@ class BearTrap(commands.Cog):
 
                         for row in rows:
                             parts = row[0].split('|')
-                            notification_days.update(int(p) for p in parts)
+                            notification_days.update(int(p) for p in parts if p)
 
                         for next_day in range(1, 8):
                             potential_day = now + timedelta(days=next_day)
@@ -568,7 +568,7 @@ class BearTrap(commands.Cog):
 
                             for row in rows:
                                 parts = row[0].split('|')
-                                notification_days.update(int(p) for p in parts)
+                                notification_days.update(int(p) for p in parts if p)
 
                             for next_day in range(1, 8):
                                 potential_day = now + timedelta(days=next_day)
