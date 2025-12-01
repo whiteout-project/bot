@@ -239,19 +239,20 @@ class Control(commands.Cog):
         embed = discord.Embed(
             title=f"{pimp.allianceIcon} {alliance_name} Alliance Control",
             description=(
-                f"-# {pimp.magnifyingIcon} Checking for changes in member status...\n"
                 f"{pimp.divider1}\n\n"
+                f"-# Checking for changes in member status...\n"
+                f"{pimp.divider2}\n"
             ),
             color = pimp.emColor1
         )
         embed.add_field(
             name=f"{pimp.totalIcon} Status",
-            value=f"{pimp.hourglassIcon} Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n\n{pimp.divider2}\n",
+            value=f"{pimp.hourglassIcon} Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n{pimp.divider2}\n",
             inline=False
         )
         embed.add_field(
             name=f"{pimp.allianceIcon} Progress",
-            value=f"{pimp.avatarIcon} Members checked: {checked_users}/{total_users}\n\n{pimp.divider2}\n",
+            value=f"{pimp.avatarIcon} Members checked: {checked_users}/{total_users}\n{pimp.divider2}\n",
             inline=False
         )
         embed.set_footer(text="⟳ Automatic Alliance Control System")
@@ -285,7 +286,7 @@ class Control(commands.Cog):
                     
                     await asyncio.sleep(wait_time)
                     
-                    embed.description = f"{pimp.magnifyingIcon} Checking for changes in member status..."
+                    embed.description = f"-# Checking for changes in member status..."
                     embed.color = pimp.emColor1
                     if message:
                         await message.edit(embed=embed)
@@ -369,7 +370,7 @@ class Control(commands.Cog):
                 embed.set_field_at(
                     1,
                     name=f"{pimp.allianceIcon} Progress",
-                    value=f"{pimp.avatarIcon} Members checked: {checked_users}/{total_users}\n\n{pimp.divider2}\n",
+                    value=f"{pimp.avatarIcon} Members checked: {checked_users}/{total_users}\n{pimp.divider2}\n",
                     inline=False
                 )
                 if message:
@@ -517,7 +518,7 @@ class Control(commands.Cog):
             embed.set_field_at(
                 0,
                 name=f"{pimp.totalIcon} Final Status",
-                value=f"{pimp.verifiedIcon} Control completed successfully\n{pimp.timeIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{pimp.deniedIcon} No changes detected\n\n{pimp.divider2}\n",
+                value=f"{pimp.verifiedIcon} Control completed successfully\n{pimp.timeIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{pimp.deniedIcon} No changes detected\n{pimp.divider2}\n",
                 inline=False
             )
             embed.add_field(

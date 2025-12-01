@@ -147,8 +147,6 @@ class AllianceMemberOperations(commands.Cog):
             color=pimp.emColor1
         )
         
-        embed.set_footer(text="Select an option to continue")
-
         class MemberOperationsView(discord.ui.View):
             def __init__(self, cog):
                 super().__init__()
@@ -206,14 +204,14 @@ class AllianceMemberOperations(commands.Cog):
                     select_embed = discord.Embed(
                         title=f"{pimp.allianceIcon} Alliance Selection",
                         description=(
-                            f"Please select an alliance to add members:\n\n"
-                            f"**Permission Details**\n"
+                            f"### Permission Details\n"
                             f"{pimp.divider2}\n"
                             f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
                             f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
                             f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{pimp.divider2}"
+                            f"{pimp.divider2}\n"
                             f"{special_alliance_text}"
+                            f"Please select an alliance to add members:\n\n"
                         ),
                         color=pimp.emColor3
                     )
@@ -292,14 +290,14 @@ class AllianceMemberOperations(commands.Cog):
                     select_embed = discord.Embed(
                         title=f"{pimp.deniedIcon} Alliance Selection - Member Deletion",
                         description=(
-                            f"Please select an alliance to remove members:\n\n"
-                            f"**Permission Details**\n"
+                            f"### Permission Details\n"
                             f"{pimp.divider2}\n"
-                            f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
-                            f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
+                            f"{pimp.avatarIcon} **Access Level:** {'Global Admin' if is_initial == 1 else 'Server Admin'}\n"
+                            f"{pimp.magnifyingIcon} **Access Type:** {'All Alliances' if is_initial == 1 else 'Server + Special Access'}\n"
+                            f"{pimp.allianceIcon} **Available Alliances:** {len(alliances)}\n"
                             f"{pimp.divider2}\n"
                             f"{special_alliance_text}"
+                            f"Please select an alliance to remove members:\n\n"
                         ),
                         color=pimp.emColor2
                     )
@@ -345,7 +343,6 @@ class AllianceMemberOperations(commands.Cog):
                         member_embed = discord.Embed(
                             title=f"{pimp.allianceIcon} {alliance_name} -  Member Selection",
                             description=(
-                                f"### **Alliance Statistics**\n"
                                 f"{pimp.divider1}\n"
                                 f"\n"
                                 f"{pimp.avatarIcon} Total Member: {len(members)}\n"
@@ -598,14 +595,14 @@ class AllianceMemberOperations(commands.Cog):
                     select_embed = discord.Embed(
                         title=f"{pimp.transferIcon} Alliance Selection - Member Transfer",
                         description=(
-                            f"Select the **source** alliance from which you want to transfer members:\n\n"
-                            f"**Permission Details**\n"
+                            f"### Permission Details\n"
                             f"{pimp.divider2}\n"
                             f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
                             f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
                             f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
                             f"{pimp.divider2}\n"
                             f"{special_alliance_text}"
+                            f"Select the **source** alliance from which you want to transfer members:\n"
                         ),
                         color=pimp.emColor1
                     )
@@ -653,17 +650,13 @@ class AllianceMemberOperations(commands.Cog):
                             member_embed = discord.Embed(
                                 title=f"{pimp.allianceIcon} {source_alliance_name} - Member Selection",
                                 description=(
-                                    f"### **Alliance Statistics**\n"
-                                    f"{pimp.divider1}\n"
-                                    f"\n"
+                                    f"{pimp.divider1}\n\n"
                                     f"{pimp.allianceIcon} Total Members: {len(members)}\n"
                                     f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                    f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                                    f"\n"
-                                    f"{pimp.divider1}\n"
-                                    f"\n"
-                                    f"Select the member to transfer:\n\n"
-                                    f"**Selection Methods**\n"
+                                    f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n\n"
+                                    f"{pimp.divider1}\n\n"
+                                    f"### Selection Methods\n"
+                                    f"{pimp.divider2}\n"
                                     f"{pimp.num1Icon} Select member from menu below\n"
                                     f"{pimp.num2Icon} Click 'Select by ID' button and enter ID\n"
                                     f"{pimp.divider2}\n"
@@ -699,8 +692,10 @@ class AllianceMemberOperations(commands.Cog):
                                 target_embed = discord.Embed(
                                     title=f"{pimp.targetIcon} Target Alliance Selection",
                                     description=(
+                                        f"{pimp.divider1}\n\n"
                                         f"**Transferring {len(selected_fids)} member(s):**\n"
                                         f"{member_list}\n\n"
+                                        f"{pimp.divider1}\n\n"
                                         f"Select the target alliance:"
                                     ),
                                     color=pimp.emColor1
@@ -717,7 +712,7 @@ class AllianceMemberOperations(commands.Cog):
                                 ]
 
                                 target_select = discord.ui.Select(
-                                    placeholder=f"{pimp.targetIcon} Select target alliance...",
+                                    placeholder=f"Select target alliance...",
                                     options=target_options
                                 )
                                 
@@ -746,10 +741,18 @@ class AllianceMemberOperations(commands.Cog):
                                         success_embed = discord.Embed(
                                             title=f"{pimp.verifiedIcon} Transfer Successful",
                                             description=(
-                                                f"**Members Transferred:** {len(selected_fids)}\n"
-                                                f"{pimp.allianceIconOld} **Source:** {source_alliance_name}\n"
-                                                f"{pimp.allianceIconOld} **Target:** {target_alliance_name}\n\n"
-                                                f"**Transferred Members:**\n{member_list}"
+                                                f"{pimp.divider1}\n"
+                                                f"### Members Transferred\n"
+                                                f"{pimp.divider2}\n"
+                                                f"{pimp.totalIcon}**Total:** {len(selected_fids)}\n"
+                                                f"{pimp.allianceOldIcon} **Source:** {source_alliance_name}\n"
+                                                f"{pimp.allianceIcon} **Target:** {target_alliance_name}\n"
+                                                f"{pimp.divider2}\n"
+                                                f"### Transferred Members\n"
+                                                f"{pimp.divider2}\n"
+                                                f"{member_list}"
+                                                f"\n{pimp.divider2}\n\n"
+                                                f"{pimp.divider1}\n"
                                             ),
                                             color=pimp.emColor3
                                         )
@@ -856,23 +859,23 @@ class AllianceMemberOperations(commands.Cog):
                     # Create special alliance text for display
                     special_alliance_text = ""
                     if special_alliances:
-                        special_alliance_text = f"\n\n**Special Access Alliances**\n"
+                        special_alliance_text = f"\n\n### Special Access Alliances\n"
                         special_alliance_text += f"{pimp.divider2}\n"
                         for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
+                            special_alliance_text += f"- {name}\n"
                         special_alliance_text += f"{pimp.divider2}\n"
 
                     select_embed = discord.Embed(
                         title=f"{pimp.allianceIcon} Alliance Selection - Export Members",
                         description=(
-                            f"Select the alliance to export members from:\n\n"
-                            f"**Permission Details**\n"
+                            f"### Permission Details\n"
                             f"{pimp.divider2}\n"
                             f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
                             f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
                             f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
                             f"{pimp.divider2}\n"
                             f"{special_alliance_text}"
+                            f"Select the alliance to export members from:\n"
                         ),
                         color=pimp.emColor1
                     )
@@ -1000,14 +1003,14 @@ class AllianceMemberOperations(commands.Cog):
                     select_embed = discord.Embed(
                         title=f"{pimp.allianceIcon} Alliance Selection",
                         description=(
-                            f"Please select an alliance to view members:\n\n"
-                            f"**Permission Details**\n"
+                            f"### Permission Details\n"
                             f"{pimp.divider2}\n"
-                            f"{pimp.avatarIcon} **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
-                            f"{pimp.allianceIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{pimp.divider2}"
+                            f"{pimp.avatarIcon} **Access Level:** {'Global Admin' if is_initial == 1 else 'Server Admin'}\n"
+                            f"{pimp.magnifyingIcon} **Access Type:** {'All Alliances' if is_initial == 1 else 'Server + Special Access'}\n"
+                            f"{pimp.allianceIcon} **Available Alliances:** {len(alliances)}\n"
+                            f"{pimp.divider2}\n"
                             f"{special_alliance_text}"
+                            f"Please select an alliance to view members:\n"
                         ),
                         color=pimp.emColor1
                     )
@@ -1053,15 +1056,11 @@ class AllianceMemberOperations(commands.Cog):
                         public_embed = discord.Embed(
                             title=f"{pimp.allianceIcon} {alliance_name} - Member List",
                             description=(
-                                f"### **Alliance Statistics**\n"
-                                f"{pimp.divider1}\n"
-                                f"\n"
+                                f"{pimp.divider1}\n\n"
                                 f"{pimp.avatarIcon} Total Members: {len(members)}\n"
                                 f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                                f"\n"
-                                f"{pimp.divider1}\n"
-                                f"\n"
+                                f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n\n"
+                                f"{pimp.divider1}\n\n"
                                 f"### **Member List**\n"
                                 f"{pimp.divider2}\n"
                             ),
@@ -2196,7 +2195,7 @@ class IDSearchModal(discord.ui.Modal):
                 )
 
                 select = discord.ui.Select(
-                    placeholder=f"{pimp.targetIcon} Choose the target alliance...",
+                    placeholder=f"Choose the target alliance...",
                     options=[
                         discord.SelectOption(
                             label=f"{name[:50]}",
@@ -2235,7 +2234,7 @@ class IDSearchModal(discord.ui.Modal):
                             description=(
                                 f"{pimp.avatarIcon} **Member:** {nickname}\n"
                                 f"{pimp.fidIcon} **ID:** {fid}\n"
-                                f"{pimp.allianceIconOld} **Source:** {current_alliance_name}\n"
+                                f"{pimp.allianceOldIcon} **Source:** {current_alliance_name}\n"
                                 f"{pimp.allianceIcon} **Target:** {target_alliance_name}"
                             ),
                             color=pimp.emColor3
@@ -2620,9 +2619,9 @@ class MemberSelectView(discord.ui.View):
 
         # Determine placeholder based on context (remove vs transfer)
         if self.is_remove_operation:
-            placeholder_text = f"{pimp.allianceIconOld} Select members to remove (Page {self.page + 1}/{self.max_page + 1})"
+            placeholder_text = f"Select members to remove (Page {self.page + 1}/{self.max_page + 1})"
         else:
-            placeholder_text = f"{pimp.allianceIcon} Select members to transfer (Page {self.page + 1}/{self.max_page + 1})"
+            placeholder_text = f"Select members to transfer (Page {self.page + 1}/{self.max_page + 1})"
 
         # Multi-select dropdown
         max_vals = min(len(options), 25)
@@ -2681,20 +2680,16 @@ class MemberSelectView(discord.ui.View):
 
         selection_text = ""
         if self.pending_selections:
-            selection_text = f"\n\n**📌 Selected: {len(self.pending_selections)} member(s)**"
+            selection_text = f"\n\n**{pimp.pinIcon} Selected: {len(self.pending_selections)} member(s)**"
 
         embed = discord.Embed(
             title=f"{pimp.allianceIcon} {self.source_alliance_name} - Member Selection",
             description=(
-                f"### **Alliance Statistics**\n"
-                f"{pimp.divider1}\n"
-                f"\n"
+                f"{pimp.divider1}\n\n"
                 f"{pimp.avatarIcon} Total Members: {len(self.members)}\n"
                 f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                f"\n"
-                f"{pimp.divider1}\n"
-                f"\n"
+                f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n\n"
+                f"{pimp.divider1}\n\n"
                 f"{selection_text}\n"
                 f"Select members using the dropdown below:"
             ),

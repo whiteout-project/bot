@@ -154,9 +154,7 @@ class Alliance(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.settingsIcon} Settings Menu",
                 description=(
-                    f"### **Menu Categories**\n"
-                    f"{pimp.divider1}\n"
-                    f"\n"
+                    f"{pimp.divider1}\n\n"
                     f"{pimp.allianceIcon} **Alliance Operations**\n"
                     f"└ Manage alliances and settings\n\n"
                     f"{pimp.avatarIcon} **Member Operations**\n"
@@ -172,8 +170,7 @@ class Alliance(commands.Cog):
                     f"{pimp.pinIcon} **PIMP my Bot**\n"
                     f"└ PIMP your bot with custom themes\n\n"
                     f"{pimp.settings2Icon} Other Features\n"
-                    f"└ Access additional features\n"
-                    f"\n"
+                    f"└ Access additional features\n\n"
                     f"{pimp.divider1}"
                 ),
                 color = pimp.emColor1
@@ -257,9 +254,7 @@ class Alliance(commands.Cog):
             embed = discord.Embed(
                 title=f"{pimp.settingsIcon} Settings Menu",
                 description=(
-                    f"### **Menu Categories**\n"
-                    f"{pimp.divider1}\n"
-                    f"\n"
+                    f"{pimp.divider1}\n\n"
                     f"{pimp.allianceIcon} **Alliance Operations**\n"
                     f"└ Manage alliances and settings\n\n"
                     f"{pimp.avatarIcon} **Member Operations**\n"
@@ -275,8 +270,7 @@ class Alliance(commands.Cog):
                     f"{pimp.pinIcon} **PIMP my Bot**\n"
                     f"└ PIMP your bot with custom themes\n\n"
                     f"{pimp.settings2Icon} Other Features\n"
-                    f"└ Access additional features\n"
-                    f"\n"
+                    f"└ Access additional features\n\n"
                     f"{pimp.divider1}"
                 ),
                 color = pimp.emColor1
@@ -597,13 +591,11 @@ class Alliance(commands.Cog):
                     embed = discord.Embed(
                         title=f"{pimp.magnifyingIcon} Alliance Control",
                         description=(
-                            f"Please select an alliance to check:\n\n"
-                            f"**Information**\n"
-                            f"{pimp.divider1}\n"
+                            f"{pimp.divider1}\n\n"
                             f"• Select 'Check All Alliances' to process all alliances\n"
                             f"• Control process may take a few minutes\n"
                             f"• Results will be shared in the designated channel\n"
-                            f"• Other controls will be queued during the process\n"
+                            f"• Other controls will be queued during the process\n\n"
                             f"{pimp.divider1}"
                         ),
                         color=pimp.emColor1
