@@ -432,19 +432,6 @@ class BearTrap(commands.Cog):
         # Default if not found
         return (True, 60)
 
-    def should_show_daily_reset_on_schedule(self, guild_id: int) -> bool:
-        """Check if Daily Reset should be shown on schedule boards for this guild"""
-        self.cursor.execute("""
-            SELECT show_daily_reset_on_schedule
-            FROM bear_trap_settings
-            WHERE guild_id = ?
-        """, (guild_id,))
-        row = self.cursor.fetchone()
-        if row:
-            return bool(row[0])
-        # Default: hidden (False)
-        return False
-
     def calculate_delete_time(self, guild_id: int, event_type: str,
                               custom_delete_delay: int, notification_times: list, current_time: int,
                               sent_at: datetime) -> datetime | None:
@@ -2392,12 +2379,11 @@ class MentionSelectMenu(discord.ui.Select):
             )
 
 class SettingsView(discord.ui.View):
-    def __init__(self, cog, delete_enabled: bool, default_delay: int, show_daily_reset: bool):
+    def __init__(self, cog, delete_enabled: bool, default_delay: int):
         super().__init__(timeout=300)
         self.cog = cog
         self.delete_enabled = delete_enabled
         self.default_delay = default_delay
-        self.show_daily_reset = show_daily_reset
         self.conn = sqlite3.connect('db/beartime.sqlite')
         self.cursor = self.conn.cursor()
 
@@ -2405,7 +2391,7 @@ class SettingsView(discord.ui.View):
         """Build the settings embed with current values"""
         embed = discord.Embed(
             title="⚙️ Bear Trap Settings",
-            description="Configure message deletion and schedule board preferences",
+            description="Configure global message deletion settings",
             color=discord.Color.blue()
         )
 
@@ -2414,14 +2400,6 @@ class SettingsView(discord.ui.View):
         embed.add_field(
             name="📨 Message Deletion",
             value=f"Status: {deletion_status}\nDefault Delay: {self.default_delay} minutes",
-            inline=False
-        )
-
-        # Schedule Board section
-        schedule_status = "✅ Shown" if self.show_daily_reset else "❌ Hidden"
-        embed.add_field(
-            name="📅 Schedule Board",
-            value=f"Daily Reset Display: {schedule_status}",
             inline=False
         )
 
@@ -2516,34 +2494,6 @@ class SettingsView(discord.ui.View):
             traceback.print_exc()
             await interaction.response.send_message(
                 "❌ An error occurred while opening the settings modal.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Toggle Daily Reset on Schedule",
-        emoji="📅",
-        style=discord.ButtonStyle.primary,
-        row=1
-    )
-    async def toggle_daily_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            new_value = 0 if self.show_daily_reset else 1
-            self.cursor.execute("""
-                UPDATE bear_trap_settings
-                SET show_daily_reset_on_schedule = ?
-                WHERE guild_id = ?
-            """, (new_value, interaction.guild_id))
-            self.conn.commit()
-
-            self.show_daily_reset = bool(new_value)
-
-            await interaction.response.edit_message(embed=self.build_settings_embed(), view=self)
-
-        except Exception as e:
-            print(f"Error toggling daily reset: {e}")
-            traceback.print_exc()
-            await interaction.response.send_message(
-                "❌ An error occurred while updating settings.",
                 ephemeral=True
             )
 
@@ -3534,25 +3484,25 @@ class BearTrapView(discord.ui.View):
         try:
             # Get current settings
             self.cursor.execute("""
-                SELECT delete_messages_enabled, default_delete_delay_minutes, show_daily_reset_on_schedule
+                SELECT delete_messages_enabled, default_delete_delay_minutes
                 FROM bear_trap_settings
                 WHERE guild_id = ?
             """, (interaction.guild_id,))
             row = self.cursor.fetchone()
 
             if row:
-                delete_enabled, default_delay, show_daily_reset = row
+                delete_enabled, default_delay = row
             else:
                 # Create default settings
-                delete_enabled, default_delay, show_daily_reset = 1, 60, 0
+                delete_enabled, default_delay = 1, 60
                 self.cursor.execute("""
-                    INSERT INTO bear_trap_settings (guild_id, delete_messages_enabled, default_delete_delay_minutes, show_daily_reset_on_schedule)
-                    VALUES (?, ?, ?, ?)
-                """, (interaction.guild_id, delete_enabled, default_delay, show_daily_reset))
+                    INSERT INTO bear_trap_settings (guild_id, delete_messages_enabled, default_delete_delay_minutes)
+                    VALUES (?, ?, ?)
+                """, (interaction.guild_id, delete_enabled, default_delay))
                 self.conn.commit()
 
             # Create settings view
-            settings_view = SettingsView(self.cog, delete_enabled, default_delay, bool(show_daily_reset))
+            settings_view = SettingsView(self.cog, delete_enabled, default_delay)
 
             await interaction.response.send_message(
                 embed=settings_view.build_settings_embed(),
