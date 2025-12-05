@@ -79,6 +79,12 @@ class BearTrapSchedule(commands.Cog):
         except sqlite3.OperationalError:
             self.cursor.execute("ALTER TABLE notification_schedule_boards ADD COLUMN use_user_timezone INTEGER DEFAULT 0")
 
+        # Add hide_daily_reset column if it doesn't exist
+        try:
+            self.cursor.execute("SELECT hide_daily_reset FROM notification_schedule_boards LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE notification_schedule_boards ADD COLUMN hide_daily_reset INTEGER DEFAULT 1")
+
         self.conn.commit()
         self.logger.info("[SCHEDULE] Cog initialized successfully")
 
@@ -288,8 +294,8 @@ class BearTrapSchedule(commands.Cog):
             self.cursor.execute("""
                 INSERT INTO notification_schedule_boards
                 (guild_id, channel_id, message_id, board_type, target_channel_id,
-                 max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone, created_by, last_updated)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone, hide_daily_reset, created_by, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 guild_id, channel_id, message.id, board_type, target_channel_id,
                 settings.get('max_events', 15),
@@ -300,6 +306,7 @@ class BearTrapSchedule(commands.Cog):
                 settings.get('filter_time_range'),
                 1 if settings.get('show_repeating_events', True) else 0,
                 1 if settings.get('use_user_timezone', False) else 0,
+                1 if settings.get('hide_daily_reset', True) else 0,
                 creator_id,
                 datetime.now(pytz.UTC).isoformat()
             ))
@@ -479,7 +486,7 @@ class BearTrapSchedule(commands.Cog):
             # Fetch board settings
             self.cursor.execute("""
                 SELECT guild_id, board_type, target_channel_id, max_events,
-                       show_disabled, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone
+                       show_disabled, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone, hide_daily_reset
                 FROM notification_schedule_boards
                 WHERE id = ?
             """, (board_id,))
@@ -489,7 +496,7 @@ class BearTrapSchedule(commands.Cog):
                 return self._create_error_embed("Board not found!")
 
             (guild_id, board_type, target_channel_id, max_events,
-             show_disabled, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone) = result
+             show_disabled, timezone, filter_name, filter_time_range, show_repeating_events, use_user_timezone, hide_daily_reset) = result
 
             settings = {
                 'max_events': max_events,
@@ -498,7 +505,8 @@ class BearTrapSchedule(commands.Cog):
                 'filter_name': filter_name,
                 'filter_time_range': filter_time_range,
                 'show_repeating_events': bool(show_repeating_events) if show_repeating_events is not None else True,
-                'use_user_timezone': use_user_timezone if use_user_timezone is not None else 0
+                'use_user_timezone': use_user_timezone if use_user_timezone is not None else 0,
+                'hide_daily_reset': bool(hide_daily_reset) if hide_daily_reset is not None else True
             }
 
             return await self._generate_schedule_embed_internal(
@@ -517,7 +525,7 @@ class BearTrapSchedule(commands.Cog):
             # Query notifications based on board type
             query = """
                 SELECT id, channel_id, hour, minute, timezone, description,
-                       notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes
+                       notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes, event_type
                 FROM bear_notifications
                 WHERE guild_id = ?
             """
@@ -551,6 +559,10 @@ class BearTrapSchedule(commands.Cog):
             self.cursor.execute(query, params)
             notifications = self.cursor.fetchall()
 
+            # Filter out Daily Reset events
+            if settings.get('hide_daily_reset', True):
+                notifications = [n for n in notifications if n[11] != 'Daily Reset']  # n[11] is event_type
+
             # No notifications found
             if not notifications:
                 return self._create_empty_schedule_embed(board_type, target_channel_id, settings)
@@ -565,7 +577,7 @@ class BearTrapSchedule(commands.Cog):
 
             for notif in notifications:
                 (notif_id, channel_id, hour, minute, notif_timezone, description,
-                 notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes) = notif
+                 notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes, event_type) = notif
 
                 next_time = datetime.fromisoformat(next_notification)
 
@@ -789,7 +801,7 @@ class BearTrapSchedule(commands.Cog):
         """
         try:
             (notif_id, channel_id, hour, minute, notif_timezone, description,
-             notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes) = notification
+             notification_type, next_notification, is_enabled, repeat_enabled, repeat_minutes, event_type) = notification
 
             # Parse next notification time
             next_time = datetime.fromisoformat(next_notification)
@@ -1468,12 +1480,22 @@ class CreateBoardChannelSelectView(discord.ui.View):
                 f"**Board Type:** {self.board_type.capitalize()}\n"
                 f"**Tracking:** {target_info}\n"
                 f"**Posted in:** <#{self.display_channel_id}>\n\n"
+                "**Button Functions:**\n"
+                "• **🔢 Max Events** - Set maximum number of events displayed on the schedule\n"
+                "• **🌍 Timezone** - Select timezone for displaying event times\n"
+                "• **🌐 User Timezone** - Show times in each user's local timezone\n"
+                "• **👁️ Show Disabled** - Include or exclude disabled notifications from the schedule\n"
+                "• **📌 Pin Message** - Automatically pin the schedule board message in the channel\n"
+                "• **🔄 Show Repeating** - Show or hide future repetitions of events on the schedule\n"
+                "• **🔄 Hide Daily Reset** - Exclude Daily Reset from the schedule to reduce clutter\n\n"
                 "**Current Settings:**\n"
                 f"• Max Events: {view.max_events}\n"
                 f"• Timezone: {view.timezone}\n"
+                f"• User Timezone: {'Yes' if view.use_user_timezone else 'No'}\n"
                 f"• Show Disabled: {'Yes' if view.show_disabled else 'No'}\n"
                 f"• Pin Message: {'Yes' if view.auto_pin else 'No'}\n"
-                f"• Show Repeating: {'Yes' if view.show_repeating_events else 'No'}\n\n"
+                f"• Show Repeating: {'Yes' if view.show_repeating_events else 'No'}\n"
+                f"• Hide Daily Reset: {'Yes' if view.hide_daily_reset else 'No'}\n\n"
                 "Use the buttons below to adjust settings, then click **Create Board**."
             ),
             color=discord.Color.blue()
@@ -1499,6 +1521,7 @@ class CreateBoardSettingsView(discord.ui.View):
         self.auto_pin = True
         self.show_repeating_events = True
         self.use_user_timezone = False
+        self.hide_daily_reset = True
 
     @discord.ui.button(label="Max Events (15)", emoji="🔢", style=discord.ButtonStyle.secondary, row=0)
     async def max_events_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1680,6 +1703,19 @@ class CreateBoardSettingsView(discord.ui.View):
             print(f"[ERROR] Error in timezone button: {e}")
             traceback.print_exc()
 
+    @discord.ui.button(label="User Timezone: No", emoji="🌐", style=discord.ButtonStyle.secondary, row=0)
+    async def use_user_timezone_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            self.use_user_timezone = not self.use_user_timezone
+            button.label = f"User Timezone: {'Yes' if self.use_user_timezone else 'No'}"
+            button.style = discord.ButtonStyle.primary if self.use_user_timezone else discord.ButtonStyle.secondary
+            # Disable timezone button when user timezone is enabled
+            self.timezone_button.disabled = self.use_user_timezone
+            await self.refresh_embed(interaction)
+        except Exception as e:
+            print(f"[ERROR] Error in use user timezone button: {e}")
+            traceback.print_exc()
+
     @discord.ui.button(label="Show Disabled: No", emoji="👁️", style=discord.ButtonStyle.secondary, row=1)
     async def show_disabled_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -1691,7 +1727,7 @@ class CreateBoardSettingsView(discord.ui.View):
             print(f"[ERROR] Error in show disabled button: {e}")
             traceback.print_exc()
 
-    @discord.ui.button(label="Pin Message: Yes", emoji="📌", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Pin Message: Yes", emoji="📌", style=discord.ButtonStyle.primary, row=0)
     async def auto_pin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.auto_pin = not self.auto_pin
@@ -1713,6 +1749,17 @@ class CreateBoardSettingsView(discord.ui.View):
             print(f"[ERROR] Error in show repeating button: {e}")
             traceback.print_exc()
 
+    @discord.ui.button(label="Hide Daily Reset: Yes", emoji="🔄", style=discord.ButtonStyle.primary, row=1)
+    async def hide_daily_reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            self.hide_daily_reset = not self.hide_daily_reset
+            button.label = f"Hide Daily Reset: {'Yes' if self.hide_daily_reset else 'No'}"
+            button.style = discord.ButtonStyle.primary if self.hide_daily_reset else discord.ButtonStyle.secondary
+            await self.refresh_embed(interaction)
+        except Exception as e:
+            print(f"[ERROR] Error in hide daily reset button: {e}")
+            traceback.print_exc()
+
     @discord.ui.button(label="Create Board", emoji="✅", style=discord.ButtonStyle.success, row=2)
     async def create_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -1722,7 +1769,9 @@ class CreateBoardSettingsView(discord.ui.View):
                 'timezone': self.timezone,
                 'show_disabled': self.show_disabled,
                 'auto_pin': self.auto_pin,
-                'show_repeating_events': self.show_repeating_events
+                'show_repeating_events': self.show_repeating_events,
+                'use_user_timezone': self.use_user_timezone,
+                'hide_daily_reset': self.hide_daily_reset
             }
 
             # Defer while creating board
@@ -1791,12 +1840,22 @@ class CreateBoardSettingsView(discord.ui.View):
                     f"**Board Type:** {self.board_type.capitalize()}\n"
                     f"**Tracking:** {target_info}\n"
                     f"**Posted in:** <#{self.display_channel_id}>\n\n"
+                    "**Button Functions:**\n"
+                    "• **🔢 Max Events** - Set maximum number of events displayed on the schedule\n"
+                    "• **🌍 Timezone** - Select timezone for displaying event times\n"
+                    "• **🌐 User Timezone** - Show times in each user's local timezone\n"
+                    "• **👁️ Show Disabled** - Include or exclude disabled notifications from the schedule\n"
+                    "• **📌 Pin Message** - Automatically pin the schedule board message in the channel\n"
+                    "• **🔄 Show Repeating** - Show or hide future repetitions of events on the schedule\n"
+                    "• **🔄 Hide Daily Reset** - Exclude Daily Reset from the schedule to reduce clutter\n\n"
                     "**Current Settings:**\n"
                     f"• Max Events: {self.max_events}\n"
                     f"• Timezone: {timezone_display}\n"
+                    f"• User Timezone: {'Yes' if self.use_user_timezone else 'No'}\n"
                     f"• Show Disabled: {'Yes' if self.show_disabled else 'No'}\n"
                     f"• Pin Message: {'Yes' if self.auto_pin else 'No'}\n"
-                    f"• Show Repeating: {'Yes' if self.show_repeating_events else 'No'}\n\n"
+                    f"• Show Repeating: {'Yes' if self.show_repeating_events else 'No'}\n"
+                    f"• Hide Daily Reset: {'Yes' if self.hide_daily_reset else 'No'}\n\n"
                     "Use the buttons below to adjust settings, then click **Create Board**."
                 ),
                 color=discord.Color.blue()
@@ -2243,16 +2302,17 @@ class EditBoardSettingsView(discord.ui.View):
     def _load_settings(self):
         """Load current settings from database"""
         self.cog.cursor.execute("""
-            SELECT max_events, timezone, show_disabled, auto_pin, show_repeating_events, use_user_timezone
+            SELECT max_events, timezone, show_disabled, auto_pin, show_repeating_events, use_user_timezone, hide_daily_reset
             FROM notification_schedule_boards
             WHERE id = ?
         """, (self.board_id,))
         result = self.cog.cursor.fetchone()
 
         if result:
-            self.max_events, self.timezone, self.show_disabled, self.auto_pin, self.show_repeating_events, self.use_user_timezone = result
+            self.max_events, self.timezone, self.show_disabled, self.auto_pin, self.show_repeating_events, self.use_user_timezone, self.hide_daily_reset = result
             # Handle NULL values
             self.use_user_timezone = self.use_user_timezone if self.use_user_timezone is not None else 0
+            self.hide_daily_reset = self.hide_daily_reset if self.hide_daily_reset is not None else 1
         else:
             # Defaults if not found
             self.max_events = 15
@@ -2261,6 +2321,7 @@ class EditBoardSettingsView(discord.ui.View):
             self.auto_pin = 1
             self.show_repeating_events = 1
             self.use_user_timezone = 0
+            self.hide_daily_reset = 1
 
     def _update_button_labels(self):
         """Update button labels to show current values"""
@@ -2289,6 +2350,10 @@ class EditBoardSettingsView(discord.ui.View):
         self.use_user_timezone_button.label = f"User Timezone: {'Yes' if self.use_user_timezone else 'No'}"
         self.use_user_timezone_button.style = discord.ButtonStyle.primary if self.use_user_timezone else discord.ButtonStyle.secondary
 
+        # Update hide_daily_reset button
+        self.hide_daily_reset_button.label = f"Hide Daily Reset: {'Yes' if self.hide_daily_reset else 'No'}"
+        self.hide_daily_reset_button.style = discord.ButtonStyle.primary if self.hide_daily_reset else discord.ButtonStyle.secondary
+
         # Update button visibility based on use_user_timezone
         self.timezone_button.disabled = bool(self.use_user_timezone)
 
@@ -2316,6 +2381,8 @@ class EditBoardSettingsView(discord.ui.View):
                 "└ Keep this message pinned in channel\n\n"
                 "🔄 **Show Repeating:** {repeat}\n"
                 "└ Display future occurrences of repeating events\n\n"
+                "🔄 **Hide Daily Reset:** {hide_reset}\n"
+                "└ Exclude Daily Reset from the schedule to reduce clutter\n\n"
                 "Click the buttons below to adjust settings."
             ).format(
                 max=self.max_events,
@@ -2323,7 +2390,8 @@ class EditBoardSettingsView(discord.ui.View):
                 user_tz='Yes' if self.use_user_timezone else 'No',
                 disabled='Yes' if self.show_disabled else 'No',
                 pin='Yes' if self.auto_pin else 'No',
-                repeat='Yes' if self.show_repeating_events else 'No'
+                repeat='Yes' if self.show_repeating_events else 'No',
+                hide_reset='Yes' if self.hide_daily_reset else 'No'
             ),
             color=discord.Color.blue()
         )
@@ -2603,6 +2671,35 @@ class EditBoardSettingsView(discord.ui.View):
 
         except Exception as e:
             print(f"[ERROR] Error toggling show repeating: {e}")
+            traceback.print_exc()
+
+    @discord.ui.button(label="Hide Daily Reset: Yes", emoji="🔄", style=discord.ButtonStyle.primary, row=2)
+    async def hide_daily_reset_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Toggle hide daily reset events"""
+        try:
+            # Toggle value
+            self.hide_daily_reset = 0 if self.hide_daily_reset else 1
+
+            # Update database
+            self.cog.cursor.execute("""
+                UPDATE notification_schedule_boards
+                SET hide_daily_reset = ?
+                WHERE id = ?
+            """, (self.hide_daily_reset, self.board_id))
+            self.cog.conn.commit()
+
+            # Update button style
+            self._update_button_styles()
+
+            # Refresh embed
+            embed = await self._create_settings_embed()
+            await interaction.response.edit_message(embed=embed, view=self)
+
+            # Update the board
+            await self.cog.update_schedule_board(self.board_id)
+
+        except Exception as e:
+            print(f"[ERROR] Error toggling hide daily reset: {e}")
             traceback.print_exc()
 
     @discord.ui.button(label="Done", emoji="✅", style=discord.ButtonStyle.success, row=2)

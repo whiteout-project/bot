@@ -1,10 +1,8 @@
-from logging import exception
 import discord
 from discord.ext import commands
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
-import traceback
 
 def format_repeat_interval(repeat_minutes, notification_id=None) -> str:
     if repeat_minutes == 0:
