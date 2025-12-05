@@ -1108,8 +1108,7 @@ class BearTrap(commands.Cog):
                     "└ View and modify default notification designs\n\n"
                     "⚙️ **Settings**\n"
                     "└ Configure whether posted notifications are auto-deleted\n"
-                    "└ Set the default time after which notifications are deleted\n"
-                    "└ Choose whether to show/hide daily reset on the schedule boards\n\n"
+                    "└ Set the default time after which notifications are deleted\n\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),
                 color=discord.Color.gold()
