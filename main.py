@@ -535,6 +535,39 @@ R = Style.RESET_ALL
 
 import warnings
 
+def check_vcredist():
+    """Check if Visual C++ Redistributable is installed on Windows."""
+    if sys.platform != "win32":
+        return True  # Not applicable on non-Windows
+
+    try:
+        import winreg
+        import struct
+
+        # Determine Python architecture
+        is_64bit = struct.calcsize("P") * 8 == 64
+        arch = "x64" if is_64bit else "x86"
+
+        # Registry key for VC++ 2015-2022 runtime
+        key_path = f"SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\{arch}"
+
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+            winreg.CloseKey(key)
+            return True  # VC++ Redist is installed
+        except FileNotFoundError:
+            # VC++ Redist not found - show warning
+            download_url = f"https://aka.ms/vc14/vc_redist.{arch}.exe"
+            print(F.YELLOW + f"⚠️ Microsoft Visual C++ Redistributable ({arch}) not found!" + R)
+            print(F.YELLOW + "Gift code redemption (captcha solver) will not work until this is installed." + R)
+            print(F.YELLOW + f"Download and install from: " + F.CYAN + download_url + R)
+            print(F.YELLOW + "Then restart the bot, and the gift code redemption should work." + R)
+            print()
+            return False
+
+    except Exception:
+        return True  # If we can't check, we hope it's fine
+
 def startup_cleanup():
     """Perform all cleanup tasks on startup - directories, files, and legacy packages."""
     v1_path = "V1oldbot"
@@ -563,6 +596,7 @@ def startup_cleanup():
         uninstall_packages(legacy_packages, " (legacy packages)")
 
 startup_cleanup()
+check_vcredist()
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
