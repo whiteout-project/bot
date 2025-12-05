@@ -1027,8 +1027,59 @@ if __name__ == "__main__":
 
     async def main():
         await load_cogs()
-        
         await bot.start(bot_token)
 
+    def run_bot():
+        import signal
+
+        shutdown_messages = [
+            "🛑 Ctrl+C detected! The bot is powering down... beep boop!",
+            "👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
+            "🔌 Ctrl+C pressed! Unplugging the bot. See you next time!",
+            "🚪 Exit signal received! The bot has left the building...",
+            "💤 Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
+            "🎬 And that's a wrap! Bot shutting down gracefully.",
+            "🌙 Trying to turn the bot off and not on again. Ctrl+C ya later!",
+            "✨ Ctrl+C and poof! The bot vanishes into thin air...",
+        ]
+
+        def get_shutdown_message():
+            import random
+            return random.choice(shutdown_messages)
+
+        def handle_signal(signum, frame):
+            """Handle shutdown signals (Ctrl+C or container stop)."""
+            signal_name = "Ctrl+C" if signum == signal.SIGINT else "SIGTERM"
+
+            if is_container():
+                print(f"\n{F.YELLOW}Received {signal_name}. Shutting down gracefully...{R}")
+            else:
+                print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
+
+            # Schedule graceful shutdown - bot.close() will cause bot.start() to return
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(bot.close())
+            except RuntimeError:
+                pass  # No running loop, just exit
+
+            # Raise SystemExit to cleanly exit
+            raise SystemExit(0)
+
+        # Register signal handler for SIGINT (Ctrl+C)
+        signal.signal(signal.SIGINT, handle_signal)
+
+        # Also handle SIGTERM on Linux for graceful container stops
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, handle_signal)
+
+        try:
+            asyncio.run(main())
+        except SystemExit:
+            pass  # Clean exit from signal handler
+        except KeyboardInterrupt:
+            # Fallback in case signal handler doesn't catch it
+            print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
+
     if __name__ == "__main__":
-        asyncio.run(main())
+        run_bot()
