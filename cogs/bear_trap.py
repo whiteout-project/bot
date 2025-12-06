@@ -8,6 +8,7 @@ import asyncio
 import json
 import traceback
 import time
+from .bear_event_types import get_event_types, get_event_icon
 
 class BearTrap(commands.Cog):
     def __init__(self, bot):
@@ -1150,7 +1151,7 @@ class BearTrap(commands.Cog):
             return False
 
     async def show_channel_selection(self, interaction: discord.Interaction, start_date, hour, minute, timezone,
-                                     message_data, channels):
+                                     message_data, channels, event_type=None):
         try:
             embed = discord.Embed(
                 title="📢 Select Channel",
@@ -1169,7 +1170,8 @@ class BearTrap(commands.Cog):
                 minute,
                 timezone,
                 message_data,
-                interaction.message
+                interaction.message,
+                event_type=event_type
             )
 
             await interaction.response.edit_message(
@@ -1187,7 +1189,7 @@ class BearTrap(commands.Cog):
 
 class RepeatOptionView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, description, channel_id, notification_type,
-                 mention_type, original_message):
+                 mention_type, original_message, event_type=None):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -1199,6 +1201,7 @@ class RepeatOptionView(discord.ui.View):
         self.notification_type = notification_type
         self.mention_type = mention_type
         self.original_message = original_message
+        self.event_type = event_type
 
     @discord.ui.button(label="No Repeat", style=discord.ButtonStyle.danger, custom_id="no_repeat")
     async def no_repeat_button(self, interaction, button):
@@ -1229,7 +1232,8 @@ class RepeatOptionView(discord.ui.View):
                 mention_type=self.mention_type,
                 repeat_enabled=repeat,
                 repeat_minutes=repeat_minutes,
-                selected_weekdays=selected_weekdays
+                selected_weekdays=selected_weekdays,
+                event_type=self.event_type
             )
 
             notification_types = {
@@ -1283,12 +1287,20 @@ class RepeatOptionView(discord.ui.View):
                 else:
                     repeat_text = f"🔄 Repeats every {minutes} minutes"
 
+            # Display event type with icon
+            if self.event_type:
+                event_icon = get_event_icon(self.event_type)
+                event_display = f"{event_icon} {self.event_type}"
+            else:
+                event_display = "📅 Custom"
+
             embed = discord.Embed(
                 title="✅ Notification Set Successfully",
                 description=(
                     f"**📅 Date:** {self.start_date.strftime('%d/%m/%Y')}\n"
                     f"**⏰ Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
                     f"**📢 Channel:** <#{self.channel_id}>\n"
+                    f"**🎯 Event Type:** {event_display}\n"
                     f"**📝 Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
                     f"**⚙️ Notification Type**\n{notification_types[self.notification_type]}\n\n"
                     f"**👥 Mentions:** {mention_display}\n"
@@ -1498,7 +1510,7 @@ class TextInputModal(discord.ui.Modal):
         await interaction.response.defer()
 
 class EmbedEditorView(discord.ui.View):
-    def __init__(self, cog, start_date, hour, minute, timezone, original_message):
+    def __init__(self, cog, start_date, hour, minute, timezone, original_message, event_type=None):
         super().__init__(timeout=None)
         self.cog = cog
         self.start_date = start_date
@@ -1506,6 +1518,7 @@ class EmbedEditorView(discord.ui.View):
         self.minute = minute
         self.timezone = timezone
         self.original_message = original_message
+        self.event_type = event_type  # Store event_type for threading through the flow
         self.embed_data = {
             "title": "⏰ Bear Trap",
             "description": "Add a description...",
@@ -1769,7 +1782,8 @@ class EmbedEditorView(discord.ui.View):
                 self.minute,
                 self.timezone,
                 embed_data,
-                interaction.guild.text_channels
+                interaction.guild.text_channels,
+                event_type=self.event_type
             )
 
         except Exception as e:
@@ -1795,27 +1809,19 @@ class MessageTypeView(discord.ui.View):
     @discord.ui.button(label="Embed Message", style=discord.ButtonStyle.primary, emoji="📝", row=0)
     async def embed_message(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            example_time = "30 minutes"
-
+            # Show event type selection view first
             embed = discord.Embed(
-                title="Bear Trap Notification",
-                description="Get ready for Bear! Only %t remaining.",
+                title="📋 Select Event Type",
+                description=(
+                    "Select an event type to use its template, "
+                    "or leave **Custom** for the default values.\n\n"
+                    "Templates will pre-fill the embed editor with title, description, "
+                    "and images from the selected event's template."
+                ),
                 color=discord.Color.blue()
             )
-            embed.set_footer(text="Notification System")
 
-            content = (
-                "📝 **Embed Editor**\n\n"
-                "**Note:** \n"
-                "• Use `%t` or `{time}` to show the remaining time\n"
-                "• Use `%n` for event name, `%e` for event time, `%d` for event date, `%i` for event emoji\n"
-                "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
-                "• You can use these in title, description, footer, and author fields\n"
-                "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
-                f"Currently showing '{example_time}' as an example."
-            )
-
-            view = EmbedEditorView(
+            view = EventTypeSelectView(
                 self.cog,
                 self.start_date,
                 self.hour,
@@ -1823,15 +1829,9 @@ class MessageTypeView(discord.ui.View):
                 self.timezone,
                 interaction.message
             )
-            view.embed_data = {
-                "title": embed.title,
-                "description": embed.description,
-                "color": embed.color.value,
-                "footer": "Notification System"
-            }
 
             await interaction.response.edit_message(
-                content=content,
+                content=None,
                 embed=embed,
                 view=view
             )
@@ -1839,7 +1839,7 @@ class MessageTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in embed_message: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while starting the embed editor!",
+                "❌ An error occurred while starting the event type selection!",
                 ephemeral=True
             )
 
@@ -1869,6 +1869,162 @@ class MessageTypeView(discord.ui.View):
 
         modal.on_submit = modal_submit
         await interaction.response.send_modal(modal)
+
+class EventTypeSelectView(discord.ui.View):
+    """View for selecting event type when creating embed notifications"""
+
+    def __init__(self, cog, start_date, hour, minute, timezone, original_message):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.start_date = start_date
+        self.hour = hour
+        self.minute = minute
+        self.timezone = timezone
+        self.original_message = original_message
+        self.selected_event_type = None  # None means Custom
+
+        # Add the event type dropdown
+        self.add_item(EventTypeDropdown(self))
+
+    @discord.ui.button(label="Continue", style=discord.ButtonStyle.primary, emoji="➡️", row=1)
+    async def continue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            # Get template data if an event type was selected
+            template_data = None
+            if self.selected_event_type:
+                # Get templates cog to fetch template defaults
+                templates_cog = self.cog.bot.get_cog("BearTrapTemplates")
+                if templates_cog:
+                    # Get templates for this event type
+                    templates = templates_cog.get_templates_by_event_type(self.selected_event_type)
+                    if templates:
+                        # Get full template data using the first template's ID
+                        template_data = templates_cog.get_template(templates[0]["template_id"])
+
+            # Build default embed data
+            if template_data:
+                embed_data = {
+                    "title": template_data.get("embed_title") or f"{self.selected_event_type} Notification",
+                    "description": template_data.get("embed_description") or f"Get ready for {self.selected_event_type}! Only %t remaining.",
+                    "color": int(template_data.get("embed_color") or 0x3498db),
+                    "footer": "Notification System",
+                    "image_url": template_data.get("embed_image_url") or "",
+                    "thumbnail_url": template_data.get("embed_thumbnail_url") or ""
+                }
+            else:
+                # Default custom embed
+                embed_data = {
+                    "title": "Bear Trap Notification",
+                    "description": "Get ready for Bear! Only %t remaining.",
+                    "color": discord.Color.blue().value,
+                    "footer": "Notification System"
+                }
+
+            # Create preview embed
+            embed = discord.Embed(
+                title=embed_data["title"],
+                description=embed_data["description"],
+                color=embed_data["color"]
+            )
+            embed.set_footer(text=embed_data.get("footer", "Notification System"))
+            if embed_data.get("image_url"):
+                embed.set_image(url=embed_data["image_url"])
+            if embed_data.get("thumbnail_url"):
+                embed.set_thumbnail(url=embed_data["thumbnail_url"])
+
+            example_time = "30 minutes"
+            content = (
+                "📝 **Embed Editor**\n\n"
+                "**Note:** \n"
+                "• Use `%t` or `{time}` to show the remaining time\n"
+                "• Use `%n` for event name, `%e` for event time, `%d` for event date, `%i` for event emoji\n"
+                "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
+                "• You can use these in title, description, footer, and author fields\n"
+                "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
+                f"Currently showing '{example_time}' as an example."
+            )
+
+            # Create embed editor view with event_type and template_data
+            view = EmbedEditorView(
+                self.cog,
+                self.start_date,
+                self.hour,
+                self.minute,
+                self.timezone,
+                self.original_message,
+                event_type=self.selected_event_type
+            )
+            view.embed_data = embed_data
+
+            await interaction.response.edit_message(
+                content=content,
+                embed=embed,
+                view=view
+            )
+
+        except Exception as e:
+            print(f"Error in EventTypeSelectView continue: {e}")
+            import traceback
+            traceback.print_exc()
+            await interaction.followup.send(
+                "❌ An error occurred while loading the embed editor!",
+                ephemeral=True
+            )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌", row=1)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="❌ Notification creation cancelled.",
+            embed=None,
+            view=None
+        )
+
+class EventTypeDropdown(discord.ui.Select):
+    """Dropdown for selecting event type"""
+
+    def __init__(self, parent_view: EventTypeSelectView):
+        self.parent_view = parent_view
+
+        # Build options: Custom first, then all event types
+        options = [
+            discord.SelectOption(
+                label="Custom (default)",
+                value="custom",
+                emoji="📅",
+                description="Create a notification with default values",
+                default=True
+            )
+        ]
+
+        # Add all event types with their icons
+        event_types = get_event_types()
+        for event_type in event_types:
+            icon = get_event_icon(event_type)
+            options.append(discord.SelectOption(
+                label=event_type,
+                value=event_type,
+                emoji=icon,
+                description=f"Use {event_type} template"
+            ))
+
+        super().__init__(
+            placeholder="Select an event type...",
+            options=options,
+            row=0
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        if selected == "custom":
+            self.parent_view.selected_event_type = None
+        else:
+            self.parent_view.selected_event_type = selected
+
+        # Update the dropdown to show the selection
+        for option in self.options:
+            option.default = (option.value == selected)
+
+        await interaction.response.edit_message(view=self.parent_view)
 
 class TimeSelectModal(discord.ui.Modal):
     def __init__(self, cog: BearTrap):
@@ -1994,7 +2150,7 @@ class TimeSelectModal(discord.ui.Modal):
             )
 
 class NotificationTypeView(discord.ui.View):
-    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message):
+    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message, event_type=None):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -2004,6 +2160,7 @@ class NotificationTypeView(discord.ui.View):
         self.message_data = message_data
         self.channel_id = channel_id
         self.original_message = original_message
+        self.event_type = event_type
 
     @discord.ui.button(label="30m, 10m, 5m & Time", style=discord.ButtonStyle.primary, custom_id="type_1", row=0)
     async def type_1(self, interaction, button):
@@ -2028,7 +2185,7 @@ class NotificationTypeView(discord.ui.View):
     @discord.ui.button(label="Custom Times", style=discord.ButtonStyle.success, custom_id="type_6", row=2)
     async def type_6(self, interaction, button):
         modal = CustomTimesModal(self.cog, self.start_date, self.hour, self.minute, self.timezone, self.message_data,
-                                 self.channel_id, self.original_message)
+                                 self.channel_id, self.original_message, event_type=self.event_type)
         await interaction.response.send_modal(modal)
 
     async def show_mention_type_menu(self, interaction, notification_type):
@@ -2054,7 +2211,8 @@ class NotificationTypeView(discord.ui.View):
                 self.message_data,
                 self.channel_id,
                 notification_type,
-                self.original_message
+                self.original_message,
+                event_type=self.event_type
             )
 
             await interaction.response.edit_message(
@@ -2070,7 +2228,7 @@ class NotificationTypeView(discord.ui.View):
             )
 
 class CustomTimesModal(discord.ui.Modal):
-    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message):
+    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message, event_type=None):
         super().__init__(title="Set Custom Notification Times")
         self.cog = cog
         self.start_date = start_date
@@ -2080,6 +2238,7 @@ class CustomTimesModal(discord.ui.Modal):
         self.message_data = message_data
         self.channel_id = channel_id
         self.original_message = original_message
+        self.event_type = event_type
 
         self.custom_times = discord.ui.TextInput(
             label="Custom Notification Times",
@@ -2126,7 +2285,8 @@ class CustomTimesModal(discord.ui.Modal):
                 f"CUSTOM_TIMES:{'-'.join(map(str, times))}|{self.message_data}",
                 self.channel_id,
                 6,
-                self.original_message
+                self.original_message,
+                event_type=self.event_type
             )
 
             await interaction.response.edit_message(
@@ -2149,7 +2309,7 @@ class CustomTimesModal(discord.ui.Modal):
 
 class MentionTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, notification_type,
-                 original_message):
+                 original_message, event_type=None):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -2160,6 +2320,7 @@ class MentionTypeView(discord.ui.View):
         self.channel_id = channel_id
         self.notification_type = notification_type
         self.original_message = original_message
+        self.event_type = event_type
 
     async def show_mention_type_menu(self, interaction, mention_type):
         try:
@@ -2185,7 +2346,8 @@ class MentionTypeView(discord.ui.View):
                 self.channel_id,
                 self.notification_type,
                 mention_type,
-                self.original_message
+                self.original_message,
+                event_type=self.event_type
             )
 
             await interaction.response.edit_message(
@@ -3538,7 +3700,7 @@ class BearTrapView(discord.ui.View):
             )
 
 class ChannelSelectView(discord.ui.View):
-    def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message):
+    def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message, event_type=None):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -3547,6 +3709,7 @@ class ChannelSelectView(discord.ui.View):
         self.timezone = timezone
         self.message_data = message_data
         self.original_message = original_message
+        self.event_type = event_type
 
         self.add_item(ChannelSelectMenu(self))
 
@@ -3614,7 +3777,8 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
                 self.parent_view.timezone,
                 self.parent_view.message_data,
                 channel.id,
-                self.parent_view.original_message
+                self.parent_view.original_message,
+                event_type=self.parent_view.event_type
             )
 
             await interaction.response.edit_message(
