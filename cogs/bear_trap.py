@@ -1530,21 +1530,33 @@ class EmbedEditorView(discord.ui.View):
 
     async def update_embed(self, interaction: discord.Interaction):
         try:
+            # Sample values for preview - use actual event data when available
             example_time = "30 minutes"
+            example_name = self.event_type if self.event_type else "Bear Trap"
+            example_emoji = get_event_icon(self.event_type) if self.event_type else "🐻"
+            example_event_time = f"{self.hour:02d}:{self.minute:02d}"
+            example_date = self.start_date.strftime("%b %d") if self.start_date else "Dec 06"
+
+            def replace_variables(text):
+                """Replace all notification variables with sample values for preview."""
+                return (text
+                    .replace("%t", example_time)
+                    .replace("{time}", example_time)
+                    .replace("%n", example_name)
+                    .replace("%e", example_event_time)
+                    .replace("%d", example_date)
+                    .replace("%i", example_emoji))
+
             embed = discord.Embed(color=self.embed_data.get("color", discord.Color.blue().value))
 
             if "title" in self.embed_data:
-                title = self.embed_data["title"].replace("%t", example_time).replace("{time}", example_time)
-                embed.title = title
+                embed.title = replace_variables(self.embed_data["title"])
             if "description" in self.embed_data:
-                description = self.embed_data["description"].replace("%t", example_time).replace("{time}", example_time)
-                embed.description = description
+                embed.description = replace_variables(self.embed_data["description"])
             if "footer" in self.embed_data:
-                footer = self.embed_data["footer"].replace("%t", example_time).replace("{time}", example_time)
-                embed.set_footer(text=footer)
+                embed.set_footer(text=replace_variables(self.embed_data["footer"]))
             if "author" in self.embed_data:
-                author = self.embed_data["author"].replace("%t", example_time).replace("{time}", example_time)
-                embed.set_author(name=author)
+                embed.set_author(name=replace_variables(self.embed_data["author"]))
             if "image_url" in self.embed_data and self.embed_data["image_url"]:
                 embed.set_image(url=self.embed_data["image_url"])
             if "thumbnail_url" in self.embed_data and self.embed_data["thumbnail_url"]:
@@ -1552,20 +1564,13 @@ class EmbedEditorView(discord.ui.View):
 
             mention_preview = self.embed_data.get('mention_message', '@tag')
             if mention_preview:
-                mention_preview = mention_preview.replace("%t", example_time)
-                mention_preview = mention_preview.replace("{time}", example_time)
+                mention_preview = replace_variables(mention_preview)
 
             content = (
                 "📝 **Embed Editor**\n\n"
-                "**Note:** \n"
-                "• Use `%t` or `{time}` to show the remaining time\n"
-                "• Use `%n` for event name, `%e` for event time, `%d` for event date, `%i` for event emoji\n"
-                "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
-                "• You can use these in title, description, footer, and author fields\n"
-                "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
-                f"Currently showing '{example_time}' as an example.\n\n"
-                f"**Current Mention Message Preview:**\n"
-                f"{mention_preview}\n\n"
+                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
+                f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining\n\n"
+                f"**Mention Message Preview:**\n{mention_preview}\n"
             )
 
             if not interaction.response.is_done():
@@ -1629,7 +1634,7 @@ class EmbedEditorView(discord.ui.View):
             modal = TextInputModal(
                 title="Edit Description",
                 label="New Description",
-                placeholder="Example: Get ready for Bear! Only {time} remaining.",
+                placeholder="Example: Get ready for Bear! Only %t remaining.",
                 default_value=self.embed_data.get("description", ""),
                 max_length=4000,
                 style=discord.TextStyle.paragraph
@@ -1920,28 +1925,40 @@ class EventTypeSelectView(discord.ui.View):
                     "footer": "Notification System"
                 }
 
-            # Create preview embed
+            # Sample values for preview
+            example_time = "30 minutes"
+            example_name = self.selected_event_type if self.selected_event_type else "Event"
+            example_emoji = get_event_icon(self.selected_event_type) if self.selected_event_type else "📅"
+            example_event_time = f"{self.hour:02d}:{self.minute:02d}"
+            example_date = self.start_date.strftime("%b %d") if self.start_date else "Dec 06"
+
+            def replace_vars(text):
+                if not text:
+                    return text
+                return (text
+                    .replace("%t", example_time)
+                    .replace("{time}", example_time)
+                    .replace("%n", example_name)
+                    .replace("%e", example_event_time)
+                    .replace("%d", example_date)
+                    .replace("%i", example_emoji))
+
+            # Create preview embed with variables replaced
             embed = discord.Embed(
-                title=embed_data["title"],
-                description=embed_data["description"],
+                title=replace_vars(embed_data["title"]),
+                description=replace_vars(embed_data["description"]),
                 color=embed_data["color"]
             )
-            embed.set_footer(text=embed_data.get("footer", "Notification System"))
+            embed.set_footer(text=replace_vars(embed_data.get("footer", "Notification System")))
             if embed_data.get("image_url"):
                 embed.set_image(url=embed_data["image_url"])
             if embed_data.get("thumbnail_url"):
                 embed.set_thumbnail(url=embed_data["thumbnail_url"])
 
-            example_time = "30 minutes"
             content = (
                 "📝 **Embed Editor**\n\n"
-                "**Note:** \n"
-                "• Use `%t` or `{time}` to show the remaining time\n"
-                "• Use `%n` for event name, `%e` for event time, `%d` for event date, `%i` for event emoji\n"
-                "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
-                "• You can use these in title, description, footer, and author fields\n"
-                "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
-                f"Currently showing '{example_time}' as an example."
+                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
+                f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining"
             )
 
             # Create embed editor view with event_type and template_data
@@ -3072,7 +3089,7 @@ class BearTrapView(discord.ui.View):
                         async def callback(self, interaction: discord.Interaction):
                             try:
                                 self.cog.cursor.execute(
-                                    """SELECT channel_id, hour, minute, description, mention_type, next_notification
+                                    """SELECT channel_id, hour, minute, description, mention_type, next_notification, event_type
                                        FROM bear_notifications WHERE id = ?""",
                                     (self.notification_id,)
                                 )
@@ -3082,7 +3099,29 @@ class BearTrapView(discord.ui.View):
                                     await interaction.response.send_message("❌ Notification not found.", ephemeral=True)
                                     return
 
-                                channel_id, hours, minutes, description, mention_type, next_notification = selected_notif
+                                channel_id, hours, minutes, description, mention_type, next_notification, event_type = selected_notif
+
+                                # Sample values for preview variable replacement
+                                example_time = "30 minutes"
+                                example_name = event_type if event_type else "Event"
+                                example_emoji = get_event_icon(event_type) if event_type else "📅"
+                                example_event_time = f"{hours:02d}:{minutes:02d}"
+                                try:
+                                    next_dt = datetime.fromisoformat(next_notification.replace("+00:00", ""))
+                                    example_date = next_dt.strftime("%b %d")
+                                except:
+                                    example_date = "Dec 06"
+
+                                def replace_vars(text):
+                                    if not text:
+                                        return text
+                                    return (text
+                                        .replace("%t", example_time)
+                                        .replace("{time}", example_time)
+                                        .replace("%n", example_name)
+                                        .replace("%e", example_event_time)
+                                        .replace("%d", example_date)
+                                        .replace("%i", example_emoji))
 
                                 embed_data = None
                                 if "EMBED_MESSAGE:" in description:
@@ -3117,11 +3156,11 @@ class BearTrapView(discord.ui.View):
                                 if embed_data:
                                     mention_preview = embed_data['mention_message'] if embed_data[
                                         'mention_message'] else ""
-                                    mention_preview = mention_preview.replace("@tag", mention_display)
+                                    mention_preview = replace_vars(mention_preview).replace("@tag", mention_display)
 
                                     preview_embed = discord.Embed(
-                                        title=embed_data['title'] if embed_data['title'] else "No Title",
-                                        description=embed_data['description'] if embed_data[
+                                        title=replace_vars(embed_data['title']) if embed_data['title'] else "No Title",
+                                        description=replace_vars(embed_data['description']) if embed_data[
                                             'description'] else "No Description",
                                         color=embed_data['color'] if embed_data['color'] else discord.Color.blue()
                                     )
@@ -3131,9 +3170,9 @@ class BearTrapView(discord.ui.View):
                                     if embed_data['thumbnail_url']:
                                         preview_embed.set_thumbnail(url=embed_data['thumbnail_url'])
                                     if embed_data['footer']:
-                                        preview_embed.set_footer(text=embed_data['footer'])
+                                        preview_embed.set_footer(text=replace_vars(embed_data['footer']))
                                     if embed_data['author']:
-                                        preview_embed.set_author(name=embed_data['author'])
+                                        preview_embed.set_author(name=replace_vars(embed_data['author']))
 
                                     # Create copyable JSON data for the embed
                                     copyable_data = {
@@ -3161,7 +3200,7 @@ class BearTrapView(discord.ui.View):
                                     )
                                 else:
                                     message_preview = description.split("PLAIN_MESSAGE:", 1)[-1].strip()
-                                    message_preview = message_preview.replace("@tag", mention_display)
+                                    message_preview = replace_vars(message_preview).replace("@tag", mention_display)
 
                                     await interaction.response.send_message(
                                         content=message_preview,
