@@ -248,7 +248,8 @@ class BearTrap(commands.Cog):
     async def update_notification(self, notification_id: int, hour: int, minute: int, timezone: str,
                                   description: str, notification_type: int, mention_type: str,
                                   repeat_minutes: int = 0, selected_weekdays: list[int] = None,
-                                  event_type: str = None, embed_data: dict = None) -> bool:
+                                  event_type: str = None, embed_data: dict = None,
+                                  instance_identifier: str = None, skip_board_update: bool = False) -> bool:
         """Update an existing notification"""
         try:
             notification_description = description
@@ -268,10 +269,12 @@ class BearTrap(commands.Cog):
             self.cursor.execute("""
                 UPDATE bear_notifications
                 SET hour = ?, minute = ?, timezone = ?, description = ?, notification_type = ?,
-                    mention_type = ?, repeat_minutes = ?, event_type = ?, next_notification = ?
+                    mention_type = ?, repeat_minutes = ?, event_type = ?, next_notification = ?,
+                    instance_identifier = ?
                 WHERE id = ?
             """, (hour, minute, timezone, notification_description, notification_type,
-                  mention_type, repeat_minutes, event_type, next_notification.isoformat(), notification_id))
+                  mention_type, repeat_minutes, event_type, next_notification.isoformat(),
+                  instance_identifier, notification_id))
             if embed_data:
                 self.cursor.execute("DELETE FROM bear_notification_embeds WHERE notification_id = ?", (notification_id,))
                 await self.save_notification_embed(notification_id, embed_data)
@@ -279,12 +282,13 @@ class BearTrap(commands.Cog):
                 self.cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (notification_id,))
                 await self.save_notification_fixed(notification_id, selected_weekdays)
             self.conn.commit()
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                self.cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (notification_id,))
-                row = self.cursor.fetchone()
-                if row:
-                    await schedule_cog.on_notification_created(row[0], row[1])
+            if not skip_board_update:
+                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                if schedule_cog:
+                    self.cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (notification_id,))
+                    row = self.cursor.fetchone()
+                    if row:
+                        await schedule_cog.on_notification_created(row[0], row[1])
             return True
         except Exception as e:
             print(f"Error updating notification: {e}")
@@ -1039,6 +1043,36 @@ class BearTrap(commands.Cog):
             print(f"Error getting wizard notifications: {e}")
             return {}
 
+    def get_all_wizard_notifications_for_channel(self, guild_id: int, channel_id: int) -> list:
+        """Get ALL wizard-created notifications for a channel as a list (includes all instances)"""
+        try:
+            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
+            self.cursor.execute("""
+                SELECT id, event_type, hour, minute, timezone, notification_type, mention_type,
+                       repeat_minutes, description, instance_identifier, is_enabled
+                FROM bear_notifications
+                WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
+            """, (guild_id, channel_id, wizard_batch_id))
+            notifications = []
+            for row in self.cursor.fetchall():
+                notifications.append({
+                    "id": row[0],
+                    "event_type": row[1],
+                    "hour": row[2],
+                    "minute": row[3],
+                    "timezone": row[4],
+                    "notification_type": row[5],
+                    "mention_type": row[6],
+                    "repeat_minutes": row[7],
+                    "description": row[8],
+                    "instance_identifier": row[9],
+                    "is_enabled": row[10]
+                })
+            return notifications
+        except Exception as e:
+            print(f"Error getting all wizard notifications: {e}")
+            return []
+
     def delete_wizard_notifications_for_channel(self, guild_id: int, channel_id: int, event_types_to_keep: list = None) -> int:
         """Delete wizard notifications that are no longer needed"""
         try:
@@ -1062,7 +1096,7 @@ class BearTrap(commands.Cog):
             print(f"Error deleting wizard notifications: {e}")
             return 0
 
-    async def toggle_notification(self, notification_id: int, enabled: bool) -> bool:
+    async def toggle_notification(self, notification_id: int, enabled: bool, skip_board_update: bool = False) -> bool:
         try:
 
             self.cursor.execute("""
@@ -1082,9 +1116,10 @@ class BearTrap(commands.Cog):
             self.conn.commit()
 
             # Notify schedule boards of toggle
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                await schedule_cog.on_notification_toggled(guild_id, channel_id)
+            if not skip_board_update:
+                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                if schedule_cog:
+                    await schedule_cog.on_notification_toggled(guild_id, channel_id)
 
             return True
         except Exception as e:
@@ -1102,7 +1137,8 @@ class BearTrap(commands.Cog):
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
                     "🧙 **Setup Wizard**\n"
                     "└ Quick and easy setup for all common event notifications\n"
-                    "└ The Wizard will guide you step-by-step through the process\n\n"
+                    "└ The Wizard will guide you step-by-step through the process\n"
+                    "└ Re-run the wizard on a channel to update existing notifications there\n\n"
                     "⏰ **Custom Notification**\n"
                     "└ Set up a new notification with custom time, message, mentions, and repeat options\n"
                     "└ Supports both plain messages and rich embeds\n"

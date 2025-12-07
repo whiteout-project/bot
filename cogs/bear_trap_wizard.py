@@ -103,6 +103,10 @@ class WizardSession:
         self.wizard_batch_id = None
         self.is_update = False
         self.existing_notifications = {}
+        # For tracking original state when updating
+        self.originally_configured_events = set()  # Events that existed before wizard run
+        self.existing_notifications_raw = {}  # {event_type: [notification_dicts]}
+        self.original_instance_states = {}  # {(event_type, instance): notification_dict}
         # Common settings
         self.channel_id = None
         self.mention_type = None
@@ -162,15 +166,164 @@ class WizardSession:
         return mapping.get(event_type, {})
 
     def load_existing_notifications(self, channel_id: int):
-        """Load existing wizard notifications for the channel"""
+        """Load existing wizard notifications and reconstruct session state"""
         bear_trap_cog = self.cog.bot.get_cog("BearTrap")
         if not bear_trap_cog:
             return
+
         self.wizard_batch_id = f"wizard_{self.guild_id}_{channel_id}"
+
+        # Get ALL notifications (not just one per event_type)
+        notifications = bear_trap_cog.get_all_wizard_notifications_for_channel(self.guild_id, channel_id)
+
+        if not notifications:
+            return
+
+        self.is_update = True
+        self.channel_id = channel_id
+
+        # Group notifications by event_type
+        self.existing_notifications_raw = {}
+        for notif in notifications:
+            event_type = notif.get("event_type")
+            if not event_type:
+                continue
+            if event_type not in self.existing_notifications_raw:
+                self.existing_notifications_raw[event_type] = []
+            self.existing_notifications_raw[event_type].append(notif)
+
+            # Store by (event_type, instance_identifier) for easy lookup
+            instance = notif.get("instance_identifier") or "default"
+            self.original_instance_states[(event_type, instance)] = notif
+
+        # Load global settings from first notification
+        first_notif = notifications[0]
+        self.timezone = first_notif.get("timezone", "UTC")
+        self.mention_type = first_notif.get("mention_type")
+
+        # Only set notification_type if it's not the default (2)
+        loaded_notif_type = first_notif.get("notification_type")
+        if loaded_notif_type and loaded_notif_type != 2:
+            self.notification_type = loaded_notif_type
+
+        # Check for custom times in description
+        desc = first_notif.get("description", "")
+        if desc.startswith("CUSTOM_TIMES:"):
+            parts = desc.split("|")
+            if parts:
+                self.custom_times = parts[0].replace("CUSTOM_TIMES:", "")
+                self.notification_type = 6  # Custom type
+
+        # Reconstruct event-specific data and mark as configured
+        for event_type, notifs in self.existing_notifications_raw.items():
+            # Only count as configured if at least one instance is enabled
+            has_enabled = any(n.get("is_enabled", 1) for n in notifs)
+            if has_enabled:
+                self._reconstruct_event_data(event_type, notifs)
+                self.mark_event_configured(event_type)
+                self.originally_configured_events.add(event_type)
+
+        # Keep legacy dict for backward compatibility
         self.existing_notifications = bear_trap_cog.get_wizard_notifications_for_channel(self.guild_id, channel_id)
-        if self.existing_notifications:
-            self.is_update = True
-            self.channel_id = channel_id
+
+    def _reconstruct_event_data(self, event_type: str, notifications: list):
+        """Reconstruct event-specific data from existing notifications"""
+        if event_type == "Bear Trap":
+            for notif in notifications:
+                instance = notif.get("instance_identifier", "")
+                if instance == "bt1" or (not instance and "bt1_hour" not in self.bear_trap_data):
+                    self.bear_trap_data["bt1_hour"] = notif["hour"]
+                    self.bear_trap_data["bt1_minute"] = notif["minute"]
+                    if notif.get("repeat_minutes") and notif["repeat_minutes"] > 0:
+                        self.bear_trap_data["repeat_days"] = notif["repeat_minutes"] // (24 * 60)
+                elif instance == "bt2" or (not instance and "bt1_hour" in self.bear_trap_data):
+                    self.bear_trap_data["bt2_hour"] = notif["hour"]
+                    self.bear_trap_data["bt2_minute"] = notif["minute"]
+
+        elif event_type == "Crazy Joe":
+            for notif in notifications:
+                instance = notif.get("instance_identifier", "")
+                if instance == "tuesday" or (not instance and "tuesday_hour" not in self.crazy_joe_data):
+                    self.crazy_joe_data["tuesday_hour"] = notif["hour"]
+                    self.crazy_joe_data["tuesday_minute"] = notif["minute"]
+                elif instance == "thursday" or (not instance and "tuesday_hour" in self.crazy_joe_data):
+                    self.crazy_joe_data["thursday_hour"] = notif["hour"]
+                    self.crazy_joe_data["thursday_minute"] = notif["minute"]
+
+        elif event_type == "Foundry Battle":
+            for notif in notifications:
+                instance = notif.get("instance_identifier", "legion1")
+                if instance == "legion1":
+                    self.foundry_data["legion1_hour"] = notif["hour"]
+                    self.foundry_data["legion1_minute"] = notif["minute"]
+                elif instance == "legion2":
+                    self.foundry_data["legion2_hour"] = notif["hour"]
+                    self.foundry_data["legion2_minute"] = notif["minute"]
+
+        elif event_type == "Canyon Clash":
+            for notif in notifications:
+                instance = notif.get("instance_identifier", "legion1")
+                if instance == "legion1":
+                    self.canyon_data["legion1_hour"] = notif["hour"]
+                    self.canyon_data["legion1_minute"] = notif["minute"]
+                elif instance == "legion2":
+                    self.canyon_data["legion2_hour"] = notif["hour"]
+                    self.canyon_data["legion2_minute"] = notif["minute"]
+
+        elif event_type == "Fortress Battle":
+            if "times" not in self.stronghold_data:
+                self.stronghold_data["times"] = []
+            for notif in notifications:
+                self.stronghold_data["times"].append({
+                    "hour": notif["hour"],
+                    "minute": notif["minute"],
+                    "phase": notif.get("instance_identifier")
+                })
+
+        elif event_type == "Frostfire Mine":
+            if "times" not in self.frostfire_data:
+                self.frostfire_data["times"] = []
+            for notif in notifications:
+                self.frostfire_data["times"].append({
+                    "hour": notif["hour"],
+                    "minute": notif["minute"],
+                    "phase": notif.get("instance_identifier")
+                })
+
+        elif event_type == "Castle Battle":
+            if "times" not in self.sunfire_data:
+                self.sunfire_data["times"] = []
+            for notif in notifications:
+                self.sunfire_data["times"].append({
+                    "hour": notif["hour"],
+                    "minute": notif["minute"],
+                    "phase": notif.get("instance_identifier")
+                })
+
+        elif event_type == "SvS":
+            if "times" not in self.svs_data:
+                self.svs_data["times"] = []
+            for notif in notifications:
+                self.svs_data["times"].append({
+                    "hour": notif["hour"],
+                    "minute": notif["minute"],
+                    "phase": notif.get("instance_identifier")
+                })
+
+        elif event_type == "Mercenary Bosses":
+            if "bosses" not in self.mercenary_bosses_data:
+                self.mercenary_bosses_data["bosses"] = []
+            for notif in notifications:
+                self.mercenary_bosses_data["bosses"].append({
+                    "hour": notif["hour"],
+                    "minute": notif["minute"],
+                    "instance": notif.get("instance_identifier")
+                })
+
+        elif event_type == "Daily Reset":
+            self.daily_reset_data["configured"] = True
+            self.daily_reset_data["hour"] = notifications[0]["hour"] if notifications else 0
+            self.daily_reset_data["minute"] = notifications[0]["minute"] if notifications else 0
 
 class WizardWelcomeView(discord.ui.View):
     def __init__(self, cog: BearTrapWizard, session: WizardSession):
@@ -858,6 +1011,19 @@ class BearTrapModal(discord.ui.Modal):
         self.session = session
         self.hub_view = hub_view
 
+        # Pre-populate from existing data if available
+        existing = session.bear_trap_data
+        bt1_time_default = ""
+        bt2_time_default = ""
+        repeat_default = ""
+
+        if existing.get("bt1_hour") is not None:
+            bt1_time_default = f"{existing['bt1_hour']:02d}:{existing['bt1_minute']:02d}"
+        if existing.get("bt2_hour") is not None:
+            bt2_time_default = f"{existing['bt2_hour']:02d}:{existing['bt2_minute']:02d}"
+        if existing.get("repeat_days"):
+            repeat_default = "yes" if existing["repeat_days"] == 2 else "no"
+
         self.bt1_date = discord.ui.TextInput(
             label="Next Bear Trap 1 Date (DD/MM)",
             placeholder="e.g., 25/11",
@@ -868,6 +1034,7 @@ class BearTrapModal(discord.ui.Modal):
         self.bt1_time = discord.ui.TextInput(
             label="Bear Trap 1 Time (HH:MM)",
             placeholder="e.g., 14:00",
+            default=bt1_time_default,
             max_length=5
         )
         self.add_item(self.bt1_time)
@@ -883,6 +1050,7 @@ class BearTrapModal(discord.ui.Modal):
         self.bt2_time = discord.ui.TextInput(
             label="Bear Trap 2 Time (HH:MM)",
             placeholder="e.g., 18:00",
+            default=bt2_time_default,
             max_length=5
         )
         self.add_item(self.bt2_time)
@@ -890,6 +1058,7 @@ class BearTrapModal(discord.ui.Modal):
         self.repeat_config = discord.ui.TextInput(
             label="Run every 2 days? (yes/no)",
             placeholder="yes = every 2 days, no = custom weekdays",
+            default=repeat_default,
             required=True,
             max_length=3
         )
@@ -1064,9 +1233,20 @@ class CrazyJoeModal(discord.ui.Modal):
         self.session = session
         self.hub_view = hub_view
 
+        # Pre-populate from existing data if available
+        existing = session.crazy_joe_data
+        tuesday_default = ""
+        thursday_default = ""
+
+        if existing.get("tuesday_hour") is not None:
+            tuesday_default = f"{existing['tuesday_hour']:02d}:{existing['tuesday_minute']:02d}"
+        if existing.get("thursday_hour") is not None:
+            thursday_default = f"{existing['thursday_hour']:02d}:{existing['thursday_minute']:02d}"
+
         self.tuesday_time = discord.ui.TextInput(
             label="Tuesday Time (HH:MM)",
             placeholder="e.g., 19:00",
+            default=tuesday_default,
             max_length=5,
             required=True
         )
@@ -1075,6 +1255,7 @@ class CrazyJoeModal(discord.ui.Modal):
         self.thursday_time = discord.ui.TextInput(
             label="Thursday Time (HH:MM, optional)",
             placeholder="Leave blank for same as Tuesday",
+            default=thursday_default,
             max_length=5,
             required=False
         )
@@ -1130,10 +1311,33 @@ class DualLegionConfigView(discord.ui.View):
         config = get_event_config(event_name)
         time_slots = config.get("available_times", [])
 
+        # Pre-populate from existing data if available
+        existing_data = getattr(self.session, session_data_attr, {})
+        if existing_data.get("legion1_hour") is not None:
+            self.legion1_time = f"{existing_data['legion1_hour']:02d}:{existing_data['legion1_minute']:02d}"
+        if existing_data.get("legion2_hour") is not None:
+            self.legion2_time = f"{existing_data['legion2_hour']:02d}:{existing_data['legion2_minute']:02d}"
+
+        # Build options with "None" option first
+        legion1_options = [discord.SelectOption(label="None (Disable)", value="none", description="Disable Legion 1 notifications")]
+        legion2_options = [discord.SelectOption(label="None (Disable)", value="none", description="Disable Legion 2 notifications")]
+
+        for time in time_slots:
+            legion1_options.append(discord.SelectOption(
+                label=f"{time} UTC",
+                value=time,
+                default=(hasattr(self, 'legion1_time') and self.legion1_time == time)
+            ))
+            legion2_options.append(discord.SelectOption(
+                label=f"{time} UTC",
+                value=time,
+                default=(hasattr(self, 'legion2_time') and self.legion2_time == time)
+            ))
+
         # Add time selection for Legion 1
         legion1_select = discord.ui.Select(
             placeholder="Select Legion 1 time...",
-            options=[discord.SelectOption(label=f"{time} UTC", value=time) for time in time_slots],
+            options=legion1_options,
             row=0
         )
         legion1_select.callback = lambda i: self.set_legion1_time(i, legion1_select.values[0])
@@ -1142,7 +1346,7 @@ class DualLegionConfigView(discord.ui.View):
         # Add time selection for Legion 2
         legion2_select = discord.ui.Select(
             placeholder="Select Legion 2 time...",
-            options=[discord.SelectOption(label=f"{time} UTC", value=time) for time in time_slots],
+            options=legion2_options,
             row=1
         )
         legion2_select.callback = lambda i: self.set_legion2_time(i, legion2_select.values[0])
@@ -1172,13 +1376,24 @@ class DualLegionConfigView(discord.ui.View):
             f"{self.event_name} occurs **{schedule_desc}**.\n\n"
             f"**Next Date:** {next_date.strftime('%B %d, %Y') if next_date else 'N/A'}\n\n"
             f"**Available Times (UTC):** {time_slots_str}\n\n"
-            "Select times for Legion 1 and Legion 2."
+            "Select times for Legion 1 and Legion 2.\n"
+            "Select 'None' to disable a legion's notifications."
         )
 
-        if hasattr(self, 'legion1_time'):
-            description += f"\n\n**Legion 1:** {self.legion1_time} UTC"
-        if hasattr(self, 'legion2_time'):
-            description += f"\n**Legion 2:** {self.legion2_time} UTC"
+        # Show current configuration
+        legion1_display = getattr(self, 'legion1_time', None)
+        legion2_display = getattr(self, 'legion2_time', None)
+
+        if legion1_display:
+            if legion1_display == "none":
+                description += f"\n\n**Legion 1:** Disabled"
+            else:
+                description += f"\n\n**Legion 1:** {legion1_display} UTC"
+        if legion2_display:
+            if legion2_display == "none":
+                description += f"\n**Legion 2:** Disabled"
+            else:
+                description += f"\n**Legion 2:** {legion2_display} UTC"
 
         embed = discord.Embed(
             title=f"{icon} Configure {self.event_name}",
@@ -1187,9 +1402,17 @@ class DualLegionConfigView(discord.ui.View):
         )
 
         # Update continue button state
+        legion1 = getattr(self, 'legion1_time', None)
+        legion2 = getattr(self, 'legion2_time', None)
+
+        # Can continue if at least one legion has an actual time selected (not "none" and not unset)
+        has_legion1_time = legion1 is not None and legion1 != "none"
+        has_legion2_time = legion2 is not None and legion2 != "none"
+        can_continue = has_legion1_time or has_legion2_time
+
         for item in self.children:
             if isinstance(item, discord.ui.Button) and item.label == "Continue":
-                item.disabled = not (hasattr(self, 'legion1_time') and hasattr(self, 'legion2_time'))
+                item.disabled = not can_continue
 
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -1205,23 +1428,39 @@ class DualLegionConfigView(discord.ui.View):
 
     async def continue_to_next(self, interaction: discord.Interaction):
         """Save data and proceed to next event"""
-        if not (hasattr(self, 'legion1_time') and hasattr(self, 'legion2_time')):
+        legion1 = getattr(self, 'legion1_time', None)
+        legion2 = getattr(self, 'legion2_time', None)
+
+        # Check that at least one legion has an actual time
+        has_legion1_time = legion1 is not None and legion1 != "none"
+        has_legion2_time = legion2 is not None and legion2 != "none"
+
+        if not has_legion1_time and not has_legion2_time:
             await interaction.response.send_message(
-                "❌ Please select times for both Legion 1 and Legion 2!",
+                "❌ At least one Legion must have a time configured!",
                 ephemeral=True
             )
             return
 
-        # Save data
-        hour1, minute1 = map(int, self.legion1_time.split(":"))
-        hour2, minute2 = map(int, self.legion2_time.split(":"))
+        # Save data - use None for disabled/unset legions
+        data = {}
+        if has_legion1_time:
+            hour1, minute1 = map(int, legion1.split(":"))
+            data["legion1_hour"] = hour1
+            data["legion1_minute"] = minute1
+        else:
+            data["legion1_hour"] = None
+            data["legion1_minute"] = None
 
-        setattr(self.session, self.session_data_attr, {
-            "legion1_hour": hour1,
-            "legion1_minute": minute1,
-            "legion2_hour": hour2,
-            "legion2_minute": minute2
-        })
+        if has_legion2_time:
+            hour2, minute2 = map(int, legion2.split(":"))
+            data["legion2_hour"] = hour2
+            data["legion2_minute"] = minute2
+        else:
+            data["legion2_hour"] = None
+            data["legion2_minute"] = None
+
+        setattr(self.session, self.session_data_attr, data)
 
         # Mark as configured and return to hub
         self.session.mark_event_configured(self.event_name)
@@ -1251,6 +1490,14 @@ class MultiTimeSelectView(discord.ui.View):
 
         config = get_event_config(event_name)
         self.time_slots = config.get("available_times", [])
+
+        # Pre-populate from existing data if available
+        existing_data = getattr(self.session, session_data_attr, {})
+        if existing_data.get("times"):
+            for t in existing_data["times"]:
+                time_str = f"{t['hour']:02d}:{t['minute']:02d}"
+                if time_str in self.time_slots:
+                    self.selected_times.append(time_str)
 
         # Add time buttons with dynamic row assignment
         for idx, time in enumerate(self.time_slots):
@@ -1363,6 +1610,14 @@ class PhaseToggleConfigView(discord.ui.View):
         self.session_data_attr = session_data_attr
         self.phases = phases
         self.selected_phases = {phase["phase_key"]: False for phase in phases}
+
+        # Pre-populate from existing data if available
+        existing_data = getattr(self.session, session_data_attr, {})
+        if existing_data.get("times"):
+            for t in existing_data["times"]:
+                phase_key = t.get("phase")
+                if phase_key and phase_key in self.selected_phases:
+                    self.selected_phases[phase_key] = True
 
     async def show(self, interaction: discord.Interaction):
         """Show event configuration with toggles"""
@@ -1480,6 +1735,16 @@ class MercenaryBossesConfigView(discord.ui.View):
         self.session = session
         self.hub_view = hub_view
         self.boss_times = []  # List of {"day": 0-2, "hour": int, "minute": int}
+
+        # Pre-populate from existing data if available
+        existing_data = self.session.mercenary_bosses_data
+        if existing_data.get("bosses"):
+            for boss in existing_data["bosses"]:
+                self.boss_times.append({
+                    "day": boss.get("day", 0),
+                    "hour": boss.get("hour", 0),
+                    "minute": boss.get("minute", 0)
+                })
 
     async def show(self, interaction: discord.Interaction):
         """Show Mercenary Bosses configuration"""
@@ -1802,11 +2067,22 @@ class WizardPreviewView(discord.ui.View):
             data = self.session.get_event_data(event)
 
             if event == "Bear Trap" and data:
+                # Handle both fresh config (with datetime) and reconstructed (hour/minute only)
+                if data.get('bt1_datetime'):
+                    bt1_str = data['bt1_datetime'].strftime('%d/%m/%Y %H:%M')
+                else:
+                    bt1_str = f"{data.get('bt1_hour', 0):02d}:{data.get('bt1_minute', 0):02d}"
+
+                if data.get('bt2_datetime'):
+                    bt2_str = data['bt2_datetime'].strftime('%d/%m/%Y %H:%M')
+                else:
+                    bt2_str = f"{data.get('bt2_hour', 0):02d}:{data.get('bt2_minute', 0):02d}"
+
                 embed.add_field(
                     name=f"{icon} Bear Trap",
                     value=(
-                        f"└ Trap 1: {data.get('bt1_datetime').strftime('%d/%m/%Y %H:%M')}\n"
-                        f"└ Trap 2: {data.get('bt2_datetime').strftime('%d/%m/%Y %H:%M')}"
+                        f"└ Trap 1: {bt1_str}\n"
+                        f"└ Trap 2: {bt2_str}"
                     ),
                     inline=False
                 )
@@ -1887,15 +2163,113 @@ class WizardPreviewView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
 
+    def _get_instance_display_name(self, event_name: str, instance_id: str, hour: int = None, minute: int = None) -> str:
+        """Convert instance_id to human-readable display name for completion message."""
+        display_map = {
+            "Bear Trap": {"bt1": "Bear 1", "bt2": "Bear 2"},
+            "Crazy Joe": {"tuesday": "Tuesday", "thursday": "Thursday"},
+            "Foundry Battle": {"legion1": "Legion 1", "legion2": "Legion 2"},
+            "Canyon Clash": {"legion1": "Legion 1", "legion2": "Legion 2"},
+            "Castle Battle": {"teleport_window": "Teleport Window", "battle_start": "Battle Start"},
+            "SvS": {"borders_open": "Borders Open", "teleport_window": "Teleport Window", "battle_start": "Battle Start"},
+        }
+
+        # Check if event has predefined display names
+        if event_name in display_map and instance_id in display_map[event_name]:
+            return display_map[event_name][instance_id]
+
+        # Fortress Battle and Frostfire Mine use actual times as display
+        if event_name in ["Fortress Battle", "Frostfire Mine"]:
+            if hour is not None and minute is not None:
+                return f"{hour:02d}:{minute:02d}"
+            return instance_id
+
+        # Mercenary Bosses: boss_0 -> "Boss 1"
+        if event_name == "Mercenary Bosses" and instance_id.startswith("boss_"):
+            try:
+                idx = int(instance_id.split("_")[1])
+                return f"Boss {idx + 1}"
+            except (ValueError, IndexError):
+                return instance_id
+
+        # Daily Reset has no instance display
+        if event_name == "Daily Reset":
+            return None
+
+        return instance_id
+
+    async def _create_or_update_notification(self, bear_trap_cog, interaction, event_name: str,
+                                             instance_id: str, hour: int, minute: int,
+                                             start_date, repeat_minutes: int, description: str,
+                                             embed_data: dict) -> tuple:
+        """
+        Create or update a single notification instance.
+        Returns (created, updated, disabled, action) where action is "added", "updated", or "enabled".
+        """
+        # Look for existing notification with this event_type and instance_identifier
+        existing = self.session.original_instance_states.get((event_name, instance_id))
+
+        if existing:
+            # UPDATE existing notification
+            await bear_trap_cog.update_notification(
+                notification_id=existing["id"],
+                hour=hour,
+                minute=minute,
+                timezone=self.session.timezone,
+                description=description,
+                notification_type=self.session.notification_type,
+                mention_type=self.session.mention_type,
+                repeat_minutes=repeat_minutes,
+                event_type=event_name,
+                embed_data=embed_data,
+                instance_identifier=instance_id,
+                skip_board_update=True
+            )
+            # Re-enable if it was disabled
+            if not existing.get("is_enabled", 1):
+                await bear_trap_cog.toggle_notification(existing["id"], enabled=True, skip_board_update=True)
+                return (0, 1, 0, "enabled")
+            return (0, 1, 0, "updated")
+        else:
+            # CREATE new notification
+            bear_trap_cog.current_embed_data = embed_data
+            await bear_trap_cog.save_notification(
+                guild_id=interaction.guild_id,
+                channel_id=self.session.channel_id,
+                skip_board_update=True,
+                start_date=start_date,
+                hour=hour,
+                minute=minute,
+                timezone=self.session.timezone,
+                description=description,
+                created_by=interaction.user.id,
+                notification_type=self.session.notification_type,
+                mention_type=self.session.mention_type,
+                repeat_enabled=repeat_minutes > 0,
+                repeat_minutes=repeat_minutes,
+                event_type=event_name,
+                wizard_batch_id=self.session.wizard_batch_id,
+                instance_identifier=instance_id
+            )
+            return (1, 0, 0, "added")
+
+    async def _disable_instance(self, bear_trap_cog, event_name: str, instance_id: str) -> int:
+        """Disable a specific instance if it exists and is enabled. Returns 1 if disabled, 0 otherwise."""
+        existing = self.session.original_instance_states.get((event_name, instance_id))
+        if existing and existing.get("is_enabled", 1):
+            await bear_trap_cog.toggle_notification(existing["id"], enabled=False, skip_board_update=True)
+            return 1
+        return 0
+
     async def create_all_notifications(self, interaction: discord.Interaction):
-        """Create or update all configured notifications"""
+        """Create, update, or disable notifications based on configuration changes"""
         try:
             await interaction.response.defer()
 
             # Show progress indication
             progress_embed = discord.Embed(
-                title="⏳ Creating Notifications...",
-                description="Please wait while notifications are being created.",
+                title="⏳ Processing Notifications...",
+                description="Please wait while notifications are being updated.",
                 color=discord.Color.blue()
             )
             await interaction.edit_original_response(embed=progress_embed, view=None)
@@ -1911,13 +2285,10 @@ class WizardPreviewView(discord.ui.View):
                 )
                 return
 
-            # Delete existing wizard notifications for this channel first
-            bear_trap_cog.delete_wizard_notifications_for_channel(
-                interaction.guild_id,
-                self.session.channel_id
-            )
-
             created_count = 0
+            updated_count = 0
+            disabled_count = 0
+            event_changes = {}
             from datetime import datetime, timedelta
             import pytz
 
@@ -1934,6 +2305,20 @@ class WizardPreviewView(discord.ui.View):
                 description_prefix = f"CUSTOM_TIMES:{custom_times_str}|EMBED_MESSAGE:"
             else:
                 description_prefix = "EMBED_MESSAGE:"
+
+            # First, disable events that were previously configured but now unconfigured
+            for event_type in self.session.originally_configured_events:
+                if event_type not in self.session.configured_events:
+                    # Disable all instances of this event - record as whole event disabled
+                    existing_notifs = self.session.existing_notifications_raw.get(event_type, [])
+                    any_disabled = False
+                    for notif in existing_notifs:
+                        if notif.get("is_enabled", 1):
+                            await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
+                            disabled_count += 1
+                            any_disabled = True
+                    if any_disabled:
+                        event_changes[event_type] = [(None, "disabled")]
 
             # Create notifications for each configured event
             for event_name in self.session.selected_events:
@@ -1967,348 +2352,336 @@ class WizardPreviewView(discord.ui.View):
                 description = f"{description_prefix}{event_name}"
 
                 if event_name == "Bear Trap":
-                    # Create Bear 1 notification
+                    repeat_minutes = 0
+                    if event_data.get("repeat_days"):
+                        repeat_minutes = event_data["repeat_days"] * 24 * 60
+
+                    # Bear Trap 1
                     bt1_datetime = event_data.get("bt1_datetime")
                     if bt1_datetime:
-                        repeat_minutes = 0
-                        if event_data.get("repeat_days"):
-                            repeat_minutes = event_data["repeat_days"] * 24 * 60
-
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=bt1_datetime,
-                            hour=event_data["bt1_hour"],
-                            minute=event_data["bt1_minute"],
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=bool(event_data.get("repeat_days")),
-                            repeat_minutes=repeat_minutes,
-                            event_type="Bear Trap",
-                            wizard_batch_id=self.session.wizard_batch_id
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, "Bear Trap", "bt1",
+                            event_data["bt1_hour"], event_data["bt1_minute"],
+                            bt1_datetime, repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":  # Only track non-update changes
+                            display = self._get_instance_display_name("Bear Trap", "bt1")
+                            event_changes.setdefault(event_name, []).append((display, action))
 
-                    # Create Bear 2 notification
+                    # Bear Trap 2
                     bt2_datetime = event_data.get("bt2_datetime")
                     if bt2_datetime:
-                        repeat_minutes = 0
-                        if event_data.get("repeat_days"):
-                            repeat_minutes = event_data["repeat_days"] * 24 * 60
-
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=bt2_datetime,
-                            hour=event_data["bt2_hour"],
-                            minute=event_data["bt2_minute"],
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=bool(event_data.get("repeat_days")),
-                            repeat_minutes=repeat_minutes,
-                            event_type="Bear Trap",
-                            wizard_batch_id=self.session.wizard_batch_id
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, "Bear Trap", "bt2",
+                            event_data["bt2_hour"], event_data["bt2_minute"],
+                            bt2_datetime, repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name("Bear Trap", "bt2")
+                            event_changes.setdefault(event_name, []).append((display, action))
 
                 elif event_name == "Crazy Joe":
-                    # Tuesday and Thursday every 4 weeks - use proper cycle calculation
+                    # Tuesday and Thursday every 4 weeks
                     next_tuesday, next_thursday = calculate_crazy_joe_dates(now)
+                    repeat_minutes = 28 * 24 * 60  # 4-week repeat
 
                     tuesday_hour = event_data.get("tuesday_hour")
                     tuesday_minute = event_data.get("tuesday_minute")
                     if tuesday_hour is not None and next_tuesday:
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=next_tuesday,
-                            hour=tuesday_hour,
-                            minute=tuesday_minute,
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=True,
-                            repeat_minutes=28 * 24 * 60,  # 4-week repeat
-                            event_type="Crazy Joe",
-                            wizard_batch_id=self.session.wizard_batch_id
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, "Crazy Joe", "tuesday",
+                            tuesday_hour, tuesday_minute, next_tuesday,
+                            repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name("Crazy Joe", "tuesday")
+                            event_changes.setdefault(event_name, []).append((display, action))
 
-                    # Thursday notification
                     thursday_hour = event_data.get("thursday_hour")
                     thursday_minute = event_data.get("thursday_minute")
                     if thursday_hour is not None and next_thursday:
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=next_thursday,
-                            hour=thursday_hour,
-                            minute=thursday_minute,
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=True,
-                            repeat_minutes=28 * 24 * 60,  # 4-week repeat
-                            event_type="Crazy Joe",
-                            wizard_batch_id=self.session.wizard_batch_id
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, "Crazy Joe", "thursday",
+                            thursday_hour, thursday_minute, next_thursday,
+                            repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name("Crazy Joe", "thursday")
+                            event_changes.setdefault(event_name, []).append((display, action))
 
                 elif event_name == "Foundry Battle":
                     # Every 2 weeks on Sunday
+                    repeat_minutes = 14 * 24 * 60
+
                     legion1_hour = event_data.get("legion1_hour")
                     legion1_minute = event_data.get("legion1_minute")
                     if legion1_hour is not None:
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=event_next_occurrence,
-                            hour=legion1_hour,
-                            minute=legion1_minute,
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=True,
-                            repeat_minutes=14 * 24 * 60,  # 2-week repeat
-                            event_type=event_name,
-                            wizard_batch_id=self.session.wizard_batch_id,
-                            instance_identifier="legion1"
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, event_name, "legion1",
+                            legion1_hour, legion1_minute, event_next_occurrence,
+                            repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name(event_name, "legion1")
+                            event_changes.setdefault(event_name, []).append((display, action))
+                    else:
+                        # Legion 1 disabled - disable if existed
+                        d = await self._disable_instance(bear_trap_cog, event_name, "legion1")
+                        disabled_count += d
+                        if d > 0:
+                            display = self._get_instance_display_name(event_name, "legion1")
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
-                    # Legion 2
                     legion2_hour = event_data.get("legion2_hour")
                     legion2_minute = event_data.get("legion2_minute")
                     if legion2_hour is not None:
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=event_next_occurrence,
-                            hour=legion2_hour,
-                            minute=legion2_minute,
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=True,
-                            repeat_minutes=14 * 24 * 60,  # 2-week repeat
-                            event_type=event_name,
-                            wizard_batch_id=self.session.wizard_batch_id,
-                            instance_identifier="legion2"
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, event_name, "legion2",
+                            legion2_hour, legion2_minute, event_next_occurrence,
+                            repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name(event_name, "legion2")
+                            event_changes.setdefault(event_name, []).append((display, action))
+                    else:
+                        # Legion 2 disabled - disable if existed
+                        d = await self._disable_instance(bear_trap_cog, event_name, "legion2")
+                        disabled_count += d
+                        if d > 0:
+                            display = self._get_instance_display_name(event_name, "legion2")
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name == "Canyon Clash":
                     # Every 4 weeks on Saturday
+                    repeat_minutes = 28 * 24 * 60
+
                     legion1_hour = event_data.get("legion1_hour")
                     legion1_minute = event_data.get("legion1_minute")
                     if legion1_hour is not None:
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=event_next_occurrence,
-                            hour=legion1_hour,
-                            minute=legion1_minute,
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=True,
-                            repeat_minutes=28 * 24 * 60,  # 4-week repeat
-                            event_type=event_name,
-                            wizard_batch_id=self.session.wizard_batch_id,
-                            instance_identifier="legion1"
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, event_name, "legion1",
+                            legion1_hour, legion1_minute, event_next_occurrence,
+                            repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name(event_name, "legion1")
+                            event_changes.setdefault(event_name, []).append((display, action))
+                    else:
+                        d = await self._disable_instance(bear_trap_cog, event_name, "legion1")
+                        disabled_count += d
+                        if d > 0:
+                            display = self._get_instance_display_name(event_name, "legion1")
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
-                    # Legion 2
                     legion2_hour = event_data.get("legion2_hour")
                     legion2_minute = event_data.get("legion2_minute")
                     if legion2_hour is not None:
-                        await bear_trap_cog.save_notification(
-                            guild_id=interaction.guild_id,
-                            channel_id=self.session.channel_id,
-                            skip_board_update=True,
-                            start_date=event_next_occurrence,
-                            hour=legion2_hour,
-                            minute=legion2_minute,
-                            timezone=self.session.timezone,
-                            description=description,
-                            created_by=interaction.user.id,
-                            notification_type=self.session.notification_type,
-                            mention_type=self.session.mention_type,
-                            repeat_enabled=True,
-                            repeat_minutes=28 * 24 * 60,  # 4-week repeat
-                            event_type=event_name,
-                            wizard_batch_id=self.session.wizard_batch_id,
-                            instance_identifier="legion2"
+                        c, u, _, action = await self._create_or_update_notification(
+                            bear_trap_cog, interaction, event_name, "legion2",
+                            legion2_hour, legion2_minute, event_next_occurrence,
+                            repeat_minutes, description, embed_data
                         )
-                        created_count += 1
+                        created_count += c
+                        updated_count += u
+                        if action != "updated":
+                            display = self._get_instance_display_name(event_name, "legion2")
+                            event_changes.setdefault(event_name, []).append((display, action))
+                    else:
+                        d = await self._disable_instance(bear_trap_cog, event_name, "legion2")
+                        disabled_count += d
+                        if d > 0:
+                            display = self._get_instance_display_name(event_name, "legion2")
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name == "Fortress Battle":
-                    # Every Friday
+                    # Every Friday - handle times with phase as instance_id
+                    repeat_minutes = 7 * 24 * 60
                     times = event_data.get("times", [])
-                    for time_data in times:
+                    processed_phases = set()
+
+                    for idx, time_data in enumerate(times):
                         hour = time_data.get("hour")
                         minute = time_data.get("minute")
-                        phase = time_data.get("phase")
+                        phase = time_data.get("phase") or f"time_{idx}"
+                        processed_phases.add(phase)
 
                         if hour is not None:
                             phase_description = description
+                            phase_embed = embed_data.copy()
                             if phase and event_config.get("descriptions"):
                                 phase_desc = event_config["descriptions"].get(phase)
                                 if phase_desc:
-                                    bear_trap_cog.current_embed_data['description'] = phase_desc
+                                    phase_embed['description'] = phase_desc
                                     phase_description = f"{description_prefix}{event_name} - {phase}"
 
-                            await bear_trap_cog.save_notification(
-                                guild_id=interaction.guild_id,
-                                channel_id=self.session.channel_id,
-                                skip_board_update=True,
-                                start_date=event_next_occurrence,
-                                hour=hour,
-                                minute=minute,
-                                timezone=self.session.timezone,
-                                description=phase_description,
-                                created_by=interaction.user.id,
-                                notification_type=self.session.notification_type,
-                                mention_type=self.session.mention_type,
-                                repeat_enabled=True,
-                                repeat_minutes=7 * 24 * 60,  # Weekly repeat
-                                event_type=event_name,
-                                wizard_batch_id=self.session.wizard_batch_id,
-                                instance_identifier=phase
+                            c, u, _, action = await self._create_or_update_notification(
+                                bear_trap_cog, interaction, event_name, phase,
+                                hour, minute, event_next_occurrence,
+                                repeat_minutes, phase_description, phase_embed
                             )
-                            created_count += 1
+                            created_count += c
+                            updated_count += u
+                            if action != "updated":
+                                # For Fortress Battle, use the time as display name
+                                display = self._get_instance_display_name(event_name, phase, hour, minute)
+                                event_changes.setdefault(event_name, []).append((display, action))
+
+                    # Disable any previously existing phases that are no longer selected
+                    existing_notifs = self.session.existing_notifications_raw.get(event_name, [])
+                    for notif in existing_notifs:
+                        old_phase = notif.get("instance_identifier") or "default"
+                        if old_phase not in processed_phases and notif.get("is_enabled", 1):
+                            await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
+                            disabled_count += 1
+                            # Get the time from the old notification for display
+                            display = self._get_instance_display_name(event_name, old_phase, notif.get("hour"), notif.get("minute"))
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name in ["Frostfire Mine", "Castle Battle", "SvS"]:
-                    # Every 4 weeks
+                    # Every 4 weeks - handle times with phase as instance_id
+                    repeat_minutes = 28 * 24 * 60
                     times = event_data.get("times", [])
-                    for time_data in times:
+                    processed_phases = set()
+
+                    for idx, time_data in enumerate(times):
                         hour = time_data.get("hour")
                         minute = time_data.get("minute")
-                        phase = time_data.get("phase")
+                        phase = time_data.get("phase") or f"time_{idx}"
+                        processed_phases.add(phase)
 
                         if hour is not None:
                             phase_description = description
+                            phase_embed = embed_data.copy()
                             if phase and event_config.get("descriptions"):
                                 phase_desc = event_config["descriptions"].get(phase)
                                 if phase_desc:
-                                    bear_trap_cog.current_embed_data['description'] = phase_desc
+                                    phase_embed['description'] = phase_desc
                                     phase_description = f"{description_prefix}{event_name} - {phase}"
 
-                            await bear_trap_cog.save_notification(
-                                guild_id=interaction.guild_id,
-                                channel_id=self.session.channel_id,
-                                skip_board_update=True,
-                                start_date=event_next_occurrence,
-                                hour=hour,
-                                minute=minute,
-                                timezone=self.session.timezone,
-                                description=phase_description,
-                                created_by=interaction.user.id,
-                                notification_type=self.session.notification_type,
-                                mention_type=self.session.mention_type,
-                                repeat_enabled=True,
-                                repeat_minutes=28 * 24 * 60,  # 4-week repeat
-                                event_type=event_name,
-                                wizard_batch_id=self.session.wizard_batch_id,
-                                instance_identifier=phase
+                            c, u, _, action = await self._create_or_update_notification(
+                                bear_trap_cog, interaction, event_name, phase,
+                                hour, minute, event_next_occurrence,
+                                repeat_minutes, phase_description, phase_embed
                             )
-                            created_count += 1
+                            created_count += c
+                            updated_count += u
+                            if action != "updated":
+                                # Frostfire uses times, Castle/SvS use phase names
+                                display = self._get_instance_display_name(event_name, phase, hour, minute)
+                                event_changes.setdefault(event_name, []).append((display, action))
+
+                    # Disable any previously existing phases that are no longer selected
+                    existing_notifs = self.session.existing_notifications_raw.get(event_name, [])
+                    for notif in existing_notifs:
+                        old_phase = notif.get("instance_identifier") or "default"
+                        if old_phase not in processed_phases and notif.get("is_enabled", 1):
+                            await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
+                            disabled_count += 1
+                            display = self._get_instance_display_name(event_name, old_phase, notif.get("hour"), notif.get("minute"))
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name == "Mercenary Bosses":
                     # Boss times across 3-day window (repeats every 4 weeks)
-                    # event_next_occurrence is the Saturday of the 3-day window
+                    repeat_minutes = 28 * 24 * 60
                     bosses = event_data.get("bosses", [])
-                    for boss in bosses:
+                    processed_instances = set()
+
+                    for idx, boss in enumerate(bosses):
                         day = boss.get("day")  # 0=Saturday, 1=Sunday, 2=Monday
                         hour = boss.get("hour")
                         minute = boss.get("minute")
+                        instance_id = f"boss_{idx}"
+                        processed_instances.add(instance_id)
+
                         if day is not None and hour is not None:
                             start_date = event_next_occurrence + timedelta(days=day)
-                            await bear_trap_cog.save_notification(
-                                guild_id=interaction.guild_id,
-                                channel_id=self.session.channel_id,
-                                skip_board_update=True,
-                                start_date=start_date,
-                                hour=hour,
-                                minute=minute,
-                                timezone=self.session.timezone,
-                                description=description,
-                                created_by=interaction.user.id,
-                                notification_type=self.session.notification_type,
-                                mention_type=self.session.mention_type,
-                                repeat_enabled=True,
-                                repeat_minutes=28 * 24 * 60,  # 4-week repeat (28 days)
-                                event_type=event_name,
-                                wizard_batch_id=self.session.wizard_batch_id
+                            c, u, _, action = await self._create_or_update_notification(
+                                bear_trap_cog, interaction, event_name, instance_id,
+                                hour, minute, start_date,
+                                repeat_minutes, description, embed_data
                             )
-                            created_count += 1
+                            created_count += c
+                            updated_count += u
+                            if action != "updated":
+                                display = self._get_instance_display_name(event_name, instance_id)
+                                event_changes.setdefault(event_name, []).append((display, action))
+
+                    # Disable any previously existing boss instances no longer needed
+                    existing_notifs = self.session.existing_notifications_raw.get(event_name, [])
+                    for notif in existing_notifs:
+                        old_instance = notif.get("instance_identifier") or "default"
+                        if old_instance not in processed_instances and notif.get("is_enabled", 1):
+                            await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
+                            disabled_count += 1
+                            display = self._get_instance_display_name(event_name, old_instance)
+                            event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name == "Daily Reset":
-                    await bear_trap_cog.save_notification(
-                        guild_id=interaction.guild_id,
-                        channel_id=self.session.channel_id,
-                        skip_board_update=True,
-                        start_date=event_next_occurrence,
-                        hour=0,
-                        minute=0,
-                        timezone=self.session.timezone,
-                        description=description,
-                        created_by=interaction.user.id,
-                        notification_type=self.session.notification_type,
-                        mention_type=self.session.mention_type,
-                        repeat_enabled=True,
-                        repeat_minutes=24 * 60,  # Daily
-                        event_type="Daily Reset",
-                        wizard_batch_id=self.session.wizard_batch_id
+                    c, u, _, action = await self._create_or_update_notification(
+                        bear_trap_cog, interaction, "Daily Reset", "daily",
+                        0, 0, event_next_occurrence,
+                        24 * 60, description, embed_data
                     )
-                    created_count += 1
+                    created_count += c
+                    updated_count += u
+                    if action != "updated":
+                        # Daily Reset uses None as display (single-instance event)
+                        event_changes.setdefault(event_name, []).append((None, action))
 
-            # Update schedule boards once after all notifications are created
+            # Update schedule boards once after all notifications are processed
             schedule_cog = self.cog.bot.get_cog("BearTrapSchedule")
             if schedule_cog:
                 await schedule_cog.on_notification_created(interaction.guild_id, self.session.channel_id)
 
+            # Build completion message with per-event changes
             embed = discord.Embed(
                 title="✅ Wizard Complete!",
-                description=f"Successfully created **{created_count}** notification(s) for **{len(self.session.selected_events)}** event(s)!",
+                description=f"**Channel:** <#{self.session.channel_id}>\n**Timezone:** {self.session.timezone}",
                 color=discord.Color.green()
             )
 
-            embed.add_field(
-                name="⚙️ Settings",
-                value=f"**Channel:** <#{self.session.channel_id}>\n**Timezone:** {self.session.timezone}",
-                inline=False
-            )
+            # Build event list with change annotations
+            event_lines = []
 
-            # List configured events
-            event_list = "\n".join([f"• {get_event_icon(e)} {e}" for e in self.session.selected_events])
+            # First, add all configured events
+            for event in self.session.selected_events:
+                icon = get_event_icon(event)
+                changes = event_changes.get(event, [])
+
+                if not changes:
+                    # No changes - just show event name (implied unchanged)
+                    event_lines.append(f"• {icon} {event}")
+                elif len(changes) == 1 and changes[0][0] is None:
+                    # Single-instance event (Daily Reset) or entire event action
+                    event_lines.append(f"• {icon} {event} - {changes[0][1]}")
+                else:
+                    # Multiple instance changes
+                    change_strs = [f"{inst} {action}" for inst, action in changes]
+                    event_lines.append(f"• {icon} {event} - {', '.join(change_strs)}")
+
+            # Then, add disabled events (previously configured but now unconfigured)
+            for event_type in self.session.originally_configured_events:
+                if event_type not in self.session.configured_events:
+                    icon = get_event_icon(event_type)
+                    event_lines.append(f"• {icon} {event_type} - disabled")
+
             embed.add_field(
-                name="📋 Configured Events",
-                value=event_list,
+                name="📋 Events",
+                value="\n".join(event_lines) if event_lines else "No events configured",
                 inline=False
             )
 
