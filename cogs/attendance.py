@@ -871,8 +871,8 @@ class EditEventDetailsView(discord.ui.View):
             title="⚙️ Edit Event",
             description=(
                 f"**Session:** {self.session_name}\n"
-                f"**Selected Event Type:** {self.selected_event_type}{legion_display}\n"
-                f"**Current Date:** {self.current_event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.current_event_date, datetime) else self.current_event_date or 'Not set'}\n\n"
+                f"**Event Type:** {self.selected_event_type}{legion_display}\n"
+                f"**Date:** {self.current_event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.current_event_date, datetime) else self.current_event_date or 'Not set'}\n\n"
                 "Select a new event type from the dropdown and/or edit the date."
             ),
             color=discord.Color.blue()
@@ -1114,7 +1114,8 @@ class ConfirmDeleteView(discord.ui.View):
     
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.parent_view.parent_view.update_main_embed(interaction)
+        # parent_view is PlayerSelectView, which has update_main_embed
+        await self.parent_view.update_main_embed(interaction)
 
 class PlayerFilterModal(discord.ui.Modal, title="Filter Players"):
     def __init__(self, parent_view):
@@ -1403,8 +1404,8 @@ class PlayerSelectView(discord.ui.View):
             title="⚙️ Edit Event",
             description=(
                 f"**Session:** {self.session_name}\n"
-                f"**Current Event Type:** {self.event_type}{legion_display}\n"
-                f"**Current Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
+                f"**Event Type:** {self.event_type}{legion_display}\n"
+                f"**Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
                 "Select a new event type from the dropdown and/or edit the date."
             ),
             color=discord.Color.blue()
