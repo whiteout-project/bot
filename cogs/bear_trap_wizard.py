@@ -9,7 +9,8 @@ import uuid
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from bear_event_types import (
-    get_event_icon, get_event_config, calculate_next_occurrence, validate_time_slot
+    get_event_icon, get_event_config, calculate_next_occurrence, validate_time_slot,
+    calculate_crazy_joe_dates
 )
 
 class BearTrapWizard(commands.Cog):
@@ -2019,11 +2020,12 @@ class WizardPreviewView(discord.ui.View):
                         created_count += 1
 
                 elif event_name == "Crazy Joe":
-                    # Tuesday and Thursday every 4 weeks
+                    # Tuesday and Thursday every 4 weeks - use proper cycle calculation
+                    next_tuesday, next_thursday = calculate_crazy_joe_dates(now)
+
                     tuesday_hour = event_data.get("tuesday_hour")
                     tuesday_minute = event_data.get("tuesday_minute")
-                    if tuesday_hour is not None:
-                        next_tuesday = now + timedelta(days=(1 - now.weekday()) % 7)
+                    if tuesday_hour is not None and next_tuesday:
                         await bear_trap_cog.save_notification(
                             guild_id=interaction.guild_id,
                             channel_id=self.session.channel_id,
@@ -2046,8 +2048,7 @@ class WizardPreviewView(discord.ui.View):
                     # Thursday notification
                     thursday_hour = event_data.get("thursday_hour")
                     thursday_minute = event_data.get("thursday_minute")
-                    if thursday_hour is not None:
-                        next_thursday = now + timedelta(days=(3 - now.weekday()) % 7)
+                    if thursday_hour is not None and next_thursday:
                         await bear_trap_cog.save_notification(
                             guild_id=interaction.guild_id,
                             channel_id=self.session.channel_id,
@@ -2239,13 +2240,14 @@ class WizardPreviewView(discord.ui.View):
 
                 elif event_name == "Mercenary Bosses":
                     # Boss times across 3-day window (repeats every 4 weeks)
+                    # event_next_occurrence is the Saturday of the 3-day window
                     bosses = event_data.get("bosses", [])
                     for boss in bosses:
-                        day = boss.get("day")
+                        day = boss.get("day")  # 0=Saturday, 1=Sunday, 2=Monday
                         hour = boss.get("hour")
                         minute = boss.get("minute")
                         if day is not None and hour is not None:
-                            start_date = now + timedelta(days=day)
+                            start_date = event_next_occurrence + timedelta(days=day)
                             await bear_trap_cog.save_notification(
                                 guild_id=interaction.guild_id,
                                 channel_id=self.session.channel_id,

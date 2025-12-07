@@ -128,7 +128,7 @@ EVENT_CONFIG = {
         "duration_minutes": 60,  # Each boss session ~1 hour
         "schedule_type": "global_4weekly_multiday",
         "fixed_days": "Every 4 weeks, 3-day window",
-        "reference_date": "2025-11-15",
+        "reference_date": "2025-12-06",
         "cycle_weeks": 4,
         "event_duration_days": 3,
         "time_slots": "5min",
