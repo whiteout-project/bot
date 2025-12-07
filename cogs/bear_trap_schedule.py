@@ -598,7 +598,7 @@ class BearTrapSchedule(commands.Cog):
                             modified_notif[7] = current_time.isoformat()  # Update next_notification
                             expanded_events.append((current_time, tuple(modified_notif)))
 
-                    elif repeat_minutes == "fixed":
+                    elif repeat_minutes == -1:
                         # Handle fixed weekday repeating
                         self.cursor.execute("""
                             SELECT weekday FROM notification_days

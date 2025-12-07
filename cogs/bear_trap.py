@@ -28,6 +28,7 @@ class BearTrap(commands.Cog):
         self.channel_warning_timestamps = {}
         self.channel_warning_interval = 300
 
+        # repeat_minutes value -1 means weekday-based repeat, 0 means no repeat
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS bear_notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,6 +84,15 @@ class BearTrap(commands.Cog):
                 FOREIGN KEY (notification_id) REFERENCES bear_notifications(id) ON DELETE CASCADE
             )
         """)
+
+        # Fix corrupted weekday-based repeats: "fixed" string was silently converted to 0 by SQLite.
+        self.cursor.execute("""
+            UPDATE bear_notifications
+            SET repeat_minutes = -1
+            WHERE id IN (SELECT DISTINCT notification_id FROM notification_days)
+            AND repeat_minutes = 0
+        """)
+        self.conn.commit()
 
         try:
             self.cursor.execute("SELECT mention_message FROM bear_notification_embeds LIMIT 1")
@@ -219,7 +229,7 @@ class BearTrap(commands.Cog):
 
             if embed_data:
                 await self.save_notification_embed(notification_id, embed_data)
-            if repeat_minutes == "fixed":
+            if repeat_minutes == -1:
                 await self.save_notification_fixed(notification_id, selected_weekdays)
 
             self.conn.commit()
@@ -265,7 +275,7 @@ class BearTrap(commands.Cog):
             if embed_data:
                 self.cursor.execute("DELETE FROM bear_notification_embeds WHERE notification_id = ?", (notification_id,))
                 await self.save_notification_embed(notification_id, embed_data)
-            if repeat_minutes == "fixed" and selected_weekdays:
+            if repeat_minutes == -1 and selected_weekdays:
                 self.cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (notification_id,))
                 await self.save_notification_fixed(notification_id, selected_weekdays)
             self.conn.commit()
@@ -549,7 +559,7 @@ class BearTrap(commands.Cog):
                         periods_passed = int(time_diff / repeat_minutes) + 1
                         next_time = next_time + timedelta(minutes=repeat_minutes * periods_passed)
 
-                    elif repeat_minutes == "fixed":
+                    elif repeat_minutes == -1:
                         self.cursor.execute("""
                                     SELECT weekday FROM notification_days
                                     WHERE notification_id = ?
@@ -920,7 +930,7 @@ class BearTrap(commands.Cog):
                         current_next = datetime.fromisoformat(next_notification)
                         next_time = current_next + timedelta(minutes=repeat_minutes)
 
-                    elif repeat_minutes == "fixed":
+                    elif repeat_minutes == -1:
                         self.cursor.execute("""
                                     SELECT weekday FROM notification_days
                                     WHERE notification_id = ?
@@ -1270,6 +1280,8 @@ class RepeatOptionView(discord.ui.View):
                 repeat_text = "❌ No repeat"
             elif interval_text:
                 repeat_text = f"🔄 Repeats every {interval_text}"
+            elif repeat_minutes == -1:  # Weekday-based repeat (days stored in notification_days table)
+                repeat_text = "🔄 Repeats on selected weekdays"
             else:
                 minutes = repeat_minutes
                 if minutes == 1:
@@ -1487,7 +1499,7 @@ class ConfirmDaysButton(discord.ui.Button):
         await repeat_view.save_notification(
             interaction,
             repeat=True,
-            repeat_minutes="fixed",
+            repeat_minutes=-1,
             interval_text=interval_text,
             selected_weekdays=selected_weekdays
         )
@@ -3028,7 +3040,7 @@ class BearTrapView(discord.ui.View):
                                 repeat_minutes %= unit
                         formatted_repeat = " and ".join(result)
 
-                    elif repeat_minutes == "fixed":
+                    elif repeat_minutes == -1:
                         self.cursor.execute("""
                                 SELECT weekday FROM notification_days
                                 WHERE notification_id = ?

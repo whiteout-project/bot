@@ -9,7 +9,7 @@ def format_repeat_interval(repeat_minutes, notification_id=None) -> str:
     if repeat_minutes == 0:
         return "❌ No repeat"
 
-    if repeat_minutes == "fixed":
+    if repeat_minutes == -1:
         if notification_id is None:
             return "Custom Days"
 
@@ -381,7 +381,7 @@ class PlainEditorView(discord.ui.View):
         self.notification_type = notification_type
         self.message = None
 
-        if self.repeat == "fixed":
+        if self.repeat == -1:
             try:
                 conn = sqlite3.connect("db/beartime.sqlite")
                 cursor = conn.cursor()
@@ -622,7 +622,7 @@ class PlainEditorView(discord.ui.View):
                         selected_weekdays = [weekdays_index[d] for d in self.selected_days]
                         sorted_days = sorted(selected_weekdays)
 
-                        self.parent_view.repeat = "fixed"
+                        self.parent_view.repeat = -1
                         self.parent_view.weekdays = "|".join(str(d) for d in sorted_days)
 
                         await self.parent_view.cog.update_notification(self.parent_view)
@@ -939,7 +939,7 @@ class NotificationEditor(commands.Cog):
         conn = sqlite3.connect("db/beartime.sqlite")
         cursor = conn.cursor()
 
-        if view.repeat == "fixed":
+        if view.repeat == -1:
             cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (view.notification_id,))
 
             weekday = getattr(view, "weekdays", "")
