@@ -381,6 +381,34 @@ class GiftCodeAPI:
                                                     except Exception as e:
                                                         self.logger.exception(f"Error sending notification to admin {admin_id[0]}: {e}")
 
+                                            # Send notification to all gift code channels
+                                            try:
+                                                self.cursor.execute("SELECT DISTINCT channel_id FROM giftcode_channel")
+                                                gift_channels = self.cursor.fetchall()
+
+                                                if gift_channels:
+                                                    channel_embed = discord.Embed(
+                                                        title="🎁 New Gift Code Retrieved",
+                                                        description=(
+                                                            f"A new gift code has been automatically retrieved from the Gift Code Distribution API.\n\n"
+                                                            f"**Code:** `{code}`\n"
+                                                            f"**Status:** {validation_status}\n"
+                                                            f"**Auto-redemption:** {'Started' if auto_alliances else 'Disabled'}"
+                                                        ),
+                                                        color=embed_color
+                                                    )
+                                                    channel_embed.set_footer(text="Retrieved via API")
+
+                                                    for (channel_id,) in gift_channels:
+                                                        try:
+                                                            channel = self.bot.get_channel(channel_id)
+                                                            if channel:
+                                                                await channel.send(embed=channel_embed)
+                                                        except Exception as e:
+                                                            self.logger.warning(f"Failed to send API code notification to channel {channel_id}: {e}")
+                                            except Exception as e:
+                                                self.logger.exception(f"Error sending gift code channel notifications: {e}")
+
                                             if auto_alliances:
                                                 gift_operations = self.bot.get_cog('GiftOperations')
                                                 if gift_operations:
