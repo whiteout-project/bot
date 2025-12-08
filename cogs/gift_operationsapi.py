@@ -316,7 +316,7 @@ class GiftCodeAPI:
 
                                                     try:
                                                         await self._execute_with_retry(
-                                                            lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+                                                            lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
                                                         )
                                                         auto_alliances = self.cursor.fetchall() or []
                                                     except sqlite3.OperationalError as e:

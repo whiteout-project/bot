@@ -124,6 +124,14 @@ class GiftOperations(commands.Cog):
             # Column already exists
             pass
 
+        # Add priority column to giftcodecontrol table if it doesn't exist
+        try:
+            self.cursor.execute("ALTER TABLE giftcodecontrol ADD COLUMN priority INTEGER DEFAULT 0")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+
         # WOS API URLs and Key
         self.wos_player_info_url = "https://wos-giftcode-api.centurygame.com/api/player"
         self.wos_giftcode_url = "https://wos-giftcode-api.centurygame.com/api/gift_code"
@@ -452,7 +460,7 @@ class GiftOperations(commands.Cog):
     
     async def _process_auto_use(self, giftcode):
         """Process auto-use for valid gift codes."""
-        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
         auto_alliances = self.cursor.fetchall()
         
         if auto_alliances:
@@ -1735,7 +1743,7 @@ class GiftOperations(commands.Cog):
 
                                 try:
                                     await self._execute_with_retry(
-                                        lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
+                                        lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
                                     )
                                     auto_alliances = self.cursor.fetchall() or []
                                 except sqlite3.OperationalError as e:
@@ -2065,6 +2073,84 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Unexpected error updating OCR settings: {e}")
             return False, f"Unexpected error updating OCR settings: {e}"
+
+    async def show_redemption_priority(self, interaction: discord.Interaction):
+        """Show the redemption priority management interface (global admin only)."""
+        try:
+            # Check global admin permission
+            self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+            admin_info = self.settings_cursor.fetchone()
+
+            if not admin_info or admin_info[0] != 1:
+                error_msg = "Only global admins can manage redemption priority."
+                if interaction.response.is_done():
+                    await interaction.followup.send(error_msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+
+            # Get all alliances with their priority info
+            self.alliance_cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
+            all_alliances = self.alliance_cursor.fetchall()
+
+            if not all_alliances:
+                error_msg = "No alliances found."
+                if interaction.response.is_done():
+                    await interaction.followup.send(error_msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+
+            # Get priority info for alliances
+            alliance_ids = [a[0] for a in all_alliances]
+            placeholders = ','.join('?' * len(alliance_ids))
+            self.cursor.execute(f"""
+                SELECT alliance_id, priority FROM giftcodecontrol
+                WHERE alliance_id IN ({placeholders})
+            """, alliance_ids)
+            priority_data = {row[0]: row[1] for row in self.cursor.fetchall()}
+
+            # Build alliance list with priorities
+            alliances_with_priority = []
+            for alliance_id, name in all_alliances:
+                priority = priority_data.get(alliance_id, 0)
+                alliances_with_priority.append((alliance_id, name, priority))
+
+            # Sort by priority, then by alliance_id
+            alliances_with_priority.sort(key=lambda x: (x[2], x[0]))
+
+            # Create embed
+            embed = discord.Embed(
+                title="📊 Redemption Priority",
+                description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+                color=discord.Color.blue()
+            )
+
+            # Build priority list
+            priority_list = []
+            for idx, (alliance_id, name, priority) in enumerate(alliances_with_priority, 1):
+                priority_list.append(f"`{idx}.` **{name}**")
+
+            embed.add_field(
+                name="Current Priority Order",
+                value="\n".join(priority_list) if priority_list else "No alliances configured",
+                inline=False
+            )
+
+            view = RedemptionPriorityView(self, alliances_with_priority)
+
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+        except Exception as e:
+            self.logger.exception(f"Error in show_redemption_priority: {e}")
+            error_msg = f"An error occurred: {str(e)}"
+            if interaction.response.is_done():
+                await interaction.followup.send(error_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(error_msg, ephemeral=True)
 
     async def validate_gift_codes(self):
         try:
@@ -3629,17 +3715,33 @@ class GiftOperations(commands.Cog):
                 
                 if selected_value in ["enable_all", "disable_all"]:
                     status = 1 if selected_value == "enable_all" else 0
-                    
+
                     for alliance_id, _, _ in alliances_with_counts:
-                        self.cursor.execute(
-                            """
-                            INSERT INTO giftcodecontrol (alliance_id, status) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(alliance_id) 
-                            DO UPDATE SET status = excluded.status
-                            """,
-                            (alliance_id, status)
-                        )
+                        if status == 1:
+                            # When enabling, assign next available priority
+                            self.cursor.execute("SELECT COALESCE(MAX(priority), 0) + 1 FROM giftcodecontrol")
+                            next_priority = self.cursor.fetchone()[0]
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status,
+                                    priority = CASE WHEN giftcodecontrol.priority = 0 THEN excluded.priority ELSE giftcodecontrol.priority END
+                                """,
+                                (alliance_id, status, next_priority)
+                            )
+                        else:
+                            # When disabling, keep existing priority
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status)
+                                VALUES (?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status
+                                """,
+                                (alliance_id, status)
+                            )
                     self.conn.commit()
 
                     status_text = "enabled" if status == 1 else "disabled"
@@ -3685,16 +3787,32 @@ class GiftOperations(commands.Cog):
                 async def button_callback(button_interaction: discord.Interaction):
                     try:
                         status = 1 if button_interaction.data['custom_id'] == "confirm" else 0
-                        
-                        self.cursor.execute(
-                            """
-                            INSERT INTO giftcodecontrol (alliance_id, status) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(alliance_id) 
-                            DO UPDATE SET status = excluded.status
-                            """,
-                            (alliance_id, status)
-                        )
+
+                        if status == 1:
+                            # When enabling, assign next available priority
+                            self.cursor.execute("SELECT COALESCE(MAX(priority), 0) + 1 FROM giftcodecontrol")
+                            next_priority = self.cursor.fetchone()[0]
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status,
+                                    priority = CASE WHEN giftcodecontrol.priority = 0 THEN excluded.priority ELSE giftcodecontrol.priority END
+                                """,
+                                (alliance_id, status, next_priority)
+                            )
+                        else:
+                            # When disabling, keep existing priority
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status)
+                                VALUES (?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status
+                                """,
+                                (alliance_id, status)
+                            )
                         self.conn.commit()
 
                         status_text = "enabled" if status == 1 else "disabled"
@@ -4602,9 +4720,20 @@ class GiftView(discord.ui.View):
             async def alliance_callback(select_interaction: discord.Interaction):
                 try:
                     selected_value = view.current_select.values[0]
-                    
+
                     if selected_value == "all":
-                        all_alliances = [aid for aid, name, _ in alliances_with_counts]
+                        # Get alliances ordered by priority
+                        alliance_ids = [aid for aid, _, _ in alliances_with_counts]
+                        placeholders = ','.join('?' * len(alliance_ids))
+                        self.cog.cursor.execute(f"""
+                            SELECT alliance_id FROM giftcodecontrol
+                            WHERE alliance_id IN ({placeholders})
+                            ORDER BY priority ASC, alliance_id ASC
+                        """, alliance_ids)
+                        prioritized = [row[0] for row in self.cog.cursor.fetchall()]
+                        # Add any alliances not in giftcodecontrol at the end, ordered by ID
+                        remaining = sorted([aid for aid in alliance_ids if aid not in prioritized])
+                        all_alliances = prioritized + remaining
                     else:
                         alliance_id = int(selected_value)
                         all_alliances = [alliance_id]
@@ -4861,7 +4990,17 @@ class SettingsMenuView(discord.ui.View):
     )
     async def auto_gift_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.setup_giftcode_auto(interaction)
-    
+
+    @discord.ui.button(
+        label="Redemption Priority",
+        style=discord.ButtonStyle.primary,
+        custom_id="redemption_priority",
+        emoji="📊",
+        row=0
+    )
+    async def redemption_priority_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_redemption_priority(interaction)
+
     @discord.ui.button(
         label="Channel History Scan",
         style=discord.ButtonStyle.secondary,
@@ -4890,6 +5029,162 @@ class SettingsMenuView(discord.ui.View):
     )
     async def back_to_main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_gift_menu(interaction)
+
+class RedemptionPriorityView(discord.ui.View):
+    def __init__(self, cog, alliances_with_priority):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliances = alliances_with_priority  # List of (alliance_id, name, priority)
+        self.selected_alliance_id = None
+
+        # Alliance select menu
+        options = [
+            discord.SelectOption(
+                label=f"{idx}. {name}",
+                value=str(alliance_id),
+                description=f"Priority position {idx}"
+            )
+            for idx, (alliance_id, name, _) in enumerate(self.alliances, 1)
+        ]
+
+        if options:
+            self.alliance_select = discord.ui.Select(
+                placeholder="Select an alliance to move",
+                options=options[:25],  # Discord limit
+                row=0
+            )
+            self.alliance_select.callback = self.alliance_select_callback
+            self.add_item(self.alliance_select)
+
+    async def alliance_select_callback(self, interaction: discord.Interaction):
+        self.selected_alliance_id = int(self.alliance_select.values[0])
+
+        # Update embed to show selected alliance with marker
+        embed = discord.Embed(
+            title="📊 Redemption Priority",
+            description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+            color=discord.Color.blue()
+        )
+
+        priority_list = []
+        for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
+            marker = " ◀" if alliance_id == self.selected_alliance_id else ""
+            priority_list.append(f"`{idx}.` **{name}**{marker}")
+
+        embed.add_field(
+            name="Current Priority Order",
+            value="\n".join(priority_list) if priority_list else "No alliances configured",
+            inline=False
+        )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Move Up", style=discord.ButtonStyle.primary, emoji="⬆️", row=1)
+    async def move_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_alliance_id:
+            await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
+            return
+
+        # Find current position
+        current_idx = next((i for i, (aid, _, _) in enumerate(self.alliances) if aid == self.selected_alliance_id), None)
+        if current_idx is None or current_idx == 0:
+            await interaction.response.send_message("Alliance is already at the top.", ephemeral=True)
+            return
+
+        # Swap with the alliance above
+        await self._swap_priorities(current_idx, current_idx - 1)
+        await self._refresh_view(interaction)
+
+    @discord.ui.button(label="Move Down", style=discord.ButtonStyle.primary, emoji="⬇️", row=1)
+    async def move_down_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_alliance_id:
+            await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
+            return
+
+        # Find current position
+        current_idx = next((i for i, (aid, _, _) in enumerate(self.alliances) if aid == self.selected_alliance_id), None)
+        if current_idx is None or current_idx >= len(self.alliances) - 1:
+            await interaction.response.send_message("Alliance is already at the bottom.", ephemeral=True)
+            return
+
+        # Swap with the alliance below
+        await self._swap_priorities(current_idx, current_idx + 1)
+        await self._refresh_view(interaction)
+
+    @discord.ui.button(label="Done", style=discord.ButtonStyle.secondary, emoji="✅", row=1)
+    async def done_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="📊 Priority Updated",
+                description="Redemption priority order has been saved.",
+                color=discord.Color.green()
+            ),
+            view=None
+        )
+
+    async def _swap_priorities(self, idx1, idx2):
+        """Swap the priorities of two alliances in the list and database."""
+        alliance1_id, name1, priority1 = self.alliances[idx1]
+        alliance2_id, name2, priority2 = self.alliances[idx2]
+
+        # Assign new sequential priorities based on position
+        new_priority1 = idx2 + 1
+        new_priority2 = idx1 + 1
+
+        # Update database
+        self.cog.cursor.execute("""
+            INSERT INTO giftcodecontrol (alliance_id, status, priority)
+            VALUES (?, 0, ?)
+            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+        """, (alliance1_id, new_priority1))
+
+        self.cog.cursor.execute("""
+            INSERT INTO giftcodecontrol (alliance_id, status, priority)
+            VALUES (?, 0, ?)
+            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+        """, (alliance2_id, new_priority2))
+
+        self.cog.conn.commit()
+
+        # Swap in local list
+        self.alliances[idx1] = (alliance1_id, name1, new_priority1)
+        self.alliances[idx2] = (alliance2_id, name2, new_priority2)
+        self.alliances[idx1], self.alliances[idx2] = self.alliances[idx2], self.alliances[idx1]
+
+    async def _refresh_view(self, interaction: discord.Interaction):
+        """Refresh the embed and view after a priority change."""
+        # Rebuild embed
+        embed = discord.Embed(
+            title="📊 Redemption Priority",
+            description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+            color=discord.Color.blue()
+        )
+
+        priority_list = []
+        for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
+            marker = " ◀" if alliance_id == self.selected_alliance_id else ""
+            priority_list.append(f"`{idx}.` **{name}**{marker}")
+
+        embed.add_field(
+            name="Current Priority Order",
+            value="\n".join(priority_list) if priority_list else "No alliances configured",
+            inline=False
+        )
+
+        # Rebuild select options
+        options = [
+            discord.SelectOption(
+                label=f"{idx}. {name}",
+                value=str(alliance_id),
+                description=f"Priority position {idx}"
+            )
+            for idx, (alliance_id, name, _) in enumerate(self.alliances, 1)
+        ]
+
+        if options:
+            self.alliance_select.options = options[:25]
+
+        await interaction.response.edit_message(embed=embed, view=self)
 
 class ClearCacheConfirmView(discord.ui.View):
     def __init__(self, parent_cog):
