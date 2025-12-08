@@ -352,10 +352,21 @@ class GiftOperations(commands.Cog):
                     # Handle batch completion update
                     if batch_id and batch_id in self.redemption_batches:
                         batch = self.redemption_batches[batch_id]
-                        batch['alliances'][alliance_id]['status'] = 'completed'
+                        total_codes = batch.get('total_codes', 1)
+
+                        # Increment codes completed for this alliance
+                        batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
+                        codes_done = batch['alliances'][alliance_id]['codes_completed']
+
+                        # Mark alliance as completed only when all codes are done for it
+                        if codes_done >= total_codes:
+                            batch['alliances'][alliance_id]['status'] = 'completed'
+                        else:
+                            batch['alliances'][alliance_id]['status'] = 'processing'
+
                         await self._update_batch_progress(batch_id)
 
-                        # Clean up batch if all complete
+                        # Clean up batch if all alliances complete
                         all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
                         if all_done:
                             del self.redemption_batches[batch_id]
@@ -378,10 +389,19 @@ class GiftOperations(commands.Cog):
                     # Handle batch error update
                     if batch_id and batch_id in self.redemption_batches:
                         batch = self.redemption_batches[batch_id]
-                        batch['alliances'][alliance_id]['status'] = 'error'
+                        total_codes = batch.get('total_codes', 1)
+
+                        # Still count this as a code attempt for progress
+                        batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
+                        codes_done = batch['alliances'][alliance_id]['codes_completed']
+
+                        # Mark alliance as error (but continue with other alliances)
+                        if codes_done >= total_codes:
+                            batch['alliances'][alliance_id]['status'] = 'error'
+
                         await self._update_batch_progress(batch_id)
 
-                        # Clean up batch if all complete
+                        # Clean up batch if all alliances complete
                         all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
                         if all_done:
                             del self.redemption_batches[batch_id]
@@ -531,13 +551,24 @@ class GiftOperations(commands.Cog):
                 'queue_by_code': queue_by_code
             }
     
-    async def add_manual_redemption_to_queue(self, giftcode, alliance_ids, interaction):
-        """Add manual redemption requests to validation queue."""
-        queue_positions = []
+    async def add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction):
+        """Add manual redemption requests to validation queue.
 
-        # Create batch for multiple alliances
+        Args:
+            giftcodes: Single gift code string or list of gift codes
+            alliance_ids: List of alliance IDs
+            interaction: Discord interaction for progress messages
+        """
+        # Normalize giftcodes to list
+        if isinstance(giftcodes, str):
+            giftcodes = [giftcodes]
+
+        queue_positions = []
+        total_redemptions = len(giftcodes) * len(alliance_ids)
+
+        # Create batch for multiple redemptions
         batch_id = None
-        if len(alliance_ids) > 1 and interaction:
+        if total_redemptions > 1 and interaction:
             import uuid
             batch_id = str(uuid.uuid4())
 
@@ -547,39 +578,51 @@ class GiftOperations(commands.Cog):
                 self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (aid,))
                 result = self.alliance_cursor.fetchone()
                 name = result[0] if result else f"Alliance {aid}"
-                alliances_info[aid] = {'name': name, 'status': 'pending'}
+                alliances_info[aid] = {'name': name, 'status': 'pending', 'codes_completed': 0}
 
             # Send initial consolidated progress message
-            embed = self._build_batch_progress_embed(giftcode, alliances_info)
+            embed = self._build_batch_progress_embed(giftcodes, alliances_info)
             progress_message = await interaction.followup.send(embed=embed, ephemeral=True)
 
             # Store batch info
             self.redemption_batches[batch_id] = {
                 'message': progress_message,
                 'alliances': alliances_info,
-                'giftcode': giftcode
+                'giftcodes': giftcodes,
+                'total_codes': len(giftcodes)
             }
 
+        # Queue order: Alliance 1 -> all codes, then Alliance 2 -> all codes, etc.
         for alliance_id in alliance_ids:
-            await self.add_to_validation_queue(
-                giftcode=giftcode,
-                source='manual',
-                operation_type='redemption',
-                alliance_id=alliance_id,
-                interaction=interaction if not batch_id else None,  # Don't pass interaction for batch items
-                batch_id=batch_id
-            )
+            for giftcode in giftcodes:
+                await self.add_to_validation_queue(
+                    giftcode=giftcode,
+                    source='manual',
+                    operation_type='redemption',
+                    alliance_id=alliance_id,
+                    interaction=interaction if not batch_id else None,
+                    batch_id=batch_id
+                )
 
-            queue_status = await self.get_queue_status()
-            queue_positions.append(queue_status['queue_length'])
+                queue_status = await self.get_queue_status()
+                queue_positions.append(queue_status['queue_length'])
 
         return queue_positions
 
-    def _build_batch_progress_embed(self, giftcode, alliances_info):
+    def _build_batch_progress_embed(self, giftcodes, alliances_info, total_codes=None):
         """Build the consolidated progress embed for batch redemption."""
+        # Handle both single code (string) and multiple codes (list)
+        if isinstance(giftcodes, str):
+            giftcodes = [giftcodes]
+
+        if total_codes is None:
+            total_codes = len(giftcodes)
+
         lines = []
         for aid, info in alliances_info.items():
             status = info['status']
+            codes_completed = info.get('codes_completed', 0)
+
             if status == 'pending':
                 icon = "⏳"
             elif status == 'processing':
@@ -590,15 +633,26 @@ class GiftOperations(commands.Cog):
                 icon = "❌"
             else:
                 icon = "⏳"
-            lines.append(f"{icon} **{info['name']}**")
 
-        completed = sum(1 for info in alliances_info.values() if info['status'] == 'completed')
-        total = len(alliances_info)
+            # Show code progress for multi-code batches
+            if total_codes > 1:
+                lines.append(f"{icon} **{info['name']}** ({codes_completed}/{total_codes} codes)")
+            else:
+                lines.append(f"{icon} **{info['name']}**")
+
+        completed_alliances = sum(1 for info in alliances_info.values() if info['status'] == 'completed')
+        total_alliances = len(alliances_info)
+
+        # Build description based on single or multiple codes
+        if total_codes > 1:
+            code_display = f"ALL ({total_codes} codes)"
+        else:
+            code_display = f"`{giftcodes[0]}`"
 
         embed = discord.Embed(
             title="🎁 Batch Redemption Progress",
-            description=f"**Gift Code:** `{giftcode}`\n**Progress:** {completed}/{total} alliances\n\n" + "\n".join(lines),
-            color=discord.Color.green() if completed == total else discord.Color.blue()
+            description=f"**Gift Code{'s' if total_codes > 1 else ''}:** {code_display}\n**Progress:** {completed_alliances}/{total_alliances} alliances\n\n" + "\n".join(lines),
+            color=discord.Color.green() if completed_alliances == total_alliances else discord.Color.blue()
         )
         return embed
 
@@ -608,7 +662,9 @@ class GiftOperations(commands.Cog):
             return
 
         batch = self.redemption_batches[batch_id]
-        embed = self._build_batch_progress_embed(batch['giftcode'], batch['alliances'])
+        giftcodes = batch.get('giftcodes', batch.get('giftcode', []))
+        total_codes = batch.get('total_codes', 1)
+        embed = self._build_batch_progress_embed(giftcodes, batch['alliances'], total_codes)
 
         try:
             await batch['message'].edit(embed=embed)
@@ -4876,18 +4932,38 @@ class GiftView(discord.ui.View):
                         ]
                     )
 
+                    # Add ALL CODES option at the beginning
+                    select_giftcode.options.insert(0, discord.SelectOption(
+                        label="ALL CODES",
+                        value="all_codes",
+                        description=f"Redeem all {len(gift_codes)} active codes",
+                        emoji="📦"
+                    ))
+
                     async def giftcode_callback(giftcode_interaction: discord.Interaction):
                         try:
-                            selected_code = giftcode_interaction.data["values"][0]
-                            
+                            selected_code_value = giftcode_interaction.data["values"][0]
+
+                            # Handle ALL CODES selection
+                            if selected_code_value == "all_codes":
+                                selected_codes = [code for code, date in gift_codes]
+                                code_display = f"ALL ({len(selected_codes)} codes)"
+                            else:
+                                selected_codes = [selected_code_value]
+                                code_display = f"`{selected_code_value}`"
+
+                            alliance_display = 'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')
+                            total_redemptions = len(selected_codes) * len(all_alliances)
+
                             confirm_embed = discord.Embed(
                                 title="⚠️ Confirm Gift Code Usage",
                                 description=(
-                                    f"Are you sure you want to use this gift code?\n\n"
+                                    f"Are you sure you want to use {'these gift codes' if len(selected_codes) > 1 else 'this gift code'}?\n\n"
                                     f"**Details**\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"🎁 **Gift Code:** `{selected_code}`\n"
-                                    f"🏰 **Alliances:** {'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')}\n"
+                                    f"🎁 **Gift Code{'s' if len(selected_codes) > 1 else ''}:** {code_display}\n"
+                                    f"🏰 **Alliances:** {alliance_display} ({len(all_alliances)})\n"
+                                    f"📊 **Total redemptions:** {total_redemptions}\n"
                                     f"━━━━━━━━━━━━━━━━━━━━━━\n"
                                 ),
                                 color=discord.Color.yellow()
@@ -4901,41 +4977,42 @@ class GiftView(discord.ui.View):
                                     await button_interaction.response.defer()
 
                                     await self.cog.add_manual_redemption_to_queue(
-                                        selected_code, all_alliances, button_interaction
+                                        selected_codes, all_alliances, button_interaction
                                     )
 
                                     queue_status = await self.cog.get_queue_status()
-                                    
+
                                     alliance_names = []
                                     for aid in all_alliances[:3]:  # Show first 3 alliance names
                                         name = next((n for a_id, n, _ in alliances_with_counts if a_id == aid), 'Unknown')
                                         alliance_names.append(name)
-                                    
+
                                     alliance_list = ", ".join(alliance_names)
                                     if len(all_alliances) > 3:
                                         alliance_list += f" and {len(all_alliances) - 3} more"
-                                    
+
                                     queue_summary = []
                                     your_position = None
-                                    
+
                                     for code, items in queue_status['queue_by_code'].items():
                                         alliance_count = len([i for i in items if i.get('alliance_id')])
-                                        
-                                        if code == selected_code and your_position is None:
+
+                                        if code in selected_codes and your_position is None:
                                             your_position = min(i['position'] for i in items)
-                                        
+
                                         queue_summary.append(f"• `{code}` - {alliance_count} alliance{'s' if alliance_count != 1 else ''}")
-                                    
+
                                     queue_info = "\n".join(queue_summary) if queue_summary else "Queue is empty"
-                                    
+
                                     queue_embed = discord.Embed(
                                         title="✅ Redemptions Queued Successfully",
                                         description=(
                                             f"Gift code redemptions added to the queue.\n\n"
                                             f"**Your Redemption**\n"
                                             f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            f"🎁 **Gift Code:** `{selected_code}`\n"
+                                            f"🎁 **Gift Code{'s' if len(selected_codes) > 1 else ''}:** {code_display}\n"
                                             f"🏰 **Alliances:** {alliance_list}\n"
+                                            f"📊 **Total redemptions:** {len(selected_codes) * len(all_alliances)}\n"
                                             f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
                                             f"**Full Queue Details**\n"
                                             f"{queue_info}\n\n"
