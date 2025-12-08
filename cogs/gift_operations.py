@@ -162,6 +162,9 @@ class GiftOperations(commands.Cog):
         self.test_captcha_cooldowns = {} # User ID: last test timestamp for test button
         self.test_captcha_delay = 60
 
+        # Batch redemption tracking for consolidated progress messages
+        self.redemption_batches = {}  # batch_id -> {message, alliances: {id: status}, giftcode}
+
         self.processing_stats = {
         "ocr_solver_calls": 0,       # Times solver.solve_captcha was called
         "ocr_valid_format": 0,     # Times solver returned success=True
@@ -259,7 +262,7 @@ class GiftOperations(commands.Cog):
         cleaned = ''.join(char for char in giftcode if unicodedata.category(char)[0] != 'C')
         return cleaned.strip()
     
-    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None):
+    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None, batch_id=None):
         """Add a gift code to the validation queue for processing."""
         async with self.validation_queue_lock:
             queue_item = {
@@ -271,7 +274,8 @@ class GiftOperations(commands.Cog):
                 'status': 'queued',
                 'operation_type': operation_type,
                 'alliance_id': alliance_id,
-                'interaction': interaction
+                'interaction': interaction,
+                'batch_id': batch_id
             }
             self.validation_queue.append(queue_item)
             self.logger.info(f"Added gift code '{giftcode}' to validation queue (source: {source}, type: {operation_type}, queue length: {len(self.validation_queue)})")
@@ -312,9 +316,10 @@ class GiftOperations(commands.Cog):
         operation_type = queue_item.get('operation_type', 'automatic')
         alliance_id = queue_item.get('alliance_id')
         interaction = queue_item.get('interaction')
-        
+        batch_id = queue_item.get('batch_id')
+
         self.logger.info(f"Processing gift code '{giftcode}' from queue (source: {source}, type: {operation_type})")
-        
+
         # Handle redemption
         if operation_type == 'redemption':
             if alliance_id:
@@ -323,10 +328,16 @@ class GiftOperations(commands.Cog):
                     self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                     alliance_result = self.alliance_cursor.fetchone()
                     alliance_name = alliance_result[0] if alliance_result else f"Alliance {alliance_id}"
-                    
-                    # Send starting message only if interaction exists
+
+                    # Handle batch progress update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        batch['alliances'][alliance_id]['status'] = 'processing'
+                        await self._update_batch_progress(batch_id)
+
+                    # Send starting message only if interaction exists (non-batch)
                     progress_message = None
-                    if interaction:
+                    if interaction and not batch_id:
                         start_embed = discord.Embed(
                             title="🔄 Processing Redemption",
                             description=f"Starting gift code redemption for **{alliance_name}**...\n"
@@ -334,12 +345,23 @@ class GiftOperations(commands.Cog):
                             color=discord.Color.blue()
                         )
                         progress_message = await interaction.followup.send(embed=start_embed, ephemeral=True)
-                    
+
                     # Execute the redemption
                     await self.use_giftcode_for_alliance(alliance_id, giftcode)
-                    
-                    # Update the message with completion status if we have a message to update
-                    if interaction and progress_message:
+
+                    # Handle batch completion update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        batch['alliances'][alliance_id]['status'] = 'completed'
+                        await self._update_batch_progress(batch_id)
+
+                        # Clean up batch if all complete
+                        all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
+                        if all_done:
+                            del self.redemption_batches[batch_id]
+
+                    # Update the message with completion status if we have a message to update (non-batch)
+                    elif interaction and progress_message:
                         complete_embed = discord.Embed(
                             title="✅ Redemption Complete",
                             description=f"Gift code redemption completed for **{alliance_name}**.\n"
@@ -348,11 +370,23 @@ class GiftOperations(commands.Cog):
                         )
                         try:
                             await progress_message.edit(embed=complete_embed)
-                        except: # If edit fails, just skip it
+                        except:
                             pass
                 except Exception as e:
                     self.logger.exception(f"Error in manual redemption for alliance {alliance_id}: {e}")
-                    if interaction:
+
+                    # Handle batch error update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        batch['alliances'][alliance_id]['status'] = 'error'
+                        await self._update_batch_progress(batch_id)
+
+                        # Clean up batch if all complete
+                        all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
+                        if all_done:
+                            del self.redemption_batches[batch_id]
+
+                    elif interaction:
                         error_embed = discord.Embed(
                             title="❌ Redemption Error",
                             description=f"An error occurred during redemption for **{alliance_name}**: {str(e)}",
@@ -361,7 +395,7 @@ class GiftOperations(commands.Cog):
                         if progress_message:
                             try:
                                 await progress_message.edit(embed=error_embed)
-                            except: # If edit fails, send a new message
+                            except:
                                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                         else:
                             await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -500,21 +534,87 @@ class GiftOperations(commands.Cog):
     async def add_manual_redemption_to_queue(self, giftcode, alliance_ids, interaction):
         """Add manual redemption requests to validation queue."""
         queue_positions = []
-        
+
+        # Create batch for multiple alliances
+        batch_id = None
+        if len(alliance_ids) > 1 and interaction:
+            import uuid
+            batch_id = str(uuid.uuid4())
+
+            # Get alliance names for the batch
+            alliances_info = {}
+            for aid in alliance_ids:
+                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (aid,))
+                result = self.alliance_cursor.fetchone()
+                name = result[0] if result else f"Alliance {aid}"
+                alliances_info[aid] = {'name': name, 'status': 'pending'}
+
+            # Send initial consolidated progress message
+            embed = self._build_batch_progress_embed(giftcode, alliances_info)
+            progress_message = await interaction.followup.send(embed=embed, ephemeral=True)
+
+            # Store batch info
+            self.redemption_batches[batch_id] = {
+                'message': progress_message,
+                'alliances': alliances_info,
+                'giftcode': giftcode
+            }
+
         for alliance_id in alliance_ids:
             await self.add_to_validation_queue(
                 giftcode=giftcode,
                 source='manual',
                 operation_type='redemption',
                 alliance_id=alliance_id,
-                interaction=interaction
+                interaction=interaction if not batch_id else None,  # Don't pass interaction for batch items
+                batch_id=batch_id
             )
-            
+
             queue_status = await self.get_queue_status()
             queue_positions.append(queue_status['queue_length'])
-        
+
         return queue_positions
-    
+
+    def _build_batch_progress_embed(self, giftcode, alliances_info):
+        """Build the consolidated progress embed for batch redemption."""
+        lines = []
+        for aid, info in alliances_info.items():
+            status = info['status']
+            if status == 'pending':
+                icon = "⏳"
+            elif status == 'processing':
+                icon = "🔄"
+            elif status == 'completed':
+                icon = "✅"
+            elif status == 'error':
+                icon = "❌"
+            else:
+                icon = "⏳"
+            lines.append(f"{icon} **{info['name']}**")
+
+        completed = sum(1 for info in alliances_info.values() if info['status'] == 'completed')
+        total = len(alliances_info)
+
+        embed = discord.Embed(
+            title="🎁 Batch Redemption Progress",
+            description=f"**Gift Code:** `{giftcode}`\n**Progress:** {completed}/{total} alliances\n\n" + "\n".join(lines),
+            color=discord.Color.green() if completed == total else discord.Color.blue()
+        )
+        return embed
+
+    async def _update_batch_progress(self, batch_id):
+        """Update the batch progress message."""
+        if batch_id not in self.redemption_batches:
+            return
+
+        batch = self.redemption_batches[batch_id]
+        embed = self._build_batch_progress_embed(batch['giftcode'], batch['alliances'])
+
+        try:
+            await batch['message'].edit(embed=embed)
+        except Exception as e:
+            self.logger.warning(f"Failed to update batch progress message: {e}")
+
     @commands.Cog.listener()
     async def on_ready(self):
         """
@@ -4797,10 +4897,13 @@ class GiftView(discord.ui.View):
                             
                             async def confirm_callback(button_interaction: discord.Interaction):
                                 try:
+                                    # Defer first so followup.send works for batch progress
+                                    await button_interaction.response.defer()
+
                                     await self.cog.add_manual_redemption_to_queue(
                                         selected_code, all_alliances, button_interaction
                                     )
-                                    
+
                                     queue_status = await self.cog.get_queue_status()
                                     
                                     alliance_names = []
@@ -4843,15 +4946,15 @@ class GiftView(discord.ui.View):
                                         color=discord.Color.green()
                                     )
                                     queue_embed.set_footer(text="Gift codes are processed sequentially to prevent issues.")
-                                    
-                                    await button_interaction.response.edit_message(
+
+                                    await button_interaction.edit_original_response(
                                         embed=queue_embed,
                                         view=None
                                     )
 
                                 except Exception as e:
                                     self.logger.exception(f"Error queueing gift code redemptions: {e}")
-                                    await button_interaction.response.send_message(
+                                    await button_interaction.followup.send(
                                         "❌ An error occurred while queueing the gift code redemptions.",
                                         ephemeral=True
                                     )
