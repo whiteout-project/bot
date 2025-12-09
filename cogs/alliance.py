@@ -179,56 +179,56 @@ class Alliance(commands.Cog):
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji=f"{pimp.allianceIcon}",
+                emoji=pimp.allianceIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="alliance_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Member Operations",
-                emoji=f"{pimp.avatarIcon}",
+                emoji=pimp.avatarIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="member_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Operations",
-                emoji=f"{pimp.robotIcon}",
+                emoji=pimp.robotIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="bot_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Gift Code Operations",
-                emoji=f"{pimp.giftIcon}",
+                emoji=pimp.giftIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance History",
-                emoji=f"{pimp.listIcon}",
+                emoji=pimp.listIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="alliance_history",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji=f"{pimp.supportIcon}",
+                emoji=pimp.supportIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="PIMP my Bot",
-                emoji=f"{pimp.pinIcon}",
+                emoji=pimp.pinIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="pimp_my_bot",
                 row=3
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji=f"{pimp.settings2Icon}",
+                emoji=pimp.settings2Icon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
@@ -279,56 +279,56 @@ class Alliance(commands.Cog):
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji=f"{pimp.allianceIcon}",
+                emoji=pimp.allianceIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="alliance_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Member Operations",
-                emoji=f"{pimp.avatarIcon}",
+                emoji=pimp.avatarIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="member_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Operations",
-                emoji=f"{pimp.robotIcon}",
+                emoji=pimp.robotIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="bot_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Gift Code Operations",
-                emoji=f"{pimp.giftIcon}",
+                emoji=pimp.giftIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance History",
-                emoji=f"{pimp.listIcon}",
+                emoji=pimp.listIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="alliance_history",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji=f"{pimp.supportIcon}",
+                emoji=pimp.supportIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="PIMP my Bot",
-                emoji=f"{pimp.pinIcon}",
+                emoji=pimp.pinIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="pimp_my_bot",
                 row=3
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji=f"{pimp.settings2Icon}",
+                emoji=pimp.settings2Icon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
@@ -378,7 +378,7 @@ class Alliance(commands.Cog):
                     view = discord.ui.View()
                     view.add_item(discord.ui.Button(
                         label="Add Alliance", 
-                        emoji=f"{pimp.addIcon}",
+                        emoji=pimp.addIcon,
                         style=discord.ButtonStyle.secondary, 
                         custom_id="add_alliance", 
                         row = 0,
@@ -386,7 +386,7 @@ class Alliance(commands.Cog):
                     ))
                     view.add_item(discord.ui.Button(
                         label="Edit Alliance", 
-                        emoji=f"{pimp.processingIcon}",
+                        emoji=pimp.processingIcon,
                         style=discord.ButtonStyle.secondary, 
                         custom_id="edit_alliance", 
                         row = 0,
@@ -394,7 +394,7 @@ class Alliance(commands.Cog):
                     ))
                     view.add_item(discord.ui.Button(
                         label="Delete Alliance", 
-                        emoji=f"{pimp.deleteIcon}",
+                        emoji=pimp.deleteIcon,
                         style=discord.ButtonStyle.secondary, 
                         custom_id="delete_alliance", 
                         row = 1,
@@ -402,21 +402,21 @@ class Alliance(commands.Cog):
                     ))
                     view.add_item(discord.ui.Button(
                         label="Check Alliance", 
-                        emoji=f"{pimp.verifiedIcon}",
+                        emoji=pimp.verifiedIcon,
                         style=discord.ButtonStyle.secondary, 
                         custom_id="check_alliance",
                         row = 1
                     ))
                     view.add_item(discord.ui.Button(
                         label="View Alliances", 
-                        emoji=f"{pimp.magnifyingIcon}",
+                        emoji=pimp.magnifyingIcon,
                         style=discord.ButtonStyle.secondary, 
                         custom_id="view_alliances",
                         row = 2
                     ))
                     view.add_item(discord.ui.Button(
                         label="Main Menu", 
-                        emoji=f"{pimp.homeIcon}",
+                        emoji=pimp.homeIcon,
                         style=discord.ButtonStyle.secondary, 
                         custom_id="main_menu",
                         row = 3
@@ -448,7 +448,7 @@ class Alliance(commands.Cog):
                             label="Check All Alliances",
                             value="all",
                             description="Start control process for all alliances",
-                            emoji=f"{pimp.verifiedIcon}"
+                            emoji=pimp.verifiedIcon
                         )
                     ]
                     
@@ -928,18 +928,20 @@ class Alliance(commands.Cog):
                 self.add_item(select)
                 
                 previous_button = discord.ui.Button(
-                    label=f"{pimp.importIcon}",
-                    style=discord.ButtonStyle.grey,
+                    label="",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="previous",
+                    emoji=pimp.importIcon,
                     disabled=(self.current_page == 0)
                 )
                 previous_button.callback = self.previous_callback
                 self.add_item(previous_button)
 
                 next_button = discord.ui.Button(
-                    label=f"{pimp.exportIcon}",
-                    style=discord.ButtonStyle.grey,
+                    label="",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="next",
+                    emoji=pimp.exportIcon,
                     disabled=(self.current_page == len(self.pages) - 1)
                 )
                 next_button.callback = self.next_callback
@@ -1110,11 +1112,12 @@ class Alliance(commands.Cog):
                 f"**Current Page:** {1}/{total_pages}\n"
                 f"**Total Alliances:** {len(alliances)}\n"
                 f"\n"
-                f"{pimp.divider1}"
+                f"{pimp.divider1}\n"
+                f"-# Use the dropdown menu below to select an alliance to edit its details."
             ),
             color=pimp.emColor1
         )
-        embed.set_footer(text="Use the dropdown menu below to select an alliance")
+        embed.set_footer(text="Last Updated: ")
         embed.timestamp = discord.utils.utcnow()
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -1145,7 +1148,7 @@ class Alliance(commands.Cog):
                     label=f"{name[:40]} (ID: {alliance_id})",
                     value=f"{alliance_id}",
                     description=f"{pimp.avatarIcon} Members: {alliance_members[alliance_id]} | Click to delete",
-                    emoji=f"{pimp.deleteIcon}"
+                    emoji=pimp.deleteIcon
                 ) for alliance_id, name in alliances
             ]
             
@@ -1297,8 +1300,8 @@ class Alliance(commands.Cog):
                 )
                 await button_interaction.response.edit_message(embed=cancel_embed, view=None)
 
-            confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.danger)
-            cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.grey)
+            confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.secondary, emoji=pimp.verifiedIcon)
+            cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji=pimp.deniedIcon)
             confirm_button.callback = confirm_callback
             cancel_button.callback = cancel_callback
             confirm_view.add_item(confirm_button)
@@ -1361,18 +1364,20 @@ class PaginatedDeleteView(discord.ui.View):
         self.add_item(select)
         
         previous_button = discord.ui.Button(
-            label=f"{pimp.importIcon}",
-            style=discord.ButtonStyle.grey,
+            label="",
+            style=discord.ButtonStyle.secondary,
             custom_id="previous",
+            emoji=pimp.importIcon,
             disabled=(self.current_page == 0)
         )
         previous_button.callback = self.previous_callback
         self.add_item(previous_button)
 
         next_button = discord.ui.Button(
-            label=f"{pimp.exportIcon}",
-            style=discord.ButtonStyle.grey,
+            label="",
+            style=discord.ButtonStyle.secondary,
             custom_id="next",
+            emoji=pimp.exportIcon,
             disabled=(self.current_page == len(self.pages) - 1)
         )
         next_button.callback = self.next_callback
@@ -1455,7 +1460,7 @@ class PaginatedChannelView(discord.ui.View):
                 label=channel_label,
                 value=str(channel.id),
                 description=option_description,
-                emoji=f"{pimp.announceIcon}"
+                emoji=pimp.announceIcon
             ))
         
         select = discord.ui.Select(
@@ -1467,18 +1472,20 @@ class PaginatedChannelView(discord.ui.View):
         
         if self.total_pages > 1:
             previous_button = discord.ui.Button(
-                label=f"{pimp.importIcon}",
-                style=discord.ButtonStyle.grey,
+                label="",
+                style=discord.ButtonStyle.secondary,
                 custom_id="previous",
+                emoji=pimp.importIcon,
                 disabled=(self.current_page == 0)
             )
             previous_button.callback = self.previous_callback
             self.add_item(previous_button)
 
             next_button = discord.ui.Button(
-                label=f"{pimp.exportIcon}",
-                style=discord.ButtonStyle.grey,
+                label="",
+                style=discord.ButtonStyle.secondary,
                 custom_id="next",
+                emoji=pimp.exportIcon,
                 disabled=(self.current_page == len(self.pages) - 1)
             )
             next_button.callback = self.next_callback
