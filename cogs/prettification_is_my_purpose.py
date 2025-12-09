@@ -1,6 +1,7 @@
 import sqlite3
 
 elseEmoji = "👻"
+furnaceLevelImageDefaultURL = "https://cdn-icons-png.freepik.com/512/12388/12388244.png"
 
 with sqlite3.connect('db/pimpsettings.sqlite') as pimpsettings_db:
     cursor = pimpsettings_db.cursor()
@@ -8,80 +9,131 @@ with sqlite3.connect('db/pimpsettings.sqlite') as pimpsettings_db:
     # Get the active theme (is_active = 1)
     cursor.execute("SELECT * FROM pimpsettings WHERE is_active=1 LIMIT 1")
     theme = cursor.fetchone()
-    
-    # If no active theme, fall back to "default" theme
     if not theme:
         cursor.execute("SELECT * FROM pimpsettings WHERE themeName=?", ("default",))
         theme = cursor.fetchone()
-    allianceOldIcon = theme[2] if theme else elseEmoji
-    avatarOldIcon = theme [3] if theme else elseEmoji
-    stoveOldIcon = theme[4] if theme else elseEmoji
-    stateOldIcon = theme[5] if theme else elseEmoji
-    allianceIcon = theme[6] if theme else elseEmoji
-    avatarIcon = theme[7] if theme else elseEmoji
-    stoveIcon = theme[8] if theme else elseEmoji
-    stateIcon = theme[9] if theme else elseEmoji
-    listIcon = theme[10]if theme else elseEmoji
-    fidIcon = theme[11] if theme else elseEmoji
-    timeIcon = theme[12] if theme else elseEmoji
-    homeIcon = theme[13] if theme else elseEmoji
-    num1Icon = theme[14] if theme else elseEmoji
-    num2Icon = theme[15] if theme else elseEmoji
-    num3Icon = theme[16] if theme else elseEmoji
-    newIcon = theme[17] if theme else elseEmoji
-    pinIcon = theme[18] if theme else elseEmoji
-    giftIcon = theme[19] if theme else elseEmoji
-    giftsIcon = theme[20] if theme else elseEmoji
-    alertIcon = theme[21] if theme else elseEmoji
-    robotIcon = theme[22] if theme else elseEmoji
-    crossIcon = theme[23] if theme else elseEmoji
-    heartIcon = theme[24] if theme else elseEmoji
-    total2Icon = theme[25] if theme else elseEmoji
-    shieldIcon = theme[26] if theme else elseEmoji
-    targetIcon = theme[27] if theme else elseEmoji
-    redeemIcon = theme[28] if theme else elseEmoji
-    membersIcon = theme[29] if theme else elseEmoji
-    anounceIcon = theme[30] if theme else elseEmoji
-    averageIcon = theme[31] if theme else elseEmoji
-    hashtagIcon = theme[32] if theme else elseEmoji
-    messageIcon = theme[33] if theme else elseEmoji
-    supportIcon = theme[34] if theme else elseEmoji
-    settingsIcon = theme[35] if theme else elseEmoji
-    settings2Icon = theme[36] if theme else elseEmoji
-    hourglassIcon = theme[37] if theme else elseEmoji
-    messageNoIcon = theme[38] if theme else elseEmoji
-    alarmClockIcon = theme[39] if theme else elseEmoji
-    magnifyingIcon = theme[40] if theme else elseEmoji
-    checkGiftCodeIcon = theme[41] if theme else elseEmoji
-    deleteGiftCodeIcon = theme[42] if theme else elseEmoji
-    addGiftCodeIcon = theme[43] if theme else elseEmoji
-    processingIcon = theme[44] if theme else elseEmoji
-    verifiedIcon = theme[45] if theme else elseEmoji
-    questionIcon = theme[46] if theme else elseEmoji
-    transferIcon = theme[47] if theme else elseEmoji
-    multiplyIcon = theme[48] if theme else elseEmoji
-    divideIcon = theme[49] if theme else elseEmoji
-    deniedIcon = theme[50] if theme else elseEmoji
-    deleteIcon = theme[51] if theme else elseEmoji
-    exportIcon = theme[52] if theme else elseEmoji
-    importIcon = theme[53] if theme else elseEmoji
-    retryIcon = theme[54] if theme else elseEmoji
-    totalIcon = theme[55] if theme else elseEmoji
-    infoIcon = theme[56] if theme else elseEmoji
-    warnIcon = theme[57] if theme else elseEmoji
-    addIcon = theme[58] if theme else elseEmoji
-    dividerEmojiStart1 = theme[59].split(",") if theme else [elseEmoji]
-    dividerEmojiPattern1 = theme[60].split(",") if theme else [elseEmoji]
-    dividerEmojiEnd1 = theme[61].split(",") if theme else [elseEmoji]
-    dividerLength1 = theme[62] if theme else 12
-    dividerEmojiStart2 = theme[63].split(",") if theme else [elseEmoji]
-    dividerEmojiPattern2 = theme[64].split(",") if theme else [elseEmoji]
-    dividerEmojiEnd2 = theme[65].split(",") if theme else [elseEmoji]
-    dividerLength2 = theme[66] if theme else 12
-    emColorString1 = theme[67] if theme else "#FFFFFF"
-    emColorString2 = theme[68] if theme else "#FFFFFF"
-    emColorString3 = theme[69] if theme else "#FFFFFF"
-    emColorString4 = theme[70] if theme else "#FFFFFF"
+
+    allianceOldIcon = theme[3] if theme else elseEmoji
+    avatarOldIcon = theme[4] if theme else elseEmoji
+    stoveOldIcon = theme[5] if theme else elseEmoji
+    stateOldIcon = theme[6] if theme else elseEmoji
+    allianceIcon = theme[7] if theme else elseEmoji
+    avatarIcon = theme[8] if theme else elseEmoji
+    stoveIcon = theme[9] if theme else elseEmoji
+    stateIcon = theme[10] if theme else elseEmoji
+    listIcon = theme[11] if theme else elseEmoji
+    fidIcon = theme[12] if theme else elseEmoji
+    timeIcon = theme[13] if theme else elseEmoji
+    homeIcon = theme[14] if theme else elseEmoji
+    num1Icon = theme[15] if theme else elseEmoji
+    num2Icon = theme[16] if theme else elseEmoji
+    num3Icon = theme[17] if theme else elseEmoji
+    num4Icon = theme[18] if theme else elseEmoji
+    num5Icon = theme[19] if theme else elseEmoji
+    num10Icon = theme[20] if theme else elseEmoji
+    newIcon = theme[21] if theme else elseEmoji
+    pinIcon = theme[22] if theme else elseEmoji
+    saveIcon = theme[23] if theme else elseEmoji
+    giftIcon = theme[24] if theme else elseEmoji
+    giftsIcon = theme[25] if theme else elseEmoji
+    alertIcon = theme[26] if theme else elseEmoji
+    robotIcon = theme[27] if theme else elseEmoji
+    crossIcon = theme[28] if theme else elseEmoji
+    heartIcon = theme[29] if theme else elseEmoji
+    total2Icon = theme[30] if theme else elseEmoji
+    shieldIcon = theme[31] if theme else elseEmoji
+    targetIcon = theme[32] if theme else elseEmoji
+    redeemIcon = theme[33] if theme else elseEmoji
+    membersIcon = theme[34] if theme else elseEmoji
+    averageIcon = theme[35] if theme else elseEmoji
+    hashtagIcon = theme[36] if theme else elseEmoji
+    messageIcon = theme[37] if theme else elseEmoji
+    supportIcon = theme[38] if theme else elseEmoji
+    foundryIcon = theme[39] if theme else elseEmoji
+    announceIcon = theme[40] if theme else elseEmoji
+    ministerIcon = theme[41] if theme else elseEmoji
+    researchIcon = theme[42] if theme else elseEmoji
+    trainingIcon = theme[43] if theme else elseEmoji
+    crazyJoeIcon = theme[44] if theme else elseEmoji
+    bearTrapIcon = theme[45] if theme else elseEmoji
+    calendarIcon = theme[46] if theme else elseEmoji
+    editListIcon = theme[47] if theme else elseEmoji
+    settingsIcon = theme[48] if theme else elseEmoji
+    settings2Icon = theme[49] if theme else elseEmoji
+    hourglassIcon = theme[50] if theme else elseEmoji
+    messageNoIcon = theme[51] if theme else elseEmoji
+    blankListIcon = theme[52] if theme else elseEmoji
+    alarmGiftIcon = theme[53] if theme else elseEmoji
+    alarmClockIcon = theme[54] if theme else elseEmoji
+    magnifyingIcon = theme[55] if theme else elseEmoji
+    frostdragonIcon = theme[56] if theme else elseEmoji
+    canyonClashIcon = theme[57] if theme else elseEmoji
+    constructionIcon = theme[58] if theme else elseEmoji
+    castleBattleIcon = theme[59] if theme else elseEmoji
+    checkGiftCodeIcon = theme[60] if theme else elseEmoji
+    deleteGiftCodeIcon = theme[61] if theme else elseEmoji
+    addGiftCodeIcon = theme[62] if theme else elseEmoji
+    processingIcon = theme[63] if theme else elseEmoji
+    verifiedIcon = theme[64] if theme else elseEmoji
+    questionIcon = theme[65] if theme else elseEmoji
+    transferIcon = theme[66] if theme else elseEmoji
+    multiplyIcon = theme[67] if theme else elseEmoji
+    divideIcon = theme[68] if theme else elseEmoji
+    deniedIcon = theme[69] if theme else elseEmoji
+    deleteIcon = theme[70] if theme else elseEmoji
+    exportIcon = theme[71] if theme else elseEmoji
+    importIcon = theme[72] if theme else elseEmoji
+    retryIcon = theme[73] if theme else elseEmoji
+    totalIcon = theme[74] if theme else elseEmoji
+    infoIcon = theme[75] if theme else elseEmoji
+    warnIcon = theme[76] if theme else elseEmoji
+    addIcon = theme[77] if theme else elseEmoji
+    dividerEmojiStart1 = theme[78].split(",") if theme else [elseEmoji]
+    dividerEmojiPattern1 = theme[79].split(",") if theme else [elseEmoji]
+    dividerEmojiEnd1 = theme[80].split(",") if theme else [elseEmoji]
+    dividerLength1 = theme[81] if theme else 12
+    dividerEmojiStart2 = theme[82].split(",") if theme else [elseEmoji]
+    dividerEmojiPattern2 = theme[83].split(",") if theme else [elseEmoji]
+    dividerEmojiEnd2 = theme[84].split(",") if theme else [elseEmoji]
+    dividerLength2 = theme[85] if theme else 12
+    emColorString1 = theme[86] if theme else "#FFFFFF"
+    emColorString2 = theme[87] if theme else "#FFFFFF"
+    emColorString3 = theme[88] if theme else "#FFFFFF"
+    emColorString4 = theme[89] if theme else "#FFFFFF"
+    headerColor1 = theme[90] if theme else "#FFFFFF"
+    headerColor2 = theme[91] if theme else "#FFFFFF"
+    furnaceLevel0Icon = theme[92] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel1Icon = theme[93] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel2Icon = theme[94] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel3Icon = theme[95] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel4Icon = theme[96] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel5Icon = theme[97] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel6Icon = theme[98] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel7Icon = theme[99] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel8Icon = theme[100] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel9Icon = theme[101] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel10Icon = theme[102] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel11Icon = theme[103] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel12Icon = theme[104] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel13Icon = theme[105] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel14Icon = theme[106] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel15Icon = theme[107] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel16Icon = theme[108] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel17Icon = theme[109] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel18Icon = theme[110] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel19Icon = theme[111] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel20Icon = theme[112] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel21Icon = theme[113] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel22Icon = theme[114] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel23Icon = theme[115] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel24Icon = theme[116] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel25Icon = theme[117] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel26Icon = theme[118] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel27Icon = theme[119] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel28Icon = theme[120] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel29Icon = theme[121] if theme else furnaceLevelImageDefaultURL
+    furnaceLevel30Icon = theme[122] if theme else furnaceLevelImageDefaultURL
+
 
 dividerEmojiCombined1 = []
 for emoji in dividerEmojiStart1:
@@ -152,12 +204,10 @@ emColor2 = int(emColorString2.lstrip('#'), 16) #to replace .red()
 emColor3 = int(emColorString3.lstrip('#'), 16) #to replace .green()
 emColor4 = int(emColorString4.lstrip('#'), 16) #to replace .orange() and .yellow() and .gold()
 
-furnnaceLevelImageDefaultURL = "https://cdn-icons-png.freepik.com/512/12388/12388244.png"
-furnaceLevelImageHostURL = "https://cdn-icons-png.freepik.com/"
-furnaceLevelImageURLs = ["512/12388/12388244.png", 
-                         "512/9932/9932942.png", "512/9933/9933046.png", "512/9933/9933166.png", "512/9933/9933287.png", "512/9933/9933409.png", 
-                         "512/9933/9933534.png", "512/9933/9933651.png", "512/9933/9933772.png", "512/9933/9933880.png", "512/9932/9932953.png",
-                         "512/9932/9932949.png", "512/9932/9932960.png", "512/9932/9932970.png", "512/9932/9932981.png", "512/9932/9932991.png", 
-                         "512/9933/9933002.png", "512/9933/9933013.png", "512/9933/9933024.png", "512/9933/9933035.png", "512/9933/9933058.png",
-                         "512/9933/9933069.png", "512/9933/9933079.png", "512/9933/9933091.png", "512/9933/9933100.png", "512/9933/9933110.png", 
-                         "512/9933/9933121.png", "512/9933/9933133.png", "512/9933/9933144.png", "512/9933/9933156.png", "512/9933/9933177.png"]
+furnaceLevelImageURLs = [furnaceLevel0Icon, 
+                         furnaceLevel1Icon, furnaceLevel2Icon, furnaceLevel3Icon, furnaceLevel4Icon, furnaceLevel5Icon,
+                         furnaceLevel6Icon, furnaceLevel7Icon, furnaceLevel8Icon, furnaceLevel9Icon, furnaceLevel10Icon,
+                         furnaceLevel11Icon, furnaceLevel12Icon, furnaceLevel13Icon, furnaceLevel14Icon, furnaceLevel15Icon,
+                         furnaceLevel16Icon, furnaceLevel17Icon, furnaceLevel18Icon, furnaceLevel19Icon, furnaceLevel20Icon,
+                         furnaceLevel21Icon, furnaceLevel22Icon, furnaceLevel23Icon, furnaceLevel24Icon, furnaceLevel25Icon,
+                         furnaceLevel26Icon, furnaceLevel27Icon, furnaceLevel28Icon, furnaceLevel29Icon, furnaceLevel30Icon]

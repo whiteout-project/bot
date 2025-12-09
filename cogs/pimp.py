@@ -66,6 +66,7 @@ class CreateThemeModal(discord.ui.Modal):
             
             # Check if theme already exists
             with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
+                cursor = pimpSettings_db.cursor()
                 cursor.execute("SELECT COUNT(*) FROM pimpsettings WHERE themeName=?", (new_theme_name,))
                 exists = cursor.fetchone()[0] > 0
                 
@@ -76,25 +77,47 @@ class CreateThemeModal(discord.ui.Modal):
                 # Get default theme structure
                 cursor.execute("PRAGMA table_info(pimpsettings)")
                 columns_info = cursor.fetchall()
-                data_columns = [col[1] for col in columns_info if col[1] not in ['id', 'themeName', 'is_active']]
+                data_columns = [col[1] for col in columns_info if col[1] not in ['id', 'themeName', 'themeCreator', 'is_active']]
                 
-                # Create default values (using emojis from default theme)
-                default_emojis = ['⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏', 
-                                 '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '🆕',
-                                 '📍', '🎁', '🛍️', '⚠️', '🤖', '⚔️', '💗', '🟰',
-                                 '🛡️', '🎯', '🔃', '👥', '📢', '📈', '🔢', '🔊',
-                                 '🆘', '⚙️', '⚙️', '⏳', '🔇', '⏰', '🔍', '✅',
-                                 '🗑️', '➕', '🔄', '✅', '❓', '↔️', '✖️', '➗',
-                                 '❌', '➖', '➡️', '⬅️', '🔁', '🟰', 'ℹ️', '⚠️', '➕']
-                
-                divider_values = ['━', '━', '━', 22, '━', '━', '━', 22]
-                color_values = ['#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFFFFF']
+                default_emojis = [
+                    '⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏',
+                    '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '4️⃣',
+                    '5️⃣', '🔟', '🆕', '📍', '💾', '🎁', '🛍️', '⚠️', 
+                    '🤖', '⚔️', '💗', '🟰', '🛡️', '🎯', '🔄', '👥', 
+                    '📈', '🔢', '🔊', '🆘', '🏭', '📢', '🏛️', '🔬', 
+                    '⚔️', '🤪', '🐻', '📅', '📝', '⚙️', '⚙️', '⏳', 
+                    '🔇', '⚪', '⏰', '⏰', '🔍', '🐉', '🏞️', '⚒️', 
+                    '🏰', '✅', '🗑️', '➕', '🔄', '✅', '❓', '↔️', 
+                    '✖️', '➗', '❌', '➖', '➡️', '⬅️', '🔄', '🟰', 
+                    'ℹ️', '⚠️', '➕'
+                ]
+                divider_values = ['━', '━', '━', 16, '━', '━', '━', 16]
+                color_values = ['#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#1F77B4', '#28A745']
+             
+                url_values = [
+                    "https://cdn-icons-png.freepik.com/512/12388/12388244.png", 
+                    "https://cdn-icons-png.freepik.com/512/9932/9932935.png", "https://cdn-icons-png.freepik.com/512/9933/9933057.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933179.png", "https://cdn-icons-png.freepik.com/512/9933/9933300.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933423.png", "https://cdn-icons-png.freepik.com/512/9933/9933543.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933662.png", "https://cdn-icons-png.freepik.com/512/9933/9933786.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933890.png", "https://cdn-icons-png.freepik.com/512/9932/9932941.png", 
+                    "https://cdn-icons-png.freepik.com/512/9932/9932961.png", "https://cdn-icons-png.freepik.com/512/9932/9932971.png", 
+                    "https://cdn-icons-png.freepik.com/512/9932/9932980.png", "https://cdn-icons-png.freepik.com/512/9932/9932990.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933000.png", "https://cdn-icons-png.freepik.com/512/9933/9933014.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933025.png", "https://cdn-icons-png.freepik.com/512/9933/9933036.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933047.png", "https://cdn-icons-png.freepik.com/512/9933/9933068.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933080.png", "https://cdn-icons-png.freepik.com/512/9933/9933089.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933103.png", "https://cdn-icons-png.freepik.com/512/9933/9933114.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933126.png", "https://cdn-icons-png.freepik.com/512/9933/9933137.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933147.png", "https://cdn-icons-png.freepik.com/512/9933/9933157.png", 
+                    "https://cdn-icons-png.freepik.com/512/9933/9933168.png", "https://cdn-icons-png.freepik.com/512/9933/9933190.png"
+                ]
                 
                 # Insert new theme
                 placeholders = ', '.join(['?' for _ in range(len(data_columns))])
                 columns_str = ', '.join(data_columns)
-                query = f"INSERT INTO pimpsettings (themeName, {columns_str}, is_active) VALUES (?, {placeholders}, 0)"
-                cursor.execute(query, [new_theme_name] + default_emojis + divider_values + color_values)
+                query = f"INSERT INTO pimpsettings (themeName, themeCreator, {columns_str}, is_active) VALUES (?, ?, {placeholders}, 0)"
+                cursor.execute(query, [new_theme_name, interaction.user.id] + default_emojis + divider_values + color_values + url_values)
                 pimpSettings_db.commit()
             
             # Load the theme preview (fetch_theme_info will handle the interaction response)
@@ -129,6 +152,146 @@ class CreateThemeView(discord.ui.View):
         modal = CreateThemeModal(self.cog, self.original_user_id)
         await interaction.response.send_modal(modal)
 
+class DeleteThemeView(discord.ui.View):
+    def __init__(self, cog, original_user_id, themename=None):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.original_user_id = original_user_id
+        self.selected_theme = themename  # Pre-select if provided from command
+
+        with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
+            cursor = pimpSettings_db.cursor()
+            cursor.execute("SELECT themeName FROM pimpsettings WHERE themeName != 'default'")
+            themeNames = cursor.fetchall()
+            themeNames = [themeName[0] for themeName in themeNames]
+       
+        select_options = [discord.SelectOption(label=themeName, value=themeName, default=(themeName == themename)) for themeName in themeNames]        
+        delete_select = discord.ui.Select(
+            placeholder="Select a theme to delete",
+            options=select_options,
+            custom_id="delete_select"
+        )
+        delete_select.callback = self.select_callback
+        self.add_item(delete_select)
+        
+        # Add Delete button
+        delete_button = discord.ui.Button(
+            label="Delete Theme",
+            style=discord.ButtonStyle.secondary,
+            emoji=pimp.deleteIcon
+        )
+        delete_button.callback = self.delete_callback
+        self.add_item(delete_button)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        """Handle theme selection from dropdown."""
+        if interaction.user.id != self.original_user_id:
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} Only the user who initiated this command can use this.",
+                ephemeral=True
+            )
+            return
+        
+        # Get selected theme from dropdown
+        selected_theme = interaction.data.get('values', [None])[0] if interaction.data else None
+        
+        if selected_theme:
+            self.selected_theme = selected_theme
+            await interaction.response.defer()
+
+    async def delete_callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.original_user_id:
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} Only the user who initiated this command can use this.",
+                ephemeral=True
+            )
+            return
+        
+        if not self.selected_theme:
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} Please select a theme from the dropdown first.",
+                ephemeral=True
+            )
+            return
+        
+        try:
+            with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
+                cursor = pimpSettings_db.cursor()
+                
+                # Check if theme is active
+                cursor.execute("SELECT is_active FROM pimpsettings WHERE themeName=?", (self.selected_theme,))
+                result = cursor.fetchone()
+                
+                if result and result[0] == 1:
+                    await interaction.response.send_message(
+                        f"{pimp.deniedIcon} Cannot delete the active theme. Please activate a different theme first.",
+                        ephemeral=True
+                    )
+                    return
+                
+                # Delete the theme
+                cursor.execute("DELETE FROM pimpsettings WHERE themeName=?", (self.selected_theme,))
+                pimpSettings_db.commit()
+            
+            deleted_theme_name = self.selected_theme
+            
+            # Refresh the select menu with updated theme list
+            with sqlite3.connect('db/pimpsettings.sqlite') as pimpSettings_db:
+                cursor = pimpSettings_db.cursor()
+                cursor.execute("SELECT themeName FROM pimpsettings WHERE themeName != 'default'")
+                themeNames = cursor.fetchall()
+                themeNames = [themeName[0] for themeName in themeNames]
+            
+            # Clear existing items and rebuild
+            self.clear_items()
+            
+            if themeNames:
+                # Rebuild select menu with remaining themes
+                select_options = [discord.SelectOption(label=themeName, value=themeName) for themeName in themeNames]        
+                delete_select = discord.ui.Select(
+                    placeholder="Select a theme to delete",
+                    options=select_options,
+                    custom_id="delete_select"
+                )
+                delete_select.callback = self.select_callback
+                self.add_item(delete_select)
+                
+                # Re-add Delete button
+                delete_button = discord.ui.Button(
+                    label="Delete Theme",
+                    style=discord.ButtonStyle.secondary,
+                    emoji=pimp.deleteIcon
+                )
+                delete_button.callback = self.delete_callback
+                self.add_item(delete_button)
+                
+                # Reset selected theme
+                self.selected_theme = None
+                
+                await interaction.response.send_message(
+                    f"{pimp.verifiedIcon} Theme **{deleted_theme_name}** has been deleted successfully!",
+                    ephemeral=True
+                )
+                
+                # Update the original message with refreshed view
+                await interaction.message.edit(view=self)
+            else:
+                # No more themes to delete
+                await interaction.response.send_message(
+                    f"{pimp.verifiedIcon} Theme **{deleted_theme_name}** has been deleted successfully!\n\nNo more custom themes available to delete.",
+                    ephemeral=True
+                )
+                
+                # Disable the view since there are no themes left
+                await interaction.message.edit(view=None)
+            
+        except Exception as e:
+            print(f"Delete theme error: {e}")
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} Error deleting theme: {e}",
+                ephemeral=True
+            )
+
 class MultiFieldEditModal(discord.ui.Modal):
     """Modal for editing divider patterns or other multi-value fields."""
     def __init__(self, view, field_name, themename, original_user_id):
@@ -145,7 +308,7 @@ class MultiFieldEditModal(discord.ui.Modal):
         current_value = str(icons.get(field_name, ""))
         
         # Create appropriate inputs based on field type
-        if field_name.startswith('emColor'):
+        if field_name.startswith('emColor') or field_name.startswith('attendanceReport'):
             # Color field - single input
             input_field = discord.ui.TextInput(
                 label="Color Value (hex color code)",
@@ -519,7 +682,7 @@ class PaginationView(discord.ui.View):
         selected_emoji = interaction.data['values'][0]
         
         # Check if this is a special field (divider, color, etc) or a regular emoji field
-        if selected_emoji.startswith(('divider', 'emColor')):
+        if selected_emoji.startswith(('divider', 'emColor', 'attendanceReport')):
             # Use multi-field modal for dividers and colors
             modal = MultiFieldEditModal(self, selected_emoji, self.themename, self.original_user_id)
             await interaction.response.send_modal(modal)
@@ -669,9 +832,9 @@ class PIMP(commands.Cog):
                     old_emoji_match = re.search(emoji_pattern, str(old_value))
                     
                     # Generate new emoji name with theme prefix to avoid duplicates across themes
-                    base_name = emoji_name.replace("Icon", "").replace("Old", "")
-                    # Sanitize theme name (remove spaces, special chars) and keep it short
-                    safe_theme = ''.join(c for c in themename if c.isalnum())[:10]
+                    base_name = emoji_name.replace(" ", "")
+                    # Sanitize theme name (remove spaces, special chars)
+                    safe_theme = themename.replace(" ", "")
                     new_emoji_name = f"{safe_theme}_{base_name}"
                     
                     # Delete old emoji if exists
@@ -716,7 +879,6 @@ class PIMP(commands.Cog):
                             is_animated = result.get('animated', False)
                             emoji_prefix = "a" if is_animated else ""
                             new_emoji_str = f"<{emoji_prefix}:{new_emoji_name}:{new_emoji_id}>"
-                            print(f"Uploaded new emoji: {new_emoji_name} ({new_emoji_id}) - Animated: {is_animated}")
                         else:
                             error_text = await resp.text()
                             error_msg = f"Failed to upload emoji. Status: {resp.status}, Error: {error_text}"
@@ -733,20 +895,22 @@ class PIMP(commands.Cog):
                 columns_info = cursor.fetchall()
                 
                 icon_mapping = {
-                    'allianceOldIcon': 2, 'avatarOldIcon': 3, 'stoveOldIcon': 4, 'stateOldIcon': 5,
-                    'allianceIcon': 6, 'avatarIcon': 7, 'stoveIcon': 8, 'stateIcon': 9,
-                    'listIcon': 10, 'fidIcon': 11, 'timeIcon': 12, 'homeIcon': 13,
-                    'num1Icon': 14, 'num2Icon': 15, 'num3Icon': 16, 'newIcon': 17,
-                    'pinIcon': 18, 'giftIcon': 19, 'giftsIcon': 20, 'alertIcon': 21,
-                    'robotIcon': 22, 'crossIcon': 23, 'heartIcon': 24, 'total2Icon': 25,
-                    'shieldIcon': 26, 'targetIcon': 27, 'redeemIcon': 28, 'membersIcon': 29,
-                    'anounceIcon': 30, 'averageIcon': 31, 'hashtagIcon': 32, 'messageIcon': 33,
-                    'supportIcon': 34, 'settingsIcon': 35, 'settings2Icon': 36, 'hourglassIcon': 37,
-                    'messageNoIcon': 38, 'alarmClockIcon': 39, 'magnifyingIcon': 40, 'checkGiftCodeIcon': 41,
-                    'deleteGiftCodeIcon': 42, 'addGiftCodeIcon': 43, 'processingIcon': 44, 'verifiedIcon': 45,
-                    'questionIcon': 46, 'transferIcon': 47, 'multiplyIcon': 48, 'divideIcon': 49,
-                    'deniedIcon': 50, 'deleteIcon': 51, 'exportIcon': 52, 'importIcon': 53,
-                    'retryIcon': 54, 'totalIcon': 55, 'infoIcon': 56, 'warnIcon': 57, 'addIcon': 58
+                    'allianceOldIcon': 3, 'avatarOldIcon': 4, 'stoveOldIcon': 5, 
+                    'stateOldIcon': 6, 'allianceIcon': 7, 'avatarIcon': 8, 'stoveIcon': 9, 'stateIcon': 10, 
+                    'listIcon': 11, 'fidIcon': 12, 'timeIcon': 13, 'homeIcon': 14, 'num1Icon': 15, 
+                    'num2Icon': 16, 'num3Icon': 17, 'num4Icon': 18, 'num5Icon': 19, 'num10Icon': 20, 
+                    'newIcon': 21, 'pinIcon': 22, 'saveIcon': 23, 'giftIcon': 24, 'giftsIcon': 25, 
+                    'alertIcon': 26, 'robotIcon': 27, 'crossIcon': 28, 'heartIcon': 29, 'total2Icon': 30, 
+                    'shieldIcon': 31, 'targetIcon': 32, 'redeemIcon': 33, 'membersIcon': 34, 'averageIcon': 35, 
+                    'hashtagIcon': 36, 'messageIcon': 37, 'supportIcon': 38, 'foundryIcon': 39, 'announceIcon': 40, 
+                    'ministerIcon': 41, 'researchIcon': 42, 'trainingIcon': 43, 'crazyJoeIcon': 44, 'bearTrapIcon': 45, 
+                    'calendarIcon': 46, 'editListIcon': 47, 'settingsIcon': 48, 'settings2Icon': 49, 'hourglassIcon': 50, 
+                    'messageNoIcon': 51, 'blankListIcon': 52, 'alarmGiftIcon': 53, 'alarmClockIcon': 54, 'magnifyingIcon': 55, 
+                    'frostdragonIcon': 56, 'canyonClashIcon': 57, 'constructionIcon': 58, 'castleBattleIcon': 59, 'checkGiftCodeIcon': 60, 
+                    'deleteGiftCodeIcon': 61, 'addGiftCodeIcon': 62, 'processingIcon': 63, 'verifiedIcon': 64, 'questionIcon': 65, 
+                    'transferIcon': 66, 'multiplyIcon': 67, 'divideIcon': 68, 'deniedIcon': 69, 'deleteIcon': 70, 
+                    'exportIcon': 71, 'importIcon': 72, 'retryIcon': 73, 'totalIcon': 74, 'infoIcon': 75, 
+                    'warnIcon': 76, 'addIcon': 77
                 }
                 
                 if emoji_name in icon_mapping:
@@ -811,21 +975,24 @@ class PIMP(commands.Cog):
         export="Export theme as JSON file",
         import_file="Import theme from JSON file (will upload emojis to bot)",
         activate="Activate this theme (sets it as the active theme)",
-        create="Create a new theme from default template"
+        create="Create a new theme from default template",
+        delete="Delete an existing theme (cannot delete active theme)"
     )
     @discord.app_commands.choices(
         export=[discord.app_commands.Choice(name="True", value="true")],
         activate=[discord.app_commands.Choice(name="True", value="true")],
-        create=[discord.app_commands.Choice(name="True", value="true")]
+        create=[discord.app_commands.Choice(name="True", value="true")],
+        delete=[discord.app_commands.Choice(name="True", value="true")]
     )
     async def pimp(
         self, 
         interaction: discord.Interaction, 
-        themename: str = None, 
+        themename: str, 
         export: str = None,
         import_file: discord.Attachment = None,
         activate: str = None,
-        create: str = None
+        create: str = None,
+        delete: str = None
     ):
         # Check if user is initial admin
         try:
@@ -850,6 +1017,8 @@ class PIMP(commands.Cog):
         
         if create and create.lower() == "true":
             await self.show_create_theme(interaction)
+        elif delete and delete.lower() == "true":
+            await self.show_delete_theme(interaction, themename)
         elif import_file:
             await self.import_theme(interaction, import_file)
         elif activate and activate.lower() == "true":
@@ -900,9 +1069,16 @@ class PIMP(commands.Cog):
                 if themename == "default" and len(parts) == 2:
                     value = parts[1]
                     if value.startswith("http"):
+                        # Handle URL values
                         description = f"[{name} - Link]({value})"
                         embed = discord.Embed(title=name, description=description, color=pimp.emColor3)
                         embed.set_thumbnail(url=value)
+                    elif value.startswith('#'):
+                        # Handle color values (like #FF5733)
+                        color_url = f"https://www.colorhexa.com/{value.strip('#')}.png"
+                        description = f"[{value}]({color_url})"
+                        embed = discord.Embed(title=name, description=description, color=pimp.emColor3)
+                        embed.set_thumbnail(url=color_url)
                     else:
                         # Handle divider and color values that aren't URLs
                         embed = discord.Embed(title=name, description=f"`{value}`", color=pimp.emColor3)
@@ -916,7 +1092,7 @@ class PIMP(commands.Cog):
                     
                     if emoji_matches:
                         # Build description with actual emojis and links
-                        description = f"{emoji_display}\n\n**Emoji Links:**\n"
+                        description = f"{emoji_display}\n\n**Emoji Link(s):**\n"
                         for emoji_name, emoji_id in emoji_matches:
                             # Check if it's animated by looking at the original string
                             is_animated = f"<a:{emoji_name}:{emoji_id}>" in emoji_display
@@ -939,17 +1115,37 @@ class PIMP(commands.Cog):
                             emoji_ext = "gif" if is_animated else "png"
                             second_emoji_url = f"https://cdn.discordapp.com/emojis/{emoji_matches[1][1]}.{emoji_ext}"
                             embed.set_image(url=second_emoji_url)
+
                     elif emoji_display.startswith("http"):
                         description = f"[{name} - Link]({emoji_display})"
                         embed = discord.Embed(title=name, description=description, color=pimp.emColor3)
                         embed.set_thumbnail(url=emoji_display)
+                    
+                    # Handle color values (like #FF5733)
+                    elif emoji_display.startswith('#'):
+                        color_url = f"https://www.colorhexa.com/{emoji_display.strip('#')}.png"
+                        description = f"[{emoji_display}]({color_url})"
+                        embed = discord.Embed(title=name, description=description, color=pimp.emColor3)
+                        embed.set_thumbnail(url=color_url)
+
                     else:
                         # Handle non-emoji divider values (like ━━━)
-                        embed = discord.Embed(title=name, description=f"`{emoji_display}`", color=pimp.emColor3)
-                # For other cases (dividers, colors, etc)
+                        embed = discord.Embed(title=name, description=f"{emoji_display}", color=pimp.emColor3)
+               
+                # For other cases (dividers, etc)
                 else:
-                    value = parts[1] if len(parts) > 1 else ""
-                    embed = discord.Embed(title=name, description=f"`{value}`", color=pimp.emColor3)
+                    if len(parts) > 1 and parts[1].startswith('http'):
+                        description = f"[{name} - Link]({parts[1]})"
+                        embed = discord.Embed(title=name, description=description, color=pimp.emColor3)
+                        embed.set_thumbnail(url=parts[1])
+                    elif len(parts) > 1 and parts[1].startswith('#'):
+                        color_url = f"https://www.colorhexa.com/{parts[1].strip('#')}.png"
+                        description = f"[{parts[1]}]({color_url})"
+                        embed = discord.Embed(title=name, description=description, color=pimp.emColor3)
+                        embed.set_thumbnail(url=color_url)
+                    elif len(parts) > 1: 
+                        value = parts[1] if len(parts) > 1 else ""
+                        embed = discord.Embed(title=name, description=f"{value}", color=pimp.emColor3)
                 
                 embeds.append(embed)
         
@@ -969,20 +1165,22 @@ class PIMP(commands.Cog):
             
             # Define icon names mapping to database indices
             icon_mapping = {
-                'allianceOldIcon': 2, 'avatarOldIcon': 3, 'stoveOldIcon': 4, 'stateOldIcon': 5,
-                'allianceIcon': 6, 'avatarIcon': 7, 'stoveIcon': 8, 'stateIcon': 9,
-                'listIcon': 10, 'fidIcon': 11, 'timeIcon': 12, 'homeIcon': 13,
-                'num1Icon': 14, 'num2Icon': 15, 'num3Icon': 16, 'newIcon': 17,
-                'pinIcon': 18, 'giftIcon': 19, 'giftsIcon': 20, 'alertIcon': 21,
-                'robotIcon': 22, 'crossIcon': 23, 'heartIcon': 24, 'total2Icon': 25,
-                'shieldIcon': 26, 'targetIcon': 27, 'redeemIcon': 28, 'membersIcon': 29,
-                'anounceIcon': 30, 'averageIcon': 31, 'hashtagIcon': 32, 'messageIcon': 33,
-                'supportIcon': 34, 'settingsIcon': 35, 'settings2Icon': 36, 'hourglassIcon': 37,
-                'messageNoIcon': 38, 'alarmClockIcon': 39, 'magnifyingIcon': 40, 'checkGiftCodeIcon': 41,
-                'deleteGiftCodeIcon': 42, 'addGiftCodeIcon': 43, 'processingIcon': 44, 'verifiedIcon': 45,
-                'questionIcon': 46, 'transferIcon': 47, 'multiplyIcon': 48, 'divideIcon': 49,
-                'deniedIcon': 50, 'deleteIcon': 51, 'exportIcon': 52, 'importIcon': 53,
-                'retryIcon': 54, 'totalIcon': 55, 'infoIcon': 56, 'warnIcon': 57, 'addIcon': 58
+                'allianceOldIcon': 3, 'avatarOldIcon': 4, 'stoveOldIcon': 5, 
+                'stateOldIcon': 6, 'allianceIcon': 7, 'avatarIcon': 8, 'stoveIcon': 9, 'stateIcon': 10, 
+                'listIcon': 11, 'fidIcon': 12, 'timeIcon': 13, 'homeIcon': 14, 'num1Icon': 15, 
+                'num2Icon': 16, 'num3Icon': 17, 'num4Icon': 18, 'num5Icon': 19, 'num10Icon': 20, 
+                'newIcon': 21, 'pinIcon': 22, 'saveIcon': 23, 'giftIcon': 24, 'giftsIcon': 25, 
+                'alertIcon': 26, 'robotIcon': 27, 'crossIcon': 28, 'heartIcon': 29, 'total2Icon': 30, 
+                'shieldIcon': 31, 'targetIcon': 32, 'redeemIcon': 33, 'membersIcon': 34, 'averageIcon': 35, 
+                'hashtagIcon': 36, 'messageIcon': 37, 'supportIcon': 38, 'foundryIcon': 39, 'announceIcon': 40, 
+                'ministerIcon': 41, 'researchIcon': 42, 'trainingIcon': 43, 'crazyJoeIcon': 44, 'bearTrapIcon': 45, 
+                'calendarIcon': 46, 'editListIcon': 47, 'settingsIcon': 48, 'settings2Icon': 49, 'hourglassIcon': 50, 
+                'messageNoIcon': 51, 'blankListIcon': 52, 'alarmGiftIcon': 53, 'alarmClockIcon': 54, 'magnifyingIcon': 55, 
+                'frostdragonIcon': 56, 'canyonClashIcon': 57, 'constructionIcon': 58, 'castleBattleIcon': 59, 'checkGiftCodeIcon': 60, 
+                'deleteGiftCodeIcon': 61, 'addGiftCodeIcon': 62, 'processingIcon': 63, 'verifiedIcon': 64, 'questionIcon': 65, 
+                'transferIcon': 66, 'multiplyIcon': 67, 'divideIcon': 68, 'deniedIcon': 69, 'deleteIcon': 70, 
+                'exportIcon': 71, 'importIcon': 72, 'retryIcon': 73, 'totalIcon': 74, 'infoIcon': 75, 
+                'warnIcon': 76, 'addIcon': 77
             }
             
             # Extract icons using mapping
@@ -990,39 +1188,78 @@ class PIMP(commands.Cog):
             
             # Extract divider and color data
             icons.update({
-                'dividerEmojiStart1': theme[59] if theme else "━",
-                'dividerEmojiPattern1': theme[60] if theme else "━",
-                'dividerEmojiEnd1': theme[61] if theme else "━",
-                'dividerLength1': theme[62] if theme else 9,
-                'dividerEmojiStart2': theme[63] if theme else "━",
-                'dividerEmojiPattern2': theme[64] if theme else "━",
-                'dividerEmojiEnd2': theme[65] if theme else "━",
-                'dividerLength2': theme[66] if theme else 9,
-                'emColorString1': theme[67] if theme else "#FFFFFF",
-                'emColorString2': theme[68] if theme else "#FFFFFF",
-                'emColorString3': theme[69] if theme else "#FFFFFF",
-                'emColorString4': theme[70] if theme else "#FFFFFF"
+                'dividerEmojiStart1': theme[78] if theme else "━",
+                'dividerEmojiPattern1': theme[79] if theme else "━",
+                'dividerEmojiEnd1': theme[80] if theme else "━",
+                'dividerLength1': theme[81] if theme else 9,
+                'dividerEmojiStart2': theme[82] if theme else "━",
+                'dividerEmojiPattern2': theme[83] if theme else "━",
+                'dividerEmojiEnd2': theme[84] if theme else "━",
+                'dividerLength2': theme[85] if theme else 9,
+                'emColorString1': theme[86] if theme else "#FFFFFF",
+                'emColorString2': theme[87] if theme else "#FFFFFF",
+                'emColorString3': theme[88] if theme else "#FFFFFF",
+                'emColorString4': theme[89] if theme else "#FFFFFF",
+                'headerColor1': theme[90] if theme else "#FFFFFF",
+                'headerColor2': theme[91] if theme else "#FFFFFF",
+                'furnaceLevel0Icon': theme[92] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel1Icon': theme[93] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel2Icon': theme[94] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel3Icon': theme[95] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel4Icon': theme[96] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel5Icon': theme[97] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel6Icon': theme[98] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel7Icon': theme[99] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel8Icon': theme[100] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel9Icon': theme[101] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel10Icon': theme[102] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel11Icon': theme[103] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel12Icon': theme[104] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel13Icon': theme[105] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel14Icon': theme[106] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel15Icon': theme[107] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel16Icon': theme[108] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel17Icon': theme[109] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel18Icon': theme[110] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel19Icon': theme[111] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel20Icon': theme[112] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel21Icon': theme[113] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel22Icon': theme[114] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel23Icon': theme[115] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel24Icon': theme[116] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel25Icon': theme[117] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel26Icon': theme[118] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel27Icon': theme[119] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel28Icon': theme[120] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel29Icon': theme[121] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel30Icon': theme[122] if theme else pimp.furnaceLevelImageDefaultURL
             })
             
             return icons
 
     def _build_default_theme_lines(self):
         """Build default theme lines with Twemoji CDN URLs."""
+        
         default_icons = {
             'allianceOldIcon': '2694', 'avatarOldIcon': '1f464', 'stoveOldIcon': '1f525', 'stateOldIcon': '1f30e',
             'allianceIcon': '2694', 'avatarIcon': '1f464', 'stoveIcon': '1f525', 'stateIcon': '1f30f',
             'listIcon': '1f4dc', 'fidIcon': '1f194', 'timeIcon': '1f570', 'homeIcon': '1f3e0',
-            'num1Icon': '31-20e3', 'num2Icon': '32-20e3', 'num3Icon': '33-20e3', 'newIcon': '1f195',
-            'pinIcon': '1f4cd', 'giftIcon': '1f381', 'giftsIcon': '1f6cd', 'alertIcon': '26a0',
-            'robotIcon': '1f916', 'crossIcon': '2694', 'heartIcon': '1f497', 'total2Icon': '1f7f0',
-            'shieldIcon': '1f6e1', 'targetIcon': '1f3af', 'redeemIcon': '1f503', 'membersIcon': '1f465',
-            'anounceIcon': '1f4e2', 'averageIcon': '1f4c8', 'hashtagIcon': '1f522', 'messageIcon': '1f50a',
-            'supportIcon': '1f198', 'settingsIcon': '2699', 'settings2Icon': '2699', 'hourglassIcon': '23f3',
-            'messageNoIcon': '1f507', 'alarmClockIcon': '23f0', 'magnifyingIcon': '1f50d', 'checkGiftCodeIcon': '2705',
-            'deleteGiftCodeIcon': '1f5d1', 'addGiftCodeIcon': '2795', 'processingIcon': '1f504', 'verifiedIcon': '2705',
-            'questionIcon': '2753', 'transferIcon': '2194', 'multiplyIcon': '2716', 'divideIcon': '2797',
-            'deniedIcon': '274c', 'deleteIcon': '2796', 'exportIcon': '27a1', 'importIcon': '2b05',
-            'retryIcon': '1f501', 'totalIcon': '1f7f0', 'infoIcon': '2139', 'warnIcon': '26a0', 'addIcon': '2795'
+            'num1Icon': '31-20e3', 'num2Icon': '32-20e3', 'num3Icon': '33-20e3', 'num4Icon': '34-20e3', 'num5Icon': '35-20e3', 
+            'num10Icon': '1f51f', 'newIcon': '1f195',
+            'pinIcon': '1f4cd', 'saveIcon': '1f4be', 'giftIcon': '1f381', 'giftsIcon': '1f6cd', 
+            'alertIcon': '26a0', 'robotIcon': '1f916', 'crossIcon': '2694', 'heartIcon': '1f497', 
+            'total2Icon': '1f7f0', 'shieldIcon': '1f6e1', 'targetIcon': '1f3af', 'redeemIcon': '1f503', 
+            'membersIcon': '1f465', 'averageIcon': '1f4c8', 'hashtagIcon': '1f522', 'messageIcon': '1f50a', 
+            'supportIcon': '1f198', 'foundryIcon': '1f3ed', 'announceIcon': '1f4e2', 'ministerIcon': '1f3db', 
+            'researchIcon': '1f52c', 'trainingIcon': '2694', 'crazyJoeIcon': '1f92a ', 'bearTrapIcon': '1f43b', 
+            'calendarIcon': '1f4c5', 'editListIcon': '1f4dd', 'settingsIcon': '2699', 'settings2Icon': '2699', 
+            'hourglassIcon': '23f3', 'messageNoIcon': '1f507', 'blankListIcon': '26AA', 'alarmGiftIcon': '2795', 
+            'alarmClockIcon': '23f0', 'magnifyingIcon': '1f50d', 'frostdragonIcon': '1f409', 'canyonClashIcon': '1f3de', 
+            'constructionIcon': '2692', 'castleBattleIcon': '1f3f0', 'checkGiftCodeIcon': '2705', 'deleteGiftCodeIcon': '1f5d1', 
+            'addGiftCodeIcon': '2795', 'processingIcon': '1f504', 'verifiedIcon': '2705', 'questionIcon': '2753', 
+            'transferIcon': '2194', 'multiplyIcon': '2716', 'divideIcon': '2797', 'deniedIcon': '274c', 
+            'deleteIcon': '2796', 'exportIcon': '27a1', 'importIcon': '2b05', 'retryIcon': '1f501', 
+            'totalIcon': '1f7f0', 'infoIcon': '2139', 'warnIcon': '26a0', 'addIcon': '2795'
         }
         
         cdn_base = "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/"
@@ -1036,7 +1273,24 @@ class PIMP(commands.Cog):
             "dividerEmojiStart1 = ━", "dividerEmojiPattern1 = ━", "dividerEmojiEnd1 = ━", 
             "dividerLength1 = 9", "dividerEmojiStart2 = ━", "dividerEmojiPattern2 = ━", 
             "dividerEmojiEnd2 = ━", "dividerLength2 = 9",
-            "emColorString1 = #FFFFFF", "emColorString2 = #FFFFFF", "emColorString3 = #FFFFFF", "emColorString4 = #FFFFFF"
+            "emColorString1 = #0000FF", "emColorString2 = #FF0000", "emColorString3 = #00FF00", "emColorString4 = #FFFF00",
+            "headerColor1 = #FFFFFF", "headerColor2 = #FFFFFF",
+            "furnaceLevel0Icon = https://cdn-icons-png.freepik.com/512/12388/12388244.png", "furnaceLevel1Icon = https://cdn-icons-png.freepik.com/512/9932/9932935.png",
+            "furnaceLevel2Icon = https://cdn-icons-png.freepik.com/512/9933/9933057.png", "furnaceLevel3Icon = https://cdn-icons-png.freepik.com/512/9933/9933179.png",
+            "furnaceLevel4Icon = https://cdn-icons-png.freepik.com/512/9933/9933300.png", "furnaceLevel5Icon = https://cdn-icons-png.freepik.com/512/9933/9933423.png",
+            "furnaceLevel6Icon = https://cdn-icons-png.freepik.com/512/9933/9933543.png", "furnaceLevel7Icon = https://cdn-icons-png.freepik.com/512/9933/9933662.png",
+            "furnaceLevel8Icon = https://cdn-icons-png.freepik.com/512/9933/9933786.png", "furnaceLevel9Icon = https://cdn-icons-png.freepik.com/512/9933/9933890.png",
+            "furnaceLevel10Icon = https://cdn-icons-png.freepik.com/512/9932/9932941.png", "furnaceLevel11Icon = https://cdn-icons-png.freepik.com/512/9932/9932961.png",
+            "furnaceLevel12Icon = https://cdn-icons-png.freepik.com/512/9932/9932971.png", "furnaceLevel13Icon = https://cdn-icons-png.freepik.com/512/9932/9932980.png",
+            "furnaceLevel14Icon = https://cdn-icons-png.freepik.com/512/9932/9932990.png", "furnaceLevel15Icon = https://cdn-icons-png.freepik.com/512/9933/9933000.png",
+            "furnaceLevel16Icon = https://cdn-icons-png.freepik.com/512/9933/9933014.png", "furnaceLevel17Icon = https://cdn-icons-png.freepik.com/512/9933/9933025.png",
+            "furnaceLevel18Icon = https://cdn-icons-png.freepik.com/512/9933/9933036.png", "furnaceLevel19Icon = https://cdn-icons-png.freepik.com/512/9933/9933047.png",
+            "furnaceLevel20Icon = https://cdn-icons-png.freepik.com/512/9933/9933068.png", "furnaceLevel21Icon = https://cdn-icons-png.freepik.com/512/9933/9933080.png",
+            "furnaceLevel22Icon = https://cdn-icons-png.freepik.com/512/9933/9933089.png", "furnaceLevel23Icon = https://cdn-icons-png.freepik.com/512/9933/9933103.png",
+            "furnaceLevel24Icon = https://cdn-icons-png.freepik.com/512/9933/9933114.png", "furnaceLevel25Icon = https://cdn-icons-png.freepik.com/512/9933/9933126.png",
+            "furnaceLevel26Icon = https://cdn-icons-png.freepik.com/512/9933/9933137.png", "furnaceLevel27Icon = https://cdn-icons-png.freepik.com/512/9933/9933147.png",
+            "furnaceLevel28Icon = https://cdn-icons-png.freepik.com/512/9933/9933157.png", "furnaceLevel29Icon = https://cdn-icons-png.freepik.com/512/9933/9933168.png",
+            "furnaceLevel30Icon = https://cdn-icons-png.freepik.com/512/9933/9933190.png"
         ])
         return lines
 
@@ -1050,9 +1304,9 @@ class PIMP(commands.Cog):
                 description=(
                     "Click the button below to create a new theme.\n\n"
                     f"{pimp.infoIcon} You'll be able to:\n"
-                    "• Name your theme\n"
-                    "• Start with default emojis\n"
-                    "• Edit each emoji individually"
+                    "- Name your theme\n"
+                    "- Start with default emojis\n"
+                    "- Edit each emoji individually"
                 ),
                 color=pimp.emColor1
             )
@@ -1063,6 +1317,38 @@ class PIMP(commands.Cog):
             print(f"Show create theme error: {e}")
             await interaction.response.send_message(f"{pimp.deniedIcon} Error: {e}", ephemeral=True)
     
+    async def show_delete_theme(self, interaction: discord.Interaction, themename: str | None = None):
+        """Show the delete theme interface."""
+        try:
+            view = DeleteThemeView(self, interaction.user.id, themename)
+
+            description = (
+                f"{pimp.divider1}\n"
+                f"### {pimp.warnIcon} Warning: {pimp.warnIcon}\n"
+                "You cannot delete the active theme.\n"
+                "Make sure to activate a different theme before deleting.\n\n"
+                f"{pimp.divider2}\n\n"
+            )
+            
+            if themename:
+                description += f"Theme **{themename}** is pre-selected.\nClick the **Delete Theme** button to confirm deletion."
+            else:
+                description += "Select a theme from the dropdown and click the **Delete Theme** button to confirm."
+            
+            description += f"\n\n{pimp.divider1}\n"
+            
+            embed = discord.Embed(
+                title=f"{pimp.deleteIcon} Delete Theme",
+                description=description,
+                color=pimp.emColor2
+            )
+            await interaction.response.send_message(embed=embed, view=view)
+            
+        except Exception as e:
+            print(f"Show delete theme error: {e}")
+            await interaction.response.send_message(f"{pimp.deniedIcon} Error: {e}", ephemeral=True)
+    
+
     @commands.Cog.listener()
     async def on_message(self, message):
         """Listen for emoji messages when user is editing."""
@@ -1137,7 +1423,7 @@ class PIMP(commands.Cog):
         
         # Process the emoji update
         try:
-            await message.add_reaction("⏳")
+            await message.add_reaction(f"{pimp.hourglassIcon}")
             
             # Simulate the modal submission by calling the update logic directly
             result = await self._process_emoji_update(
@@ -1227,7 +1513,8 @@ class PIMP(commands.Cog):
                 "themeName": themename,
                 "icons": {},
                 "dividers": {},
-                "colors": {}
+                "colors": {},
+                "urls": {}
             }
             
             emoji_pattern = r'<:(\w+):(\d+)>'
@@ -1249,10 +1536,12 @@ class PIMP(commands.Cog):
                         else:
                             export_data["dividers"][key] = {"raw": str(value)}
                         
-                elif key.startswith('emColor'):
+                elif key.startswith('emColor') or key.startswith('headerColor'):
                     # Handle color fields
                     export_data["colors"][key] = str(value)
-                    
+                elif key.startswith('furnaceLevel'):
+                    # Handle furnace level icon URLs
+                    export_data["urls"][key] = str(value)
                 else:
                     # Handle icon fields
                     emoji_matches = re.findall(emoji_pattern, str(value))
@@ -1312,6 +1601,7 @@ class PIMP(commands.Cog):
             icons_data = theme_data.get("icons", {})
             dividers_data = theme_data.get("dividers", {})
             colors_data = theme_data.get("colors", {})
+            urls_data = theme_data.get("urls", {})
             
             status_embed = discord.Embed(
                 title=f"{pimp.processingIcon} Importing Theme",
@@ -1364,7 +1654,6 @@ class PIMP(commands.Cog):
                             # Build dict of existing emoji names to IDs
                             for emoji_data in emoji_list.get('items', []):
                                 existing_emojis[emoji_data['name']] = emoji_data['id']
-                            print(f"Found {len(existing_emojis)} existing bot emojis")
                 except Exception as e:
                     print(f"Failed to fetch existing emojis: {e}")
                 
@@ -1375,7 +1664,6 @@ class PIMP(commands.Cog):
                         if emoji_name in existing_emojis:
                             emoji_id = existing_emojis[emoji_name]
                             uploaded_emojis[emoji_name] = f"<:{emoji_name}:{emoji_id}>"
-                            print(f"Skipped emoji (already exists): {emoji_name} -> {emoji_id}")
                             continue
                         
                         # Download emoji image
@@ -1406,7 +1694,6 @@ class PIMP(commands.Cog):
                                         emoji_data = await upload_resp.json()
                                         emoji_id = emoji_data['id']
                                         uploaded_emojis[emoji_name] = f"<:{emoji_name}:{emoji_id}>"
-                                        print(f"Uploaded new emoji: {emoji_name} -> {emoji_id}")
                                     else:
                                         error_text = await upload_resp.text()
                                         print(f"Failed to upload emoji {emoji_name}: {upload_resp.status} - {error_text}")
@@ -1422,20 +1709,22 @@ class PIMP(commands.Cog):
             
             # Map icon positions (same as _get_theme_data)
             icon_positions = [
-                'allianceOldIcon', 'avatarOldIcon', 'stoveOldIcon', 'stateOldIcon',
-                'allianceIcon', 'avatarIcon', 'stoveIcon', 'stateIcon',
-                'listIcon', 'fidIcon', 'timeIcon', 'homeIcon',
-                'num1Icon', 'num2Icon', 'num3Icon', 'newIcon',
-                'pinIcon', 'giftIcon', 'giftsIcon', 'alertIcon',
-                'robotIcon', 'crossIcon', 'heartIcon', 'total2Icon',
-                'shieldIcon', 'targetIcon', 'redeemIcon', 'membersIcon',
-                'anounceIcon', 'averageIcon', 'hashtagIcon', 'messageIcon',
-                'supportIcon', 'settingsIcon', 'settings2Icon', 'hourglassIcon',
-                'messageNoIcon', 'alarmClockIcon', 'magnifyingIcon', 'checkGiftCodeIcon',
-                'deleteGiftCodeIcon', 'addGiftCodeIcon', 'processingIcon', 'verifiedIcon',
-                'questionIcon', 'transferIcon', 'multiplyIcon', 'divideIcon',
-                'deniedIcon', 'deleteIcon', 'exportIcon', 'importIcon',
-                'retryIcon', 'totalIcon', 'infoIcon', 'warnIcon', 'addIcon'
+                'allianceOldIcon', 'avatarOldIcon', 'stoveOldIcon', 
+                'stateOldIcon', 'allianceIcon', 'avatarIcon', 'stoveIcon', 'stateIcon', 
+                'listIcon', 'fidIcon', 'timeIcon', 'homeIcon', 'num1Icon', 
+                'num2Icon', 'num3Icon', 'num4Icon', 'num5Icon', 'num10Icon', 
+                'newIcon', 'pinIcon', 'saveIcon', 'giftIcon', 'giftsIcon', 
+                'alertIcon', 'robotIcon', 'crossIcon', 'heartIcon', 'total2Icon', 
+                'shieldIcon', 'targetIcon', 'redeemIcon', 'membersIcon', 'averageIcon', 
+                'hashtagIcon', 'messageIcon', 'supportIcon', 'foundryIcon', 'announceIcon', 
+                'ministerIcon', 'researchIcon', 'trainingIcon', 'crazyJoeIcon', 'bearTrapIcon', 
+                'calendarIcon', 'editListIcon', 'settingsIcon', 'settings2Icon', 'hourglassIcon', 
+                'messageNoIcon', 'blankListIcon', 'alarmGiftIcon', 'alarmClockIcon', 'magnifyingIcon', 
+                'frostdragonIcon', 'canyonClashIcon', 'constructionIcon', 'castleBattleIcon', 'checkGiftCodeIcon', 
+                'deleteGiftCodeIcon', 'addGiftCodeIcon', 'processingIcon', 'verifiedIcon', 'questionIcon', 
+                'transferIcon', 'multiplyIcon', 'divideIcon', 'deniedIcon', 'deleteIcon', 
+                'exportIcon', 'importIcon', 'retryIcon', 'totalIcon', 'infoIcon', 
+                'warnIcon', 'addIcon'
             ]
             
             # Build icon values list - ensure all values are strings
@@ -1452,7 +1741,6 @@ class PIMP(commands.Cog):
                         icon_values.append(str(data.get("value", "👻")))
                 else:
                     icon_values.append("👻")
-            
             # Process dividers - ensure returns are strings
             def process_divider(key):
                 if key in dividers_data:
@@ -1471,13 +1759,13 @@ class PIMP(commands.Cog):
                 return "━"
             
             # Get divider lengths (stored as plain integers)
-            divider_length1 = dividers_data.get('dividerLength1', 9)
-            divider_length2 = dividers_data.get('dividerLength2', 9)
+            divider_length1 = dividers_data.get('dividerLength1', 16)
+            divider_length2 = dividers_data.get('dividerLength2', 16)
             # Ensure they're integers
             if not isinstance(divider_length1, int):
-                divider_length1 = int(divider_length1) if str(divider_length1).isdigit() else 9
+                divider_length1 = int(divider_length1) if str(divider_length1).isdigit() else 16
             if not isinstance(divider_length2, int):
-                divider_length2 = int(divider_length2) if str(divider_length2).isdigit() else 9
+                divider_length2 = int(divider_length2) if str(divider_length2).isdigit() else 16
             
             divider_values = [
                 process_divider('dividerEmojiStart1'),
@@ -1492,10 +1780,47 @@ class PIMP(commands.Cog):
             
             # Process colors - ensure they're strings
             color_values = [
-                str(colors_data.get('emColorString1', '#FFFFFF')),
-                str(colors_data.get('emColorString2', '#FFFFFF')),
-                str(colors_data.get('emColorString3', '#FFFFFF')),
-                str(colors_data.get('emColorString4', '#FFFFFF'))
+                str(colors_data.get('emColorString1', '#0000FF')),
+                str(colors_data.get('emColorString2', '#FF0000')),
+                str(colors_data.get('emColorString3', '#00FF00')),
+                str(colors_data.get('emColorString4', '#FFFF00')),
+                str(colors_data.get('headerColor1', '#1F77B4')),
+                str(colors_data.get('headerColor2', '#28A745')),
+            ]
+
+            # Process urls - ensure they're strings
+            urls_values = [
+                str(urls_data.get('furnaceLevel0Icon', 'None')),
+                str(urls_data.get('furnaceLevel1Icon', 'None')),
+                str(urls_data.get('furnaceLevel2Icon', 'None')),
+                str(urls_data.get('furnaceLevel3Icon', 'None')),
+                str(urls_data.get('furnaceLevel4Icon', 'None')),
+                str(urls_data.get('furnaceLevel5Icon', 'None')),
+                str(urls_data.get('furnaceLevel6Icon', 'None')),
+                str(urls_data.get('furnaceLevel7Icon', 'None')),
+                str(urls_data.get('furnaceLevel8Icon', 'None')),
+                str(urls_data.get('furnaceLevel9Icon', 'None')),
+                str(urls_data.get('furnaceLevel10Icon', 'None')),
+                str(urls_data.get('furnaceLevel11Icon', 'None')),
+                str(urls_data.get('furnaceLevel12Icon', 'None')),
+                str(urls_data.get('furnaceLevel13Icon', 'None')),
+                str(urls_data.get('furnaceLevel14Icon', 'None')),
+                str(urls_data.get('furnaceLevel15Icon', 'None')),
+                str(urls_data.get('furnaceLevel16Icon', 'None')),
+                str(urls_data.get('furnaceLevel17Icon', 'None')),
+                str(urls_data.get('furnaceLevel18Icon', 'None')),
+                str(urls_data.get('furnaceLevel19Icon', 'None')),
+                str(urls_data.get('furnaceLevel20Icon', 'None')),
+                str(urls_data.get('furnaceLevel21Icon', 'None')),
+                str(urls_data.get('furnaceLevel22Icon', 'None')),
+                str(urls_data.get('furnaceLevel23Icon', 'None')),
+                str(urls_data.get('furnaceLevel24Icon', 'None')),
+                str(urls_data.get('furnaceLevel25Icon', 'None')),
+                str(urls_data.get('furnaceLevel26Icon', 'None')),
+                str(urls_data.get('furnaceLevel27Icon', 'None')),
+                str(urls_data.get('furnaceLevel28Icon', 'None')),
+                str(urls_data.get('furnaceLevel29Icon', 'None')),
+                str(urls_data.get('furnaceLevel30Icon', 'None')),
             ]
             
             # Save to database
@@ -1506,7 +1831,7 @@ class PIMP(commands.Cog):
                 cursor.execute("PRAGMA table_info(pimpsettings)")
                 columns_info = cursor.fetchall()
                 # Skip id (0), themeName (1), and is_active (last), get columns 2 onwards for data
-                data_columns = [col[1] for col in columns_info if col[1] not in ['id', 'themeName', 'is_active']]
+                data_columns = [col[1] for col in columns_info if col[1] not in ['id', 'themeName', 'themeCreator', 'is_active']]
                 
                 # Check if theme exists
                 cursor.execute("SELECT COUNT(*) FROM pimpsettings WHERE themeName=?", (themename,))
@@ -1516,13 +1841,13 @@ class PIMP(commands.Cog):
                     # Update existing theme (don't update is_active)
                     update_columns = [f"{col}=?" for col in data_columns]
                     query = f"UPDATE pimpsettings SET {', '.join(update_columns)} WHERE themeName=?"
-                    cursor.execute(query, icon_values + divider_values + color_values + [themename])
+                    cursor.execute(query, icon_values + divider_values + color_values + urls_values + [themename])
                 else:
                     # Insert new theme with is_active = 0 (inactive by default)
                     placeholders = ', '.join(['?' for _ in range(len(data_columns))])
                     columns_str = ', '.join(data_columns)
-                    query = f"INSERT INTO pimpsettings (themeName, {columns_str}, is_active) VALUES (?, {placeholders}, 0)"
-                    cursor.execute(query, [themename] + icon_values + divider_values + color_values)
+                    query = f"INSERT INTO pimpsettings (themeName, themeCreator, {columns_str}, is_active) VALUES (?, ?, {placeholders}, 0)"
+                    cursor.execute(query, [themename, interaction.user.id] + icon_values + divider_values + color_values + urls_values)
                 
                 pimpSettings_db.commit()
             

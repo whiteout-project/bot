@@ -1548,7 +1548,7 @@ class GiftOperations(commands.Cog):
             messages_scanned = results['messages_scanned']
             
             embed.add_field(
-                name=f"{pimp.anounceIcon} Scan Summary",
+                name=f"{pimp.announceIcon} Scan Summary",
                 value=f"**Messages Scanned:** {messages_scanned}\n**Total Codes Found:** {total_found}",
                 inline=False
             )
@@ -1959,7 +1959,7 @@ class GiftOperations(commands.Cog):
                 stats_lines.append(f"• Avg. ID Processing Time: `{avg_time:.2f}s` (over `{total_fids}` IDs)")
 
                 embed.add_field(
-                    name=f"{pimp.anounceIcon} Processing Statistics (Since Bot Start)",
+                    name=f"{pimp.announceIcon} Processing Statistics (Since Bot Start)",
                     value="\n".join(stats_lines),
                     inline=False
                 )
@@ -2298,7 +2298,7 @@ class GiftOperations(commands.Cog):
         current_channels = dict(self.cursor.fetchall())
 
         alliance_embed = discord.Embed(
-            title = f"{pimp.anounceIcon} Gift Code Channel Setup",
+            title = f"{pimp.announceIcon} Gift Code Channel Setup",
             description=(
                 f"Please select an alliance to set up gift code channel:\n\n"
                 f"**Alliance List**\n"
@@ -2315,7 +2315,7 @@ class GiftOperations(commands.Cog):
                 alliance_id = int(view.current_select.values[0])
                 
                 channel_embed = discord.Embed(
-                    title = f"{pimp.anounceIcon} Gift Code Channel Setup",
+                    title = f"{pimp.announceIcon} Gift Code Channel Setup",
                     description=(
                         f"**Instructions:**\n"
                         f"{pimp.divider1}\n"
@@ -2343,7 +2343,7 @@ class GiftOperations(commands.Cog):
                             description=(
                                 f"Successfully set gift code channel:\n\n"
                                 f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
+                                f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                                 f"{pimp.verifiedIcon} Channel has been configured for gift code monitoring.\n"
                                 f"Use **Channel History Scan** in Gift Code Settings to scan historical messages on-demand.\n"
                                 f"**Tip:** Follow the official WOS #giftcodes channel in your gift code channel to easily find new codes."
@@ -2800,7 +2800,7 @@ class GiftOperations(commands.Cog):
                     description=(
                         f"Are you sure you want to remove the gift code channel for:\n\n"
                         f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                        f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
+                        f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                         "This action cannot be undone!"
                     ),
                     color=pimp.emColor4,
@@ -2818,7 +2818,7 @@ class GiftOperations(commands.Cog):
                             description=(
                                 f"Successfully removed gift code channel for:\n\n"
                                 f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                f"{pimp.anounceIcon} **Channel:** <#{channel_id}>"
+                                f"{pimp.announceIcon} **Channel:** <#{channel_id}>"
                             ),
                             color = pimp.emColor3,
                         )
@@ -2923,7 +2923,7 @@ class GiftOperations(commands.Cog):
                 description=(
                     f"Are you sure you want to remove the gift code channel setting?\n\n"
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                    f"{pimp.anounceIcon} **Current Channel:** <#{channel_id}>\n\n"
+                    f"{pimp.announceIcon} **Current Channel:** <#{channel_id}>\n\n"
                     "This action cannot be undone!"
                 ),
                 color=emColor4,
@@ -2942,7 +2942,7 @@ class GiftOperations(commands.Cog):
                         description=(
                             f"Successfully removed gift code channel setting:\n\n"
                             f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                            f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
+                            f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                             "You can set a new channel anytime by selecting a channel from the list above."
                         ),
                         color = pimp.emColor3,
@@ -3015,7 +3015,7 @@ class GiftOperations(commands.Cog):
             title = f"{pimp.settingsIcon} Gift Code Settings",
             description=(
                 f"{pimp.divider1}\n\n"
-                f"{pimp.anounceIcon} **Channel Management**\n"
+                f"{pimp.announceIcon} **Channel Management**\n"
                 f"└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
                 f"{pimp.giftIcon} **Automatic Redemption**\n"
                 f"└ Enable/disable auto-redemption of new valid gift codes\n\n"
@@ -3073,7 +3073,7 @@ class GiftOperations(commands.Cog):
             post_text = ""
             description_text = ""
             pre_text = f"Manage gift code channels for your alliances.\n"
-            pre_text += f"### {pimp.anounceIcon} **Current Configurations**\n"
+            pre_text += f"### {pimp.announceIcon} **Current Configurations**\n"
             pre_text += f"{pimp.divider1}\n\n"
             post_text += f"\n{pimp.divider1}\n"
             for alliance_id, channel_id in channel_configs:
@@ -3085,7 +3085,7 @@ class GiftOperations(commands.Cog):
                         channel_name = f"<#{channel_id}>"
                     else:
                         channel_name = f"Unknown Channel ({channel_id})"
-                    configured_text += f"{pimp.allianceIcon} **{alliance_name}**\n{pimp.anounceIcon} Channel: {channel_name}\n"
+                    configured_text += f"{pimp.allianceIcon} **{alliance_name}**\n{pimp.announceIcon} Channel: {channel_name}\n"
             if configured_text:
                 description_text = pre_text + configured_text + post_text
             else:
@@ -3103,13 +3103,13 @@ class GiftOperations(commands.Cog):
         config_button = discord.ui.Button(
             label="Configure Channel",
             style=discord.ButtonStyle.secondary,
-            emoji=f"{pimp.anounceIcon}"
+            emoji=f"{pimp.announceIcon}"
         )
         
         async def config_callback(config_interaction: discord.Interaction):
             # Show alliance selection for configuration
             alliance_embed = discord.Embed(
-                title = f"{pimp.anounceIcon} Select Alliance to Configure",
+                title = f"{pimp.announceIcon} Select Alliance to Configure",
                 description="Choose an alliance to set up or change its gift code channel:",
                 color = pimp.emColor1,
             )
@@ -3152,7 +3152,7 @@ class GiftOperations(commands.Cog):
                 alliance_name = alliance_names[alliance_id]
                 
                 channel_embed = discord.Embed(
-                    title=f"{pimp.anounceIcon} Configure Channel for {alliance_name}",
+                    title=f"{pimp.announceIcon} Configure Channel for {alliance_name}",
                     description="Select a channel for gift codes:",
                     color = pimp.emColor1,
                 )
@@ -3174,7 +3174,7 @@ class GiftOperations(commands.Cog):
                             title = f"{pimp.verifiedIcon} Channel Configured",
                             description=(
                                 f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
+                                f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                                 f"{pimp.verifiedIcon} Channel has been successfully configured for gift code monitoring."
                             ),
                             color=pimp.emColor3,
@@ -3271,7 +3271,7 @@ class GiftOperations(commands.Cog):
                         description=(
                             f"Are you sure you want to remove the gift code channel configuration?\n\n"
                             f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                            f"{pimp.anounceIcon} **Channel:** <#{channel_id}>\n\n"
+                            f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                             f"{pimp.alertIcon} **Warning:** This will stop the bot from monitoring this channel for gift codes."
                         ),
                         color=pimp.emColor2,
@@ -3301,7 +3301,7 @@ class GiftOperations(commands.Cog):
                                 description=(
                                     f"Successfully removed gift code channel configuration:\n\n"
                                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                    f"{pimp.anounceIcon} **Channel:** <#{channel_id}>"
+                                    f"{pimp.announceIcon} **Channel:** <#{channel_id}>"
                                 ),
                                 color = pimp.emColor3,
                             )
@@ -3483,7 +3483,7 @@ class GiftOperations(commands.Cog):
                     f"**Scan Details**\n"
                     f"{pimp.divider1}\n"
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                    f"{pimp.anounceIcon} **Channel:** #{channel.name}\n"
+                    f"{pimp.announceIcon} **Channel:** #{channel.name}\n"
                     f"{pimp.listIcon} **Scan Limit:** Up to 75 historical messages\n\n"
                     f"{pimp.alertIcon} **Note:** This will scan historical messages in the channel to find "
                     f"potential gift codes. Use this carefully in channels with lots of non-gift-code messages.\n\n"
@@ -3526,7 +3526,7 @@ class GiftOperations(commands.Cog):
                 results_text = f"**Scan Complete**\n"
                 results_text += f"{pimp.divider1}\n"
                 results_text += f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                results_text += f"{pimp.anounceIcon} **Channel:** #{channel.name}\n"
+                results_text += f"{pimp.announceIcon} **Channel:** #{channel.name}\n"
                 results_text += f"{pimp.listIcon} **Messages Scanned:** {messages_scanned}\n"
                 results_text += f"{pimp.giftIcon} **Total Codes Found:** {total_found}\n\n"
                 
@@ -3671,7 +3671,7 @@ class GiftOperations(commands.Cog):
                             f"### **Configuration Details**\n"
                             f"{pimp.divider1}\n\n"
                             f"{pimp.allianceIcon} **Scope:** All Alliances\n"
-                            f"{pimp.anounceIcon} **Status:** Automatic redemption {status_text}\n"
+                            f"{pimp.announceIcon} **Status:** Automatic redemption {status_text}\n"
                             f"{pimp.avatarIcon} **Updated by:** {select_interaction.user.mention}\n\n"
                             f"{pimp.divider1}\n"
                         ),
@@ -3695,7 +3695,7 @@ class GiftOperations(commands.Cog):
                         f"### **Alliance Details**\n\n"
                         f"{pimp.divider1}\n\n"
                         f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                        f"{pimp.anounceIcon} **Current Status:** Automatic redemption is {current_setting}\n\n"
+                        f"{pimp.announceIcon} **Current Status:** Automatic redemption is {current_setting}\n\n"
                         f"{pimp.divider1}\n\n"
                         f"Do you want to enable or disable automatic redemption for this alliance?"
                     ),
@@ -3726,7 +3726,7 @@ class GiftOperations(commands.Cog):
                                 f"### **Configuration Details**\n"
                                 f"{pimp.divider1}\n\n"
                                 f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
-                                f"{pimp.anounceIcon} **Status:** Automatic redemption {status_text}\n"
+                                f"{pimp.announceIcon} **Status:** Automatic redemption {status_text}\n"
                                 f"{pimp.avatarIcon} **Updated by:** {button_interaction.user.mention}\n\n"
                                 f"{pimp.divider1}\n"
                             ),
@@ -4061,7 +4061,7 @@ class GiftOperations(commands.Cog):
                         f"{pimp.allianceIcon} **Alliance:** `{alliance_name}`\n"
                         f"{pimp.deniedIcon} **Reason:** {status_reason_runtime}\n"
                         f"{pimp.listIcon} **Action:** Code marked as invalid in database. Remaining members for this alliance will not be processed.\n"
-                        f"{pimp.anounceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
+                        f"{pimp.announceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
                         f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
                         f"{pimp.divider1}\n"
                     )
@@ -4090,7 +4090,7 @@ class GiftOperations(commands.Cog):
                         f"{pimp.allianceIcon} **Alliance:** `{alliance_name}`\n"
                         f"{pimp.settingsIcon} **Reason:** Sign Error (check bot config/encrypt key)\n"
                         f"{pimp.listIcon} **Action:** Redemption stopped. Check bot configuration.\n"
-                        f"{pimp.anounceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
+                        f"{pimp.announceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
                         f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
                         f"{pimp.divider1}\n"
                     )
@@ -4726,9 +4726,9 @@ class GiftView(discord.ui.View):
                                             f"\n{pimp.divider1}\n\n"
                                             f"**Full Queue Details**\n"
                                             f"{queue_info}\n\n"
-                                            f"{pimp.anounceIcon} **Total items in queue:** {queue_status['queue_length']}\n"
+                                            f"{pimp.announceIcon} **Total items in queue:** {queue_status['queue_length']}\n"
                                             f"{pimp.pinIcon} **Your position:** #{your_position if your_position else 'Processing'}\n\n"
-                                            f"{pimp.anounceIcon} You'll receive notifications as each alliance is processed."
+                                            f"{pimp.announceIcon} You'll receive notifications as each alliance is processed."
                                         ),
                                         color = pimp.emColor3,
                                     )
@@ -4877,7 +4877,7 @@ class SettingsMenuView(discord.ui.View):
         label="Channel Management",
         style=discord.ButtonStyle.secondary,
         custom_id="channel_management",
-        emoji=f"{pimp.anounceIcon}",
+        emoji=f"{pimp.announceIcon}",
         row=0
     )
     async def channel_management_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5154,7 +5154,7 @@ class OCRSettingsView(discord.ui.View):
                     f"\n{pimp.divider1}\n"
                     f"{pimp.robotIcon} **OCR Success:** {'{pimp.verifiedIcon} Yes' if success else '{pimp.deniedIcon} No'}\n"
                     f"{pimp.magnifyingIcon} **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
-                    f"{pimp.anounceIcon} **Confidence:** `{confidence_str}`\n"
+                    f"{pimp.announceIcon} **Confidence:** `{confidence_str}`\n"
                     f"{pimp.timeIcon} **Solve Time:** `{solve_duration:.2f}s`\n"
                     f"{pimp.divider1}\n"
                 ), color=pimp.emColor3 if success else emColor2,
@@ -5250,14 +5250,14 @@ class OCRSettingsView(discord.ui.View):
             self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
             current_count = self.cog.cursor.fetchone()[0]
             embed.add_field(
-                name=f"{pimp.anounceIcon} Current Records",
+                name=f"{pimp.announceIcon} Current Records",
                 value=f"{current_count:,} redemption records will be deleted",
                 inline=False
             )
         except Exception as e:
             self.cog.logger.error(f"Error getting user_giftcodes count: {e}")
             embed.add_field(
-                name=f"{pimp.anounceIcon} Current Records", 
+                name=f"{pimp.announceIcon} Current Records", 
                 value="Unable to count records",
                 inline=False
             )

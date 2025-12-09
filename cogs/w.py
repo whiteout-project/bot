@@ -59,7 +59,20 @@ class WCommand(commands.Cog):
         except Exception as e:
             print(f"Autocomplete could not be loaded: {e}")
             return []
+    
+    async def parseemoji(self, emoji_string: str) -> str:
+        import re
 
+        # Match both static <:name:id> and animated <a:name:id> emojis
+        match = re.match(r'<a?:(\w+):(\d+)>', emoji_string)
+        
+        if match:
+            # It's a custom emoji, get the URL
+            emoji_id = match.group(2)
+            # Check if it's animated
+            is_animated = emoji_string.startswith("<a:")
+            emoji_ext = "gif" if is_animated else "png"
+            return f"https://cdn.discordapp.com/emojis/{emoji_id}.{emoji_ext}"
 
     async def fetch_user_info(self, interaction: discord.Interaction, fid: str):
         try:
@@ -129,14 +142,19 @@ class WCommand(commands.Cog):
                             if avatar_image:
                                 embed.set_image(url = avatar_image)
 
-                            embed.set_footer(text = f"[✔] Registered on the List" if user_info else f"[✘] Not on the List")
+                            if user_info:
+                                embed.set_footer(text = f"Registered on the List", icon_url = f"{await self.parseemoji(pimp.verifiedIcon)}")
+                            else:
+                                embed.set_footer(text = f"Not on the List", icon_url = f"{await self.parseemoji(pimp.deniedIcon)}")
                            
                             if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
                                 embed.set_thumbnail(url = stove_lv_content)
-                            elif stove_level <=30 and pimp.furnaceLevelImageURLs[stove_level] == "":
-                                embed.set_thumbnail(url = pimp.furnnaceLevelImageDefaultURL)
+                            elif stove_level <=30 and pimp.furnaceLevelImageURLs[stove_level] == None or pimp.furnaceLevelImageURLs[stove_level] == "":
+                                embed.set_thumbnail(url = pimp.furnaceLevelImageDefaultURL)
+                            elif stove_level <=30 and pimp.furnaceLevelImageURLs[stove_level].startswith("<:"):
+                                embed.set_thumbnail(url = pimp.furnaceLevelImageURLs[stove_level])
                             else :
-                                embed.set_thumbnail(url = pimp.furnaceLevelImageHostURL + pimp.furnaceLevelImageURLs[stove_level])
+                                embed.set_thumbnail(url = pimp.furnaceLevelImageURLs[stove_level])
                             
                             await interaction.followup.send(embed = embed)
                             return 

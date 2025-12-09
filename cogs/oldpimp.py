@@ -80,7 +80,7 @@ class PIMP(commands.Cog):
                 targetIcon = theme[27] if theme else elseEmoji
                 redeemIcon = theme[28] if theme else elseEmoji
                 membersIcon = theme[29] if theme else elseEmoji
-                anounceIcon = theme[30] if theme else elseEmoji
+                announceIcon = theme[30] if theme else elseEmoji
                 averageIcon = theme[31] if theme else elseEmoji
                 hashtagIcon = theme[32] if theme else elseEmoji
                 messageIcon = theme[33] if theme else elseEmoji
@@ -159,7 +159,7 @@ class PIMP(commands.Cog):
                     f"targetIcon = {targetIcon} = \\{targetIcon}\n"
                     f"redeemIcon = {redeemIcon} = \\{redeemIcon}\n"
                     f"membersIcon = {membersIcon} = \\{membersIcon}\n"
-                    f"anounceIcon = {anounceIcon} = \\{anounceIcon}\n"
+                    f"announceIcon = {announceIcon} = \\{announceIcon}\n"
                     f"averageIcon = {averageIcon} = \\{averageIcon}\n"
                     f"hashtagIcon = {hashtagIcon} = \\{hashtagIcon}\n"
                     f"messageIcon = {messageIcon} = \\{messageIcon}\n"

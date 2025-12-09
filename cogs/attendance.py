@@ -46,12 +46,12 @@ FC_LEVEL_MAPPING = {
 EVENT_TYPES = ["Foundry", "Canyon Clash", "Crazy Joe", "Bear Trap", "Castle Battle", "Frostdragon Tyrant", "Other"]
 
 EVENT_TYPE_ICONS = {
-    "Foundry": "🏭",
-    "Canyon Clash": "⚔️",
-    "Crazy Joe": "🤪",
-    "Bear Trap": "🐻",
-    "Castle Battle": "🏰",
-    "Frostdragon Tyrant": "🐉",
+    "Foundry": f"{pimp.foundryIcon}",
+    "Canyon Clash": f"{pimp.trainingIcon}",
+    "Crazy Joe": f"{pimp.crazyJoeIcon}",
+    "Bear Trap": f"{pimp.bearTrapIcon}",
+    "Castle Battle": f"{pimp.castleBattleIcon}",
+    "Frostdragon Tyrant": f"{pimp.frostdragonIcon}",
     "Other": f"{pimp.listIcon}"
 }
 
@@ -289,7 +289,7 @@ class ReportSortSelectView(discord.ui.View):
 
     @discord.ui.button(
         label="Last Attended First",
-        emoji="📅",
+        emoji=f"{pimp.calendarIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="sort_last_attended"
     )
@@ -547,12 +547,12 @@ class EventTypeSelectView(discord.ui.View):
         select = discord.ui.Select(
             placeholder=f"{pimp.targetIcon} Select Event Type...",
             options=[
-                discord.SelectOption(label="Foundry", value="Foundry", emoji="🏭"),
-                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji="⚔️"),
-                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji="🤪"),
-                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji="🐻"),
-                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji="🏰"),
-                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji="🐉"),
+                discord.SelectOption(label="Foundry", value="Foundry", emoji=f"{pimp.foundryIcon}"),
+                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji=f"{pimp.canyonClashIcon}"),
+                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji=f"{pimp.crazyJoeIcon}"),
+                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji=f"{pimp.bearTrapIcon}"),
+                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji=f"{pimp.castleBattleIcon}"),
+                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji=f"{pimp.frostdragonIcon}"),
                 discord.SelectOption(label="Other", value="Other", emoji=f"{pimp.listIcon}", default=True)
             ]
         )
@@ -695,21 +695,21 @@ class AllianceSelectView(discord.ui.View):
         self.current_select = select
 
         # Update navigation button states
-        prev_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "◀️"), None)
-        next_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "▶️"), None)
+        prev_button = next((item for item in self.children if hasattr(item, 'label') and item.label == f"{pimp.importIcon}"), None)
+        next_button = next((item for item in self.children if hasattr(item, 'label') and item.label == f"{pimp.exportIcon}"), None)
         
         if prev_button:
             prev_button.disabled = self.page == 0
         if next_button:
             next_button.disabled = self.page == self.max_page
 
-    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="", emoji=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="", emoji=f"{pimp.exportIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
@@ -740,12 +740,12 @@ class EditEventDetailsView(discord.ui.View):
         self.event_type_select = discord.ui.Select(
             placeholder=f"Event Type: {current_event_type or 'Select...'}",
             options=[
-                discord.SelectOption(label="Foundry", value="Foundry", emoji="🏭", default=(current_event_type == "Foundry")),
-                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji="⚔️", default=(current_event_type == "Canyon Clash")),
-                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji="🤪", default=(current_event_type == "Crazy Joe")),
-                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji="🐻", default=(current_event_type == "Bear Trap")),
-                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji="🏰", default=(current_event_type == "Castle Battle")),
-                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji="🐉", default=(current_event_type == "Frostdragon Tyrant")),
+                discord.SelectOption(label="Foundry", value="Foundry", emoji=f"{pimp.foundryIcon}", default=(current_event_type == "Foundry")),
+                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji=f"{pimp.canyonClashIcon}", default=(current_event_type == "Canyon Clash")),
+                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji=f"{pimp.crazyJoeIcon}", default=(current_event_type == "Crazy Joe")),
+                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji=f"{pimp.bearTrapIcon}", default=(current_event_type == "Bear Trap")),
+                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji=f"{pimp.castleBattleIcon}", default=(current_event_type == "Castle Battle")),
+                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji=f"{pimp.frostdragonIcon}", default=(current_event_type == "Frostdragon Tyrant")),
                 discord.SelectOption(label="Other", value="Other", emoji=f"{pimp.listIcon}", default=(current_event_type == "Other" or not current_event_type))
             ],
             row=1
@@ -763,17 +763,17 @@ class EditEventDetailsView(discord.ui.View):
         self.selected_event_type = self.event_type_select.values[0]
         await interaction.response.defer()
         
-    @discord.ui.button(label="✏️ Rename Session", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Rename Session", emoji=f"{pimp.editListIcon}", style=discord.ButtonStyle.secondary, row=0)
     async def rename_session_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         rename_modal = RenameSessionModal(self.session_id, self.session_name, self)
         await interaction.response.send_modal(rename_modal)
     
-    @discord.ui.button(label="📅 Edit Date", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Edit Date", emoji=f"{pimp.calendarIcon}", style=discord.ButtonStyle.secondary, row=0)
     async def edit_date_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         date_modal = EventDateModal(self.current_event_date, self)
         await interaction.response.send_modal(date_modal)
 
-    @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Save", emoji=f"{pimp.saveIcon}", style=discord.ButtonStyle.secondary, row=2)
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             # Use the selected event type
@@ -1238,27 +1238,27 @@ class PlayerSelectView(discord.ui.View):
         self.current_select = select
 
         # Update navigation button states
-        prev_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "◀️"), None)
-        next_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "▶️"), None)
+        prev_button = next((item for item in self.children if hasattr(item, 'label') and item.label == f"{pimp.importIcon}"), None)
+        next_button = next((item for item in self.children if hasattr(item, 'label') and item.label == f"{pimp.exportIcon}"), None)
         
         if prev_button:
             prev_button.disabled = self.page == 0
         if next_button:
             next_button.disabled = self.page == self.max_page
 
-    @discord.ui.button(label="◀️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         await self.update_main_embed(interaction)
 
-    @discord.ui.button(label="▶️", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=f"{pimp.exportIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
         await self.update_main_embed(interaction)
     
-    @discord.ui.button(label="🔍 Filter", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=f"{pimp.magnifyingIcon} Filter", style=discord.ButtonStyle.secondary, row=1)
     async def filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = PlayerFilterModal(self)
         await interaction.response.send_modal(modal)
@@ -1915,7 +1915,7 @@ class Attendance(commands.Cog):
 
     def _get_status_emoji(self, status):
         """Helper to get status emoji"""
-        return {"present": f"{pimp.verifiedIcon}", "absent": f"{pimp.deniedIcon}", "not_recorded": "⚪"}.get(status, "❓")
+        return {"present": f"{pimp.verifiedIcon}", "absent": f"{pimp.deniedIcon}", "not_recorded": f"{pimp.blankListIcon}"}.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -1925,7 +1925,7 @@ class Attendance(commands.Cog):
         replacements = [
             ("present", f"{pimp.verifiedIcon}"), ("Present", f"{pimp.verifiedIcon}"),
             ("absent", f"{pimp.deniedIcon}"), ("Absent", f"{pimp.deniedIcon}"),
-            ("not_recorded", "⚪"), ("Not Recorded", "⚪"), ("not recorded", "⚪")
+            ("not_recorded", f"{pimp.blankListIcon}"), ("Not Recorded", f"{pimp.blankListIcon}"), ("not recorded", f"{pimp.blankListIcon}")
         ]
         
         for old, new in replacements:
@@ -2207,7 +2207,7 @@ class Attendance(commands.Cog):
                     "**Permission Details**\n"
                     f"{pimp.divider1}\n\n"
                     f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                    f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                    f"{pimp.magnifyingIcon} **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
                     f"{pimp.listIcon} **Available Alliances:** `{len(alliances)}`\n"
                     f"{pimp.divider1}\n"
                 ),
@@ -2546,7 +2546,7 @@ class Attendance(commands.Cog):
                     f"**Summary:**\n"
                     f"{pimp.verifiedIcon} Present: {present_count}\n"
                     f"{pimp.deniedIcon} Absent: {absent_count}\n"
-                    f"⚪ Not Recorded: {actual_not_recorded}\n"
+                    f"{pimp.blankListIcon} Not Recorded: {actual_not_recorded}\n"
                     f"**Total Players:** {total_players}"
                 ),
                 color=pimp.emColor3

@@ -219,7 +219,7 @@ class Control(commands.Cog):
                             f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                             f"{pimp.pinIcon} **Status:** In Progress\n"
                             f"{pimp.timeIcon} **Started:** <t:{int(start_time.timestamp())}:R>\n"
-                            f"{pimp.anounceIcon} **Results Channel:** {channel.mention}\n"
+                            f"{pimp.announceIcon} **Results Channel:** {channel.mention}\n"
                             f"\n"
                             f"{pimp.divider1}\n"
                         ),

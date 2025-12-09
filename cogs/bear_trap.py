@@ -700,7 +700,7 @@ class BearTrap(commands.Cog):
                                      message_data, channels):
         try:
             embed = discord.Embed(
-                title=f"{pimp.anounceIcon} Select Channel",
+                title=f"{pimp.announceIcon} Select Channel",
                 description=(
                     "Choose a channel to send notifications:\n\n"
                     "Select a text channel from the dropdown menu below.\n"
@@ -827,7 +827,7 @@ class RepeatOptionView(discord.ui.View):
                 description=(
                     f"**📅 Date:** {self.start_date.strftime('%d/%m/%Y')}\n"
                     f"**{pimp.hourglassIcon} Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
-                    f"**{pimp.anounceIcon} Channel:** <#{self.channel_id}>\n"
+                    f"**{pimp.announceIcon} Channel:** <#{self.channel_id}>\n"
                     f"**{pimp.listIcon} Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
                     f"**{pimp.settings2Icon} Notification Type**\n{notification_types[self.notification_type]}\n\n"
                     f"**👥 Mentions:** {mention_display}\n"
@@ -1571,7 +1571,7 @@ class NotificationTypeView(discord.ui.View):
     async def show_mention_type_menu(self, interaction, notification_type):
         try:
             embed = discord.Embed(
-                title=f"{pimp.anounceIcon} Select Mention Type",
+                title=f"{pimp.announceIcon} Select Mention Type",
                 description=(
                     f"Choose how to mention users:\n\n"
                     f"{pimp.num1Icon} @everyone\n"
@@ -1643,7 +1643,7 @@ class CustomTimesModal(discord.ui.Modal):
                 raise ValueError("Times must be in descending order")
 
             embed = discord.Embed(
-                title=f"{pimp.anounceIcon} Select Mention Type",
+                title=f"{pimp.announceIcon} Select Mention Type",
                 description=(
                     f"Choose how to mention users:\n\n"
                     f"{pimp.num1Icon} @everyone\n"
@@ -1737,7 +1737,7 @@ class MentionTypeView(discord.ui.View):
                 ephemeral=True
             )
 
-    @discord.ui.button(label="@everyone", style=discord.ButtonStyle.secondary, emoji=f"{pimp.anounceIcon}", row=0)
+    @discord.ui.button(label="@everyone", style=discord.ButtonStyle.secondary, emoji=f"{pimp.announceIcon}", row=0)
     async def everyone_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await self.show_mention_type_menu(interaction, "everyone")
@@ -1848,7 +1848,7 @@ class MentionSelectMenu(discord.ui.Select):
                 label="@everyone",
                 value="everyone",
                 description="Mention everyone in the server",
-                emoji=f"{pimp.anounceIcon}"
+                emoji=f"{pimp.announceIcon}"
             )
         )
 
@@ -2249,7 +2249,7 @@ class BearTrapView(discord.ui.View):
                         description=(
                             f"**📅 Next Notification date:** {datetime.fromisoformat(selected_notif[15]).strftime('%d/%m/%Y')}\n"
                             f"**{pimp.hourglassIcon} Time:** {selected_notif[3]:02d}:{selected_notif[4]:02d} ({selected_notif[5]})\n"
-                            f"**{pimp.anounceIcon} Channel:** {channel_display}\n"
+                            f"**{pimp.announceIcon} Channel:** {channel_display}\n"
                             f"**{pimp.listIcon} Description:** {selected_notif[6]}\n\n"
                             f"**{pimp.settings2Icon} Notification Type:** \n{notification_type_desc}\n\n"
                             f"**👥 Mention:** {mention_display}\n"

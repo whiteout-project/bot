@@ -46,13 +46,13 @@ FC_LEVEL_MAPPING = {
 }
 
 EVENT_TYPE_ICONS = {
-    "Foundry": "🏭",
-    "Canyon Clash": "⚔️",
-    "Crazy Joe": "🤪",
-    "Bear Trap": "🐻",
-    "Castle Battle": "🏰",
-    "Frostdragon Tyrant": "🐉",
-    "Other": "📋"
+    "Foundry": f"{pimp.foundryIcon}",
+    "Canyon Clash": f"{pimp.trainingIcon}",
+    "Crazy Joe": f"{pimp.crazyJoeIcon}",
+    "Bear Trap": f"{pimp.bearTrapIcon}",
+    "Castle Battle": f"{pimp.castleBattleIcon}",
+    "Frostdragon Tyrant": f"{pimp.frostdragonIcon}",
+    "Other": f"{pimp.listIcon}"
 }
 
 class ExportFormatSelectView(discord.ui.View):
@@ -65,9 +65,9 @@ class ExportFormatSelectView(discord.ui.View):
     @discord.ui.select(
         placeholder="Select export format...",
         options=[
-            discord.SelectOption(label="CSV", value="csv", description="Comma-separated values", emoji="📄"),
-            discord.SelectOption(label="TSV", value="tsv", description="Tab-separated values", emoji="📋"),
-            discord.SelectOption(label="HTML", value="html", description="Web page format", emoji="🌐")
+            discord.SelectOption(label="CSV", value="csv", description="Comma-separated values", emoji=f"{pimp.listIcon}"),
+            discord.SelectOption(label="TSV", value="tsv", description="Tab-separated values", emoji=f"{pimp.listIcon}"),
+            discord.SelectOption(label="HTML", value="html", description="Web page format", emoji=f"{pimp.listIcon}")
         ]
     )
     async def format_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -94,7 +94,7 @@ class AttendanceReport(commands.Cog):
 
     def _get_status_emoji(self, status):
         """Helper to get status emoji"""
-        return {"present": f"{pimp.verifiedIcon}", "absent": f"{pimp.deniedIcon}", "not_recorded": "⚪"}.get(status, "❓")
+        return {"present": f"{pimp.verifiedIcon}", "absent": f"{pimp.deniedIcon}", "not_recorded": f"{pimp.blankListIcon}"}.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -104,7 +104,7 @@ class AttendanceReport(commands.Cog):
         replacements = [
             ("present", f"{pimp.verifiedIcon}"), ("Present", f"{pimp.verifiedIcon}"),
             ("absent", f"{pimp.deniedIcon}"), ("Absent", f"{pimp.deniedIcon}"),
-            ("not_recorded", "⚪"), ("Not Recorded", "⚪"), ("not recorded", "⚪")
+            ("not_recorded", f"{pimp.blankListIcon}"), ("Not Recorded", f"{pimp.blankListIcon}"), ("not recorded", f"{pimp.blankListIcon}")
         ]
 
         for old, new in replacements:
@@ -565,7 +565,7 @@ class AttendanceReport(commands.Cog):
             # Try to DM the file
             try:
                 await interaction.user.send(
-                    f"📊 **Attendance Report Export**\n"
+                    f"{pimp.listIcon} **Attendance Report Export**\n"
                     f"**Format:** {format_name}\n"
                     f"**Alliance:** {session_info['alliance_name']}\n"
                     f"**Session:** {session_info['session_name']}\n"
@@ -756,10 +756,10 @@ class AttendanceReport(commands.Cog):
             # Generate Matplotlib table image - different headers for preview vs full
             if is_preview:
                 headers = ["Player", "Status", "Points"]
-                table_color = '#28a745'  # Green for preview
+                table_color = f"{pimp.headerColor2}"  # Green for preview
             else:
                 headers = ["Player", "Status", "Last Event", "Points", "Marked By"]
-                table_color = '#1f77b4'  # Blue for full report
+                table_color = f"{pimp.headerColor1}"  # Blue for full report
             table_data = []
             
             def fix_arabic(text):
@@ -864,7 +864,7 @@ class AttendanceReport(commands.Cog):
             file = discord.File(img_buffer, filename="attendance_report.png")
 
             # Format embed title with event type
-            embed_title = f"📊 Attendance Report - {alliance_name}"
+            embed_title = f"{pimp.listIcon} Attendance Report - {alliance_name}"
             description_text = f"**Session:** {session_name}"
             if event_type:
                 description_text += f" [{event_type}]"
@@ -943,7 +943,7 @@ class AttendanceReport(commands.Cog):
                 # Post to Channel button - only for full reports
                 post_button = discord.ui.Button(
                     label="Post to Channel",
-                    emoji=f"{pimp.anounceIcon}",
+                    emoji=f"{pimp.announceIcon}",
                     style=discord.ButtonStyle.success
                 )
 
@@ -1165,7 +1165,7 @@ class AttendanceReport(commands.Cog):
             report_sections = []
             
             # Summary section
-            report_sections.append("📊 **SUMMARY**")
+            report_sections.append(f"{pimp.listIcon} **SUMMARY**")
             session_line = f"**Session:** {session_name}"
             if event_type:
                 session_line += f" [{event_type}]"
@@ -1191,8 +1191,8 @@ class AttendanceReport(commands.Cog):
             report_sections.append("")
             
             # Player details section
-            report_sections.append("👥 **PLAYER DETAILS**")
-            report_sections.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            report_sections.append(f"{pimp.avatarIcon} **PLAYER DETAILS**")
+            report_sections.append(f"{pimp.divider1}")
 
             # Get user's sort preference and apply sorting
             sort_preference = await self.get_user_sort_preference(interaction.user.id)
@@ -1260,7 +1260,7 @@ class AttendanceReport(commands.Cog):
 
                     # If we're past the summary, add a continuation header
                     if i > summary_end_index:
-                        continuation_header = "👥 **PLAYER DETAILS** (continued)"
+                        continuation_header = f"{pimp.avatarIcon} **PLAYER DETAILS** (continued)"
                         current_sections.append(continuation_header)
                         current_length = len(continuation_header) + 1
 
@@ -1277,14 +1277,14 @@ class AttendanceReport(commands.Cog):
                 if idx == 0:
                     # First embed gets the full title
                     embed = discord.Embed(
-                        title=f"📊 Attendance Report - {alliance_name}",
+                        title=f"{pimp.listIcon} Attendance Report - {alliance_name}",
                         description=embed_desc,
                         color=discord.Color.blue()
                     )
                 else:
                     # Subsequent embeds get continuation title
                     embed = discord.Embed(
-                        title=f"📊 Attendance Report - {alliance_name} (Page {idx + 1})",
+                        title=f"{pimp.listIcon} Attendance Report - {alliance_name} (Page {idx + 1})",
                         description=embed_desc,
                         color=discord.Color.blue()
                     )
@@ -1357,7 +1357,7 @@ class AttendanceReport(commands.Cog):
             if not is_preview:
                 post_button = discord.ui.Button(
                     label="Post to Channel",
-                    emoji=f"{pimp.anounceIcon}",
+                    emoji=f"{pimp.announceIcon}",
                     style=discord.ButtonStyle.success
                 )
 
@@ -1449,7 +1449,7 @@ class AttendanceReport(commands.Cog):
             if not sessions:
                 # Create embed for no sessions found
                 embed = discord.Embed(
-                    title=f"📋 Attendance Sessions - {alliance_name}",
+                    title=f"{pimp.listIcon} Attendance Sessions - {alliance_name}",
                     description=f"{pimp.deniedIcon} **No attendance sessions found for {alliance_name}.**\n\nTo create attendance records, use the 'Mark Attendance' option from the main menu.",
                     color=discord.Color.orange()
                 )
@@ -1509,7 +1509,7 @@ class AttendanceReport(commands.Cog):
             view = SessionSelectView(sessions, alliance_id, self, is_viewing=True)
             
             embed = discord.Embed(
-                title=f"📋 Attendance Sessions - {alliance_name}",
+                title=f"{pimp.listIcon} Attendance Sessions - {alliance_name}",
                 description="Please select a session to view attendance records:",
                 color=discord.Color.blue()
             )

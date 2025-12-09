@@ -838,7 +838,7 @@ class Alliance(commands.Cog):
                     info_section = (
                         f"**{pimp.allianceIcon} Alliance Name**\n{alliance_name}\n\n"
                         f"**{pimp.hashtagIcon} Alliance ID**\n{alliance_id}\n\n"
-                        f"**{pimp.anounceIcon} Channel**\n<#{channel_id}>\n\n"
+                        f"**{pimp.announceIcon} Channel**\n<#{channel_id}>\n\n"
                         f"**{pimp.hourglassIcon} Control Interval**\n{interval} minutes"
                     )
                     result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
@@ -1006,12 +1006,12 @@ class Alliance(commands.Cog):
                     interval = int(modal.interval.value.strip())
 
                     embed = discord.Embed(
-                        title=f"{pimp.anounceIcon} Channel Selection",
+                        title=f"{pimp.announceIcon} Channel Selection",
                         description=(
                             f"**Current Channel Information**\n"
                             f"{pimp.divider1}\n"
                             f"\n"
-                            f"{pimp.anounceIcon} Current channel: {f'<#{settings_data[1]}>' if settings_data else 'Not set'}\n"
+                            f"{pimp.announceIcon} Current channel: {f'<#{settings_data[1]}>' if settings_data else 'Not set'}\n"
                             f"**Page:** 1/1\n"
                             f"**Total Channels:** {len(interaction.guild.text_channels)}\n"
                             f"\n"
@@ -1050,7 +1050,7 @@ class Alliance(commands.Cog):
                             info_section = (
                                 f"**{pimp.allianceIcon} Alliance Name**\n{alliance_name}\n\n"
                                 f"**{pimp.hashtagIcon} Alliance ID**\n{alliance_id}\n\n"
-                                f"**{pimp.anounceIcon} Channel**\n<#{channel_id}>\n\n"
+                                f"**{pimp.announceIcon} Channel**\n<#{channel_id}>\n\n"
                                 f"**{pimp.hourglassIcon} Control Interval**\n{interval} minutes"
                             )
                             result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
@@ -1224,7 +1224,7 @@ class Alliance(commands.Cog):
                     f"{pimp.allianceIcon} Alliance Settings: {settings_count}\n"
                     f"{pimp.avatarIcon} User Records: {users_count}\n"
                     f"{pimp.avatarIcon} Admin Server Records: {admin_server_count}\n"
-                    f"{pimp.anounceIcon} Gift Channels: {gift_channels_count}\n"
+                    f"{pimp.announceIcon} Gift Channels: {gift_channels_count}\n"
                     f"{pimp.giftIcon} Gift Code Controls: {gift_code_control_count}\n\n"
                     f"**{pimp.warnIcon} WARNING: This action cannot be undone!**\n"
                     f"\n"
@@ -1271,7 +1271,7 @@ class Alliance(commands.Cog):
                             f"{pimp.avatarIcon} Users Removed: {users_count_deleted}\n"
                             f"{pimp.allianceIcon} Alliance Settings: {admin_settings_count}\n"
                             f"{pimp.avatarIcon} Admin Server Records: {admin_server_count}\n"
-                            f"{pimp.anounceIcon} Gift Channels: {gift_channels_count}\n"
+                            f"{pimp.announceIcon} Gift Channels: {gift_channels_count}\n"
                             f"{pimp.giftIcon} Gift Code Controls: {gift_code_control_count}"
                         ),
                         color = pimp.emColor3
@@ -1455,7 +1455,7 @@ class PaginatedChannelView(discord.ui.View):
                 label=channel_label,
                 value=str(channel.id),
                 description=option_description,
-                emoji=f"{pimp.anounceIcon}"
+                emoji=f"{pimp.announceIcon}"
             ))
         
         select = discord.ui.Select(

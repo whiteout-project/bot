@@ -12,7 +12,7 @@ class OtherFeatures(commands.Cog):
                 title=f"{pimp.pinIcon} Other Features",
                 description=(
                     f"{pimp.divider1}\n\n"
-                    f"{pimp.anounceIcon} **Notification System**\n"
+                    f"{pimp.announceIcon} **Notification System**\n"
                     f"└ Event notification system\n"
                     f"└ Not just for Bear! Use it for any event:\n"
                     f"   Bear - KE - Frostfire - CJ and everything else\n"
@@ -63,7 +63,7 @@ class OtherFeaturesView(discord.ui.View):
 
     @discord.ui.button(
         label="Notification System",
-        emoji=f"{pimp.anounceIcon}",
+        emoji=f"{pimp.announceIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="bear_trap",
         row=0

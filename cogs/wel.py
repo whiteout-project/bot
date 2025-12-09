@@ -103,7 +103,7 @@ class GNCommands(commands.Cog):
                                 settings = cursor.fetchone()
                                 if settings:
                                     if settings[0]:
-                                        info_parts.append(f"{pimp.anounceIcon} **Alliance Channel:** <#{settings[0]}>")
+                                        info_parts.append(f"{pimp.announceIcon} **Alliance Channel:** <#{settings[0]}>")
                                     interval_text = f"{pimp.alarmClockIcon} **Auto Check:** {settings[1]} minutes" if settings[1] > 0 else f"{pimp.deleteGiftCodeIcon}  No Auto Check"
                                     info_parts.append(interval_text)
                             
