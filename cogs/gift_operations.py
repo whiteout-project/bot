@@ -2640,19 +2640,25 @@ class GiftOperations(commands.Cog):
         gift_menu_embed = discord.Embed(
             title="🎁 Gift Code Operations",
             description=(
-                "Please select an operation:\n\n"
+                "Here you can manage everything related to gift code redemption.\n\n"
+                "The bot automatically retrieves new gift codes from our distribution API. "
+                "Codes are validated periodically, and automatically removed if they become invalid.\n\n"
+                "If you're new here, you'll want to head to **Settings** and configure some things:\n"
+                "- If you want codes to be automatically redeemed, go to **Auto Redemption** and enable it.\n"
+                "- You can set up a channel via **Channel Management** where the bot will scan for new codes.\n"
+                "- You can also adjust the order in which alliances redeem gift codes via **Redemption Priority**.\n\n"
                 "**Available Operations**\n"
                 "━━━━━━━━━━━━━━━━━━━━━━\n"
                 "🎫 **Add Gift Code**\n"
-                "└ Input a new gift code\n\n"
+                "└ Manually input a new gift code\n\n"
                 "📋 **List Gift Codes**\n"
                 "└ View all active, valid codes\n\n"
+                "🎯 **Redeem Gift Code**\n"
+                "└ Redeem gift code(s) for one or more alliances\n\n"
+                "⚙️ **Settings**\n"
+                "└ Set up a gift code channel, configure auto redemption, and more...\n\n"
                 "❌ **Delete Gift Code**\n"
-                "└ Remove existing codes\n\n"
-                "🎯 **Use Gift Code for Alliance**\n"
-                "└ Redeem a gift code for one or more alliances\n\n"
-                "⚙️ **Gift Code Settings**\n"
-                "└ Configure automatic gift code usage\n"
+                "└ Remove existing codes (rarely needed)\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
             ),
             color=discord.Color.gold()
@@ -3237,8 +3243,10 @@ class GiftOperations(commands.Cog):
                 "└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
                 "🎁 **Automatic Redemption**\n"
                 "└ Enable/disable auto-redemption of new valid gift codes\n\n"
+                "🔢 **Redemption Priority**\n"
+                "└ Change the order in which alliances auto-redeem new gift codes\n\n"
                 "🔍 **Channel History Scan**\n"
-                "└ Trigger an on-demand scan of existing messages in a gift channel\n\n"
+                "└ Scan for gift codes in existing messages in a gift channel\n\n"
                 "⚙️ **CAPTCHA Settings**\n"
                 "└ Configure CAPTCHA-solver related settings and image saving\n"
                 "━━━━━━━━━━━━━━━━━━━━━━"
@@ -4780,16 +4788,6 @@ class GiftView(discord.ui.View):
         await self.cog.create_gift_code(interaction)
         
     @discord.ui.button(
-        label="Gift Code Settings",
-        style=discord.ButtonStyle.secondary,
-        custom_id="gift_code_settings",
-        emoji="⚙️",
-        row=1
-    )
-    async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_settings_menu(interaction)
-
-    @discord.ui.button(
         label="List Gift Codes",
         style=discord.ButtonStyle.blurple,
         custom_id="list_gift",
@@ -4800,28 +4798,11 @@ class GiftView(discord.ui.View):
         await self.cog.list_gift_codes(interaction)
 
     @discord.ui.button(
-        label="Delete Gift Code",
-        emoji="🗑️",
-        style=discord.ButtonStyle.danger,
-        custom_id="delete_gift",
-        row=0
-    )
-    async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self.cog.delete_gift_code(interaction)
-        except Exception as e:
-            self.logger.exception(f"Delete gift button error: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while processing delete request.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Use Gift Code for Alliance",
+        label="Redeem Gift Code",
         emoji="🎯",
         style=discord.ButtonStyle.primary,
         custom_id="use_gift_alliance",
-        row=1
+        row=0
     )
     async def use_gift_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -4854,7 +4835,7 @@ class GiftView(discord.ui.View):
                     alliances_with_counts.append((alliance_id, name, member_count))
 
             alliance_embed = discord.Embed(
-                title="🎯 Use Gift Code for Alliance",
+                title="🎯 Redeem Gift Code",
                 description=(
                     "Select an alliance to use gift code:\n\n"
                     "**Alliance List**\n"
@@ -4865,7 +4846,7 @@ class GiftView(discord.ui.View):
             )
 
             view = AllianceSelectView(alliances_with_counts, self.cog)
-            
+
             view.current_select.options.insert(0, discord.SelectOption(
                 label="ALL ALLIANCES",
                 value="all",
@@ -5049,18 +5030,16 @@ class GiftView(discord.ui.View):
 
                             confirm_button = discord.ui.Button(
                                 label="Confirm",
-                                emoji="✅",
                                 style=discord.ButtonStyle.success,
-                                custom_id="confirm"
+                                emoji="✅"
                             )
-                            confirm_button.callback = confirm_callback
-
                             cancel_button = discord.ui.Button(
                                 label="Cancel",
-                                emoji="❌",
                                 style=discord.ButtonStyle.danger,
-                                custom_id="cancel"
+                                emoji="❌"
                             )
+
+                            confirm_button.callback = confirm_callback
                             cancel_button.callback = cancel_callback
 
                             confirm_view.add_item(confirm_button)
@@ -5070,60 +5049,65 @@ class GiftView(discord.ui.View):
                                 embed=confirm_embed,
                                 view=confirm_view
                             )
-
                         except Exception as e:
-                            self.logger.exception(f"Error in gift code selection: {e}")
-                            if not giftcode_interaction.response.is_done():
-                                await giftcode_interaction.response.send_message(
-                                    "❌ An error occurred while processing your selection.",
-                                    ephemeral=True
-                                )
-                            else:
-                                await giftcode_interaction.followup.send(
-                                    "❌ An error occurred while processing your selection.",
-                                    ephemeral=True
-                                )
+                            self.logger.exception(f"Gift code callback error: {e}")
+                            await giftcode_interaction.response.send_message(
+                                "❌ An error occurred while processing the gift code.",
+                                ephemeral=True
+                            )
 
                     select_giftcode.callback = giftcode_callback
                     giftcode_view = discord.ui.View()
                     giftcode_view.add_item(select_giftcode)
 
-                    if not select_interaction.response.is_done():
-                        await select_interaction.response.edit_message(
-                            embed=giftcode_embed,
-                            view=giftcode_view
-                        )
-                    else:
-                        await select_interaction.message.edit(
-                            embed=giftcode_embed,
-                            view=giftcode_view
-                        )
-
+                    await select_interaction.response.edit_message(
+                        embed=giftcode_embed,
+                        view=giftcode_view
+                    )
                 except Exception as e:
-                    self.logger.exception(f"Error in alliance selection: {e}")
-                    if not select_interaction.response.is_done():
-                        await select_interaction.response.send_message(
-                            "❌ An error occurred while processing your selection.",
-                            ephemeral=True
-                        )
-                    else:
-                        await select_interaction.followup.send(
-                            "❌ An error occurred while processing your selection.",
-                            ephemeral=True
-                        )
+                    self.logger.exception(f"Alliance callback error: {e}")
+                    await select_interaction.response.send_message(
+                        "❌ An error occurred while processing the alliance selection.",
+                        ephemeral=True
+                    )
 
-            view.callback = alliance_callback
-
+            view.current_select.callback = alliance_callback
             await interaction.response.send_message(
                 embed=alliance_embed,
                 view=view,
                 ephemeral=True
             )
-
         except Exception as e:
-            self.logger.exception(f"Error in use_gift_alliance_button: {str(e)}")
+            self.logger.exception(f"Use gift alliance button error: {e}")
             await interaction.response.send_message(
                 "❌ An error occurred while processing the request.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Settings",
+        style=discord.ButtonStyle.secondary,
+        custom_id="gift_code_settings",
+        emoji="⚙️",
+        row=1
+    )
+    async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_settings_menu(interaction)
+
+    @discord.ui.button(
+        label="Delete Gift Code",
+        emoji="🗑️",
+        style=discord.ButtonStyle.danger,
+        custom_id="delete_gift",
+        row=1
+    )
+    async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await self.cog.delete_gift_code(interaction)
+        except Exception as e:
+            self.logger.exception(f"Delete gift button error: {e}")
+            await interaction.response.send_message(
+                "❌ An error occurred while processing delete request.",
                 ephemeral=True
             )
 
