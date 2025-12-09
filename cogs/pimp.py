@@ -224,7 +224,11 @@ class DeleteThemeView(discord.ui.View):
                 
                 if result and result[0] == 1:
                     await interaction.response.send_message(
-                        f"{pimp.deniedIcon} Cannot delete the active theme. Please activate a different theme first.",
+                        f"{pimp.divider1}\n"
+                        f"### {pimp.warnIcon} Warning: {pimp.warnIcon}\n"
+                        "You cannot delete the active theme.\n\n"
+                        "Make sure to activate a different theme before deleting.\n\n"
+                        f"{pimp.divider1}\n\n",
                         ephemeral=True
                     )
                     return
@@ -1325,7 +1329,7 @@ class PIMP(commands.Cog):
             description = (
                 f"{pimp.divider1}\n"
                 f"### {pimp.warnIcon} Warning: {pimp.warnIcon}\n"
-                "You cannot delete the active theme.\n"
+                "You cannot delete the active theme.\n\n"
                 "Make sure to activate a different theme before deleting.\n\n"
                 f"{pimp.divider2}\n\n"
             )
