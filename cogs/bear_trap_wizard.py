@@ -959,8 +959,22 @@ class EventSelectionHubView(discord.ui.View):
 
     async def continue_to_preview(self, interaction: discord.Interaction):
         """Proceed to preview"""
-        view = WizardPreviewView(self.cog, self.session)
-        await view.show(interaction)
+        try:
+            view = WizardPreviewView(self.cog, self.session)
+            await view.show(interaction)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"An error occurred while loading the preview: {type(e).__name__}: {e}",
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"An error occurred while loading the preview: {type(e).__name__}: {e}",
+                    ephemeral=True
+                )
 
 
 class EventConfigRouter:
@@ -2092,29 +2106,35 @@ class WizardPreviewView(discord.ui.View):
                 thu_hour = data.get('thursday_hour')
                 thu_min = data.get('thursday_minute')
 
-                if tue_hour == thu_hour and tue_min == thu_min:
-                    # Same time for both days
-                    value = f"└ Tuesday & Thursday: {tue_hour:02d}:{tue_min:02d}"
-                else:
-                    # Different times
-                    value = f"└ Tuesday: {tue_hour:02d}:{tue_min:02d}\n└ Thursday: {thu_hour:02d}:{thu_min:02d}"
+                # Only show if we have valid data
+                if tue_hour is not None and tue_min is not None:
+                    if tue_hour == thu_hour and tue_min == thu_min:
+                        # Same time for both days
+                        value = f"└ Tuesday & Thursday: {tue_hour:02d}:{tue_min:02d}"
+                    elif thu_hour is not None and thu_min is not None:
+                        # Different times
+                        value = f"└ Tuesday: {tue_hour:02d}:{tue_min:02d}\n└ Thursday: {thu_hour:02d}:{thu_min:02d}"
+                    else:
+                        # Only Tuesday configured
+                        value = f"└ Tuesday: {tue_hour:02d}:{tue_min:02d}"
 
-                embed.add_field(
-                    name=f"{icon} Crazy Joe",
-                    value=value,
-                    inline=False
-                )
+                    embed.add_field(
+                        name=f"{icon} Crazy Joe",
+                        value=value,
+                        inline=False
+                    )
             elif event in ["Foundry Battle", "Canyon Clash"] and data:
                 times_str = ""
                 if data.get("legion1_hour") is not None:
                     times_str += f"└ Legion 1: {data['legion1_hour']:02d}:{data['legion1_minute']:02d}\n"
                 if data.get("legion2_hour") is not None:
                     times_str += f"└ Legion 2: {data['legion2_hour']:02d}:{data['legion2_minute']:02d}"
-                embed.add_field(
-                    name=f"{icon} {event}",
-                    value=times_str.strip(),
-                    inline=False
-                )
+                if times_str.strip():
+                    embed.add_field(
+                        name=f"{icon} {event}",
+                        value=times_str.strip(),
+                        inline=False
+                    )
             elif event in ["Fortress Battle", "Frostfire Mine", "Castle Battle", "SvS"] and data:
                 times = data.get("times", [])
                 if times:
@@ -2127,10 +2147,18 @@ class WizardPreviewView(discord.ui.View):
             elif event == "Mercenary Bosses" and data:
                 bosses = data.get("bosses", [])
                 if bosses:
-                    boss_str = "\n".join([f"└ Day {b['day']}: {b['hour']:02d}:{b['minute']:02d}" for b in bosses])
+                    boss_lines = []
+                    for i, b in enumerate(bosses):
+                        hour = b.get('hour', 0)
+                        minute = b.get('minute', 0)
+                        if 'day' in b:
+                            boss_lines.append(f"└ Day {b['day']}: {hour:02d}:{minute:02d}")
+                        else:
+                            # Reconstructed from DB - no day info, show as Boss N
+                            boss_lines.append(f"└ Boss {i + 1}: {hour:02d}:{minute:02d}")
                     embed.add_field(
                         name=f"{icon} {event}",
-                        value=boss_str,
+                        value="\n".join(boss_lines),
                         inline=False
                     )
             elif event == "Daily Reset" and data:
