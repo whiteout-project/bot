@@ -535,6 +535,39 @@ R = Style.RESET_ALL
 
 import warnings
 
+def check_vcredist():
+    """Check if Visual C++ Redistributable is installed on Windows."""
+    if sys.platform != "win32":
+        return True  # Not applicable on non-Windows
+
+    try:
+        import winreg
+        import struct
+
+        # Determine Python architecture
+        is_64bit = struct.calcsize("P") * 8 == 64
+        arch = "x64" if is_64bit else "x86"
+
+        # Registry key for VC++ 2015-2022 runtime
+        key_path = f"SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\{arch}"
+
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+            winreg.CloseKey(key)
+            return True  # VC++ Redist is installed
+        except FileNotFoundError:
+            # VC++ Redist not found - show warning
+            download_url = f"https://aka.ms/vc14/vc_redist.{arch}.exe"
+            print(F.YELLOW + f"⚠️ Microsoft Visual C++ Redistributable ({arch}) not found!" + R)
+            print(F.YELLOW + "Gift code redemption (captcha solver) will not work until this is installed." + R)
+            print(F.YELLOW + f"Download and install from: " + F.CYAN + download_url + R)
+            print(F.YELLOW + "Then restart the bot, and the gift code redemption should work." + R)
+            print()
+            return False
+
+    except Exception:
+        return True  # If we can't check, we hope it's fine
+
 def startup_cleanup():
     """Perform all cleanup tasks on startup - directories, files, and legacy packages."""
     v1_path = "V1oldbot"
@@ -563,6 +596,7 @@ def startup_cleanup():
         uninstall_packages(legacy_packages, " (legacy packages)")
 
 startup_cleanup()
+check_vcredist()
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -1188,7 +1222,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "bear_trap_schedule", "id_channel", "backup_operations", "bear_trap_editor", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "registration", "pimp"]
+        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "bear_trap_schedule", "id_channel", "backup_operations", "bear_trap_editor", "bear_trap_templates", "bear_trap_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "registration"]
 
         failed_cogs = []
         
@@ -1217,8 +1251,59 @@ if __name__ == "__main__":
 
     async def main():
         await load_cogs()
-        
         await bot.start(bot_token)
 
+    def run_bot():
+        import signal
+
+        shutdown_messages = [
+            "🛑 Ctrl+C detected! The bot is powering down... beep boop!",
+            "👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
+            "🔌 Ctrl+C pressed! Unplugging the bot. See you next time!",
+            "🚪 Exit signal received! The bot has left the building...",
+            "💤 Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
+            "🎬 And that's a wrap! Bot shutting down gracefully.",
+            "🌙 Trying to turn the bot off and not on again. Ctrl+C ya later!",
+            "✨ Ctrl+C and poof! The bot vanishes into thin air...",
+        ]
+
+        def get_shutdown_message():
+            import random
+            return random.choice(shutdown_messages)
+
+        def handle_signal(signum, frame):
+            """Handle shutdown signals (Ctrl+C or container stop)."""
+            signal_name = "Ctrl+C" if signum == signal.SIGINT else "SIGTERM"
+
+            if is_container():
+                print(f"\n{F.YELLOW}Received {signal_name}. Shutting down gracefully...{R}")
+            else:
+                print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
+
+            # Schedule graceful shutdown - bot.close() will cause bot.start() to return
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(bot.close())
+            except RuntimeError:
+                pass  # No running loop, just exit
+
+            # Raise SystemExit to cleanly exit
+            raise SystemExit(0)
+
+        # Register signal handler for SIGINT (Ctrl+C)
+        signal.signal(signal.SIGINT, handle_signal)
+
+        # Also handle SIGTERM on Linux for graceful container stops
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, handle_signal)
+
+        try:
+            asyncio.run(main())
+        except SystemExit:
+            pass  # Clean exit from signal handler
+        except KeyboardInterrupt:
+            # Fallback in case signal handler doesn't catch it
+            print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
+
     if __name__ == "__main__":
-        asyncio.run(main())
+        run_bot()

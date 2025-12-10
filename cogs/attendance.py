@@ -55,6 +55,9 @@ EVENT_TYPE_ICONS = {
     "Other": f"{pimp.listIcon}"
 }
 
+# Event types that support legion selection (Legion 1, Legion 2)
+LEGION_EVENT_TYPES = ["Foundry", "Canyon Clash"]
+
 def parse_points(points_str):
     try:
         points_str = points_str.strip().upper()
@@ -534,34 +537,70 @@ class EventTypeSelectView(discord.ui.View):
         self.cog = cog
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
-        
-        # Add the dropdown
-        self.add_item(self.create_event_type_select())
-        
+        self.selected_event_type = None
+        self.selected_legion = None
+
+        # Add the event type dropdown
+        self.event_type_select = self.create_event_type_select()
+        self.add_item(self.event_type_select)
+
+        # Legion select (initially not added, added dynamically when needed)
+        self.legion_select = None
+
         # Add back button
-        back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=f"{pimp.importIcon}", row=3)
+        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary, row=2)
         back_button.callback = self.back_to_sessions
         self.add_item(back_button)
-    
+
     def create_event_type_select(self):
+        options = []
+        for event_type in EVENT_TYPES:
+            emoji = EVENT_TYPE_ICONS.get(event_type, "📋")
+            is_default = event_type == "Other"
+            options.append(discord.SelectOption(label=event_type, value=event_type, emoji=emoji, default=is_default))
+
         select = discord.ui.Select(
-            placeholder=f"{pimp.targetIcon} Select Event Type...",
-            options=[
-                discord.SelectOption(label="Foundry", value="Foundry", emoji=f"{pimp.foundryIcon}"),
-                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji=f"{pimp.canyonClashIcon}"),
-                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji=f"{pimp.crazyJoeIcon}"),
-                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji=f"{pimp.bearTrapIcon}"),
-                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji=f"{pimp.castleBattleIcon}"),
-                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji=f"{pimp.frostdragonIcon}"),
-                discord.SelectOption(label="Other", value="Other", emoji=f"{pimp.listIcon}", default=True)
-            ]
+            placeholder="🎯 Select Event Type...",
+            options=options,
+            row=0
         )
-        
-        async def select_callback(interaction: discord.Interaction):
-            event_type = select.values[0]
-            self.session_data['event_type'] = event_type
-            
-            # Proceed to player marking
+        select.callback = self.on_event_type_select
+        return select
+
+    def create_legion_select(self):
+        select = discord.ui.Select(
+            placeholder="🎖️ Select Legion...",
+            options=[
+                discord.SelectOption(label="Legion 1", value="Legion 1", emoji="1️⃣"),
+                discord.SelectOption(label="Legion 2", value="Legion 2", emoji="2️⃣")
+            ],
+            row=1
+        )
+        select.callback = self.on_legion_select
+        return select
+
+    async def on_event_type_select(self, interaction: discord.Interaction):
+        event_type = self.event_type_select.values[0]
+        self.selected_event_type = event_type
+        self.session_data['event_type'] = event_type
+
+        # Check if this event type requires legion selection
+        if event_type in LEGION_EVENT_TYPES:
+            # Add legion dropdown if not already present
+            if self.legion_select is None:
+                self.legion_select = self.create_legion_select()
+                self.add_item(self.legion_select)
+
+            # Update embed to prompt for legion selection
+            embed = discord.Embed(
+                title="🎖️ Select Legion",
+                description=f"**Event Type:** {EVENT_TYPE_ICONS.get(event_type, '📋')} {event_type}\n\nPlease select the legion for this attendance session:",
+                color=discord.Color.blue()
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+        else:
+            # No legion needed, proceed to player marking
+            self.selected_legion = None
             await self.cog.show_attendance_marking(
                 interaction,
                 self.alliance_id,
@@ -570,12 +609,26 @@ class EventTypeSelectView(discord.ui.View):
                 session_id=None,
                 is_edit=False,
                 event_type=event_type,
-                event_date=self.session_data.get('event_date')
+                event_date=self.session_data.get('event_date'),
+                event_subtype=None
             )
-        
-        select.callback = select_callback
-        return select
-    
+
+    async def on_legion_select(self, interaction: discord.Interaction):
+        self.selected_legion = self.legion_select.values[0]
+
+        # Proceed to player marking with legion
+        await self.cog.show_attendance_marking(
+            interaction,
+            self.alliance_id,
+            self.alliance_name,
+            self.session_data['name'],
+            session_id=None,
+            is_edit=False,
+            event_type=self.selected_event_type,
+            event_date=self.session_data.get('event_date'),
+            event_subtype=self.selected_legion
+        )
+
     async def back_to_sessions(self, interaction: discord.Interaction):
         await self.cog.show_session_selection_for_marking(interaction, self.alliance_id)
 
@@ -725,42 +778,120 @@ class AllianceSelectView(discord.ui.View):
         await self.cog.show_attendance_menu(interaction)
 
 class EditEventDetailsView(discord.ui.View):
-    def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True):
+    def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True, current_event_subtype=None):
         super().__init__(timeout=1800)
         self.session_id = session_id
         self.session_name = session_name
         self.current_event_type = current_event_type
         self.current_event_date = current_event_date
+        self.current_event_subtype = current_event_subtype
         self.parent_view = parent_view
         self.selected_event_type = current_event_type
+        self.selected_event_subtype = current_event_subtype
         self.new_event_date = None
         self.is_edit = is_edit
-        
-        # Create event type dropdown
+
+        # Create event type dropdown with dynamic options
+        options = []
+        for event_type in EVENT_TYPES:
+            emoji = EVENT_TYPE_ICONS.get(event_type, "📋")
+            is_default = (event_type == current_event_type) or (event_type == "Other" and not current_event_type)
+            options.append(discord.SelectOption(label=event_type, value=event_type, emoji=emoji, default=is_default))
+
         self.event_type_select = discord.ui.Select(
             placeholder=f"Event Type: {current_event_type or 'Select...'}",
-            options=[
-                discord.SelectOption(label="Foundry", value="Foundry", emoji=f"{pimp.foundryIcon}", default=(current_event_type == "Foundry")),
-                discord.SelectOption(label="Canyon Clash", value="Canyon Clash", emoji=f"{pimp.canyonClashIcon}", default=(current_event_type == "Canyon Clash")),
-                discord.SelectOption(label="Crazy Joe", value="Crazy Joe", emoji=f"{pimp.crazyJoeIcon}", default=(current_event_type == "Crazy Joe")),
-                discord.SelectOption(label="Bear Trap", value="Bear Trap", emoji=f"{pimp.bearTrapIcon}", default=(current_event_type == "Bear Trap")),
-                discord.SelectOption(label="Castle Battle", value="Castle Battle", emoji=f"{pimp.castleBattleIcon}", default=(current_event_type == "Castle Battle")),
-                discord.SelectOption(label="Frostdragon Tyrant", value="Frostdragon Tyrant", emoji=f"{pimp.frostdragonIcon}", default=(current_event_type == "Frostdragon Tyrant")),
-                discord.SelectOption(label="Other", value="Other", emoji=f"{pimp.listIcon}", default=(current_event_type == "Other" or not current_event_type))
-            ],
+            options=options,
             row=1
         )
         self.event_type_select.callback = self.on_event_type_select
         self.add_item(self.event_type_select)
-        
+
+        # Create legion dropdown only for legion events (Foundry, Canyon Clash)
+        self.legion_select = None
+        if current_event_type in LEGION_EVENT_TYPES:
+            self._add_legion_select(current_event_subtype)
+
         # Remove delete button if not in edit mode
         if not self.is_edit:
             for item in self.children:
                 if hasattr(item, 'label') and item.label == f"{pimp.deleteIcon} Delete Event":
                     item.disabled = True
-        
+
+    def _add_legion_select(self, subtype=None):
+        """Add legion select dropdown"""
+        self.legion_select = discord.ui.Select(
+            placeholder=f"Legion: {subtype or 'Not Set'}",
+            options=[
+                discord.SelectOption(label="Not Set", value="none", emoji="➖", default=(not subtype)),
+                discord.SelectOption(label="Legion 1", value="Legion 1", emoji="1️⃣", default=(subtype == "Legion 1")),
+                discord.SelectOption(label="Legion 2", value="Legion 2", emoji="2️⃣", default=(subtype == "Legion 2"))
+            ],
+            row=2
+        )
+        self.legion_select.callback = self.on_legion_select
+        self.add_item(self.legion_select)
+
+    def _remove_legion_select(self):
+        """Remove legion select dropdown"""
+        if self.legion_select is not None:
+            self.remove_item(self.legion_select)
+            self.legion_select = None
+
+    def _rebuild_event_type_select(self):
+        """Rebuild the event type select with updated default"""
+        # Remove old select
+        self.remove_item(self.event_type_select)
+
+        # Create new options with updated default
+        options = []
+        for event_type in EVENT_TYPES:
+            emoji = EVENT_TYPE_ICONS.get(event_type, "📋")
+            is_default = (event_type == self.selected_event_type)
+            options.append(discord.SelectOption(label=event_type, value=event_type, emoji=emoji, default=is_default))
+
+        self.event_type_select = discord.ui.Select(
+            placeholder=f"Event Type: {self.selected_event_type}",
+            options=options,
+            row=1
+        )
+        self.event_type_select.callback = self.on_event_type_select
+        self.add_item(self.event_type_select)
+
+    def _rebuild_legion_select(self):
+        """Rebuild legion select to reset its state, or remove if not a legion event"""
+        # Always remove the old one first
+        self._remove_legion_select()
+
+        # Only add back if this is a legion event type
+        if self.selected_event_type in LEGION_EVENT_TYPES:
+            self._add_legion_select(self.selected_event_subtype)
+        else:
+            self.selected_event_subtype = None
+
     async def on_event_type_select(self, interaction: discord.Interaction):
         self.selected_event_type = self.event_type_select.values[0]
+
+        # Rebuild both selects to maintain consistent view state
+        self._rebuild_event_type_select()
+        self._rebuild_legion_select()
+
+        # Rebuild embed with updated event type
+        legion_display = f" [{self.selected_event_subtype[:1]}{self.selected_event_subtype[-1]}]" if self.selected_event_subtype else ""
+        embed = discord.Embed(
+            title="⚙️ Edit Event",
+            description=(
+                f"**Session:** {self.session_name}\n"
+                f"**Event Type:** {self.selected_event_type}{legion_display}\n"
+                f"**Date:** {self.current_event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.current_event_date, datetime) else self.current_event_date or 'Not set'}\n\n"
+                "Select a new event type from the dropdown and/or edit the date."
+            ),
+            color=discord.Color.blue()
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_legion_select(self, interaction: discord.Interaction):
+        value = self.legion_select.values[0]
+        self.selected_event_subtype = value if value != "none" else None
         await interaction.response.defer()
         
     @discord.ui.button(label="Rename Session", emoji=f"{pimp.editListIcon}", style=discord.ButtonStyle.secondary, row=0)
@@ -773,12 +904,13 @@ class EditEventDetailsView(discord.ui.View):
         date_modal = EventDateModal(self.current_event_date, self)
         await interaction.response.send_modal(date_modal)
 
-    @discord.ui.button(label="Save", emoji=f"{pimp.saveIcon}", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.primary, row=3)
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Use the selected event type
+            # Use the selected event type and subtype
             event_type = self.selected_event_type
-            
+            event_subtype = self.selected_event_subtype
+
             # Use new date if set, otherwise keep current
             event_date = self.new_event_date if self.new_event_date else self.current_event_date
             if isinstance(event_date, str):
@@ -789,33 +921,34 @@ class EditEventDetailsView(discord.ui.View):
             elif event_date is None:
                 # If no date is set, use current datetime
                 event_date = datetime.utcnow()
-            
+
             # Update the database
             with sqlite3.connect('db/attendance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute("""
                     UPDATE attendance_records
-                    SET event_type = ?, event_date = ?
+                    SET event_type = ?, event_subtype = ?, event_date = ?
                     WHERE session_id = ?
-                """, (event_type, event_date.isoformat(), self.session_id))
+                """, (event_type, event_subtype, event_date.isoformat(), self.session_id))
                 db.commit()
-            
+
             # Update parent view and refresh
             self.parent_view.event_type = event_type
+            self.parent_view.event_subtype = event_subtype
             self.parent_view.event_date = event_date
             await self.parent_view.update_main_embed(interaction)
-            
+
         except Exception as e:
             await interaction.response.send_message(
                 f"{pimp.deniedIcon} Error updating event details: {str(e)}",
                 ephemeral=True
             )
-            
-    @discord.ui.button(label=f"{pimp.deniedIcon} Cancel", style=discord.ButtonStyle.secondary, row=2)
+
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=3)
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.parent_view.update_main_embed(interaction)
-    
-    @discord.ui.button(label=f"{pimp.deleteIcon} Delete Event", style=discord.ButtonStyle.secondary, row=3)
+
+    @discord.ui.button(label="🗑️ Delete Event", style=discord.ButtonStyle.danger, row=4)
     async def delete_event_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Only show for edit mode
         if not self.is_edit:
@@ -993,7 +1126,8 @@ class ConfirmDeleteView(discord.ui.View):
     
     @discord.ui.button(label=f"{pimp.deniedIcon} Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.parent_view.parent_view.update_main_embed(interaction)
+        # parent_view is PlayerSelectView, which has update_main_embed
+        await self.parent_view.update_main_embed(interaction)
 
 class PlayerFilterModal(discord.ui.Modal, title="Filter Players"):
     def __init__(self, parent_view):
@@ -1018,7 +1152,7 @@ class PlayerFilterModal(discord.ui.Modal, title="Filter Players"):
         await self.parent_view.update_main_embed(interaction)
 
 class PlayerSelectView(discord.ui.View):
-    def __init__(self, players, alliance_name, session_name, cog, alliance_id=None, session_id=None, is_edit=False, page=0, event_type="Other", event_date=None):
+    def __init__(self, players, alliance_name, session_name, cog, alliance_id=None, session_id=None, is_edit=False, page=0, event_type="Other", event_date=None, event_subtype=None):
         super().__init__(timeout=7200)
         self.players = players
         self.alliance_name = alliance_name
@@ -1029,6 +1163,7 @@ class PlayerSelectView(discord.ui.View):
         self.is_edit = is_edit
         self.event_type = event_type
         self.event_date = event_date
+        self.event_subtype = event_subtype
         self.selected_players = {}
         
         # Pre-populate selected_players if in edit mode
@@ -1275,13 +1410,14 @@ class PlayerSelectView(discord.ui.View):
     @discord.ui.button(label=f"{pimp.settingsIcon} Edit Event", style=discord.ButtonStyle.secondary, row=1)
     async def edit_event_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Show view to edit event type and date
-        view = EditEventDetailsView(self.session_id, self.session_name, self.event_type, self.event_date, self, is_edit=self.is_edit)
+        view = EditEventDetailsView(self.session_id, self.session_name, self.event_type, self.event_date, self, is_edit=self.is_edit, current_event_subtype=self.event_subtype)
+        legion_display = f" [{self.event_subtype[:1]}{self.event_subtype[-1]}]" if self.event_subtype else ""
         embed = discord.Embed(
             title=f"{pimp.settingsIcon} Edit Event",
             description=(
                 f"**Session:** {self.session_name}\n"
-                f"**Current Event Type:** {self.event_type}\n"
-                f"**Current Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
+                f"**Event Type:** {self.event_type}{legion_display}\n"
+                f"**Date:** {self.event_date.strftime('%Y-%m-%d %H:%M UTC') if isinstance(self.event_date, datetime) else self.event_date or 'Not set'}\n\n"
                 "Select a new event type from the dropdown and/or edit the date."
             ),
             color=pimp.emColor1
@@ -1368,7 +1504,8 @@ class PlayerSelectView(discord.ui.View):
                 is_edit=self.is_edit,
                 event_type=self.event_type,
                 event_date=self.event_date,
-                alliance_id=self.alliance_id
+                alliance_id=self.alliance_id,
+                event_subtype=self.event_subtype
             )
         except Exception as e:
             import traceback
@@ -1758,16 +1895,29 @@ class PlayerAttendanceView(discord.ui.View):
                 # Check which schema we have
                 cursor.execute("PRAGMA table_info(attendance_records)")
                 columns = {col[1] for col in cursor.fetchall()}
-                
+
                 if 'player_id' in columns:
                     # New schema - filter by event type and exclude current session
-                    cursor.execute(
-                        "SELECT status, event_date FROM attendance_records "
-                        "WHERE player_id = ? AND event_type = ? "
-                        "AND event_date < ? AND session_id != ? "
-                        "ORDER BY event_date DESC LIMIT 1",
-                        (str(fid), self.event_type, self.parent_view.event_date, self.parent_view.session_id)
-                    )
+                    event_subtype = getattr(self.parent_view, 'event_subtype', None)
+
+                    if event_subtype:
+                        # Filter by both event_type and event_subtype (legion)
+                        cursor.execute(
+                            "SELECT status, event_date FROM attendance_records "
+                            "WHERE player_id = ? AND event_type = ? AND event_subtype = ? "
+                            "AND event_date < ? AND session_id != ? "
+                            "ORDER BY event_date DESC LIMIT 1",
+                            (str(fid), self.event_type, event_subtype, self.parent_view.event_date, self.parent_view.session_id)
+                        )
+                    else:
+                        # No subtype - filter by event_type only, matching NULL subtypes
+                        cursor.execute(
+                            "SELECT status, event_date FROM attendance_records "
+                            "WHERE player_id = ? AND event_type = ? AND event_subtype IS NULL "
+                            "AND event_date < ? AND session_id != ? "
+                            "ORDER BY event_date DESC LIMIT 1",
+                            (str(fid), self.event_type, self.parent_view.event_date, self.parent_view.session_id)
+                        )
                 else:
                     # Old schema
                     cursor.execute(
@@ -1788,7 +1938,7 @@ class PlayerAttendanceView(discord.ui.View):
                             formatted_date = date_str[:10]
                     except:
                         formatted_date = date_str[:10] if len(date_str) >= 10 else date_str
-                    
+
                     status_display = status.replace('_', ' ').title() if status else status
                     return f"{status_display} ({formatted_date})"
                 else:
@@ -2026,6 +2176,13 @@ class Attendance(commands.Cog):
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_player ON attendance_records(player_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_type ON attendance_records(event_type)")
 
+                # Migration: Add event_subtype column for legion tracking (Legion 1, Legion 2), NULL is unset
+                try:
+                    cursor.execute("SELECT event_subtype FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN event_subtype TEXT DEFAULT NULL")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_subtype ON attendance_records(event_subtype)")
+
                 # Create user preferences table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS user_preferences (
@@ -2256,10 +2413,11 @@ class Attendance(commands.Cog):
             with sqlite3.connect('db/attendance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute("""
-                    SELECT 
+                    SELECT
                         session_id,
                         session_name,
                         event_type,
+                        event_subtype,
                         MIN(event_date) as session_date,
                         COUNT(DISTINCT player_id) as player_count,
                         SUM(CASE WHEN status != 'not_recorded' THEN 1 ELSE 0 END) as marked_count
@@ -2269,16 +2427,17 @@ class Attendance(commands.Cog):
                     ORDER BY session_date DESC
                 """, (str(alliance_id),))
                 raw_sessions = cursor.fetchall()
-                
+
                 # Convert tuples to dictionaries for SessionSelectView
                 sessions = [
                     {
                         'session_id': row[0],
                         'name': row[1],
                         'event_type': row[2],
-                        'date': row[3].split('T')[0] if row[3] else "Unknown",
-                        'player_count': row[4],
-                        'marked_count': row[5]
+                        'event_subtype': row[3],
+                        'date': row[4].split('T')[0] if row[4] else "Unknown",
+                        'player_count': row[5],
+                        'marked_count': row[6]
                     }
                     for row in raw_sessions
                 ]
@@ -2314,7 +2473,7 @@ class Attendance(commands.Cog):
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
 
-    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, alliance_name: str, session_name: str, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None):
+    async def show_attendance_marking(self, interaction: discord.Interaction, alliance_id: int, alliance_name: str, session_name: str, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, event_subtype: str = None):
         """Show attendance marking interface with status display"""
         try:
             # Get all alliance members
@@ -2384,12 +2543,13 @@ class Attendance(commands.Cog):
             absent_count = sum(1 for p in players if p[3] == 'absent')
             not_recorded_count = sum(1 for p in players if p[3] == 'not_recorded')
             
-            event_icon = EVENT_TYPE_ICONS.get(event_type, "{pimp.listIcon}")
+            event_icon = EVENT_TYPE_ICONS.get(event_type, "📋")
+            legion_display = f" [{event_subtype[:1]}{event_subtype[-1]}]" if event_subtype else ""
             embed = discord.Embed(
                 title=f"{pimp.listIcon} Mark Attendance - {alliance_name}",
                 description=(
                     f"**Session:** {session_name}\n"
-                    f"**Event Type:** {event_icon} {event_type}\n"
+                    f"**Event Type:** {event_icon} {event_type}{legion_display}\n"
                     f"**Mode:** {'Edit Existing' if is_edit else 'New Session'}\n"
                     f"**Total Members:** {len(players)}\n"
                     f"**Status:** {pimp.verifiedIcon} Present: {present_count} | {pimp.deniedIcon} Absent: {absent_count} | ❓ Not Recorded: {not_recorded_count}\n\n"
@@ -2397,8 +2557,8 @@ class Attendance(commands.Cog):
                 ),
                 color=pimp.emColor1
             )
-            
-            view = PlayerSelectView(players, alliance_name, session_name, self, alliance_id, session_id, is_edit, event_type=event_type, event_date=event_date)
+
+            view = PlayerSelectView(players, alliance_name, session_name, self, alliance_id, session_id, is_edit, event_type=event_type, event_date=event_date, event_subtype=event_subtype)
             
             if interaction.response.is_done():
                 await interaction.edit_original_response(embed=embed, view=view)
@@ -2412,7 +2572,7 @@ class Attendance(commands.Cog):
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
 
-    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str, use_defer: bool = True, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, alliance_id: int = None):
+    async def process_attendance_results(self, interaction: discord.Interaction, selected_players: dict, alliance_name: str, session_name: str, use_defer: bool = True, session_id: int = None, is_edit: bool = False, event_type: str = "Other", event_date: datetime = None, alliance_id: int = None, event_subtype: str = None):
         """Process and display final attendance results"""
         try:
             # Count attendance types
@@ -2446,18 +2606,18 @@ class Attendance(commands.Cog):
                     for member in all_members:
                         member_fid, member_nickname, member_furnace_lv = member
                         cursor.execute("""
-                            INSERT INTO attendance_records 
+                            INSERT INTO attendance_records
                             (player_id, player_name, session_id, session_name, alliance_id, alliance_name,
-                             status, points, event_type, event_date, 
+                             status, points, event_type, event_subtype, event_date,
                              marked_at, marked_by, marked_by_username)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
-                            str(member_fid), member_nickname, session_id, session_name, 
+                            str(member_fid), member_nickname, session_id, session_name,
                             str(alliance_id), alliance_name,
-                            'not_recorded', 0, 
-                            event_type, 
+                            'not_recorded', 0,
+                            event_type, event_subtype,
                             event_date.isoformat() if event_date else datetime.utcnow().isoformat(),
-                            datetime.utcnow().isoformat(), 
+                            datetime.utcnow().isoformat(),
                             str(interaction.user.id), interaction.user.name
                         ))
                 
@@ -2590,9 +2750,11 @@ class SessionSelectView(discord.ui.View):
         if sessions:
             options = []
             for session in sessions[:25]:  # Discord limit
-                event_icon = EVENT_TYPE_ICONS.get(session.get('event_type', 'Other'), f"{pimp.listIcon}")
+                event_icon = EVENT_TYPE_ICONS.get(session.get('event_type', 'Other'), '📋')
+                event_subtype = session.get('event_subtype')
+                legion_suffix = f" [L{event_subtype[-1]}]" if event_subtype else ""
                 options.append(discord.SelectOption(
-                    label=f"{session['name'][:90]} [{session.get('event_type', 'Other')}]",
+                    label=f"{session['name'][:85]}{legion_suffix} [{session.get('event_type', 'Other')}]",
                     value=str(session['session_id']),
                     description=f"{session.get('date', 'Unknown date')} - {session.get('marked_count', 0)}/{session.get('player_count', 0)} marked",
                     emoji=event_icon
@@ -2668,12 +2830,14 @@ class SessionSelectView(discord.ui.View):
                 else:
                     # For marking mode, show attendance marking
                     await self.cog.show_attendance_marking(
-                        interaction, 
-                        self.alliance_id, 
+                        interaction,
+                        self.alliance_id,
                         await self.cog._get_alliance_name(self.alliance_id),
-                        selected_session['name'], 
+                        selected_session['name'],
                         session_id=session_id,
-                        is_edit=True
+                        is_edit=True,
+                        event_type=selected_session.get('event_type', 'Other'),
+                        event_subtype=selected_session.get('event_subtype')
                     )
             else:
                 await interaction.edit_original_response(

@@ -71,7 +71,7 @@ class AllianceMemberOperations(commands.Cog):
         self.c_users = self.conn_users.cursor()
         
         self.level_mapping = {
-            31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
+            31: "F30 - 1", 32: "F30 - 2", 33: "F30 - 3", 34: "F30 - 4",
             35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
             40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
             45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
@@ -646,166 +646,59 @@ class AllianceMemberOperations(commands.Cog):
                             max_fl = max(member[2] for member in members)
                             avg_fl = sum(member[2] for member in members) / len(members)
 
+                        public_embed = discord.Embed(
+                            title=f"👥 {alliance_name} - Member List",
+                            description=(
+                                "```ml\n"
+                                "Alliance Statistics\n"
+                                "══════════════════════════\n"
+                                f"📊 Total Members    : {len(members)}\n"
+                                f"⚔️ Highest Level    : {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
+                                f"📈 Average Level    : {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
+                                "══════════════════════════\n"
+                                "```\n"
+                                "**Member List**\n"
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                            ),
+                            color=discord.Color.blue()
+                        )
+
+                        members_per_page = 15
+                        member_chunks = [members[i:i + members_per_page] for i in range(0, len(members), members_per_page)]
+                        embeds = []
+
+                        for page, chunk in enumerate(member_chunks):
+                            embed = public_embed.copy()
                             
-                            member_embed = discord.Embed(
-                                title=f"{pimp.allianceIcon} {source_alliance_name} - Member Selection",
-                                description=(
-                                    f"{pimp.divider1}\n\n"
-                                    f"{pimp.allianceIcon} Total Members: {len(members)}\n"
-                                    f"{pimp.stoveIcon}️ Highest Level: {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                    f"{pimp.averageIcon} Average Level: {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n\n"
-                                    f"{pimp.divider1}\n\n"
-                                    f"### Selection Methods\n"
-                                    f"{pimp.divider2}\n"
-                                    f"{pimp.num1Icon} Select member from menu below\n"
-                                    f"{pimp.num2Icon} Click 'Select by ID' button and enter ID\n"
-                                    f"{pimp.divider2}\n"
-                                ),
-                                color=pimp.emColor1
-                            )
+                            member_list = ""
+                            for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
+                                level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
+                                member_list += f"👤 {nickname}\n└ ⚔ {level}\n└ 🆔 FID: {fid}\n└ 👑 State: {kid}\n\n"
 
-                            member_view = MemberSelectView(
-                                members,
-                                source_alliance_name,
-                                self.cog,
-                                is_remove_operation=False,
-                                alliance_id=source_alliance_id,
-                                alliances=alliances_with_counts
-                            )
+                            embed.description += member_list
+                            
+                            if len(member_chunks) > 1:
+                                embed.set_footer(text=f"Page {page + 1}/{len(member_chunks)}")
+                            
+                            embeds.append(embed)
 
-                            async def member_callback(member_interaction: discord.Interaction, selected_fids=None):
-                                if not selected_fids:
-                                    await member_interaction.response.send_message("No members selected", ephemeral=True)
-                                    return
+                        pagination_view = PaginationView(embeds, interaction.user.id)
+                        
+                        await interaction.response.edit_message(
+                            content="✅ Member list has been generated and posted below.",
+                            embed=None,
+                            view=None
+                        )
+                        
+                        message = await interaction.channel.send(
+                            embed=embeds[0],
+                            view=pagination_view if len(embeds) > 1 else None
+                        )
+                        
+                        if pagination_view:
+                            pagination_view.message = message
 
-                                # Get member names for confirmation
-                                with sqlite3.connect('db/users.sqlite') as users_db:
-                                    cursor = users_db.cursor()
-                                    placeholders = ','.join('?' * len(selected_fids))
-                                    cursor.execute(f"SELECT fid, nickname FROM users WHERE fid IN ({placeholders})", selected_fids)
-                                    selected_members = cursor.fetchall()
-
-                                member_list = "\n".join([f"• {nickname} (ID: {fid})" for fid, nickname in selected_members[:10]])
-                                if len(selected_members) > 10:
-                                    member_list += f"\n... and {len(selected_members) - 10} more"
-
-                                target_embed = discord.Embed(
-                                    title=f"{pimp.targetIcon} Target Alliance Selection",
-                                    description=(
-                                        f"{pimp.divider1}\n\n"
-                                        f"**Transferring {len(selected_fids)} member(s):**\n"
-                                        f"{member_list}\n\n"
-                                        f"{pimp.divider1}\n\n"
-                                        f"Select the target alliance:"
-                                    ),
-                                    color=pimp.emColor1
-                                )
-
-                                target_options = [
-                                    discord.SelectOption(
-                                        label=f"{name[:50]}",
-                                        value=str(alliance_id),
-                                        description=f"ID: {alliance_id} | Members: {count}",
-                                        emoji=f"{pimp.allianceIcon}"
-                                    ) for alliance_id, name, count in alliances_with_counts
-                                    if alliance_id != source_alliance_id
-                                ]
-
-                                target_select = discord.ui.Select(
-                                    placeholder=f"Select target alliance...",
-                                    options=target_options
-                                )
-                                
-                                target_view = discord.ui.View()
-                                target_view.add_item(target_select)
-
-                                async def target_callback(target_interaction: discord.Interaction):
-                                    target_alliance_id = int(target_select.values[0])
-
-                                    try:
-                                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                                            cursor = alliance_db.cursor()
-                                            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
-                                            target_alliance_name = cursor.fetchone()[0]
-
-                                        # Bulk transfer
-                                        with sqlite3.connect('db/users.sqlite') as users_db:
-                                            cursor = users_db.cursor()
-                                            placeholders = ','.join('?' * len(selected_fids))
-                                            cursor.execute(
-                                                f"UPDATE users SET alliance = ? WHERE fid IN ({placeholders})",
-                                                [target_alliance_id] + selected_fids
-                                            )
-                                            users_db.commit()
-
-                                        success_embed = discord.Embed(
-                                            title=f"{pimp.verifiedIcon} Transfer Successful",
-                                            description=(
-                                                f"{pimp.divider1}\n"
-                                                f"### Members Transferred\n"
-                                                f"{pimp.divider2}\n"
-                                                f"{pimp.totalIcon}**Total:** {len(selected_fids)}\n"
-                                                f"{pimp.allianceOldIcon} **Source:** {source_alliance_name}\n"
-                                                f"{pimp.allianceIcon} **Target:** {target_alliance_name}\n"
-                                                f"{pimp.divider2}\n"
-                                                f"### Transferred Members\n"
-                                                f"{pimp.divider2}\n"
-                                                f"{member_list}"
-                                                f"\n{pimp.divider2}\n\n"
-                                                f"{pimp.divider1}\n"
-                                            ),
-                                            color=pimp.emColor3
-                                        )
-
-                                        await target_interaction.response.edit_message(
-                                            embed=success_embed,
-                                            view=None
-                                        )
-
-                                        # Log the bulk transfer
-                                        self.cog.log_message(
-                                            f"Bulk transfer: {len(selected_fids)} members from {source_alliance_name} to {target_alliance_name}"
-                                        )
-
-                                    except Exception as e:
-                                        print(f"Transfer error: {e}")
-                                        self.cog.log_message(f"Bulk transfer error: {e}")
-                                        error_embed = discord.Embed(
-                                            title=f"{pimp.deniedIcon} Error",
-                                            description="An error occurred during the transfer operation.",
-                                            color=pimp.emColor2
-                                        )
-                                        await target_interaction.response.edit_message(
-                                            embed=error_embed,
-                                            view=None
-                                        )
-
-                                target_select.callback = target_callback
-                                try:
-                                    await member_interaction.response.edit_message(
-                                        embed=target_embed,
-                                        view=target_view
-                                    )
-                                except:
-                                    await member_interaction.edit_original_response(
-                                        embed=target_embed,
-                                        view=target_view
-                                    )
-
-                            member_view.callback = member_callback
-                            await interaction.response.edit_message(
-                                embed=member_embed,
-                                view=member_view
-                            )
-
-                        except Exception as e:
-                            self.log_message(f"Source callback error: {e}")
-                            await interaction.response.send_message(
-                                f"{pimp.deniedIcon} An error occurred. Please try again.",
-                                ephemeral=True
-                            )
-
-                    view.callback = source_callback
+                    view.callback = select_callback
                     await button_interaction.response.send_message(
                         embed=select_embed,
                         view=view,
