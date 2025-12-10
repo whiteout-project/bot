@@ -8,27 +8,20 @@ import asyncio
 import json
 import traceback
 import time
-from .bear_event_types import get_event_types, get_event_icon
-
+from cogs import prettification_is_my_purpose as pimp
 class BearTrap(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
         self.db_path = 'db/beartime.sqlite'
         os.makedirs('db', exist_ok=True)
-        self.conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
+        self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
-
-        # Enable WAL mode for better concurrency with other cogs
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.commit()
 
         # Rate limiting for channel unavailable warnings
         self.channel_warning_timestamps = {}
         self.channel_warning_interval = 300
 
-        # repeat_minutes value -1 means weekday-based repeat, 0 means no repeat
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS bear_notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,95 +78,21 @@ class BearTrap(commands.Cog):
             )
         """)
 
-        # Fix corrupted weekday-based repeats: "fixed" string was silently converted to 0 by SQLite.
-        self.cursor.execute("""
-            UPDATE bear_notifications
-            SET repeat_minutes = -1
-            WHERE id IN (SELECT DISTINCT notification_id FROM notification_days)
-            AND repeat_minutes = 0
-        """)
-        self.conn.commit()
-
         try:
             self.cursor.execute("SELECT mention_message FROM bear_notification_embeds LIMIT 1")
         except sqlite3.OperationalError:
             self.cursor.execute("ALTER TABLE bear_notification_embeds ADD COLUMN mention_message TEXT")
-
-        try:
-            self.cursor.execute("SELECT event_type FROM bear_notifications LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN event_type TEXT")
-        try:
-            self.cursor.execute("SELECT wizard_batch_id FROM bear_notifications LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN wizard_batch_id TEXT")
-        try:
-            self.cursor.execute("SELECT instance_identifier FROM bear_notifications LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN instance_identifier TEXT")
-
-        # Message deletion settings
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS bear_trap_settings (
-                guild_id INTEGER PRIMARY KEY,
-                delete_messages_enabled INTEGER DEFAULT 1,
-                default_delete_delay_minutes INTEGER DEFAULT 60,
-                show_daily_reset_on_schedule INTEGER DEFAULT 0
-            )
-        """)
-
-        # Add custom delete delay column to notifications
-        try:
-            self.cursor.execute("SELECT custom_delete_delay_minutes FROM bear_notifications LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN custom_delete_delay_minutes INTEGER DEFAULT NULL")
-
-        # Add message tracking columns to notification_history
-        try:
-            self.cursor.execute("SELECT message_id FROM notification_history LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE notification_history ADD COLUMN message_id BIGINT DEFAULT NULL")
-
-        try:
-            self.cursor.execute("SELECT channel_id FROM notification_history LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE notification_history ADD COLUMN channel_id BIGINT DEFAULT NULL")
-
-        try:
-            self.cursor.execute("SELECT scheduled_delete_at FROM notification_history LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE notification_history ADD COLUMN scheduled_delete_at TIMESTAMP DEFAULT NULL")
-
-        try:
-            self.cursor.execute("SELECT deleted_at FROM notification_history LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE notification_history ADD COLUMN deleted_at TIMESTAMP DEFAULT NULL")
-
-        # Add schedule board settings column
-        try:
-            self.cursor.execute("SELECT show_daily_reset_on_schedule FROM bear_trap_settings LIMIT 1")
-        except sqlite3.OperationalError:
-            self.cursor.execute("ALTER TABLE bear_trap_settings ADD COLUMN show_daily_reset_on_schedule INTEGER DEFAULT 0")
-
-        # Initialize default settings for all guilds with notifications
-        self.cursor.execute("""
-            INSERT OR IGNORE INTO bear_trap_settings (guild_id, delete_messages_enabled, default_delete_delay_minutes, show_daily_reset_on_schedule)
-            SELECT DISTINCT guild_id, 1, 60, 0 FROM bear_notifications
-        """)
 
         self.conn.commit()
 
     async def cog_load(self):
 
         self.notification_task = asyncio.create_task(self.check_notifications())
-        self.deletion_task = asyncio.create_task(self.check_message_deletions())
 
     async def cog_unload(self):
 
         if hasattr(self, 'notification_task'):
             self.notification_task.cancel()
-        if hasattr(self, 'deletion_task'):
-            self.deletion_task.cancel()
 
     def should_warn_about_channel(self, channel_id: int) -> bool:
         """Check if we should warn about this channel being unavailable."""
@@ -188,8 +107,8 @@ class BearTrap(commands.Cog):
     async def save_notification(self, guild_id: int, channel_id: int, start_date: datetime,
                                 hour: int, minute: int, timezone: str, description: str,
                                 created_by: int, notification_type: int, mention_type: str,
-                                repeat_enabled: bool, repeat_minutes: int = 0,
-                                selected_weekdays: list[int] = None, event_type: str = None, wizard_batch_id: str = None, instance_identifier: str = None, skip_board_update: bool = False) -> int:
+                                repeat_48h: bool, repeat_minutes: int = 0,
+                                selected_weekdays: list[int] = None) -> int:
         try:
             embed_data = None
             notification_description = description
@@ -217,82 +136,26 @@ class BearTrap(commands.Cog):
             )
 
             self.cursor.execute("""
-                INSERT INTO bear_notifications
+                INSERT INTO bear_notifications 
                 (guild_id, channel_id, hour, minute, timezone, description, notification_type,
-                mention_type, repeat_enabled, repeat_minutes, created_by, next_notification, event_type, wizard_batch_id, instance_identifier)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mention_type, repeat_enabled, repeat_minutes, created_by, next_notification)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (guild_id, channel_id, hour, minute, timezone, notification_description, notification_type,
-                  mention_type, 1 if repeat_enabled else 0, repeat_minutes, created_by,
-                  next_notification.isoformat(), event_type, wizard_batch_id, instance_identifier))
+                  mention_type, 1 if repeat_48h else 0, repeat_minutes, created_by,
+                  next_notification.isoformat()))
 
             notification_id = self.cursor.lastrowid
 
             if embed_data:
                 await self.save_notification_embed(notification_id, embed_data)
-            if repeat_minutes == -1:
+            if repeat_minutes == "fixed":
                 await self.save_notification_fixed(notification_id, selected_weekdays)
 
             self.conn.commit()
-
-            # Notify schedule boards of new notification (skip if bulk creating)
-            if not skip_board_update:
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
-                if schedule_cog:
-                    await schedule_cog.on_notification_created(guild_id, channel_id)
-
             return notification_id
         except Exception as e:
             print(f"Error saving notification: {e}")
             raise
-
-    async def update_notification(self, notification_id: int, hour: int, minute: int, timezone: str,
-                                  description: str, notification_type: int, mention_type: str,
-                                  repeat_minutes: int = 0, selected_weekdays: list[int] = None,
-                                  event_type: str = None, embed_data: dict = None,
-                                  instance_identifier: str = None, skip_board_update: bool = False) -> bool:
-        """Update an existing notification"""
-        try:
-            notification_description = description
-            if description.startswith("CUSTOM_TIMES:"):
-                notification_description = description
-            elif "EMBED_MESSAGE:" in description:
-                title = embed_data.get("title", "true") if embed_data else "true"
-                notification_description = f"EMBED_MESSAGE:{title}"
-            tz = pytz.timezone(timezone)
-            self.cursor.execute("SELECT next_notification FROM bear_notifications WHERE id = ?", (notification_id,))
-            row = self.cursor.fetchone()
-            if row:
-                current_next = datetime.fromisoformat(row[0])
-                next_notification = current_next.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            else:
-                next_notification = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
-            self.cursor.execute("""
-                UPDATE bear_notifications
-                SET hour = ?, minute = ?, timezone = ?, description = ?, notification_type = ?,
-                    mention_type = ?, repeat_minutes = ?, event_type = ?, next_notification = ?,
-                    instance_identifier = ?
-                WHERE id = ?
-            """, (hour, minute, timezone, notification_description, notification_type,
-                  mention_type, repeat_minutes, event_type, next_notification.isoformat(),
-                  instance_identifier, notification_id))
-            if embed_data:
-                self.cursor.execute("DELETE FROM bear_notification_embeds WHERE notification_id = ?", (notification_id,))
-                await self.save_notification_embed(notification_id, embed_data)
-            if repeat_minutes == -1 and selected_weekdays:
-                self.cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (notification_id,))
-                await self.save_notification_fixed(notification_id, selected_weekdays)
-            self.conn.commit()
-            if not skip_board_update:
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
-                if schedule_cog:
-                    self.cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (notification_id,))
-                    row = self.cursor.fetchone()
-                    if row:
-                        await schedule_cog.on_notification_created(row[0], row[1])
-            return True
-        except Exception as e:
-            print(f"Error updating notification: {e}")
-            return False
 
     async def save_notification_embed(self, notification_id: int, embed_data: dict) -> bool:
         try:
@@ -360,63 +223,13 @@ class BearTrap(commands.Cog):
             print(f"Error getting embed: {e}")
             return None
 
-    async def check_message_deletions(self):
-        """Background task to delete messages when their scheduled time arrives"""
-        await self.bot.wait_until_ready()
-        while not self.bot.is_closed():
-            try:
-                now = datetime.now(pytz.UTC)
-
-                # Find messages ready to delete
-                self.cursor.execute("""
-                    SELECT id, message_id, channel_id
-                    FROM notification_history
-                    WHERE scheduled_delete_at IS NOT NULL
-                      AND scheduled_delete_at <= ?
-                      AND deleted_at IS NULL
-                      AND message_id IS NOT NULL
-                """, (now.isoformat(),))
-
-                rows = self.cursor.fetchall()
-
-                for history_id, message_id, channel_id in rows:
-                    try:
-                        channel = self.bot.get_channel(channel_id)
-                        if channel:
-                            try:
-                                msg = await channel.fetch_message(message_id)
-                                await msg.delete()
-                            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                                # Message already deleted, no permission, or other error
-                                pass
-                    except Exception as e:
-                        print(f"Error deleting message {message_id}: {e}")
-                    finally:
-                        # Mark as deleted regardless
-                        self.cursor.execute("""
-                            UPDATE notification_history
-                            SET deleted_at = ?
-                            WHERE id = ?
-                        """, (now.isoformat(), history_id))
-
-                self.conn.commit()
-
-            except Exception as e:
-                print(f"Error in message deletion checker: {e}")
-
-            await asyncio.sleep(10)  # Check every 10 seconds
-
     async def check_notifications(self):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
 
                 self.cursor.execute("""
-                    SELECT id, guild_id, channel_id, hour, minute, timezone, description,
-                           notification_type, mention_type, repeat_enabled, repeat_minutes,
-                           is_enabled, created_at, created_by, last_notification, next_notification,
-                           event_type, instance_identifier, custom_delete_delay_minutes
-                    FROM bear_notifications
+                    SELECT * FROM bear_notifications 
                     WHERE is_enabled = 1 AND next_notification IS NOT NULL
                 """)
                 notifications = self.cursor.fetchall()
@@ -434,113 +247,18 @@ class BearTrap(commands.Cog):
 
             await asyncio.sleep(0.1)
 
-    def get_guild_deletion_settings(self, guild_id: int) -> tuple[bool, int]:
-        """Get deletion settings for a guild. Returns (enabled, default_delay_minutes)"""
-        self.cursor.execute("""
-            SELECT delete_messages_enabled, default_delete_delay_minutes
-            FROM bear_trap_settings
-            WHERE guild_id = ?
-        """, (guild_id,))
-        row = self.cursor.fetchone()
-        if row:
-            return (bool(row[0]), row[1])
-        # Default if not found
-        return (True, 60)
-
-    def calculate_delete_time(self, guild_id: int, event_type: str,
-                              custom_delete_delay: int, notification_times: list, current_time: int,
-                              sent_at: datetime) -> datetime | None:
-        """Calculate when to delete a message. Returns None for non-last notifications."""
-        is_last = (current_time == min(notification_times))
-
-        if not is_last:
-            # Non-last notifications will be deleted when next one is sent
-            return None
-
-        # This is the last notification - calculate delete time
-        deletion_enabled, default_delay = self.get_guild_deletion_settings(guild_id)
-
-        if not deletion_enabled:
-            return None  # Deletion disabled
-
-        # Determine delay in minutes
-        delay_minutes = None
-
-        # 1. Check for per-notification custom delay
-        if custom_delete_delay is not None:
-            delay_minutes = custom_delete_delay
-        # 2. Check for event type duration
-        elif event_type:
-            from .bear_event_types import get_event_config
-            event_config = get_event_config(event_type)
-            if event_config:
-                event_duration = event_config.get("duration_minutes", default_delay)
-                # If event has 0 duration (like Daily Reset), use default delay instead
-                delay_minutes = event_duration if event_duration > 0 else default_delay
-            else:
-                delay_minutes = default_delay
-        # 3. Fall back to guild default
-        else:
-            delay_minutes = default_delay
-
-        return sent_at + timedelta(minutes=delay_minutes)
-
-    async def store_message_for_deletion(self, notification_id: int, notification_time: int,
-                                          channel_id: int, message_id: int,
-                                          scheduled_delete_at: datetime | None):
-        """Store a sent message ID for later deletion"""
-        current_time_str = datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')
-        delete_at_str = scheduled_delete_at.isoformat() if scheduled_delete_at else None
-
-        self.cursor.execute("""
-            INSERT INTO notification_history
-            (notification_id, notification_time, message_id, channel_id, scheduled_delete_at, sent_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (notification_id, notification_time, message_id, channel_id, delete_at_str, current_time_str))
-
-    async def delete_previous_notifications(self, notification_id: int, channel_id: int):
-        """Delete messages from previous notifications (for non-last notifications)"""
-        try:
-            channel = self.bot.get_channel(channel_id)
-            if not channel:
-                return
-
-            # Find messages that should be deleted on next notification (scheduled_delete_at IS NULL)
-            self.cursor.execute("""
-                SELECT id, message_id FROM notification_history
-                WHERE notification_id = ?
-                  AND scheduled_delete_at IS NULL
-                  AND deleted_at IS NULL
-                  AND message_id IS NOT NULL
-            """, (notification_id,))
-
-            rows = self.cursor.fetchall()
-            for history_id, message_id in rows:
-                try:
-                    msg = await channel.fetch_message(message_id)
-                    await msg.delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException) as e:
-                    # Message already deleted, no permission, or other error
-                    pass
-                finally:
-                    # Mark as deleted regardless
-                    self.cursor.execute("""
-                        UPDATE notification_history
-                        SET deleted_at = ?
-                        WHERE id = ?
-                    """, (datetime.now(pytz.UTC).isoformat(), history_id))
-
-            self.conn.commit()
-        except Exception as e:
-            print(f"Error deleting previous notifications: {e}")
-
     async def process_notification(self, notification):
-        id = None  # Initialize to avoid UnboundLocalError in exception handler
         try:
             (id, guild_id, channel_id, hour, minute, timezone, description,
              notification_type, mention_type, repeat_enabled, repeat_minutes,
              is_enabled, created_at, created_by, last_notification,
-             next_notification, event_type, instance_identifier, custom_delete_delay_minutes) = notification
+             next_notification) = notification
+
+            weekly_repeat_days = []
+            if repeat_enabled and repeat_minutes == 0:
+                self.cursor.execute("SELECT weekday FROM notification_days WHERE notification_id = ?", (id,))
+                weekly_repeat_days = [row[0] for row in self.cursor.fetchall()]
+
 
             if not is_enabled:
                 return
@@ -563,7 +281,7 @@ class BearTrap(commands.Cog):
                         periods_passed = int(time_diff / repeat_minutes) + 1
                         next_time = next_time + timedelta(minutes=repeat_minutes * periods_passed)
 
-                    elif repeat_minutes == -1:
+                    elif repeat_minutes == "fixed":
                         self.cursor.execute("""
                                     SELECT weekday FROM notification_days
                                     WHERE notification_id = ?
@@ -573,7 +291,7 @@ class BearTrap(commands.Cog):
 
                         for row in rows:
                             parts = row[0].split('|')
-                            notification_days.update(int(p) for p in parts if p)
+                            notification_days.update(int(p) for p in parts)
 
                         for next_day in range(1, 8):
                             potential_day = now + timedelta(days=next_day)
@@ -646,12 +364,6 @@ class BearTrap(commands.Cog):
                     break
 
             if should_notify:
-                # Delete previous notifications before sending new ones
-                await self.delete_previous_notifications(id, channel_id)
-
-                # Track message IDs for deletion
-                sent_message_ids = []
-
                 mention_text = ""
                 if mention_type == "everyone":
                     mention_text = "@everyone"
@@ -691,33 +403,6 @@ class BearTrap(commands.Cog):
 
                 time_text = f"{rounded_time} {time_unit}"
 
-                # Calculate event name, date, and time placeholders
-                event_name = event_type if event_type else "Event"
-
-                # Get event emoji from event_types config
-                event_emoji = ""
-                if event_type:
-                    from .bear_event_types import get_event_icon
-                    event_emoji = get_event_icon(event_type)
-
-                # Format event time in user's timezone
-                event_datetime = next_time.astimezone(tz)
-                event_time = event_datetime.strftime("%H:%M")
-
-                # Format event date as "MMM DD" (e.g., "Nov 15")
-                event_date = event_datetime.strftime("%b %d")
-
-                # Check if event has instance-specific descriptions
-                actual_description = description
-                if event_type and instance_identifier and "EMBED_MESSAGE:" not in description:
-                    from .bear_event_types import get_event_config
-                    event_config = get_event_config(event_type)
-                    if event_config and "descriptions" in event_config:
-                        descriptions_dict = event_config["descriptions"]
-                        # instance_identifier could be "legion1", "legion2", "teleport_window", "battle_start", etc.
-                        if instance_identifier in descriptions_dict:
-                            actual_description = descriptions_dict[instance_identifier]
-
                 if "EMBED_MESSAGE:" in description:
                     try:
                         embed_data = await self.get_notification_embed(id)
@@ -739,32 +424,14 @@ class BearTrap(commands.Cog):
                                 if title and isinstance(title, str):
                                     title = title.replace("%t", time_text)
                                     title = title.replace("{time}", time_text)
-                                    title = title.replace("%n", event_name)
-                                    title = title.replace("%e", event_time)
-                                    title = title.replace("%d", event_date)
-                                    title = title.replace("%i", event_emoji)
                                     if "@tag" in title:
                                         title = title.replace("@tag", mention_text)
                                     embed.title = title
 
                                 description = embed_data.get("description", "")
-
-                                # Override with instance-specific description if available
-                                if event_type and instance_identifier:
-                                    from .bear_event_types import get_event_config
-                                    event_config = get_event_config(event_type)
-                                    if event_config and "descriptions" in event_config:
-                                        descriptions_dict = event_config["descriptions"]
-                                        if instance_identifier in descriptions_dict:
-                                            description = descriptions_dict[instance_identifier]
-
                                 if description and isinstance(description, str):
                                     description = description.replace("%t", time_text)
                                     description = description.replace("{time}", time_text)
-                                    description = description.replace("%n", event_name)
-                                    description = description.replace("%e", event_time)
-                                    description = description.replace("%d", event_date)
-                                    description = description.replace("%i", event_emoji)
                                     if "@tag" in description:
                                         description = description.replace("@tag", mention_text)
                                     embed.description = description
@@ -785,10 +452,6 @@ class BearTrap(commands.Cog):
                                 if footer_text and isinstance(footer_text, str):
                                     footer_text = footer_text.replace("%t", time_text)
                                     footer_text = footer_text.replace("{time}", time_text)
-                                    footer_text = footer_text.replace("%n", event_name)
-                                    footer_text = footer_text.replace("%e", event_time)
-                                    footer_text = footer_text.replace("%d", event_date)
-                                    footer_text = footer_text.replace("%i", event_emoji)
                                     if "@tag" in footer_text:
                                         footer_text = footer_text.replace("@tag", mention_text)
                                     embed.set_footer(text=footer_text)
@@ -797,10 +460,6 @@ class BearTrap(commands.Cog):
                                 if author_text and isinstance(author_text, str):
                                     author_text = author_text.replace("%t", time_text)
                                     author_text = author_text.replace("{time}", time_text)
-                                    author_text = author_text.replace("%n", event_name)
-                                    author_text = author_text.replace("%e", event_time)
-                                    author_text = author_text.replace("%d", event_date)
-                                    author_text = author_text.replace("%i", event_emoji)
                                     if "@tag" in author_text:
                                         author_text = author_text.replace("@tag", mention_text)
                                     embed.set_author(name=author_text)
@@ -812,42 +471,32 @@ class BearTrap(commands.Cog):
                                             mention_message = mention_message.replace("@tag", mention_text)
                                             mention_message = mention_message.replace("%t", time_text)
                                             mention_message = mention_message.replace("{time}", time_text)
-                                            mention_message = mention_message.replace("%n", event_name)
-                                            mention_message = mention_message.replace("%e", event_time)
-                                            mention_message = mention_message.replace("%d", event_date)
-                                            mention_message = mention_message.replace("%i", event_emoji)
-                                            msg = await channel.send(mention_message)
-                                            sent_message_ids.append(msg.id)
+                                            await channel.send(mention_message)
                                         else:
                                             mention_text = mention_text.replace("%t", time_text)
                                             mention_text = mention_text.replace("{time}", time_text)
-                                            msg = await channel.send(mention_text)
-                                            sent_message_ids.append(msg.id)
-                                    msg = await channel.send(embed=embed)
-                                    sent_message_ids.append(msg.id)
+                                            await channel.send(mention_text)
+                                    await channel.send(embed=embed)
                                 else:
                                     if rounded_time > 0:
-                                        msg = await channel.send(
-                                            f"{mention_text} ⏰ **Notification** will start in **{time_text}**!")
+                                        await channel.send(
+                                            f"{mention_text} {pimp.hourglassIcon} **Notification** will start in **{time_text}**!")
                                     else:
-                                        msg = await channel.send(f"{mention_text} ⏰ **Notification**")
-                                    sent_message_ids.append(msg.id)
+                                        await channel.send(f"{mention_text} {pimp.hourglassIcon} **Notification**")
                             except Exception as e:
                                 print(f"Error creating embed: {e}")
                                 if rounded_time > 0:
-                                    msg = await channel.send(
-                                        f"{mention_text} ⏰ **Error sending embed notification** will start in **{time_text}**!")
+                                    await channel.send(
+                                        f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification** will start in **{time_text}**!")
                                 else:
-                                    msg = await channel.send(f"{mention_text} ⏰ **Error sending embed notification**")
-                                sent_message_ids.append(msg.id)
+                                    await channel.send(f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification**")
                     except Exception as e:
                         print(f"Error creating embed: {e}")
                         if rounded_time > 0:
-                            msg = await channel.send(
-                                f"{mention_text} ⏰ **Error sending embed notification** will start in **{time_text}**!")
+                            await channel.send(
+                                f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification** will start in **{time_text}**!")
                         else:
-                            msg = await channel.send(f"{mention_text} ⏰ **Error sending embed notification**")
-                        sent_message_ids.append(msg.id)
+                            await channel.send(f"{mention_text} {pimp.hourglassIcon} **Error sending embed notification**")
                 else:
                     actual_description = description
                     if description.startswith("CUSTOM_TIMES:"):
@@ -858,7 +507,7 @@ class BearTrap(commands.Cog):
                     if actual_description.startswith("PLAIN_MESSAGE:"):
                         actual_description = actual_description.replace("PLAIN_MESSAGE:", "", 1)
 
-                    if "@tag" in actual_description or "%t" in actual_description or "{time}" in actual_description or "%n" in actual_description or "%e" in actual_description or "%d" in actual_description or "%i" in actual_description:
+                    if "@tag" in actual_description or "%t" in actual_description or "{time}" in actual_description:
                         message = actual_description
                         if "@tag" in message:
                             message = message.replace("@tag", mention_text)
@@ -866,35 +515,19 @@ class BearTrap(commands.Cog):
                             message = message.replace("%t", time_text)
                         if "{time}" in message:
                             message = message.replace("{time}", time_text)
-                        if "%n" in message:
-                            message = message.replace("%n", event_name)
-                        if "%e" in message:
-                            message = message.replace("%e", event_time)
-                        if "%d" in message:
-                            message = message.replace("%d", event_date)
-                        if "%i" in message:
-                            message = message.replace("%i", event_emoji)
-                        msg = await channel.send(message)
-                        sent_message_ids.append(msg.id)
+                        await channel.send(message)
                     else:
                         if rounded_time > 0:
-                            msg = await channel.send(
-                                f"{mention_text} ⏰ **{actual_description}** will start in **{time_text}**!")
+                            await channel.send(
+                                f"{mention_text} {pimp.hourglassIcon} **{actual_description}** will start in **{time_text}**!")
                         else:
-                            msg = await channel.send(f"{mention_text} ⏰ **{actual_description}**")
-                        sent_message_ids.append(msg.id)
+                            await channel.send(f"{mention_text} {pimp.hourglassIcon} **{actual_description}**")
 
-                # Calculate when to delete messages
-                scheduled_delete_at = self.calculate_delete_time(
-                    guild_id, event_type, custom_delete_delay_minutes,
-                    notification_times, current_time, now
-                )
-
-                # Store each sent message for deletion
-                for message_id in sent_message_ids:
-                    await self.store_message_for_deletion(
-                        id, current_time, channel_id, message_id, scheduled_delete_at
-                    )
+                current_time_str = now.strftime('%Y-%m-%d %H:%M:%S')
+                self.cursor.execute("""
+                    INSERT INTO notification_history (notification_id, notification_time, sent_at)
+                    VALUES (?, ?, ?)
+                """, (id, current_time, current_time_str))
 
                 self.cursor.execute("""
                     UPDATE bear_notifications 
@@ -902,86 +535,67 @@ class BearTrap(commands.Cog):
                     WHERE id = ?
                 """, (now.isoformat(), id))
 
-                # Handle notification disabling for non-repeating notifications
-                should_disable = False
                 if not repeat_enabled and current_time == min(notification_times):
-                    should_disable = True
-                elif rounded_time == 0 and not repeat_enabled:
-                    should_disable = True
-
-                if should_disable:
-                    # Build informative message
-                    event_display = event_type if event_type else "Custom"
-                    time_str = f"{hour:02d}:{minute:02d}"
-                    desc_preview = description[:50] + "..." if len(description) > 50 else description
-                    if "EMBED_MESSAGE:" in desc_preview:
-                        desc_preview = "Embed notification"
-                    elif desc_preview.startswith("CUSTOM_TIMES:"):
-                        parts = desc_preview.split("|", 1)
-                        if len(parts) > 1:
-                            desc_preview = parts[1][:50]
-
-                    print(f"[INFO] Notification {id} - {event_display} {time_str} ({desc_preview}) was disabled since it is not set to repeat")
-
+                    print(f"Warning: (current_time: {current_time}) repeat isnt enabled and last notification was sent for notification {id} at {notification_times}. Disabling the notification")
                     self.cursor.execute("""
-                        UPDATE bear_notifications
-                        SET is_enabled = 0
+                        UPDATE bear_notifications 
+                        SET is_enabled = 0 
                         WHERE id = ?
                     """, (id,))
 
-                elif rounded_time == 0 and repeat_enabled:
-                    if isinstance(repeat_minutes, int) and repeat_minutes > 0:
-                        current_next = datetime.fromisoformat(next_notification)
-                        next_time = current_next + timedelta(minutes=repeat_minutes)
+                if rounded_time == 0:
+                    if repeat_enabled:
+                        if isinstance(repeat_minutes, int) and repeat_minutes > 0:
+                            current_next = datetime.fromisoformat(next_notification)
+                            next_time = current_next + timedelta(minutes=repeat_minutes)
 
-                    elif repeat_minutes == -1:
+                        elif repeat_minutes == "fixed":
+                            self.cursor.execute("""
+                                        SELECT weekday FROM notification_days
+                                        WHERE notification_id = ?
+                                    """, (id,))
+                            rows = self.cursor.fetchall()
+                            notification_days = set()
+
+                            for row in rows:
+                                parts = row[0].split('|')
+                                notification_days.update(int(p) for p in parts)
+
+                            for next_day in range(1, 8):
+                                potential_day = now + timedelta(days=next_day)
+                                if potential_day.weekday() in notification_days:
+                                    next_time = potential_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                                    break
+
                         self.cursor.execute("""
-                                    SELECT weekday FROM notification_days
-                                    WHERE notification_id = ?
-                                """, (id,))
-                        rows = self.cursor.fetchall()
-                        notification_days = set()
+                            UPDATE bear_notifications 
+                            SET next_notification = ? 
+                            WHERE id = ?
+                        """, (next_time.isoformat(), id))
 
-                        for row in rows:
-                            parts = row[0].split('|')
-                            notification_days.update(int(p) for p in parts if p)
-
-                        for next_day in range(1, 8):
-                            potential_day = now + timedelta(days=next_day)
-                            if potential_day.weekday() in notification_days:
-                                next_time = potential_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                break
-
-                    self.cursor.execute("""
-                        UPDATE bear_notifications
-                        SET next_notification = ?
-                        WHERE id = ?
-                    """, (next_time.isoformat(), id))
+                    else:
+                        print(f"Warning: (current_time: {current_time}) repeat isnt enabled (repeat = {repeat_enabled}) or repeat minutes arent > 0 (repeat minutes = {repeat_minutes}) for notification {id}. Disabling notification")
+                        self.cursor.execute("""
+                            UPDATE bear_notifications 
+                            SET is_enabled = 0 
+                            WHERE id = ?
+                        """, (id,))
 
                 self.conn.commit()
 
-                # Notify schedule boards after sending notification
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
-                if schedule_cog:
-                    await schedule_cog.on_notification_sent(guild_id, channel_id)
-
         except Exception as e:
-            notif_id = id if id is not None else "unknown"
-            error_msg = f"[ERROR] Error processing notification {notif_id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
+            error_msg = f"[ERROR] Error processing notification {id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
             print(error_msg)
 
     async def get_notifications(self, guild_id: int) -> list:
         try:
             self.cursor.execute("""
-                SELECT id, guild_id, channel_id, hour, minute, timezone, description,
-                       notification_type, mention_type, repeat_enabled, repeat_minutes,
-                       is_enabled, created_at, created_by, last_notification, next_notification, event_type, custom_delete_delay_minutes
-                FROM bear_notifications
-                WHERE guild_id = ?
-                ORDER BY
-                    CASE
-                        WHEN next_notification >= CURRENT_TIMESTAMP THEN 0
-                        ELSE 1
+                SELECT * FROM bear_notifications 
+                WHERE guild_id = ? 
+                ORDER BY 
+                    CASE 
+                        WHEN next_notification >= CURRENT_TIMESTAMP THEN 0 
+                        ELSE 1 
                     END,
                     next_notification
             """, (guild_id,))
@@ -993,134 +607,35 @@ class BearTrap(commands.Cog):
     async def delete_notification(self, notification_id):
         try:
             # Ensure we're using the same connection as toggle_notification
-            self.cursor.execute("""SELECT id, guild_id, channel_id FROM bear_notifications WHERE id = ?""", (notification_id,))
+            self.cursor.execute("""SELECT id FROM bear_notifications WHERE id = ?""", (notification_id,))
             result = self.cursor.fetchone()
             if not result:
                 return False  # If the notification doesn't exist, return False
 
-            notif_id, guild_id, channel_id = result
-
             # If the notification exists, proceed to delete
             self.cursor.execute("""DELETE FROM bear_notifications WHERE id = ?""", (notification_id,))
             self.conn.commit()  # Commit the changes using the same connection as toggle_notification
-
-            # Notify schedule boards of deletion
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                await schedule_cog.on_notification_deleted(guild_id, channel_id)
-
             return True
         except Exception as e:
             print(f"[ERROR] Error deleting notification {notification_id}: {e}")
             return False
 
-    def get_wizard_notifications_for_channel(self, guild_id: int, channel_id: int) -> dict:
-        """Get all wizard-created notifications for a channel, mapped by event type"""
-        try:
-            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
-            self.cursor.execute("""
-                SELECT id, event_type, hour, minute, timezone, notification_type, mention_type,
-                       repeat_minutes, description
-                FROM bear_notifications
-                WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
-            """, (guild_id, channel_id, wizard_batch_id))
-            notifications = {}
-            for row in self.cursor.fetchall():
-                if row[1]:
-                    notifications[row[1]] = {
-                        "id": row[0],
-                        "event_type": row[1],
-                        "hour": row[2],
-                        "minute": row[3],
-                        "timezone": row[4],
-                        "notification_type": row[5],
-                        "mention_type": row[6],
-                        "repeat_minutes": row[7],
-                        "description": row[8]
-                    }
-            return notifications
-        except Exception as e:
-            print(f"Error getting wizard notifications: {e}")
-            return {}
-
-    def get_all_wizard_notifications_for_channel(self, guild_id: int, channel_id: int) -> list:
-        """Get ALL wizard-created notifications for a channel as a list (includes all instances)"""
-        try:
-            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
-            self.cursor.execute("""
-                SELECT id, event_type, hour, minute, timezone, notification_type, mention_type,
-                       repeat_minutes, description, instance_identifier, is_enabled
-                FROM bear_notifications
-                WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
-            """, (guild_id, channel_id, wizard_batch_id))
-            notifications = []
-            for row in self.cursor.fetchall():
-                notifications.append({
-                    "id": row[0],
-                    "event_type": row[1],
-                    "hour": row[2],
-                    "minute": row[3],
-                    "timezone": row[4],
-                    "notification_type": row[5],
-                    "mention_type": row[6],
-                    "repeat_minutes": row[7],
-                    "description": row[8],
-                    "instance_identifier": row[9],
-                    "is_enabled": row[10]
-                })
-            return notifications
-        except Exception as e:
-            print(f"Error getting all wizard notifications: {e}")
-            return []
-
-    def delete_wizard_notifications_for_channel(self, guild_id: int, channel_id: int, event_types_to_keep: list = None) -> int:
-        """Delete wizard notifications that are no longer needed"""
-        try:
-            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
-            if event_types_to_keep:
-                placeholders = ",".join(["?"] * len(event_types_to_keep))
-                self.cursor.execute(f"""
-                    DELETE FROM bear_notifications
-                    WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
-                    AND event_type NOT IN ({placeholders})
-                """, (guild_id, channel_id, wizard_batch_id, *event_types_to_keep))
-            else:
-                self.cursor.execute("""
-                    DELETE FROM bear_notifications
-                    WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
-                """, (guild_id, channel_id, wizard_batch_id))
-            deleted_count = self.cursor.rowcount
-            self.conn.commit()
-            return deleted_count
-        except Exception as e:
-            print(f"Error deleting wizard notifications: {e}")
-            return 0
-
-    async def toggle_notification(self, notification_id: int, enabled: bool, skip_board_update: bool = False) -> bool:
+    async def toggle_notification(self, notification_id: int, enabled: bool) -> bool:
         try:
 
             self.cursor.execute("""
-                SELECT is_enabled, guild_id, channel_id FROM bear_notifications WHERE id = ?
+                SELECT is_enabled FROM bear_notifications WHERE id = ?
             """, (notification_id,))
             result = self.cursor.fetchone()
             if not result:
                 return False
 
-            old_enabled, guild_id, channel_id = result
-
             self.cursor.execute("""
-                UPDATE bear_notifications
-                SET is_enabled = ?
+                UPDATE bear_notifications 
+                SET is_enabled = ? 
                 WHERE id = ?
             """, (1 if enabled else 0, notification_id))
             self.conn.commit()
-
-            # Notify schedule boards of toggle
-            if not skip_board_update:
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
-                if schedule_cog:
-                    await schedule_cog.on_notification_toggled(guild_id, channel_id)
-
             return True
         except Exception as e:
             print(f"Error toggling notification: {e}")
@@ -1129,34 +644,19 @@ class BearTrap(commands.Cog):
     async def show_bear_trap_menu(self, interaction: discord.Interaction):
         try:
             embed = discord.Embed(
-                title="🔔 Notification System",
-                description=(
-                    "The Notification System can be used to create notifications that will alert players of upcoming events. "
-                    "It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n\n"
-                    "**Available Operations**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "🧙 **Setup Wizard**\n"
-                    "└ Quick and easy setup for all common event notifications\n"
-                    "└ The Wizard will guide you step-by-step through the process\n"
-                    "└ Re-run the wizard on a channel to update existing notifications there\n\n"
-                    "⏰ **Custom Notification**\n"
-                    "└ Set up a new notification with custom time, message, mentions, and repeat options\n"
-                    "└ Supports both plain messages and rich embeds\n"
-                    "└ Perfect for any events not covered by the Wizard\n\n"
-                    "📋 **Manage Notifications**\n"
-                    "└ View all existing notifications\n"
-                    "└ Edit, enable/disable or delete them\n\n"
-                    "📅 **Schedule Boards**\n"
-                    "└ Create live schedule boards that display upcoming notifications\n"
-                    "└ Auto-updates when notifications are created, edited, or deleted\n"
-                    "└ Supports server-wide or per-channel boards with customizable settings\n\n"
-                    "📚 **Event Templates**\n"
-                    "└ Browse pre-built event templates\n"
-                    "└ View and modify default notification designs\n\n"
-                    "⚙️ **Settings**\n"
-                    "└ Configure whether posted notifications are auto-deleted\n"
-                    "└ Set the default time after which notifications are deleted\n\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                title=f"{pimp.membersIcon} Notification System",
+                description=(  
+                    f"-# The Notification System can be used to create notifications that will alert players of upcoming events. "
+                    f"It is fully customizable and can be used for any type of event. Use the buttons below to get started.\n"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.addIcon} **Create Notification**\n"
+                    f"└ Set up a new notification with custom time, message, mentions, and repeat options\n"
+                    f"└ Supports both plain messages and rich embeds\n"
+                    f"└ Perfect for Bear Trap, Crazy Joe, Kill Event, Frostfire and more...\n\n"
+                    f"{pimp.retryIcon} **Manage Notifications**\n"
+                    f"└ View all existing notifications\n"
+                    f"└ Edit, enable/disable or delete them\n\n"
+                    f"{pimp.divider1}\n"
                 ),
                 color=pimp.emColor4
             )
@@ -1197,7 +697,7 @@ class BearTrap(commands.Cog):
             return False
 
     async def show_channel_selection(self, interaction: discord.Interaction, start_date, hour, minute, timezone,
-                                     message_data, channels, event_type=None):
+                                     message_data, channels):
         try:
             embed = discord.Embed(
                 title=f"{pimp.announceIcon} Select Channel",
@@ -1216,8 +716,7 @@ class BearTrap(commands.Cog):
                 minute,
                 timezone,
                 message_data,
-                interaction.message,
-                event_type=event_type
+                interaction.message
             )
 
             await interaction.response.edit_message(
@@ -1235,7 +734,7 @@ class BearTrap(commands.Cog):
 
 class RepeatOptionView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, description, channel_id, notification_type,
-                 mention_type, original_message, event_type=None):
+                 mention_type, original_message):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -1247,7 +746,6 @@ class RepeatOptionView(discord.ui.View):
         self.notification_type = notification_type
         self.mention_type = mention_type
         self.original_message = original_message
-        self.event_type = event_type
 
     @discord.ui.button(label="No Repeat", style=discord.ButtonStyle.secondary, custom_id="no_repeat")
     async def no_repeat_button(self, interaction, button):
@@ -1276,10 +774,9 @@ class RepeatOptionView(discord.ui.View):
                 created_by=interaction.user.id,
                 notification_type=self.notification_type,
                 mention_type=self.mention_type,
-                repeat_enabled=repeat,
+                repeat_48h=repeat,
                 repeat_minutes=repeat_minutes,
-                selected_weekdays=selected_weekdays,
-                event_type=self.event_type
+                selected_weekdays=selected_weekdays
             )
 
             notification_types = {
@@ -1296,28 +793,18 @@ class RepeatOptionView(discord.ui.View):
             elif self.mention_type.startswith("role_"):
                 role_id = int(self.mention_type.split('_')[1])
                 role = interaction.guild.get_role(role_id)
-                # Avoid nested f-strings for Python 3.9+ compatibility
-                if role:
-                    mention_display = f"@{role.name}"
-                else:
-                    mention_display = f"Role: {role_id}"
+                mention_display = f"@{role.name}" if role else f"Role: {role_id}"
             elif self.mention_type.startswith("member_"):
                 member_id = int(self.mention_type.split('_')[1])
                 member = interaction.guild.get_member(member_id)
-                # Avoid nested f-strings for Python 3.9+ compatibility
-                if member:
-                    mention_display = f"@{member.display_name}"
-                else:
-                    mention_display = f"Member: {member_id}"
+                mention_display = f"@{member.display_name}" if member else f"Member: {member_id}"
             else:
                 mention_display = "No Mention"
 
             if not repeat:
                 repeat_text = f"{pimp.deniedIcon} No repeat"
             elif interval_text:
-                repeat_text = f"🔄 Repeats every {interval_text}"
-            elif repeat_minutes == -1:  # Weekday-based repeat (days stored in notification_days table)
-                repeat_text = "🔄 Repeats on selected weekdays"
+                repeat_text = f"{pimp.processingIcon} Repeats every {interval_text}"
             else:
                 minutes = repeat_minutes
                 if minutes == 1:
@@ -1333,24 +820,16 @@ class RepeatOptionView(discord.ui.View):
                 elif minutes == 10080:
                     repeat_text = f"{pimp.processingIcon} Repeats weekly"
                 else:
-                    repeat_text = f"🔄 Repeats every {minutes} minutes"
-
-            # Display event type with icon
-            if self.event_type:
-                event_icon = get_event_icon(self.event_type)
-                event_display = f"{event_icon} {self.event_type}"
-            else:
-                event_display = "📅 Custom"
+                    repeat_text = f"{pimp.processingIcon} Repeats every {minutes} minutes"
 
             embed = discord.Embed(
                 title=f"{pimp.verifiedIcon} Notification Set Successfully",
                 description=(
                     f"**📅 Date:** {self.start_date.strftime('%d/%m/%Y')}\n"
-                    f"**⏰ Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
-                    f"**📢 Channel:** <#{self.channel_id}>\n"
-                    f"**🎯 Event Type:** {event_display}\n"
-                    f"**📝 Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
-                    f"**⚙️ Notification Type**\n{notification_types[self.notification_type]}\n\n"
+                    f"**{pimp.hourglassIcon} Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
+                    f"**{pimp.announceIcon} Channel:** <#{self.channel_id}>\n"
+                    f"**{pimp.listIcon} Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
+                    f"**{pimp.settings2Icon} Notification Type**\n{notification_types[self.notification_type]}\n\n"
                     f"**👥 Mentions:** {mention_display}\n"
                     f"**{pimp.processingIcon} Repeat:** {repeat_text}"
                 ),
@@ -1535,7 +1014,7 @@ class ConfirmDaysButton(discord.ui.Button):
         await repeat_view.save_notification(
             interaction,
             repeat=True,
-            repeat_minutes=-1,
+            repeat_minutes="fixed",
             interval_text=interval_text,
             selected_weekdays=selected_weekdays
         )
@@ -1558,7 +1037,7 @@ class TextInputModal(discord.ui.Modal):
         await interaction.response.defer()
 
 class EmbedEditorView(discord.ui.View):
-    def __init__(self, cog, start_date, hour, minute, timezone, original_message, event_type=None):
+    def __init__(self, cog, start_date, hour, minute, timezone, original_message):
         super().__init__(timeout=None)
         self.cog = cog
         self.start_date = start_date
@@ -1566,7 +1045,6 @@ class EmbedEditorView(discord.ui.View):
         self.minute = minute
         self.timezone = timezone
         self.original_message = original_message
-        self.event_type = event_type  # Store event_type for threading through the flow
         self.embed_data = {
             f"title": "{pimp.hourglassIcon} Bear Trap",
             f"description": "Add a description...",
@@ -1578,33 +1056,21 @@ class EmbedEditorView(discord.ui.View):
 
     async def update_embed(self, interaction: discord.Interaction):
         try:
-            # Sample values for preview - use actual event data when available
             example_time = "30 minutes"
-            example_name = self.event_type if self.event_type else "Bear Trap"
-            example_emoji = get_event_icon(self.event_type) if self.event_type else "🐻"
-            example_event_time = f"{self.hour:02d}:{self.minute:02d}"
-            example_date = self.start_date.strftime("%b %d") if self.start_date else "Dec 06"
-
-            def replace_variables(text):
-                """Replace all notification variables with sample values for preview."""
-                return (text
-                    .replace("%t", example_time)
-                    .replace("{time}", example_time)
-                    .replace("%n", example_name)
-                    .replace("%e", example_event_time)
-                    .replace("%d", example_date)
-                    .replace("%i", example_emoji))
-
             embed = discord.Embed(color=self.embed_data.get("color", discord.Color.blue().value))
 
             if "title" in self.embed_data:
-                embed.title = replace_variables(self.embed_data["title"])
+                title = self.embed_data["title"].replace("%t", example_time).replace("{time}", example_time)
+                embed.title = title
             if "description" in self.embed_data:
-                embed.description = replace_variables(self.embed_data["description"])
+                description = self.embed_data["description"].replace("%t", example_time).replace("{time}", example_time)
+                embed.description = description
             if "footer" in self.embed_data:
-                embed.set_footer(text=replace_variables(self.embed_data["footer"]))
+                footer = self.embed_data["footer"].replace("%t", example_time).replace("{time}", example_time)
+                embed.set_footer(text=footer)
             if "author" in self.embed_data:
-                embed.set_author(name=replace_variables(self.embed_data["author"]))
+                author = self.embed_data["author"].replace("%t", example_time).replace("{time}", example_time)
+                embed.set_author(name=author)
             if "image_url" in self.embed_data and self.embed_data["image_url"]:
                 embed.set_image(url=self.embed_data["image_url"])
             if "thumbnail_url" in self.embed_data and self.embed_data["thumbnail_url"]:
@@ -1612,13 +1078,19 @@ class EmbedEditorView(discord.ui.View):
 
             mention_preview = self.embed_data.get('mention_message', '@tag')
             if mention_preview:
-                mention_preview = replace_variables(mention_preview)
+                mention_preview = mention_preview.replace("%t", example_time)
+                mention_preview = mention_preview.replace("{time}", example_time)
 
             content = (
-                "📝 **Embed Editor**\n\n"
-                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
-                f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining\n\n"
-                f"**Mention Message Preview:**\n{mention_preview}\n"
+                f"{pimp.listIcon} **Embed Editor**\n\n"
+                "**Note:** \n"
+                "• Use `%t` or `{time}` to show the remaining time\n"
+                "• Use `@tag` for mentions (will be replaced with the actual mention)\n"
+                "• You can use these in title, description, footer, and author fields\n"
+                "• Time will automatically show with appropriate units (minutes/hours/days)\n\n"
+                f"Currently showing '{example_time}' as an example.\n\n"
+                f"**Current Mention Message Preview:**\n"
+                f"{mention_preview}\n\n"
             )
 
             if not interaction.response.is_done():
@@ -1661,7 +1133,7 @@ class EmbedEditorView(discord.ui.View):
             modal = TextInputModal(
                 title="Edit Title",
                 label="New Title",
-                placeholder="Example: %i %n at %e starts in %t!",
+                placeholder=f"Example: {pimp.hourglassIcon} Bear starts in {time}!",
                 default_value=self.embed_data.get("title", ""),
                 max_length=256
             )
@@ -1682,7 +1154,7 @@ class EmbedEditorView(discord.ui.View):
             modal = TextInputModal(
                 title="Edit Description",
                 label="New Description",
-                placeholder="Example: Get ready for Bear! Only %t remaining.",
+                placeholder="Example: Get ready for Bear! Only {time} remaining.",
                 default_value=self.embed_data.get("description", ""),
                 max_length=4000,
                 style=discord.TextStyle.paragraph
@@ -1835,8 +1307,7 @@ class EmbedEditorView(discord.ui.View):
                 self.minute,
                 self.timezone,
                 embed_data,
-                interaction.guild.text_channels,
-                event_type=self.event_type
+                interaction.guild.text_channels
             )
 
         except Exception as e:
@@ -1862,19 +1333,26 @@ class MessageTypeView(discord.ui.View):
     @discord.ui.button(label="Embed Message", style=discord.ButtonStyle.secondary, emoji=f"{pimp.listIcon}", row=0)
     async def embed_message(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Show event type selection view first
+            example_time = "30 minutes"
+
             embed = discord.Embed(
-                title="📋 Select Event Type",
-                description=(
-                    "Select an event type to use its template, "
-                    "or leave **Custom** for the default values.\n\n"
-                    "Templates will pre-fill the embed editor with title, description, "
-                    "and images from the selected event's template."
-                ),
+                title="Bear Trap Notification",
+                description="Get ready for Bear! Only %t remaining.",
                 color=discord.Color.blue()
             )
+            embed.set_footer(text="Notification System")
 
-            view = EventTypeSelectView(
+            content = (
+                f"{pimp.listIcon} **Embed Editor**\n\n"
+                f"**Note:** \n"
+                f"- Use `%t` or `{time}` to show the remaining time\n"
+                f"- Use `@tag` for mentions (will be replaced with the actual mention)\n"
+                f"- You can use these in title, description, footer, and author fields\n"
+                f"- Time will automatically show with appropriate units (minutes/hours/days)\n\n"
+                f"Currently showing '{example_time}' as an example."
+            )
+
+            view = EmbedEditorView(
                 self.cog,
                 self.start_date,
                 self.hour,
@@ -1882,9 +1360,15 @@ class MessageTypeView(discord.ui.View):
                 self.timezone,
                 interaction.message
             )
+            view.embed_data = {
+                "title": embed.title,
+                "description": embed.description,
+                "color": embed.color.value,
+                "footer": "Notification System"
+            }
 
             await interaction.response.edit_message(
-                content=None,
+                content=content,
                 embed=embed,
                 view=view
             )
@@ -1892,7 +1376,7 @@ class MessageTypeView(discord.ui.View):
         except Exception as e:
             print(f"Error in embed_message: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while starting the event type selection!",
+                f"{pimp.deniedIcon} An error occurred while starting the embed editor!",
                 ephemeral=True
             )
 
@@ -1922,174 +1406,6 @@ class MessageTypeView(discord.ui.View):
 
         modal.on_submit = modal_submit
         await interaction.response.send_modal(modal)
-
-class EventTypeSelectView(discord.ui.View):
-    """View for selecting event type when creating embed notifications"""
-
-    def __init__(self, cog, start_date, hour, minute, timezone, original_message):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.start_date = start_date
-        self.hour = hour
-        self.minute = minute
-        self.timezone = timezone
-        self.original_message = original_message
-        self.selected_event_type = None  # None means Custom
-
-        # Add the event type dropdown
-        self.add_item(EventTypeDropdown(self))
-
-    @discord.ui.button(label="Continue", style=discord.ButtonStyle.primary, emoji="➡️", row=1)
-    async def continue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # Get template data if an event type was selected
-            template_data = None
-            if self.selected_event_type:
-                # Get templates cog to fetch template defaults
-                templates_cog = self.cog.bot.get_cog("BearTrapTemplates")
-                if templates_cog:
-                    # Get templates for this event type
-                    templates = templates_cog.get_templates_by_event_type(self.selected_event_type)
-                    if templates:
-                        # Get full template data using the first template's ID
-                        template_data = templates_cog.get_template(templates[0]["template_id"])
-
-            # Build default embed data
-            if template_data:
-                embed_data = {
-                    "title": template_data.get("embed_title") or f"{self.selected_event_type} Notification",
-                    "description": template_data.get("embed_description") or f"Get ready for {self.selected_event_type}! Only %t remaining.",
-                    "color": int(template_data.get("embed_color") or 0x3498db),
-                    "footer": "Notification System",
-                    "image_url": template_data.get("embed_image_url") or "",
-                    "thumbnail_url": template_data.get("embed_thumbnail_url") or ""
-                }
-            else:
-                # Default custom embed
-                embed_data = {
-                    "title": "Bear Trap Notification",
-                    "description": "Get ready for Bear! Only %t remaining.",
-                    "color": discord.Color.blue().value,
-                    "footer": "Notification System"
-                }
-
-            # Sample values for preview
-            example_time = "30 minutes"
-            example_name = self.selected_event_type if self.selected_event_type else "Event"
-            example_emoji = get_event_icon(self.selected_event_type) if self.selected_event_type else "📅"
-            example_event_time = f"{self.hour:02d}:{self.minute:02d}"
-            example_date = self.start_date.strftime("%b %d") if self.start_date else "Dec 06"
-
-            def replace_vars(text):
-                if not text:
-                    return text
-                return (text
-                    .replace("%t", example_time)
-                    .replace("{time}", example_time)
-                    .replace("%n", example_name)
-                    .replace("%e", example_event_time)
-                    .replace("%d", example_date)
-                    .replace("%i", example_emoji))
-
-            # Create preview embed with variables replaced
-            embed = discord.Embed(
-                title=replace_vars(embed_data["title"]),
-                description=replace_vars(embed_data["description"]),
-                color=embed_data["color"]
-            )
-            embed.set_footer(text=replace_vars(embed_data.get("footer", "Notification System")))
-            if embed_data.get("image_url"):
-                embed.set_image(url=embed_data["image_url"])
-            if embed_data.get("thumbnail_url"):
-                embed.set_thumbnail(url=embed_data["thumbnail_url"])
-
-            content = (
-                "📝 **Embed Editor**\n\n"
-                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
-                f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining"
-            )
-
-            # Create embed editor view with event_type and template_data
-            view = EmbedEditorView(
-                self.cog,
-                self.start_date,
-                self.hour,
-                self.minute,
-                self.timezone,
-                self.original_message,
-                event_type=self.selected_event_type
-            )
-            view.embed_data = embed_data
-
-            await interaction.response.edit_message(
-                content=content,
-                embed=embed,
-                view=view
-            )
-
-        except Exception as e:
-            print(f"Error in EventTypeSelectView continue: {e}")
-            import traceback
-            traceback.print_exc()
-            await interaction.followup.send(
-                "❌ An error occurred while loading the embed editor!",
-                ephemeral=True
-            )
-
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌", row=1)
-    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(
-            content="❌ Notification creation cancelled.",
-            embed=None,
-            view=None
-        )
-
-class EventTypeDropdown(discord.ui.Select):
-    """Dropdown for selecting event type"""
-
-    def __init__(self, parent_view: EventTypeSelectView):
-        self.parent_view = parent_view
-
-        # Build options: Custom first, then all event types
-        options = [
-            discord.SelectOption(
-                label="Custom (default)",
-                value="custom",
-                emoji="📅",
-                description="Create a notification with default values",
-                default=True
-            )
-        ]
-
-        # Add all event types with their icons
-        event_types = get_event_types()
-        for event_type in event_types:
-            icon = get_event_icon(event_type)
-            options.append(discord.SelectOption(
-                label=event_type,
-                value=event_type,
-                emoji=icon,
-                description=f"Use {event_type} template"
-            ))
-
-        super().__init__(
-            placeholder="Select an event type...",
-            options=options,
-            row=0
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        selected = self.values[0]
-        if selected == "custom":
-            self.parent_view.selected_event_type = None
-        else:
-            self.parent_view.selected_event_type = selected
-
-        # Update the dropdown to show the selection
-        for option in self.options:
-            option.default = (option.value == selected)
-
-        await interaction.response.edit_message(view=self.parent_view)
 
 class TimeSelectModal(discord.ui.Modal):
     def __init__(self, cog: BearTrap):
@@ -2215,7 +1531,7 @@ class TimeSelectModal(discord.ui.Modal):
             )
 
 class NotificationTypeView(discord.ui.View):
-    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message, event_type=None):
+    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -2225,7 +1541,6 @@ class NotificationTypeView(discord.ui.View):
         self.message_data = message_data
         self.channel_id = channel_id
         self.original_message = original_message
-        self.event_type = event_type
 
     @discord.ui.button(label="30m, 10m, 5m & Time", style=discord.ButtonStyle.secondary, custom_id="type_1", row=0)
     async def type_1(self, interaction, button):
@@ -2250,7 +1565,7 @@ class NotificationTypeView(discord.ui.View):
     @discord.ui.button(label="Custom Times", style=discord.ButtonStyle.secondary, custom_id="type_6", row=2)
     async def type_6(self, interaction, button):
         modal = CustomTimesModal(self.cog, self.start_date, self.hour, self.minute, self.timezone, self.message_data,
-                                 self.channel_id, self.original_message, event_type=self.event_type)
+                                 self.channel_id, self.original_message)
         await interaction.response.send_modal(modal)
 
     async def show_mention_type_menu(self, interaction, notification_type):
@@ -2276,8 +1591,7 @@ class NotificationTypeView(discord.ui.View):
                 self.message_data,
                 self.channel_id,
                 notification_type,
-                self.original_message,
-                event_type=self.event_type
+                self.original_message
             )
 
             await interaction.response.edit_message(
@@ -2293,7 +1607,7 @@ class NotificationTypeView(discord.ui.View):
             )
 
 class CustomTimesModal(discord.ui.Modal):
-    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message, event_type=None):
+    def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message):
         super().__init__(title="Set Custom Notification Times")
         self.cog = cog
         self.start_date = start_date
@@ -2303,7 +1617,6 @@ class CustomTimesModal(discord.ui.Modal):
         self.message_data = message_data
         self.channel_id = channel_id
         self.original_message = original_message
-        self.event_type = event_type
 
         self.custom_times = discord.ui.TextInput(
             label="Custom Notification Times",
@@ -2350,8 +1663,7 @@ class CustomTimesModal(discord.ui.Modal):
                 f"CUSTOM_TIMES:{'-'.join(map(str, times))}|{self.message_data}",
                 self.channel_id,
                 6,
-                self.original_message,
-                event_type=self.event_type
+                self.original_message
             )
 
             await interaction.response.edit_message(
@@ -2374,7 +1686,7 @@ class CustomTimesModal(discord.ui.Modal):
 
 class MentionTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, notification_type,
-                 original_message, event_type=None):
+                 original_message):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -2385,7 +1697,6 @@ class MentionTypeView(discord.ui.View):
         self.channel_id = channel_id
         self.notification_type = notification_type
         self.original_message = original_message
-        self.event_type = event_type
 
     async def show_mention_type_menu(self, interaction, mention_type):
         try:
@@ -2411,8 +1722,7 @@ class MentionTypeView(discord.ui.View):
                 self.channel_id,
                 self.notification_type,
                 mention_type,
-                self.original_message,
-                event_type=self.event_type
+                self.original_message
             )
 
             await interaction.response.edit_message(
@@ -2600,126 +1910,7 @@ class MentionSelectMenu(discord.ui.Select):
         except Exception as e:
             print(f"Error in mention selection: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while processing your selection!",
-                ephemeral=True
-            )
-
-class SettingsView(discord.ui.View):
-    def __init__(self, cog, delete_enabled: bool, default_delay: int):
-        super().__init__(timeout=300)
-        self.cog = cog
-        self.delete_enabled = delete_enabled
-        self.default_delay = default_delay
-        self.conn = sqlite3.connect('db/beartime.sqlite')
-        self.cursor = self.conn.cursor()
-
-    def build_settings_embed(self):
-        """Build the settings embed with current values"""
-        embed = discord.Embed(
-            title="⚙️ Bear Trap Settings",
-            description="Configure global message deletion settings",
-            color=discord.Color.blue()
-        )
-
-        # Message Deletion section
-        deletion_status = "✅ Enabled" if self.delete_enabled else "❌ Disabled"
-        embed.add_field(
-            name="📨 Message Deletion",
-            value=f"Status: {deletion_status}\nDefault Delay: {self.default_delay} minutes",
-            inline=False
-        )
-
-        embed.set_footer(text="Use the buttons below to modify settings")
-        return embed
-
-    @discord.ui.button(
-        label="Toggle Message Deletion",
-        emoji="🗑️",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def toggle_deletion(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            new_value = 0 if self.delete_enabled else 1
-            self.cursor.execute("""
-                UPDATE bear_trap_settings
-                SET delete_messages_enabled = ?
-                WHERE guild_id = ?
-            """, (new_value, interaction.guild_id))
-            self.conn.commit()
-
-            self.delete_enabled = bool(new_value)
-
-            await interaction.response.edit_message(embed=self.build_settings_embed(), view=self)
-
-        except Exception as e:
-            print(f"Error toggling deletion: {e}")
-            traceback.print_exc()
-            await interaction.response.send_message(
-                "❌ An error occurred while updating settings.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Set Default Delay",
-        emoji="⏱️",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def set_default_delay(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            modal = discord.ui.Modal(title="Set Default Deletion Delay")
-            delay_input = discord.ui.TextInput(
-                label="Delay in Minutes",
-                placeholder="Enter delay in minutes (e.g., 60)",
-                default=str(self.default_delay),
-                required=True,
-                max_length=5
-            )
-            modal.add_item(delay_input)
-
-            async def modal_callback(modal_interaction: discord.Interaction):
-                try:
-                    new_delay = int(delay_input.value)
-                    if new_delay < 1:
-                        await modal_interaction.response.send_message(
-                            "❌ Delay must be at least 1 minute.",
-                            ephemeral=True
-                        )
-                        return
-
-                    self.cursor.execute("""
-                        UPDATE bear_trap_settings
-                        SET default_delete_delay_minutes = ?
-                        WHERE guild_id = ?
-                    """, (new_delay, modal_interaction.guild_id))
-                    self.conn.commit()
-
-                    self.default_delay = new_delay
-
-                    await modal_interaction.response.edit_message(embed=self.build_settings_embed(), view=self)
-
-                except ValueError:
-                    await modal_interaction.response.send_message(
-                        "❌ Please enter a valid number.",
-                        ephemeral=True
-                    )
-                except Exception as e:
-                    print(f"Error in modal callback: {e}")
-                    traceback.print_exc()
-                    await modal_interaction.response.send_message(
-                        "❌ An error occurred while updating the delay.",
-                        ephemeral=True
-                    )
-
-            modal.on_submit = modal_callback
-            await interaction.response.send_modal(modal)
-
-        except Exception as e:
-            print(f"Error opening delay modal: {e}")
-            traceback.print_exc()
-            await interaction.response.send_message(
-                "❌ An error occurred while opening the settings modal.",
+                f"{pimp.deniedIcon} An error occurred while processing your selection!",
                 ephemeral=True
             )
 
@@ -2731,35 +1922,9 @@ class BearTrapView(discord.ui.View):
         self.cursor = self.conn.cursor()
 
     @discord.ui.button(
-        label="Setup Wizard",
-        emoji="🧙",
-        style=discord.ButtonStyle.success,
-        custom_id="setup_wizard",
-        row=0
-    )
-    async def setup_wizard_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
-        try:
-            wizard_cog = self.cog.bot.get_cog("BearTrapWizard")
-            if wizard_cog:
-                await wizard_cog.show_wizard(interaction)
-            else:
-                await interaction.response.send_message(
-                    "❌ Setup Wizard not found. Don't worry, I'm sure he will arrive precisely when he means to.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            print(f"Error loading Setup Wizard: {e}")
-            await interaction.response.send_message(
-                "❌ We couldn't summon the Setup Wizard. Try summoning him off and on again?",
-                ephemeral=True
-            ) 
-
-    @discord.ui.button(
-        label="Custom Notification",
-        emoji="⏰",
-        style=discord.ButtonStyle.success,
+        label="Create Notification",
+        emoji=f"{pimp.hourglassIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="set_time",
         row=0
     )
@@ -2788,6 +1953,29 @@ class BearTrapView(discord.ui.View):
                     )
             except Exception as notify_error:
                 print(f"[ERROR] Failed to notify user about error: {notify_error}")
+
+    @discord.ui.button(
+        label="Back",
+        emoji=f"{pimp.importIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_other_features",
+        row=2
+    )
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
+            if other_features_cog:
+                await other_features_cog.show_other_features_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{pimp.deniedIcon} Other Features module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} An error occurred while returning to Other Features menu.",
+                ephemeral=True
+            )
 
     @discord.ui.button(
         label="Manage Notifications",
@@ -2821,83 +2009,34 @@ class BearTrapView(discord.ui.View):
 
                 options = []
                 for notif in page_notifications:
-                    status_emoji = "🟢" if notif[11] else "🔴"
-                    status = "Enabled" if notif[11] else "Disabled"
+                    status = f"{pimp.messageIcon} Enabled" if notif[11] else f"{pimp.messageNoIcon} Disabled"
 
                     # Check if channel exists
                     channel = interaction.guild.get_channel(notif[2])
                     channel_warning = "⚠️ " if not channel else ""
-                    channel_name = f"#{channel.name}" if channel else "Unknown"
 
-                    # Get event type from database column (index 16)
-                    event_type = notif[16] if notif[16] else None
-
-                    # Get event emoji and display name
-                    if event_type:
-                        from bear_event_types import get_event_icon
-                        event_emoji = get_event_icon(event_type)
-                        display_name = event_type
-                    else:
-                        # Custom notification - get title from description or embed
-                        event_emoji = "📝"
-                        notification_desc = notif[6]  # description field
-
-                        if "EMBED_MESSAGE:" in notification_desc:
-                            # Try to get embed title
-                            try:
-                                self.cog.cursor.execute("""
-                                    SELECT title FROM bear_notification_embeds
-                                    WHERE notification_id = ?
-                                """, (notif[0],))
-                                embed_row = self.cog.cursor.fetchone()
-                                if embed_row and embed_row[0]:
-                                    display_name = f"{embed_row[0]} (Custom)"
-                                else:
-                                    display_name = "Custom Notification"
-                            except:
-                                display_name = "Custom Notification"
-                        elif notification_desc.startswith("CUSTOM_TIMES:"):
-                            # Extract description after CUSTOM_TIMES:
-                            parts = notification_desc.split("|", 1)
-                            if len(parts) > 1:
-                                custom_desc = parts[1].replace("PLAIN_MESSAGE:", "").strip()
-                                display_name = f"{custom_desc[:30]} (Custom)" if custom_desc else "Custom Notification"
-                            else:
-                                display_name = "Custom Notification"
-                        else:
-                            # Plain notification
-                            plain_desc = notification_desc.replace("PLAIN_MESSAGE:", "").strip()
-                            display_name = f"{plain_desc[:30]} (Custom)" if plain_desc else "Custom Notification"
-
-                    # Format next occurrence time
-                    import pytz
-                    from datetime import datetime
-                    if notif[15]:  # next_notification
-                        try:
-                            next_time = datetime.fromisoformat(notif[15])
-                            tz = pytz.timezone(notif[5])
-                            next_time_local = next_time.astimezone(tz)
-                            time_display = next_time_local.strftime("%m/%d %H:%M")
-                        except:
-                            time_display = f"{notif[3]:02d}:{notif[4]:02d}"
-                    else:
-                        time_display = f"{notif[3]:02d}:{notif[4]:02d}"
-
-                    # Build label: [Emoji] [Event Type/Title] - [Time]
-                    label = f"{channel_warning}{event_emoji} {display_name} - {time_display}"
-                    description = f"{status_emoji} {status} | {channel_name} | ID: {notif[0]}"
-
-                    # Avoid nested f-strings for Python 3.9+ compatibility
                     if "EMBED_MESSAGE:" in notif[6]:
-                        option_value = f"{notif[0]}|embed"
+                        self.cog.cursor.execute("""
+                            SELECT title, description
+                            FROM bear_notification_embeds
+                            WHERE notification_id = ?
+                        """, (notif[0],))
+                        embed_data = self.cog.cursor.fetchone()
+
+                        if embed_data and embed_data[0]:
+                            display_description = f"{pimp.listIcon} Embed: {embed_data[0]}"
+                        else:
+                            display_description = f"{pimp.listIcon} Embed Message"
                     else:
-                        option_value = f"{notif[0]}|plain"
+                        display_description = notif[6].split('|')[-1] if '|' in notif[6] else notif[6]
+                        if display_description.startswith("PLAIN_MESSAGE:"):
+                            display_description = display_description.replace("PLAIN_MESSAGE:", "✍️ ")
 
                     options.append(
                         discord.SelectOption(
-                            label=label[:100],  # Discord max 100 chars
-                            description=description[:100],
-                            value=option_value
+                            label=f"{channel_warning}{notif[3]:02d}:{notif[4]:02d} - {display_description[:30]}",
+                            description=f"ID: {notif[0]} | {status}",
+                            value=f"{notif[0]}|embed" if "EMBED_MESSAGE:" in notif[6] else f"{notif[0]}|plain"
                         )
                     )
                 if len(options) > 25:
@@ -3076,7 +2215,7 @@ class BearTrapView(discord.ui.View):
                                 repeat_minutes %= unit
                         formatted_repeat = " and ".join(result)
 
-                    elif repeat_minutes == -1:
+                    elif repeat_minutes == "fixed":
                         self.cursor.execute("""
                                 SELECT weekday FROM notification_days
                                 WHERE notification_id = ?
@@ -3105,13 +2244,6 @@ class BearTrapView(discord.ui.View):
                     else:
                         channel_display = f"⚠️ #unknown-channel (Deleted or Inaccessible)"
 
-                    # Format delete delay display
-                    custom_delay = selected_notif[17] if len(selected_notif) > 17 else None
-                    if custom_delay is not None:
-                        delete_delay_display = f"{custom_delay} minutes (custom)"
-                    else:
-                        delete_delay_display = "Using default delay"
-
                     details_embed = discord.Embed(
                         title=f"{pimp.listIcon} Notification Details",
                         description=(
@@ -3121,8 +2253,7 @@ class BearTrapView(discord.ui.View):
                             f"**{pimp.listIcon} Description:** {selected_notif[6]}\n\n"
                             f"**{pimp.settings2Icon} Notification Type:** \n{notification_type_desc}\n\n"
                             f"**👥 Mention:** {mention_display}\n"
-                            f"**🔄 Repeat:** {formatted_repeat}\n"
-                            f"**🧹 Message Cleanup:** {delete_delay_display}\n"),
+                            f"**{pimp.processingIcon} Repeat:** {formatted_repeat}\n"),
                         color=discord.Color.blue()
                     )
 
@@ -3137,7 +2268,7 @@ class BearTrapView(discord.ui.View):
                         async def callback(self, interaction: discord.Interaction):
                             try:
                                 self.cog.cursor.execute(
-                                    """SELECT channel_id, hour, minute, description, mention_type, next_notification, event_type
+                                    """SELECT channel_id, hour, minute, description, mention_type, next_notification
                                        FROM bear_notifications WHERE id = ?""",
                                     (self.notification_id,)
                                 )
@@ -3147,29 +2278,7 @@ class BearTrapView(discord.ui.View):
                                     await interaction.response.send_message(f"{pimp.deniedIcon} Notification not found.", ephemeral=True)
                                     return
 
-                                channel_id, hours, minutes, description, mention_type, next_notification, event_type = selected_notif
-
-                                # Sample values for preview variable replacement
-                                example_time = "30 minutes"
-                                example_name = event_type if event_type else "Event"
-                                example_emoji = get_event_icon(event_type) if event_type else "📅"
-                                example_event_time = f"{hours:02d}:{minutes:02d}"
-                                try:
-                                    next_dt = datetime.fromisoformat(next_notification.replace("+00:00", ""))
-                                    example_date = next_dt.strftime("%b %d")
-                                except:
-                                    example_date = "Dec 06"
-
-                                def replace_vars(text):
-                                    if not text:
-                                        return text
-                                    return (text
-                                        .replace("%t", example_time)
-                                        .replace("{time}", example_time)
-                                        .replace("%n", example_name)
-                                        .replace("%e", example_event_time)
-                                        .replace("%d", example_date)
-                                        .replace("%i", example_emoji))
+                                channel_id, hours, minutes, description, mention_type, next_notification = selected_notif
 
                                 embed_data = None
                                 if "EMBED_MESSAGE:" in description:
@@ -3204,11 +2313,11 @@ class BearTrapView(discord.ui.View):
                                 if embed_data:
                                     mention_preview = embed_data['mention_message'] if embed_data[
                                         'mention_message'] else ""
-                                    mention_preview = replace_vars(mention_preview).replace("@tag", mention_display)
+                                    mention_preview = mention_preview.replace("@tag", mention_display)
 
                                     preview_embed = discord.Embed(
-                                        title=replace_vars(embed_data['title']) if embed_data['title'] else "No Title",
-                                        description=replace_vars(embed_data['description']) if embed_data[
+                                        title=embed_data['title'] if embed_data['title'] else "No Title",
+                                        description=embed_data['description'] if embed_data[
                                             'description'] else "No Description",
                                         color=embed_data['color'] if embed_data['color'] else discord.Color.blue()
                                     )
@@ -3218,9 +2327,9 @@ class BearTrapView(discord.ui.View):
                                     if embed_data['thumbnail_url']:
                                         preview_embed.set_thumbnail(url=embed_data['thumbnail_url'])
                                     if embed_data['footer']:
-                                        preview_embed.set_footer(text=replace_vars(embed_data['footer']))
+                                        preview_embed.set_footer(text=embed_data['footer'])
                                     if embed_data['author']:
-                                        preview_embed.set_author(name=replace_vars(embed_data['author']))
+                                        preview_embed.set_author(name=embed_data['author'])
 
                                     # Create copyable JSON data for the embed
                                     copyable_data = {
@@ -3248,7 +2357,7 @@ class BearTrapView(discord.ui.View):
                                     )
                                 else:
                                     message_preview = description.split("PLAIN_MESSAGE:", 1)[-1].strip()
-                                    message_preview = replace_vars(message_preview).replace("@tag", mention_display)
+                                    message_preview = message_preview.replace("@tag", mention_display)
 
                                     await interaction.response.send_message(
                                         content=message_preview,
@@ -3270,105 +2379,6 @@ class BearTrapView(discord.ui.View):
                                 content=f"```json\n{self.embed_json}\n```",
                                 ephemeral=True
                             )
-
-                    class AdvancedSettingsButton(discord.ui.Button):
-                        def __init__(self, cog, notification_id):
-                            super().__init__(label="🧹 Message Cleanup", style=discord.ButtonStyle.secondary)
-                            self.cog = cog
-                            self.notification_id = notification_id
-
-                        async def callback(self, interaction: discord.Interaction):
-                            try:
-                                # Get current custom delete delay
-                                self.cog.cursor.execute("""
-                                    SELECT custom_delete_delay_minutes
-                                    FROM bear_notifications
-                                    WHERE id = ?
-                                """, (self.notification_id,))
-                                row = self.cog.cursor.fetchone()
-                                current_delay = row[0] if row and row[0] is not None else None
-
-                                modal = discord.ui.Modal(title="Message Cleanup Settings")
-                                delay_input = discord.ui.TextInput(
-                                    label="Custom Delete Delay (minutes)",
-                                    placeholder="Leave empty to use default delay (60 min)",
-                                    default=str(current_delay) if current_delay is not None else "",
-                                    required=False,
-                                    max_length=5
-                                )
-                                modal.add_item(delay_input)
-
-                                async def modal_callback(modal_interaction: discord.Interaction):
-                                    try:
-                                        if delay_input.value.strip():
-                                            new_delay = int(delay_input.value)
-                                            if new_delay < 1:
-                                                await modal_interaction.response.send_message(
-                                                    "❌ Delay must be at least 1 minute.",
-                                                    ephemeral=True
-                                                )
-                                                return
-                                        else:
-                                            # Empty = use default
-                                            new_delay = None
-
-                                        self.cog.cursor.execute("""
-                                            UPDATE bear_notifications
-                                            SET custom_delete_delay_minutes = ?
-                                            WHERE id = ?
-                                        """, (new_delay, self.notification_id))
-                                        self.cog.conn.commit()
-
-                                        # Refresh the notification list to get updated data
-                                        notifications = await self.cog.get_notifications(modal_interaction.guild_id)
-                                        selected_notif = next(n for n in notifications if n[0] == self.notification_id)
-
-                                        # Update delete delay display
-                                        custom_delay = selected_notif[17] if len(selected_notif) > 17 else None
-                                        if custom_delay is not None:
-                                            delete_delay_display = f"{custom_delay} minutes (custom)"
-                                        else:
-                                            delete_delay_display = "Using default delay"
-
-                                        # Get current embed and update it
-                                        current_embed = modal_interaction.message.embeds[0]
-
-                                        # Rebuild description with updated delete delay
-                                        lines = current_embed.description.split('\n')
-                                        updated_lines = []
-                                        for line in lines:
-                                            if line.startswith("**🧹 Message Cleanup:**"):
-                                                updated_lines.append(f"**🧹 Message Cleanup:** {delete_delay_display}")
-                                            else:
-                                                updated_lines.append(line)
-
-                                        current_embed.description = '\n'.join(updated_lines)
-
-                                        await modal_interaction.response.edit_message(embed=current_embed)
-
-                                    except ValueError:
-                                        await modal_interaction.response.send_message(
-                                            "❌ Please enter a valid number.",
-                                            ephemeral=True
-                                        )
-                                    except Exception as e:
-                                        print(f"Error updating custom delay: {e}")
-                                        traceback.print_exc()
-                                        await modal_interaction.response.send_message(
-                                            "❌ An error occurred while updating settings.",
-                                            ephemeral=True
-                                        )
-
-                                modal.on_submit = modal_callback
-                                await interaction.response.send_modal(modal)
-
-                            except Exception as e:
-                                print(f"Error opening advanced settings: {e}")
-                                traceback.print_exc()
-                                await interaction.response.send_message(
-                                    "❌ An error occurred while opening advanced settings.",
-                                    ephemeral=True
-                                )
 
                     class DeleteButton(discord.ui.Button):
                         def __init__(self, cog, notification_id):
@@ -3605,7 +2615,6 @@ class BearTrapView(discord.ui.View):
                     view.add_item(EditButton())
                     view.add_item(ToggleButton(self.cog, notification_id, EditButton(), select))
                     view.add_item(PreviewButton(self.cog, notification_id))
-                    view.add_item(AdvancedSettingsButton(self.cog, notification_id))
                     view.add_item(ChangeChannelButton(self.cog, notification_id, channel is not None))
                     view.add_item(DeleteButton(self.cog, notification_id))
 
@@ -3614,13 +2623,12 @@ class BearTrapView(discord.ui.View):
 
                     # Build help text - add Change Channel info if channel is missing
                     help_text = (
-                        "- **🔍 Search:** Filter the menu options based on specific keywords\n"
-                        "- **📝 Edit:** Modify notification details.\n"
-                        "- **⚙️ Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
-                        "  - -# Click to toggle between enabling or disabling.\n"
-                        "  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
-                        "- **👀 Preview:** See how the notification will look when it's sent.\n"
-                        "- **🧹 Message Cleanup:** Configure custom message deletion delay for this notification.\n"
+                        f"- **🔍 Search:** Filter the menu options based on specific keywords\n"
+                        f"- **{pimp.listIcon} Edit:** Modify notification details.\n"
+                        f"- **{pimp.settings2Icon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
+                        f"  - -# Click to toggle between enabling or disabling.\n"
+                        f"  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
+                        f"- **👀 Preview:** See how the notification will look when it's sent.\n"
                     )
 
                     if not channel:
@@ -3661,133 +2669,12 @@ class BearTrapView(discord.ui.View):
         except Exception as e:
             print(f"[ERROR] Error in manage_notification button: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while starting the edit process!",
-                ephemeral=True
-            )
-
-
-    @discord.ui.button(
-        label="Schedule Boards",
-        emoji="📅",
-        style=discord.ButtonStyle.primary,
-        custom_id="schedule_boards",
-        row=1
-    )
-    async def schedule_boards_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
-        try:
-            schedule_cog = self.cog.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                await schedule_cog.show_main_menu(interaction, force_new=True)
-            else:
-                await interaction.response.send_message(
-                    "❌ Schedule board system is not loaded!",
-                    ephemeral=True
-                )
-        except Exception as e:
-            print(f"[ERROR] Error in schedule boards button: {e}")
-            traceback.print_exc()
-            await interaction.response.send_message(
-                "❌ An error occurred while loading schedule boards!",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Event Templates",
-        emoji="📚",
-        style=discord.ButtonStyle.primary,
-        custom_id="browse_templates",
-        row=1
-    )
-    async def notification_templates_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
-        try:
-            templates_cog = self.cog.bot.get_cog("BearTrapTemplates")
-            if templates_cog:
-                await templates_cog.show_templates(interaction)
-            else:
-                await interaction.response.send_message(
-                    "❌ Notification Templates module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            print(f"Error loading templates: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while loading templates.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Settings",
-        emoji="⚙️",
-        style=discord.ButtonStyle.secondary,
-        custom_id="settings",
-        row=1
-    )
-    async def settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
-        try:
-            # Get current settings
-            self.cursor.execute("""
-                SELECT delete_messages_enabled, default_delete_delay_minutes
-                FROM bear_trap_settings
-                WHERE guild_id = ?
-            """, (interaction.guild_id,))
-            row = self.cursor.fetchone()
-
-            if row:
-                delete_enabled, default_delay = row
-            else:
-                # Create default settings
-                delete_enabled, default_delay = 1, 60
-                self.cursor.execute("""
-                    INSERT INTO bear_trap_settings (guild_id, delete_messages_enabled, default_delete_delay_minutes)
-                    VALUES (?, ?, ?)
-                """, (interaction.guild_id, delete_enabled, default_delay))
-                self.conn.commit()
-
-            # Create settings view
-            settings_view = SettingsView(self.cog, delete_enabled, default_delay)
-
-            await interaction.response.send_message(
-                embed=settings_view.build_settings_embed(),
-                view=settings_view,
-                ephemeral=True
-            )
-        except Exception as e:
-            print(f"Error loading settings: {e}")
-            traceback.print_exc()
-            await interaction.response.send_message(
-                "❌ An error occurred while loading settings.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Main Menu",
-        emoji="🏠",
-        style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
-        row=2
-    )
-    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await self.cog.check_admin(interaction):
-            return
-        try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                await alliance_cog.show_main_menu(interaction)
-        except Exception as e:
-            print(f"Error returning to main menu: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while returning to main menu.",
+                f"{pimp.deniedIcon} An error occurred while starting the edit process!",
                 ephemeral=True
             )
 
 class ChannelSelectView(discord.ui.View):
-    def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message, event_type=None):
+    def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message):
         super().__init__(timeout=300)
         self.cog = cog
         self.start_date = start_date
@@ -3796,7 +2683,6 @@ class ChannelSelectView(discord.ui.View):
         self.timezone = timezone
         self.message_data = message_data
         self.original_message = original_message
-        self.event_type = event_type
 
         self.add_item(ChannelSelectMenu(self))
 
@@ -3870,8 +2756,7 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
                 self.parent_view.timezone,
                 self.parent_view.message_data,
                 channel.id,
-                self.parent_view.original_message,
-                event_type=self.parent_view.event_type
+                self.parent_view.original_message
             )
 
             await interaction.response.edit_message(

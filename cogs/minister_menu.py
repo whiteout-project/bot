@@ -245,19 +245,13 @@ class ClearConfirmationView(discord.ui.View):
             cleared_fids = {row[0]: (row[1], row[2]) for row in self.cog.svs_cursor.fetchall()}
 
             time_list, _ = minister_schedule_cog.generate_time_list(cleared_fids)
-
-            # Split into chunks if too long for embed description (4096 char limit)
-            header = f"**Previous {self.activity_name} schedule** (before clearing):"
-            message_chunks = minister_schedule_cog.split_message_content(header, time_list, max_length=4000)
-
-            for i, chunk in enumerate(message_chunks):
-                title = f"Cleared {self.activity_name}" if i == 0 else f"Cleared {self.activity_name} (continued)"
-                clear_list_embed = discord.Embed(
-                    title=title,
-                    description=chunk,
-                    color=discord.Color.orange()
-                )
-                await minister_schedule_cog.send_embed_to_channel(clear_list_embed)
+            message_content = f"**Previous {self.activity_name} schedule** (before clearing):\n" + "\n".join(time_list)
+            clear_list_embed = discord.Embed(
+                title=f"Cleared {self.activity_name}",
+                description=message_content,
+                color=pimp.emColor4
+            )
+            await minister_schedule_cog.send_embed_to_channel(clear_list_embed)
 
             # Clear all appointments
             self.cog.svs_cursor.execute("DELETE FROM appointments WHERE appointment_type=?", (self.activity_name,))
