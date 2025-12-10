@@ -64,7 +64,7 @@ class BearTrapTemplates(commands.Cog):
             embed_desc = description
 
             # Create embed title
-            embed_title = f"%i %n Notification"
+            embed_title = f"%i %n"
 
             # Repeat configuration based on event schedule type
             repeat_config = {}

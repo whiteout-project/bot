@@ -9,6 +9,7 @@ import traceback
 import logging
 import logging.handlers
 import asyncio
+from .bear_event_types import get_event_icon
 
 class BearTrapSchedule(commands.Cog):
     def __init__(self, bot):
@@ -725,7 +726,7 @@ class BearTrapSchedule(commands.Cog):
 
                     # Format events for this day
                     for event_time, notif in days_dict[date]:
-                        line = await self._format_event_line(notif, tz, show_channel, settings.get('use_user_timezone', 0), time_only=True)
+                        line = await self._format_event_line(notif, tz, show_channel, settings.get('use_user_timezone', 0))
                         output_lines.append(f"└ {line}")
 
                 return "\n".join(output_lines)
@@ -789,7 +790,7 @@ class BearTrapSchedule(commands.Cog):
             traceback.print_exc()
             return self._create_error_embed(f"Error: {str(e)}")
 
-    async def _format_event_line(self, notification, timezone_obj, show_channel: bool, use_user_timezone: int = 0, time_only: bool = False) -> str:
+    async def _format_event_line(self, notification, timezone_obj, show_channel: bool, use_user_timezone: int = 0) -> str:
         """Formats a single notification as a line in the schedule
 
         Args:
@@ -797,7 +798,6 @@ class BearTrapSchedule(commands.Cog):
             timezone_obj: Timezone object for calculations
             show_channel: Whether to show channel info
             use_user_timezone: Whether to use Discord timestamps for local timezone (1) or custom format (0)
-            time_only: Whether to show only time (not date), used when date is shown in header
         """
         try:
             (notif_id, channel_id, hour, minute, notif_timezone, description,
@@ -807,32 +807,12 @@ class BearTrapSchedule(commands.Cog):
             next_time = datetime.fromisoformat(next_notification)
             next_time_tz = next_time.astimezone(timezone_obj)
 
-            # Format time based on user timezone setting and time_only flag
-            if time_only:
-                # When grouped by date, show only the time
-                if use_user_timezone:
-                    timestamp = int(next_time.timestamp())
-                    time_str = f"<t:{timestamp}:t>"  # :t = short time only
-                else:
-                    time_str = next_time_tz.strftime('%H:%M')
+            # Format time
+            if use_user_timezone:
+                timestamp = int(next_time.timestamp())
+                time_str = f"<t:{timestamp}:t>"  # :t = short time only
             else:
-                # Full format with date
-                if use_user_timezone:
-                    # Use Discord timestamp for automatic local timezone conversion
-                    timestamp = int(next_time.timestamp())
-                    time_str = f"<t:{timestamp}:f>"  # :f = full date/time format
-                else:
-                    # Use custom format in board timezone
-                    now = datetime.now(pytz.UTC)
-                    now_in_tz = now.astimezone(timezone_obj)
-                    next_date = next_time_tz.date()
-                    today_date = now_in_tz.date()
-
-                    # Determine date format
-                    if next_date == today_date:
-                        time_str = f"Today {next_time_tz.strftime('%H:%M')}"
-                    else:
-                        time_str = next_time_tz.strftime("%d-%m-%y %H:%M")
+                time_str = next_time_tz.strftime('%H:%M')
 
             # Extract notification name
             if "EMBED_MESSAGE:" in description:
@@ -851,17 +831,17 @@ class BearTrapSchedule(commands.Cog):
             else:
                 name = description[:30] if len(description) > 30 else description
 
-            # Build line with bold time (or simple format if time_only)
-            if time_only:
-                # For day-grouped display: **time** - name
-                line = f"**{time_str}** - {name}"
-                if show_channel:
-                    line += f" <#{channel_id}>"
-            else:
-                # For regular display: • **time** | name
-                line = f"• **{time_str}** | {name}"
-                if show_channel:
-                    line += f" in <#{channel_id}>"
+            # Get emoji for this event type
+            emoji = get_event_icon(event_type) if event_type else "📅"
+
+            # Strip "Notification" suffix if present (for backwards compatibility)
+            if name.endswith(" Notification"):
+                name = name[:-13]
+
+            # Build line: **time** - emoji name
+            line = f"**{time_str}** - {emoji} {name}"
+            if show_channel:
+                line += f" <#{channel_id}>"
 
             if not is_enabled:
                 line += " ⚠️ [DISABLED]"
