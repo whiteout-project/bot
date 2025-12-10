@@ -1,28 +1,16 @@
 #!/bin/sh
 
-echo "[WSDB] for more information please see https://github.com/whiteout-project/bot"
+echo "[WSDB] For more information please see https://github.com/whiteout-project/bot"
 
 cd /app
 
-if [ -z "${DISCORD_BOT_TOKEN}" ]; then
-    echo "please set DISCORD_BOT_TOKEN"
-    exit 1
+if [ ! -n "${DISCORD_BOT_TOKEN}" ]; then
+	echo "please set DISCORD_BOT_TOKEN"
+	exit
 fi
 
-echo "${DISCORD_BOT_TOKEN}" > bot_token.txt
-
-if [ "${UPDATE}" = "0" ]; then
-    ARGS="--no-update"
-else
-	ARGS="--autoupdate"
+if [ -n "${DISCORD_BOT_TOKEN}" ]; then
+    echo "${DISCORD_BOT_TOKEN}" > bot_token.txt
 fi
 
-if [ "${BETA}" = "1" ]; then
-    ARGS="$ARGS --beta"
-fi
-
-if [ "${DEBUG}" = "1" ]; then
-    ARGS="$ARGS --debug"
-fi
-
-python main.py $ARGS
+python main.py --autoupdate
