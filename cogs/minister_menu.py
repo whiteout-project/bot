@@ -154,21 +154,21 @@ class FilteredUserSelectView(discord.ui.View):
         else:
             await self.cog.show_time_selection(interaction, self.activity_name, str(fid), None)
     
-    @discord.ui.button(label=f"{pimp.importIcon}", style=discord.ButtonStyle.secondary, custom_id="prev_page", row=1)
+    @discord.ui.button(label="", style=discord.ButtonStyle.secondary, custom_id="prev_page", emoji=f"{pimp.importIcon}", row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = max(0, self.page - 1)
         self.update_select_menu()
         self.update_navigation_buttons()
         await self.update_embed(interaction)
     
-    @discord.ui.button(label=f"{pimp.exportIcon}", style=discord.ButtonStyle.secondary, custom_id="next_page", row=1)
+    @discord.ui.button(label="", style=discord.ButtonStyle.secondary, custom_id="next_page", emoji=f"{pimp.exportIcon}", row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = min(self.max_page, self.page + 1)
         self.update_select_menu()
         self.update_navigation_buttons()
         await self.update_embed(interaction)
     
-    @discord.ui.button(label="Filter", style=discord.ButtonStyle.secondary, emoji="🔍", custom_id="filter", row=1)
+    @discord.ui.button(label="Filter", style=discord.ButtonStyle.secondary, emoji=f"{pimp.magnifyingIcon}", custom_id="filter", row=1)
     async def filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = UserFilterModal(self)
         await interaction.response.send_modal(modal)
@@ -197,20 +197,21 @@ class FilteredUserSelectView(discord.ui.View):
         available_slots = 48 - total_booked
         
         # Create description based on filter status
-        description = f"Select a user to manage their {self.activity_name} appointment.\n\n"
-        
+        description = ""
         if self.filter_text:
-            description += f"**Filter:** `{self.filter_text}`\n"
-            description += f"**Filtered Users:** {len(self.filtered_users)}/{len(self.users)}\n\n"
+            description = f"**Filter:** {self.filter_text}\n"
+            description += f"**Filtered Users:** {len(self.filtered_users)}/{len(self.users)}\n"
         
         description += (
             f"### Current Status\n"
             f"{pimp.divider1}\n\n"
-            f"{pimp.calendarIcon} **Booked Slots:** `{total_booked}/48`\n"
-            f"{pimp.alarmClockIcon} **Available Slots:** `{available_slots}/48`\n"
+            f"{pimp.calendarIcon} **Booked Slots:** {total_booked}/48\n"
+            f"{pimp.alarmClockIcon} **Available Slots:** {available_slots}/48\n\n"
             f"{pimp.divider1}\n\n"
             f"{pimp.calendarIcon} = User already has a booking\n"
         )
+
+        description += f"Select a user to manage their {self.activity_name} appointment.\n"
         
         embed = discord.Embed(
             title=f"{pimp.avatarIcon} {self.activity_name} Management",
@@ -635,9 +636,10 @@ class TimeSelectView(discord.ui.View):
         if self.max_page > 0:
             # Previous page button
             prev_button = discord.ui.Button(
-                label=f"{pimp.importIcon}",
+                label="",
                 style=discord.ButtonStyle.secondary,
                 custom_id="prev_page",
+                emoji=f"{pimp.importIcon}",
                 row=1,
                 disabled=self.page == 0
             )
@@ -646,9 +648,10 @@ class TimeSelectView(discord.ui.View):
 
             # Next page button
             next_button = discord.ui.Button(
-                label=f"{pimp.exportIcon}",
+                label="",
                 style=discord.ButtonStyle.secondary,
                 custom_id="next_page",
+                emoji=f"{pimp.exportIcon}",
                 row=1,
                 disabled=self.page >= self.max_page
             )
@@ -1033,10 +1036,10 @@ class MinisterMenu(commands.Cog):
         description += (
             f"### Current Status\n"
             f"{pimp.divider1}\n\n"
-            f"{pimp.calendarIcon} **Booked Slots:** `{total_booked}/48`\n"
-            f"{pimp.alarmClockIcon} **Available Slots:** `{available_slots}/48`\n\n"
+            f"{pimp.calendarIcon} **Booked Slots:** {total_booked}/48\n"
+            f"{pimp.alarmClockIcon} **Available Slots:** {available_slots}/48\n\n"
             f"{pimp.divider1}\n\n"
-            f"{pimp.calendarIcon} = User already has a booking"
+            f"{pimp.calendarIcon} = User already has a booking\n"
         )
         
         embed = discord.Embed(
