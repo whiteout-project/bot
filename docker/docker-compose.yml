@@ -1,9 +1,0 @@
-services:
-  wos-discord-bot:
-    image: ghcr.io/whiteout-project/bot:latest
-    container_name: wos-discord-bot
-    volumes:
-      - /opt/docker/wos/db/:/app/db
-    restart: unless-stopped
-    environment:
-      - DISCORD_BOT_TOKEN=<your bot token here>
