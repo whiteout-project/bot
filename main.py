@@ -3,6 +3,7 @@ import sys
 import os
 import shutil
 import stat
+from cogs import prettification_is_my_purpose as pimp
 
 def is_container() -> bool:
     return os.path.exists("/.dockerenv") or os.path.exists("/var/run/secrets/kubernetes.io")
@@ -535,6 +536,39 @@ R = Style.RESET_ALL
 
 import warnings
 
+def check_vcredist():
+    """Check if Visual C++ Redistributable is installed on Windows."""
+    if sys.platform != "win32":
+        return True  # Not applicable on non-Windows
+
+    try:
+        import winreg
+        import struct
+
+        # Determine Python architecture
+        is_64bit = struct.calcsize("P") * 8 == 64
+        arch = "x64" if is_64bit else "x86"
+
+        # Registry key for VC++ 2015-2022 runtime
+        key_path = f"SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\{arch}"
+
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path)
+            winreg.CloseKey(key)
+            return True  # VC++ Redist is installed
+        except FileNotFoundError:
+            # VC++ Redist not found - show warning
+            download_url = f"https://aka.ms/vc14/vc_redist.{arch}.exe"
+            print(F.YELLOW + f"{pimp.warnIcon} Microsoft Visual C++ Redistributable ({arch}) not found!" + R)
+            print(F.YELLOW + "Gift code redemption (captcha solver) will not work until this is installed." + R)
+            print(F.YELLOW + f"Download and install from: " + F.CYAN + download_url + R)
+            print(F.YELLOW + "Then restart the bot, and the gift code redemption should work." + R)
+            print()
+            return False
+
+    except Exception:
+        return True  # If we can't check, we hope it's fine
+
 def startup_cleanup():
     """Perform all cleanup tasks on startup - directories, files, and legacy packages."""
     v1_path = "V1oldbot"
@@ -563,6 +597,7 @@ def startup_cleanup():
         uninstall_packages(legacy_packages, " (legacy packages)")
 
 startup_cleanup()
+check_vcredist()
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -956,19 +991,14 @@ if __name__ == "__main__":
                 newIcon TEXT,
                 pinIcon TEXT,
                 saveIcon TEXT,
-                giftIcon TEXT,
-                giftsIcon TEXT,
-                alertIcon TEXT,
                 robotIcon TEXT,
                 crossIcon TEXT,
                 heartIcon TEXT,
-                total2Icon TEXT,
                 shieldIcon TEXT,
                 targetIcon TEXT,
                 redeemIcon TEXT,
                 membersIcon TEXT,
                 averageIcon TEXT,
-                hashtagIcon TEXT,
                 messageIcon TEXT,
                 supportIcon TEXT,
                 foundryIcon TEXT,
@@ -981,20 +1011,25 @@ if __name__ == "__main__":
                 calendarIcon TEXT,
                 editListIcon TEXT,
                 settingsIcon TEXT,
-                settings2Icon TEXT,
                 hourglassIcon TEXT,
                 messageNoIcon TEXT,
                 blankListIcon TEXT,
-                alarmGiftIcon TEXT,
                 alarmClockIcon TEXT,
                 magnifyingIcon TEXT,
                 frostdragonIcon TEXT,
                 canyonClashIcon TEXT,
                 constructionIcon TEXT,
                 castleBattleIcon TEXT,
-                checkGiftCodeIcon TEXT,
-                deleteGiftCodeIcon TEXT,
-                addGiftCodeIcon TEXT,
+                giftIcon TEXT,
+                giftsIcon TEXT,
+                giftAddIcon TEXT,
+                giftAlarmIcon TEXT,
+                gifAlertIcon TEXT,
+                giftCheckIcon TEXT,
+                giftTotalIcon TEXT,
+                giftDeleteIcon TEXT,
+                giftHashtagIcon TEXT,
+                giftSettingsIcon TEXT,
                 processingIcon TEXT,
                 verifiedIcon TEXT,
                 questionIcon TEXT,
@@ -1010,6 +1045,14 @@ if __name__ == "__main__":
                 infoIcon TEXT,
                 warnIcon TEXT,
                 addIcon TEXT,
+                shutdownZzzIcon TEXT,
+                shutdownDoorIcon TEXT,
+                shutdownHandIcon TEXT,
+                shutdownMoonIcon TEXT,
+                shutdownPlugIcon TEXT,
+                shutdownStopIcon TEXT,
+                shutdownClapperIcon TEXT,
+                shutdownSparkleIcon TEXT,
                 dividerEmojiStart1 TEXT,
                 dividerEmojiPattern1 TEXT,
                 dividerEmojiEnd1 TEXT,
@@ -1022,8 +1065,8 @@ if __name__ == "__main__":
                 emColorString2 TEXT,
                 emColorString3 TEXT,
                 emColorString4 TEXT,
-                headerColor1 TEXT,
-                headerColor2 TEXT,
+                HeaderColor1 TEXT,
+                HeaderColor2 TEXT,
                 furnaceLevel0Icon TEXT,
                 furnaceLevel1Icon TEXT,
                 furnaceLevel2Icon TEXT,
@@ -1062,25 +1105,27 @@ if __name__ == "__main__":
             tableIsEmpty = cursor.fetchone()[0] == 0
             if tableIsEmpty:
                 conn_pimpsettings.execute("""INSERT INTO pimpsettings (
-                    themeName, themeCreator,
-                    allianceOldIcon, avatarOldIcon, stoveOldIcon, stateOldIcon, allianceIcon, avatarIcon, stoveIcon, stateIcon,
-                    listIcon, fidIcon, timeIcon, homeIcon, num1Icon, num2Icon, num3Icon, num4Icon,
-                    num5Icon, num10Icon, newIcon, 
-                    pinIcon, saveIcon, giftIcon, giftsIcon, alertIcon, robotIcon, crossIcon, heartIcon,
-                    total2Icon, shieldIcon, targetIcon, redeemIcon, membersIcon, averageIcon, hashtagIcon, messageIcon,
-                    supportIcon, foundryIcon, announceIcon, ministerIcon, researchIcon, trainingIcon, crazyJoeIcon, bearTrapIcon,
-                    calendarIcon, editListIcon, settingsIcon, settings2Icon, hourglassIcon, messageNoIcon, blankListIcon, alarmGiftIcon,
-                    alarmClockIcon, magnifyingIcon, frostdragonIcon, canyonClashIcon, constructionIcon, castleBattleIcon, checkGiftCodeIcon, deleteGiftCodeIcon,
-                    addGiftCodeIcon, processingIcon, verifiedIcon, questionIcon, transferIcon, multiplyIcon, divideIcon, deniedIcon,
-                    deleteIcon, exportIcon, importIcon, retryIcon, totalIcon, infoIcon, warnIcon, addIcon,
+                    themeName, themeCreator, 
+                    allianceOldIcon, avatarOldIcon, stoveOldIcon, stateOldIcon, allianceIcon, avatarIcon, stoveIcon, stateIcon, 
+                    listIcon, fidIcon, timeIcon, homeIcon, num1Icon, num2Icon, num3Icon, num4Icon, 
+                    num5Icon, num10Icon, newIcon, pinIcon, saveIcon, robotIcon, crossIcon, heartIcon, 
+                    shieldIcon, targetIcon, redeemIcon, membersIcon, averageIcon, messageIcon, supportIcon, foundryIcon, 
+                    announceIcon, ministerIcon, researchIcon, trainingIcon, crazyJoeIcon, bearTrapIcon, calendarIcon, editListIcon, 
+                    settingsIcon, hourglassIcon, messageNoIcon, blankListIcon, alarmClockIcon, magnifyingIcon, frostdragonIcon, canyonClashIcon, 
+                    constructionIcon, castleBattleIcon, 
+                    giftIcon, giftsIcon, giftAddIcon, giftAlarmIcon, gifAlertIcon, giftCheckIcon, giftTotalIcon, giftDeleteIcon, 
+                    giftHashtagIcon, giftSettingsIcon, 
+                    processingIcon, verifiedIcon, questionIcon, transferIcon, multiplyIcon, divideIcon, deniedIcon, deleteIcon, 
+                    exportIcon, importIcon, retryIcon, totalIcon, infoIcon, warnIcon, addIcon, 
+                    shutdownZzzIcon, shutdownDoorIcon, shutdownHandIcon, shutdownMoonIcon, shutdownPlugIcon, shutdownStopIcon, shutdownClapperIcon, shutdownSparkleIcon,
                     dividerEmojiStart1, dividerEmojiPattern1, dividerEmojiEnd1, dividerLength1,
                     dividerEmojiStart2, dividerEmojiPattern2, dividerEmojiEnd2, dividerLength2,
-                    emColorString1, emColorString2, emColorString3, emColorString4, headerColor1, headerColor2,
+                    emColorString1, emColorString2, emColorString3, emColorString4, HeaderColor1, HeaderColor2, 
                     furnaceLevel0Icon,
-                    furnaceLevel1Icon, furnaceLevel2Icon, furnaceLevel3Icon, furnaceLevel4Icon, furnaceLevel5Icon,
-                    furnaceLevel6Icon, furnaceLevel7Icon, furnaceLevel8Icon, furnaceLevel9Icon, furnaceLevel10Icon,
-                    furnaceLevel11Icon, furnaceLevel12Icon, furnaceLevel13Icon, furnaceLevel14Icon, furnaceLevel15Icon,
-                    furnaceLevel16Icon, furnaceLevel17Icon, furnaceLevel18Icon, furnaceLevel19Icon, furnaceLevel20Icon,
+                    furnaceLevel1Icon, furnaceLevel2Icon, furnaceLevel3Icon, furnaceLevel4Icon, furnaceLevel5Icon, 
+                    furnaceLevel6Icon, furnaceLevel7Icon, furnaceLevel8Icon, furnaceLevel9Icon, furnaceLevel10Icon, 
+                    furnaceLevel11Icon, furnaceLevel12Icon, furnaceLevel13Icon, furnaceLevel14Icon, furnaceLevel15Icon, 
+                    furnaceLevel16Icon, furnaceLevel17Icon, furnaceLevel18Icon, furnaceLevel19Icon, furnaceLevel20Icon, 
                     furnaceLevel21Icon, furnaceLevel22Icon, furnaceLevel23Icon, furnaceLevel24Icon, furnaceLevel25Icon,
                     furnaceLevel26Icon, furnaceLevel27Icon, furnaceLevel28Icon, furnaceLevel29Icon, furnaceLevel30Icon,
                     is_active
@@ -1088,33 +1133,26 @@ if __name__ == "__main__":
                     'default', '@WOSLand',
                     '⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏',
                     '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '4️⃣',
-                    '5️⃣', '🔟', '🆕', '📍', '💾', '🎁', '🛍️', '⚠️', 
-                    '🤖', '⚔️', '💗', '🟰', '🛡️', '🎯', '🔄', '👥', 
-                    '📈', '🔢', '🔊', '🆘', '🏭', '📢', '🏛️', '🔬', 
-                    '⚔️', '🤪', '🐻', '📅', '📝', '⚙️', '⚙️', '⏳', 
-                    '🔇', '⚪', '⏰', '⏰', '🔍', '🐉', '🏞️', '⚒️', 
-                    '🏰', '✅', '🗑️', '➕', '🔄', '✅', '❓', '↔️', 
-                    '✖️', '➗', '❌', '➖', '➡️', '⬅️', '🔄', '🟰', 
-                    'ℹ️', '⚠️', '➕',
+                    '5️⃣', '🔟', '🆕', '📍', '💾', '🤖', '⚔️', '💗', 
+                    '🛡️', '🎯', '🔄', '👥', '📈', '🔊', '🆘', '🏭', 
+                    '📢', '🏛️', '🔬', '⚔️', '🤪', '🐻', '📅', '📝', 
+                    '⚙️', '⏳', '🔇', '⚪', '⏰', '🔍', '🐉', '🏞️', 
+                    '⚒️', '🏰', 
+                    '🎁', '🛍️', '➕', '⏰', '⚠️', '✅', '🟰', '🗑️', 
+                    '🔢', '⚙️', 
+                    '🔄', '✅', '❓', '↔️', '✖️', '➗', '❌', '➖', 
+                    '➡️', '⬅️', '🔄', '🟰', 'ℹ️', '⚠️', '➕', 
+                    '💤', '🚪', '👋', '🌙', '🔌', '🛑', '🎬', '✨', 
                     '━', '━', '━', 16,
                     '━', '━', '━', 16,
                     '#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#1F77B4', '#28A745',
-                    "https://cdn-icons-png.freepik.com/512/12388/12388244.png", "https://cdn-icons-png.freepik.com/512/9932/9932935.png", 
-                    "https://cdn-icons-png.freepik.com/512/9933/9933057.png", "https://cdn-icons-png.freepik.com/512/9933/9933179.png", 
-                    "https://cdn-icons-png.freepik.com/512/9933/9933300.png", "https://cdn-icons-png.freepik.com/512/9933/9933423.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933543.png", "https://cdn-icons-png.freepik.com/512/9933/9933662.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933786.png", "https://cdn-icons-png.freepik.com/512/9933/9933890.png",
-                    "https://cdn-icons-png.freepik.com/512/9932/9932941.png", "https://cdn-icons-png.freepik.com/512/9932/9932961.png",
-                    "https://cdn-icons-png.freepik.com/512/9932/9932971.png", "https://cdn-icons-png.freepik.com/512/9932/9932980.png",
-                    "https://cdn-icons-png.freepik.com/512/9932/9932990.png", "https://cdn-icons-png.freepik.com/512/9933/9933000.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933014.png", "https://cdn-icons-png.freepik.com/512/9933/9933025.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933036.png", "https://cdn-icons-png.freepik.com/512/9933/9933047.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933068.png", "https://cdn-icons-png.freepik.com/512/9933/9933080.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933089.png", "https://cdn-icons-png.freepik.com/512/9933/9933103.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933114.png", "https://cdn-icons-png.freepik.com/512/9933/9933126.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933137.png", "https://cdn-icons-png.freepik.com/512/9933/9933147.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933157.png", "https://cdn-icons-png.freepik.com/512/9933/9933168.png",
-                    "https://cdn-icons-png.freepik.com/512/9933/9933190.png",
+                    "https://cdn-icons-png.freepik.com/512/12388/12388244.png", 
+                    "https://cdn-icons-png.freepik.com/512/9932/9932935.png", "https://cdn-icons-png.freepik.com/512/9933/9933057.png", "https://cdn-icons-png.freepik.com/512/9933/9933179.png", "https://cdn-icons-png.freepik.com/512/9933/9933300.png", "https://cdn-icons-png.freepik.com/512/9933/9933423.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933543.png", "https://cdn-icons-png.freepik.com/512/9933/9933662.png", "https://cdn-icons-png.freepik.com/512/9933/9933786.png", "https://cdn-icons-png.freepik.com/512/9933/9933890.png", "https://cdn-icons-png.freepik.com/512/9932/9932941.png",
+                    "https://cdn-icons-png.freepik.com/512/9932/9932961.png", "https://cdn-icons-png.freepik.com/512/9932/9932971.png", "https://cdn-icons-png.freepik.com/512/9932/9932980.png", "https://cdn-icons-png.freepik.com/512/9932/9932990.png", "https://cdn-icons-png.freepik.com/512/9933/9933000.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933014.png", "https://cdn-icons-png.freepik.com/512/9933/9933025.png", "https://cdn-icons-png.freepik.com/512/9933/9933036.png", "https://cdn-icons-png.freepik.com/512/9933/9933047.png", "https://cdn-icons-png.freepik.com/512/9933/9933068.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933080.png", "https://cdn-icons-png.freepik.com/512/9933/9933089.png", "https://cdn-icons-png.freepik.com/512/9933/9933103.png", "https://cdn-icons-png.freepik.com/512/9933/9933114.png", "https://cdn-icons-png.freepik.com/512/9933/9933126.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933137.png", "https://cdn-icons-png.freepik.com/512/9933/9933147.png", "https://cdn-icons-png.freepik.com/512/9933/9933157.png", "https://cdn-icons-png.freepik.com/512/9933/9933168.png", "https://cdn-icons-png.freepik.com/512/9933/9933190.png",
                     1
                 );""")
 
@@ -1200,7 +1238,7 @@ if __name__ == "__main__":
                 failed_cogs.append(cog)
         
         if failed_cogs:
-            print(F.RED + f"\n⚠️  {len(failed_cogs)} cog(s) failed to load:" + R)
+            print(F.RED + f"\n{pimp.warnIcon}  {len(failed_cogs)} cog(s) failed to load:" + R)
             for cog in failed_cogs:
                 print(F.YELLOW + f"   • {cog}" + R)
             print(F.YELLOW + "\nThe bot will continue with reduced functionality." + R)
@@ -1219,6 +1257,58 @@ if __name__ == "__main__":
         await load_cogs()
         
         await bot.start(bot_token)
+
+    def run_bot():
+        import signal
+
+        shutdown_messages = [
+            f"🛑 Ctrl+C detected! The bot is powering down... beep boop!",
+            f"👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
+            f"🔌 Ctrl+C pressed! Unplugging the bot. See you next time!",
+            f"🚪 Exit signal received! The bot has left the building...",
+            f"💤 Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
+            f"🎬 And that's a wrap! Bot shutting down gracefully.",
+            f"🌙 Trying to turn the bot off and not on again. Ctrl+C ya later!",
+            f"✨ Ctrl+C and poof! The bot vanishes into thin air...",
+        ]
+
+        def get_shutdown_message():
+            import random
+            return random.choice(shutdown_messages)
+
+        def handle_signal(signum, frame):
+            """Handle shutdown signals (Ctrl+C or container stop)."""
+            signal_name = "Ctrl+C" if signum == signal.SIGINT else "SIGTERM"
+
+            if is_container():
+                print(f"\n{F.YELLOW}Received {signal_name}. Shutting down gracefully...{R}")
+            else:
+                print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
+
+            # Schedule graceful shutdown - bot.close() will cause bot.start() to return
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(bot.close())
+            except RuntimeError:
+                pass  # No running loop, just exit
+
+            # Raise SystemExit to cleanly exit
+            raise SystemExit(0)
+
+        # Register signal handler for SIGINT (Ctrl+C)
+        signal.signal(signal.SIGINT, handle_signal)
+
+        # Also handle SIGTERM on Linux for graceful container stops
+        if sys.platform != "win32":
+            signal.signal(signal.SIGTERM, handle_signal)
+
+        try:
+            asyncio.run(main())
+        except SystemExit:
+            pass  # Clean exit from signal handler
+        except KeyboardInterrupt:
+            # Fallback in case signal handler doesn't catch it
+            print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
 
     if __name__ == "__main__":
         asyncio.run(main())

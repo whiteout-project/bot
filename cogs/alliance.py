@@ -152,7 +152,7 @@ class Alliance(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title=f"{pimp.settingsIcon} Settings Menu",
+                title=f"{pimp.giftSettingsIcon} Settings Menu",
                 description=(
                     f"{pimp.divider1}\n\n"
                     f"{pimp.allianceIcon} **Alliance Operations**\n"
@@ -169,7 +169,7 @@ class Alliance(commands.Cog):
                     f"└ Access support features\n\n"
                     f"{pimp.pinIcon} **PIMP my Bot**\n"
                     f"└ PIMP your bot with custom themes\n\n"
-                    f"{pimp.settings2Icon} Other Features\n"
+                    f"{pimp.settingsIcon} Other Features\n"
                     f"└ Access additional features\n\n"
                     f"{pimp.divider1}"
                 ),
@@ -228,7 +228,7 @@ class Alliance(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji=pimp.settings2Icon,
+                emoji=pimp.settingsIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
@@ -252,7 +252,7 @@ class Alliance(commands.Cog):
         """Display the main settings menu - can be called by other cogs"""
         try:
             embed = discord.Embed(
-                title=f"{pimp.settingsIcon} Settings Menu",
+                title=f"{pimp.giftSettingsIcon} Settings Menu",
                 description=(
                     f"{pimp.divider1}\n\n"
                     f"{pimp.allianceIcon} **Alliance Operations**\n"
@@ -269,7 +269,7 @@ class Alliance(commands.Cog):
                     f"└ Access support features\n\n"
                     f"{pimp.pinIcon} **PIMP my Bot**\n"
                     f"└ PIMP your bot with custom themes\n\n"
-                    f"{pimp.settings2Icon} Other Features\n"
+                    f"{pimp.settingsIcon} Other Features\n"
                     f"└ Access additional features\n\n"
                     f"{pimp.divider1}"
                 ),
@@ -328,7 +328,7 @@ class Alliance(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji=pimp.settings2Icon,
+                emoji=pimp.settingsIcon,
                 style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
@@ -491,7 +491,7 @@ class Alliance(commands.Cog):
                                         f"{pimp.stateIcon} **Type:** All Alliances ({len(alliances)} total)\n"
                                         f"{pimp.allianceIcon} **Alliances:** {len(alliances)} alliances\n"
                                         f"{pimp.pinIcon} **Status:** Queued\n"
-                                        f"{pimp.hashtagIcon} **Queue Position:** {initial_queue_pos}\n"
+                                        f"{pimp.giftHashtagIcon} **Queue Position:** {initial_queue_pos}\n"
                                         f"\n"
                                         f"{pimp.divider1}"
                                     ),
@@ -560,7 +560,7 @@ class Alliance(commands.Cog):
                                         f"{pimp.allianceIcon} **Type:** Single Alliance\n"
                                         f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                                         f"{pimp.pinIcon} **Status:** Queued\n"
-                                        f"{pimp.hashtagIcon} **Queue Position:** {queue_position}\n"
+                                        f"{pimp.giftHashtagIcon} **Queue Position:** {queue_position}\n"
                                         f"\n"
                                         f"{pimp.divider1}\n"
                                     ),
@@ -837,7 +837,7 @@ class Alliance(commands.Cog):
                     
                     info_section = (
                         f"**{pimp.allianceIcon} Alliance Name**\n{alliance_name}\n\n"
-                        f"**{pimp.hashtagIcon} Alliance ID**\n{alliance_id}\n\n"
+                        f"**{pimp.giftHashtagIcon} Alliance ID**\n{alliance_id}\n\n"
                         f"**{pimp.announceIcon} Channel**\n<#{channel_id}>\n\n"
                         f"**{pimp.hourglassIcon} Control Interval**\n{interval} minutes"
                     )
@@ -1051,7 +1051,7 @@ class Alliance(commands.Cog):
                             
                             info_section = (
                                 f"**{pimp.allianceIcon} Alliance Name**\n{alliance_name}\n\n"
-                                f"**{pimp.hashtagIcon} Alliance ID**\n{alliance_id}\n\n"
+                                f"**{pimp.giftHashtagIcon} Alliance ID**\n{alliance_id}\n\n"
                                 f"**{pimp.announceIcon} Channel**\n<#{channel_id}>\n\n"
                                 f"**{pimp.hourglassIcon} Control Interval**\n{interval} minutes"
                             )
@@ -1221,7 +1221,7 @@ class Alliance(commands.Cog):
                     f"{pimp.divider1}\n"
                     f"\n"
                     f"{pimp.allianceIcon} **Name:** {alliance_name}\n"
-                    f"{pimp.hashtagIcon} **ID:** {alliance_id}\n"
+                    f"{pimp.giftHashtagIcon} **ID:** {alliance_id}\n"
                     f"{pimp.avatarIcon} **Members:** {users_count}\n\n"
                     f"**Data to be Deleted:**\n"
                     f"{pimp.allianceIcon} Alliance Settings: {settings_count}\n"

@@ -337,7 +337,7 @@ class GiftCodeAPI:
                                                     auto_alliances = []
                                                 else:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
-                                                    validation_status = f"{pimp.alertIcon} Pending"
+                                                    validation_status = f"{pimp.gifAlertIcon} Pending"
                                                     auto_alliances = []
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
@@ -350,7 +350,7 @@ class GiftCodeAPI:
                                                 embed_description = (
                                                     f"**{pimp.giftIcon} Gift Code Details**\n"
                                                     f"{pimp.divider1}\n\n"
-                                                    f"{pimp.hashtagIcon} **Code:** {code}\n"
+                                                    f"{pimp.giftHashtagIcon} **Code:** {code}\n"
                                                     f"{pimp.redeemIcon} **Date:** {formatted_date}\n"
                                                     f"{pimp.verifiedIcon if validation_status == 'Validated' else pimp.deniedIcon} **Validation Status:** {validation_status}\n"
                                                     f"{pimp.robotIcon} **Source:** Retrieved from Bot API\n"
@@ -360,13 +360,13 @@ class GiftCodeAPI:
 
                                                 if is_valid is None:
                                                     embed_description += (
-                                                        f"\n{pimp.alertIcon} **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
+                                                        f"\n{pimp.gifAlertIcon} **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
                                                         f"Please wait for periodic validation to complete, after which auto-redemption will begin.\n"
                                                     )
 
                                                 embed_description += f"\n{pimp.divider1}\n"
 
-                                                embed_color = discord.Color.green() if is_valid else (discord.Color.red() if is_valid is False else discord.Color.orange())
+                                                embed_color = pimp.emColor3 if is_valid else (pimp.emColor2 if is_valid is False else pimp.emColor4)
 
                                                 admin_embed = discord.Embed(
                                                     title=f"{pimp.giftsIcon} New Gift Code Found!",
@@ -381,6 +381,34 @@ class GiftCodeAPI:
                                                             await admin_user.send(embed=admin_embed)
                                                     except Exception as e:
                                                         self.logger.exception(f"Error sending notification to admin {admin_id[0]}: {e}")
+
+                                            # Send notification to all gift code channels
+                                            try:
+                                                self.cursor.execute("SELECT DISTINCT channel_id FROM giftcode_channel")
+                                                gift_channels = self.cursor.fetchall()
+
+                                                if gift_channels:
+                                                    channel_embed = discord.Embed(
+                                                        title=f"{pimp.giftIcon} New Gift Code Retrieved",
+                                                        description=(
+                                                            f"A new gift code has been automatically retrieved from the Gift Code Distribution API.\n\n"
+                                                            f"**Code:** `{code}`\n"
+                                                            f"**Status:** {validation_status}\n"
+                                                            f"**Auto-redemption:** {'Started' if auto_alliances else 'Disabled'}"
+                                                        ),
+                                                        color=embed_color
+                                                    )
+                                                    channel_embed.set_footer(text="Retrieved via API")
+
+                                                    for (channel_id,) in gift_channels:
+                                                        try:
+                                                            channel = self.bot.get_channel(channel_id)
+                                                            if channel:
+                                                                await channel.send(embed=channel_embed)
+                                                        except Exception as e:
+                                                            self.logger.warning(f"Failed to send API code notification to channel {channel_id}: {e}")
+                                            except Exception as e:
+                                                self.logger.exception(f"Error sending gift code channel notifications: {e}")
 
                                             if auto_alliances:
                                                 gift_operations = self.bot.get_cog('GiftOperations')

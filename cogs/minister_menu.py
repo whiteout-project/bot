@@ -245,13 +245,19 @@ class ClearConfirmationView(discord.ui.View):
             cleared_fids = {row[0]: (row[1], row[2]) for row in self.cog.svs_cursor.fetchall()}
 
             time_list, _ = minister_schedule_cog.generate_time_list(cleared_fids)
-            message_content = f"**Previous {self.activity_name} schedule** (before clearing):\n" + "\n".join(time_list)
-            clear_list_embed = discord.Embed(
-                title=f"Cleared {self.activity_name}",
-                description=message_content,
-                color=pimp.emColor4
-            )
-            await minister_schedule_cog.send_embed_to_channel(clear_list_embed)
+
+            # Split into chunks if too long for embed description (4096 char limit)
+            header = f"**Previous {self.activity_name} schedule** (before clearing):"
+            message_chunks = minister_schedule_cog.split_message_content(header, time_list, max_length=4000)
+
+            for i, chunk in enumerate(message_chunks):
+                title = f"Cleared {self.activity_name}" if i == 0 else f"Cleared {self.activity_name} (continued)"
+                clear_list_embed = discord.Embed(
+                    title=title,
+                    description=chunk,
+                    color=pimp.emColor4
+                )
+                await minister_schedule_cog.send_embed_to_channel(clear_list_embed)
 
             # Clear all appointments
             self.cog.svs_cursor.execute("DELETE FROM appointments WHERE appointment_type=?", (self.activity_name,))
@@ -287,7 +293,7 @@ class ClearConfirmationView(discord.ui.View):
         
         # Return to settings menu with success message
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Minister Settings",
+            title=f"{pimp.giftSettingsIcon} Minister Settings",
             description=(
                 f"{pimp.verifiedIcon} **{message}**\n\n"
                 f"{pimp.divider1}\n\n"
@@ -459,7 +465,7 @@ class MinisterChannelView(discord.ui.View):
 
         await archive_cog.show_archive_menu(interaction)
 
-    @discord.ui.button(label="Settings", style=discord.ButtonStyle.secondary, emoji=f"{pimp.settingsIcon}", row=1)
+    @discord.ui.button(label="Settings", style=discord.ButtonStyle.secondary, emoji=f"{pimp.giftSettingsIcon}", row=1)
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
@@ -791,7 +797,7 @@ class MinisterMenu(commands.Cog):
                 "└ Configure channels for appointments and logging\n\n"
                 f"{pimp.saveIcon} **Event Archive**\n"
                 "└ Save and view past SvS minister schedules\n\n"
-                f"{pimp.settingsIcon} **Settings**\n"
+                f"{pimp.giftSettingsIcon} **Settings**\n"
                 "└ Update names, clear reservations and more\n\n"
                 f"{pimp.divider1}\n"
             ),
@@ -1094,7 +1100,7 @@ class MinisterMenu(commands.Cog):
         
         # Return to settings menu with success message
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Minister Settings",
+            title=f"{pimp.giftSettingsIcon} Minister Settings",
             description=(
                 f"{pimp.verifiedIcon} **{result_msg}**\n\n"
                 f"{pimp.divider1}\n\n"
@@ -1510,7 +1516,7 @@ class MinisterMenu(commands.Cog):
                     
                     # Return to settings menu with success message
                     embed = discord.Embed(
-                        title=f"{pimp.settingsIcon} Minister Settings",
+                        title=f"{pimp.giftSettingsIcon} Minister Settings",
                         description=(
                             f"{pimp.verifiedIcon} **{success_message}**\n\n"
                             f"{pimp.divider1}\n\n"
@@ -1584,7 +1590,7 @@ class MinisterMenu(commands.Cog):
     async def show_settings_menu(self, interaction: discord.Interaction):
         """Show the minister settings menu"""
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Minister Settings",
+            title=f"{pimp.giftSettingsIcon} Minister Settings",
             description=(
                 f"{pimp.divider1}\n\n"
                 f"{pimp.editListIcon} **Update Names**\n"

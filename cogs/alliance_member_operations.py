@@ -71,7 +71,7 @@ class AllianceMemberOperations(commands.Cog):
         self.c_users = self.conn_users.cursor()
         
         self.level_mapping = {
-            31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
+            31: "F30 - 1", 32: "F30 - 2", 33: "F30 - 3", 34: "F30 - 4",
             35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
             40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
             45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
@@ -2480,7 +2480,7 @@ class ExportColumnSelectView(discord.ui.View):
         
         # Show format selection
         format_embed = discord.Embed(
-            title=f"📄 Select Export Format",
+            title=f"{pimp.listIcon} Select Export Format",
             description=(
                 f"**Alliance:** {self.alliance_name}\n"
                 f"**Selected Columns:** {', '.join([col[1] for col in columns])}\n\n"

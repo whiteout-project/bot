@@ -111,7 +111,7 @@ class ChannelSelect(discord.ui.ChannelSelect):
             if minister_menu_cog and self.context.endswith("channel"):
                 # Return to channel configuration menu with confirmation
                 embed = discord.Embed(
-                    title=f"{pimp.settingsIcon} Channel Setup",
+                    title=f"{pimp.giftSettingsIcon} Channel Setup",
                     description=(
                         f"{pimp.verifiedIcon} **{self.context}** set to <#{channel_id}>\n\n"
                         f"### Channel Types\n"
@@ -645,6 +645,40 @@ class MinisterSchedule(commands.Cog):
 
         return time_list
 
+    def split_message_content(self, header: str, time_list: list, max_length: int = 1900) -> list:
+        """
+        Splits message content into chunks that fit within Discord's character limit.
+        Returns a list of message strings.
+        """
+        if not time_list:
+            return [header]
+
+        messages = []
+        current_lines = []
+        current_length = len(header) + 1  # for newline after header
+
+        for line in time_list:
+            line_length = len(line) + 1
+            if current_length + line_length > max_length:
+                # Save current chunk
+                if current_lines:
+                    messages.append(header + "\n" + "\n".join(current_lines))
+                else:
+                    messages.append(header)
+                current_lines = [line]
+                current_length = len(header) + 1 + line_length
+            else:
+                current_lines.append(line)
+                current_length += line_length
+
+        # Add remaining lines
+        if current_lines:
+            messages.append(header + "\n" + "\n".join(current_lines))
+        elif not messages:
+            messages.append(header)
+
+        return messages
+
     # handler to get minister channel
     async def get_channel_id(self, context: str):
         self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (context,))
@@ -653,6 +687,11 @@ class MinisterSchedule(commands.Cog):
 
     # handler to get minister message from channel to edit it
     async def get_or_create_message(self, context: str, message_content: str, channel: discord.TextChannel):
+        # Check if content exceeds Discord's 2000 character limit
+        if len(message_content) > 1900:
+            truncated_content = message_content[:1850] + "\n\n*... (list truncated due to length)*"
+            message_content = truncated_content
+
         self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (context,))
         row = self.svs_cursor.fetchone()
 
@@ -1087,13 +1126,19 @@ class MinisterSchedule(commands.Cog):
                 
                     # Generate available times list
                     time_list, _ = self.generate_time_list(booked_times)
-                    message_content = f"**Previous {appointment_type} schedule** (before clearing):\n" + "\n".join(time_list)
-                    clear_list_embed = discord.Embed(
-                        title=f"Cleared {appointment_type}",
-                        description=message_content,
-                        color=discord.Color.orange()
-                    )
-                    await self.send_embed_to_channel(clear_list_embed)
+
+                    # Split into chunks if too long for embed description (4096 char limit)
+                    header = f"**Previous {appointment_type} schedule** (before clearing):"
+                    message_chunks = self.split_message_content(header, time_list, max_length=4000)
+
+                    for i, chunk in enumerate(message_chunks):
+                        title = f"Cleared {appointment_type}" if i == 0 else f"Cleared {appointment_type} (continued)"
+                        clear_list_embed = discord.Embed(
+                            title=title,
+                            description=chunk,
+                            color=pimp.emColor4
+                        )
+                        await self.send_embed_to_channel(clear_list_embed)
 
                     # Regenerate empty list of available times
                     booked_times = {}
@@ -1101,20 +1146,14 @@ class MinisterSchedule(commands.Cog):
 
                     message_content = f"**{appointment_type}** available slots:\n" + "\n".join(time_list)
 
-                    # Get the channel and message to update
-                    self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (context,))
-                    msg_row = self.svs_cursor.fetchone()
-
+                    # Get the channel to update
                     self.svs_cursor.execute("SELECT context_id FROM reference WHERE context=?", (channel_context,))
                     channel_row = self.svs_cursor.fetchone()
 
-                    if msg_row and channel_row:
-                        message_id = int(msg_row[0])
+                    if channel_row:
                         channel_id = int(channel_row[0])
                         channel = log_guild.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
-                        message = await channel.fetch_message(message_id)
-                        await message.edit(content=message_content)
-
+                        await self.get_or_create_message(context, message_content, channel)
                     else:
                         await confirmation_message.reply(f"[Warning] Could not find message or channel for {appointment_type}, skipping message update.\n\nNext time you run the `/minister_add` command that channel will be used")
 

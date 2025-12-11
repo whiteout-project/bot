@@ -104,14 +104,14 @@ class GNCommands(commands.Cog):
                                 if settings:
                                     if settings[0]:
                                         info_parts.append(f"{pimp.announceIcon} **Alliance Channel:** <#{settings[0]}>")
-                                    interval_text = f"{pimp.alarmClockIcon} **Auto Check:** {settings[1]} minutes" if settings[1] > 0 else f"{pimp.deleteGiftCodeIcon}  No Auto Check"
+                                    interval_text = f"{pimp.alarmClockIcon} **Auto Check:** {settings[1]} minutes" if settings[1] > 0 else f"{pimp.giftDeleteIcon}  No Auto Check"
                                     info_parts.append(interval_text)
                             
                             with sqlite3.connect('db/giftcode.sqlite') as gift_db:
                                 cursor = gift_db.cursor()
                                 cursor.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
                                 gift_status = cursor.fetchone()
-                                gift_text = f"{pimp.checkGiftCodeIcon} **Gift System:** Active" if gift_status and gift_status[0] == 1 else f"{pimp.deleteGiftCodeIcon} **Gift System:** Inactive"
+                                gift_text = f"{pimp.giftCheckIcon} **Gift System:** Active" if gift_status and gift_status[0] == 1 else f"{pimp.giftDeleteIcon} **Gift System:** Inactive"
                                 info_parts.append(gift_text)
                                 
                                 cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))

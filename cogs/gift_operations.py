@@ -23,6 +23,7 @@ from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
 from collections import deque
 from cogs import prettification_is_my_purpose as pimp
+
 class GiftOperations(commands.Cog):
        
     def __init__(self, bot):
@@ -125,6 +126,14 @@ class GiftOperations(commands.Cog):
             # Column already exists
             pass
 
+        # Add priority column to giftcodecontrol table if it doesn't exist
+        try:
+            self.cursor.execute("ALTER TABLE giftcodecontrol ADD COLUMN priority INTEGER DEFAULT 0")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
+
         # WOS API URLs and Key
         self.wos_player_info_url = "https://wos-giftcode-api.centurygame.com/api/player"
         self.wos_giftcode_url = "https://wos-giftcode-api.centurygame.com/api/gift_code"
@@ -154,6 +163,9 @@ class GiftOperations(commands.Cog):
         self.validation_queue_task = None
         self.test_captcha_cooldowns = {} # User ID: last test timestamp for test button
         self.test_captcha_delay = 60
+
+        # Batch redemption tracking for consolidated progress messages
+        self.redemption_batches = {}  # batch_id -> {message, alliances: {id: status}, giftcode}
 
         self.processing_stats = {
         "ocr_solver_calls": 0,       # Times solver.solve_captcha was called
@@ -252,7 +264,7 @@ class GiftOperations(commands.Cog):
         cleaned = ''.join(char for char in giftcode if unicodedata.category(char)[0] != 'C')
         return cleaned.strip()
     
-    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None):
+    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None, batch_id=None):
         """Add a gift code to the validation queue for processing."""
         async with self.validation_queue_lock:
             queue_item = {
@@ -264,7 +276,8 @@ class GiftOperations(commands.Cog):
                 'status': 'queued',
                 'operation_type': operation_type,
                 'alliance_id': alliance_id,
-                'interaction': interaction
+                'interaction': interaction,
+                'batch_id': batch_id
             }
             self.validation_queue.append(queue_item)
             self.logger.info(f"Added gift code '{giftcode}' to validation queue (source: {source}, type: {operation_type}, queue length: {len(self.validation_queue)})")
@@ -305,7 +318,8 @@ class GiftOperations(commands.Cog):
         operation_type = queue_item.get('operation_type', 'automatic')
         alliance_id = queue_item.get('alliance_id')
         interaction = queue_item.get('interaction')
-        
+        batch_id = queue_item.get('batch_id')
+
         self.logger.info(f"Processing gift code '{giftcode}' from queue (source: {source}, type: {operation_type})")
         
         # Handle redemption
@@ -316,8 +330,14 @@ class GiftOperations(commands.Cog):
                     self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
                     alliance_result = self.alliance_cursor.fetchone()
                     alliance_name = alliance_result[0] if alliance_result else f"Alliance {alliance_id}"
-                    
-                    # Send starting message only if interaction exists
+
+                    # Handle batch progress update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        batch['alliances'][alliance_id]['status'] = 'processing'
+                        await self._update_batch_progress(batch_id)
+
+                    # Send starting message only if interaction exists (non-batch)
                     progress_message = None
                     if interaction:
                         start_embed = discord.Embed(
@@ -330,9 +350,31 @@ class GiftOperations(commands.Cog):
                     
                     # Execute the redemption
                     await self.use_giftcode_for_alliance(alliance_id, giftcode)
-                    
-                    # Update the message with completion status if we have a message to update
-                    if interaction and progress_message:
+
+                    # Handle batch completion update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        total_codes = batch.get('total_codes', 1)
+
+                        # Increment codes completed for this alliance
+                        batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
+                        codes_done = batch['alliances'][alliance_id]['codes_completed']
+
+                        # Mark alliance as completed only when all codes are done for it
+                        if codes_done >= total_codes:
+                            batch['alliances'][alliance_id]['status'] = 'completed'
+                        else:
+                            batch['alliances'][alliance_id]['status'] = 'processing'
+
+                        await self._update_batch_progress(batch_id)
+
+                        # Clean up batch if all alliances complete
+                        all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
+                        if all_done:
+                            del self.redemption_batches[batch_id]
+
+                    # Update the message with completion status if we have a message to update (non-batch)
+                    elif interaction and progress_message:
                         complete_embed = discord.Embed(
                             title = f"{pimp.verifiedIcon} Redemption Complete",
                             description=f"Gift code redemption completed for **{alliance_name}**.\n"
@@ -345,7 +387,28 @@ class GiftOperations(commands.Cog):
                             pass
                 except Exception as e:
                     self.logger.exception(f"Error in manual redemption for alliance {alliance_id}: {e}")
-                    if interaction:
+
+                    # Handle batch error update
+                    if batch_id and batch_id in self.redemption_batches:
+                        batch = self.redemption_batches[batch_id]
+                        total_codes = batch.get('total_codes', 1)
+
+                        # Still count this as a code attempt for progress
+                        batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
+                        codes_done = batch['alliances'][alliance_id]['codes_completed']
+
+                        # Mark alliance as error (but continue with other alliances)
+                        if codes_done >= total_codes:
+                            batch['alliances'][alliance_id]['status'] = 'error'
+
+                        await self._update_batch_progress(batch_id)
+
+                        # Clean up batch if all alliances complete
+                        all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
+                        if all_done:
+                            del self.redemption_batches[batch_id]
+
+                    elif interaction:
                         error_embed = discord.Embed(
                             title = f"{pimp.deniedIcon} Redemption Error",
                             description=f"An error occurred during redemption for **{alliance_name}**: {str(e)}",
@@ -438,11 +501,11 @@ class GiftOperations(commands.Cog):
                 f"**Gift Code Details**\n{pimp.divider1}\n"
                 f"{pimp.avatarIcon} **Sender:** {message.author.mention}\n"
                 f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
-                f"{pimp.alertIcon} **Status:** {validation_msg}\n"
+                f"{pimp.gifAlertIcon} **Status:** {validation_msg}\n"
                 f"{pimp.listIcon} **Action:** Added for later validation\n"
                 f"{pimp.divider1}\n"
             )
-            reaction = f"{pimp.alertIcon}"
+            reaction = f"{pimp.gifAlertIcon}"
         
         if processing_message:
             await processing_message.edit(embed=reply_embed)
@@ -493,24 +556,125 @@ class GiftOperations(commands.Cog):
                 'queue_by_code': queue_by_code
             }
     
-    async def add_manual_redemption_to_queue(self, giftcode, alliance_ids, interaction):
-        """Add manual redemption requests to validation queue."""
+    async def add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction):
+        """Add manual redemption requests to validation queue.
+
+        Args:
+            giftcodes: Single gift code string or list of gift codes
+            alliance_ids: List of alliance IDs
+            interaction: Discord interaction for progress messages
+        """
+        # Normalize giftcodes to list
+        if isinstance(giftcodes, str):
+            giftcodes = [giftcodes]
+
         queue_positions = []
-        
+        total_redemptions = len(giftcodes) * len(alliance_ids)
+
+        # Create batch for multiple redemptions
+        batch_id = None
+        if total_redemptions > 1 and interaction:
+            import uuid
+            batch_id = str(uuid.uuid4())
+
+            # Get alliance names for the batch
+            alliances_info = {}
+            for aid in alliance_ids:
+                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (aid,))
+                result = self.alliance_cursor.fetchone()
+                name = result[0] if result else f"Alliance {aid}"
+                alliances_info[aid] = {'name': name, 'status': 'pending', 'codes_completed': 0}
+
+            # Send initial consolidated progress message
+            embed = self._build_batch_progress_embed(giftcodes, alliances_info)
+            progress_message = await interaction.followup.send(embed=embed, ephemeral=True)
+
+            # Store batch info
+            self.redemption_batches[batch_id] = {
+                'message': progress_message,
+                'alliances': alliances_info,
+                'giftcodes': giftcodes,
+                'total_codes': len(giftcodes)
+            }
+
+        # Queue order: Alliance 1 -> all codes, then Alliance 2 -> all codes, etc.
         for alliance_id in alliance_ids:
-            await self.add_to_validation_queue(
-                giftcode=giftcode,
-                source='manual',
-                operation_type='redemption',
-                alliance_id=alliance_id,
-                interaction=interaction
-            )
-            
-            queue_status = await self.get_queue_status()
-            queue_positions.append(queue_status['queue_length'])
-        
+            for giftcode in giftcodes:
+                await self.add_to_validation_queue(
+                    giftcode=giftcode,
+                    source='manual',
+                    operation_type='redemption',
+                    alliance_id=alliance_id,
+                    interaction=interaction if not batch_id else None,
+                    batch_id=batch_id
+                )
+
+                queue_status = await self.get_queue_status()
+                queue_positions.append(queue_status['queue_length'])
+
         return queue_positions
-    
+
+    def _build_batch_progress_embed(self, giftcodes, alliances_info, total_codes=None):
+        """Build the consolidated progress embed for batch redemption."""
+        # Handle both single code (string) and multiple codes (list)
+        if isinstance(giftcodes, str):
+            giftcodes = [giftcodes]
+
+        if total_codes is None:
+            total_codes = len(giftcodes)
+
+        lines = []
+        for aid, info in alliances_info.items():
+            status = info['status']
+            codes_completed = info.get('codes_completed', 0)
+
+            if status == 'pending':
+                icon = f"{pimp.hourglassIcon}"
+            elif status == 'processing':
+                icon = f"{pimp.processingIcon}"
+            elif status == 'completed':
+                icon = f"{pimp.verifiedIcon}"
+            elif status == 'error':
+                icon = f"{pimp.deniedIcon}"
+            else:
+                icon = f"{pimp.hourglassIcon}"
+            # Show code progress for multi-code batches
+            if total_codes > 1:
+                lines.append(f"{icon} **{info['name']}** ({codes_completed}/{total_codes} codes)")
+            else:
+                lines.append(f"{icon} **{info['name']}**")
+
+        completed_alliances = sum(1 for info in alliances_info.values() if info['status'] == 'completed')
+        total_alliances = len(alliances_info)
+
+        # Build description based on single or multiple codes
+        if total_codes > 1:
+            code_display = f"ALL ({total_codes} codes)"
+        else:
+            code_display = f"`{giftcodes[0]}`"
+
+        embed = discord.Embed(
+            title=f"{pimp.giftIcon} Batch Redemption Progress",
+            description=f"**Gift Code{'s' if total_codes > 1 else ''}:** {code_display}\n**Progress:** {completed_alliances}/{total_alliances} alliances\n\n" + "\n".join(lines),
+            color=pimp.emColor3 if completed_alliances == total_alliances else pimp.emColor1
+        )
+        return embed
+
+    async def _update_batch_progress(self, batch_id):
+        """Update the batch progress message."""
+        if batch_id not in self.redemption_batches:
+            return
+
+        batch = self.redemption_batches[batch_id]
+        giftcodes = batch.get('giftcodes', batch.get('giftcode', []))
+        total_codes = batch.get('total_codes', 1)
+        embed = self._build_batch_progress_embed(giftcodes, batch['alliances'], total_codes)
+
+        try:
+            await batch['message'].edit(embed=embed)
+        except Exception as e:
+            self.logger.warning(f"Failed to update batch progress message: {e}")
+
     @commands.Cog.listener()
     async def on_ready(self):
         """
@@ -1136,7 +1300,7 @@ class GiftOperations(commands.Cog):
             self.giftlog.info(log_entry_redeem.strip())
             
             # Parse response
-            msg = response_json_redeem.get("msg", "Unknown Error").strip('.')
+            msg = str(response_json_redeem.get("msg", "Unknown Error")).strip('.')
             err_code = response_json_redeem.get("err_code")
             
             # Check if this is a rate limit error - these need special handling
@@ -1386,7 +1550,7 @@ class GiftOperations(commands.Cog):
                 
                 # Check if we've already reacted to this message
                 bot_reactions = {str(reaction.emoji) for reaction in message.reactions if reaction.me}
-                if bot_reactions.intersection([f"{pimp.verifiedIcon}", f"{pimp.deniedIcon}", f"{pimp.alertIcon}", f"{pimp.questionIcon}", f"{pimp.infoIcon}"]):
+                if bot_reactions.intersection([f"{pimp.verifiedIcon}", f"{pimp.deniedIcon}", f"{pimp.gifAlertIcon}", f"{pimp.questionIcon}", f"{pimp.infoIcon}"]):
                     continue
                 
                 messages_to_process.append(message)
@@ -1493,7 +1657,7 @@ class GiftOperations(commands.Cog):
                     
             for giftcode in scan_results['existing_pending']:
                 if giftcode in message_code_map:
-                    await message_code_map[giftcode].add_reaction(f"{pimp.alertIcon}")
+                    await message_code_map[giftcode].add_reaction(f"{pimp.gifAlertIcon}")
             
             # Send consolidated results message
             await self._send_scan_results_message(channel, scan_results, alliance_id)
@@ -1588,7 +1752,7 @@ class GiftOperations(commands.Cog):
             if results['existing_invalid']:
                 existing_summary += f"{pimp.deniedIcon} Previously Invalid: {len(results['existing_invalid'])}\n"
             if results['existing_pending']:
-                existing_summary += f"{pimp.alertIcon} Pending Validation: {len(results['existing_pending'])}\n"
+                existing_summary += f"{pimp.gifAlertIcon} Pending Validation: {len(results['existing_pending'])}\n"
             
             if existing_summary:
                 embed.add_field(
@@ -1903,7 +2067,7 @@ class GiftOperations(commands.Cog):
                         solver_status_msg = "onnxruntime library missing"
 
                 save_options_text = {
-                    0: f"{pimp.deniedIcon} None", 1: f"{pimp.alertIcon} Failed Only", 2: f"{pimp.verifiedIcon} Success Only", 3: f"💾 All"
+                    0: f"{pimp.deniedIcon} None", 1: f"{pimp.gifAlertIcon} Failed Only", 2: f"{pimp.verifiedIcon} Success Only", 3: f"💾 All"
                 }
                 save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
 
@@ -1917,7 +2081,7 @@ class GiftOperations(commands.Cog):
                         f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
                         f"{pimp.fidIcon} **Test ID:** `{current_test_fid}`\n"
                         f"📦 **ONNX Runtime:** {f'{pimp.verifiedIcon} Found' if onnx_available else f'{pimp.deniedIcon} Missing'}\n"
-                        f"{pimp.settingsIcon} **Solver Status:** `{solver_status_msg}`\n"
+                        f"{pimp.giftSettingsIcon} **Solver Status:** `{solver_status_msg}`\n"
                         f"{pimp.divider1}\n"
                     ),
                     color = pimp.emColor1,
@@ -1925,7 +2089,7 @@ class GiftOperations(commands.Cog):
 
                 if not onnx_available:
                     embed.add_field(
-                        name=f"{pimp.alertIcon} Missing Library",
+                        name=f"{pimp.gifAlertIcon} Missing Library",
                         value=(
                             "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
                             "The model files must be in the bot/models/ directory.\n"
@@ -1965,7 +2129,7 @@ class GiftOperations(commands.Cog):
                 )
 
                 embed.add_field(
-                    name=f"{pimp.alertIcon} Important Note",
+                    name=f"{pimp.gifAlertIcon} Important Note",
                     value="Saving images (especially 'All') can consume significant disk space over time.",
                     inline=False
                 )
@@ -2069,6 +2233,84 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Unexpected error updating OCR settings: {e}")
             return False, f"Unexpected error updating OCR settings: {e}"
+
+    async def show_redemption_priority(self, interaction: discord.Interaction):
+        """Show the redemption priority management interface (global admin only)."""
+        try:
+            # Check global admin permission
+            self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
+            admin_info = self.settings_cursor.fetchone()
+
+            if not admin_info or admin_info[0] != 1:
+                error_msg = "Only global admins can manage redemption priority."
+                if interaction.response.is_done():
+                    await interaction.followup.send(error_msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+
+            # Get all alliances with their priority info
+            self.alliance_cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
+            all_alliances = self.alliance_cursor.fetchall()
+
+            if not all_alliances:
+                error_msg = "No alliances found."
+                if interaction.response.is_done():
+                    await interaction.followup.send(error_msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(error_msg, ephemeral=True)
+                return
+
+            # Get priority info for alliances
+            alliance_ids = [a[0] for a in all_alliances]
+            placeholders = ','.join('?' * len(alliance_ids))
+            self.cursor.execute(f"""
+                SELECT alliance_id, priority FROM giftcodecontrol
+                WHERE alliance_id IN ({placeholders})
+            """, alliance_ids)
+            priority_data = {row[0]: row[1] for row in self.cursor.fetchall()}
+
+            # Build alliance list with priorities
+            alliances_with_priority = []
+            for alliance_id, name in all_alliances:
+                priority = priority_data.get(alliance_id, 0)
+                alliances_with_priority.append((alliance_id, name, priority))
+
+            # Sort by priority, then by alliance_id
+            alliances_with_priority.sort(key=lambda x: (x[2], x[0]))
+
+            # Create embed
+            embed = discord.Embed(
+                title=f"{pimp.giftHashtagIcon} Redemption Priority",
+                description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+                color=discord.Color.blue()
+            )
+
+            # Build priority list
+            priority_list = []
+            for idx, (alliance_id, name, priority) in enumerate(alliances_with_priority, 1):
+                priority_list.append(f"`{idx}.` **{name}**")
+
+            embed.add_field(
+                name="Current Priority Order",
+                value="\n".join(priority_list) if priority_list else "No alliances configured",
+                inline=False
+            )
+
+            view = RedemptionPriorityView(self, alliances_with_priority)
+
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+        except Exception as e:
+            self.logger.exception(f"Error in show_redemption_priority: {e}")
+            error_msg = f"An error occurred: {str(e)}"
+            if interaction.response.is_done():
+                await interaction.followup.send(error_msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(error_msg, ephemeral=True)
 
     async def validate_gift_codes(self):
         try:
@@ -2404,19 +2646,19 @@ class GiftOperations(commands.Cog):
             description=(
                 f"\n{pimp.divider1}\n"
                 f"\n"
-                f"{pimp.addGiftCodeIcon} **Add Gift Code**\n"
+                f"{pimp.giftAddIcon} **Add Gift Code**\n"
                 f"└ Input a new gift code\n"
                 f"\n"
-                f"{pimp.deleteGiftCodeIcon} **Delete Gift Code**\n"
+                f"{pimp.giftDeleteIcon} **Delete Gift Code**\n"
                 f"└ Remove existing codes\n"
                 f"\n"
                 f"{pimp.giftsIcon} **List Gift Codes**\n"
                 f"└ View all active, valid codes\n"
                 f"\n"
-                f"{pimp.checkGiftCodeIcon} **Use Gift Code**\n"
+                f"{pimp.giftCheckIcon} **Use Gift Code**\n"
                 f"└ Redeem gift code for alliance(s)\n"
                 f"\n"
-                f"{pimp.settingsIcon} **Gift Code Settings**\n"
+                f"{pimp.giftSettingsIcon} **Gift Code Settings**\n"
                 f"└ Edit automatic usage settings\n"
                 f"\n"
                 f"{pimp.homeIcon} **Main Menu**\n"
@@ -2487,7 +2729,7 @@ class GiftOperations(commands.Cog):
 
         for code, date, used_count in codes:
             embed.add_field(
-                name=f"{pimp.hashtagIcon} {code}",
+                name=f"{pimp.giftHashtagIcon} {code}",
                 value=(
                     f"Created: {date}\nUsed by: {used_count} users\n"
                     f"{'\n' + pimp.divider2 if code != codes[-1][0] else ''}"
@@ -2564,7 +2806,7 @@ class GiftOperations(commands.Cog):
                     status_emoji = pimp.deniedIcon
                 elif validation_status == 'pending':
                     status_display = "Pending"
-                    status_emoji = pimp.alertIcon
+                    status_emoji = pimp.gifAlertIcon
                 else:
                     status_display = "Unknown"
                     status_emoji = pimp.questionIcon
@@ -2673,12 +2915,12 @@ class GiftOperations(commands.Cog):
                 confirm_view.add_item(cancel)
 
                 confirmation_embed = discord.Embed(
-                    title = f"{pimp.alertIcon} Confirm Deletion",
+                    title = f"{pimp.gifAlertIcon} Confirm Deletion",
                     description=(
                         f"**Gift Code Details**\n"
                         f"{pimp.divider1}\n"
                         f"{pimp.giftIcon} **Selected Code:** `{selected_code}`\n"
-                        f"{pimp.alertIcon} **Warning:** This action cannot be undone!\n"
+                        f"{pimp.gifAlertIcon} **Warning:** This action cannot be undone!\n"
                         f"{pimp.divider1}\n"
                     ),
                     color = pimp.emColor4,
@@ -2705,13 +2947,13 @@ class GiftOperations(commands.Cog):
             
             if total_codes > 25:
                 description_text += (
-                    f"\n{pimp.alertIcon} **Note:** Showing 25 of {total_codes} codes.\n"
+                    f"\n{pimp.gifAlertIcon} **Note:** Showing 25 of {total_codes} codes.\n"
                     f"Oldest codes are shown first.\n"
                     f"To delete newer codes, you'll need to delete the older ones first."
                 )
             
             initial_embed = discord.Embed(
-                title = f"{pimp.deleteGiftCodeIcon} Delete Gift Code",
+                title = f"{pimp.giftDeleteIcon} Delete Gift Code",
                 description=description_text,
                 color = pimp.emColor1,
             )
@@ -2723,7 +2965,7 @@ class GiftOperations(commands.Cog):
             )
 
         except Exception as e:
-            self.logger.exception(f"{pimp.deleteGiftCodeIcon} Delete gift code error: {str(e)}")
+            self.logger.exception(f"{pimp.giftDeleteIcon} Delete gift code error: {str(e)}")
             await interaction.response.send_message(
                 f"{pimp.deniedIcon} An error occurred while processing the request.",
                 ephemeral=True
@@ -2796,7 +3038,7 @@ class GiftOperations(commands.Cog):
                 alliance_name = next((name for aid, name in available_alliances if aid == alliance_id), "Unknown Alliance")
                 
                 confirm_embed = discord.Embed(
-                    title = f"{pimp.alertIcon} Confirm Removal",
+                    title = f"{pimp.gifAlertIcon} Confirm Removal",
                     description=(
                         f"Are you sure you want to remove the gift code channel for:\n\n"
                         f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
@@ -2919,7 +3161,7 @@ class GiftOperations(commands.Cog):
             
             # Create confirmation embed
             confirm_embed = discord.Embed(
-                title = f"{pimp.alertIcon} Confirm Channel Removal",
+                title = f"{pimp.gifAlertIcon} Confirm Channel Removal",
                 description=(
                     f"Are you sure you want to remove the gift code channel setting?\n\n"
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
@@ -3012,16 +3254,18 @@ class GiftOperations(commands.Cog):
             return
         
         settings_embed = discord.Embed(
-            title = f"{pimp.settingsIcon} Gift Code Settings",
+            title = f"{pimp.giftSettingsIcon} Gift Code Settings",
             description=(
                 f"{pimp.divider1}\n\n"
                 f"{pimp.announceIcon} **Channel Management**\n"
                 f"└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
                 f"{pimp.giftIcon} **Automatic Redemption**\n"
                 f"└ Enable/disable auto-redemption of new valid gift codes\n\n"
+                f"{pimp.giftHashtagIcon} **Redemption Priority**\n"
+                f"└ Change the order in which alliances auto-redeem new gift codes\n\n"
                 f"{pimp.magnifyingIcon} **Channel History Scan**\n"
                 f"└ Trigger an on-demand scan of existing messages in a gift channel\n\n"
-                f"{pimp.settingsIcon} **CAPTCHA Settings**\n"
+                f"{pimp.giftSettingsIcon} **CAPTCHA Settings**\n"
                 f"c└ Configure CAPTCHA-solver related settings and image saving\n"
                 f"\n{pimp.divider1}"
             ),
@@ -3092,7 +3336,7 @@ class GiftOperations(commands.Cog):
                 description_text = f"No gift code channels configured yet.\n\n"
  
         main_embed = discord.Embed(
-            title = f"{pimp.settingsIcon} Channel Management",
+            title = f"{pimp.giftSettingsIcon} Channel Management",
             description = description_text,
             color = pimp.emColor1,
         )
@@ -3267,12 +3511,12 @@ class GiftOperations(commands.Cog):
                     
                     # Confirmation embed
                     confirm_embed = discord.Embed(
-                        title = f"{pimp.alertIcon} Confirm Removal",
+                        title = f"{pimp.gifAlertIcon} Confirm Removal",
                         description=(
                             f"Are you sure you want to remove the gift code channel configuration?\n\n"
                             f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                             f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
-                            f"{pimp.alertIcon} **Warning:** This will stop the bot from monitoring this channel for gift codes."
+                            f"{pimp.gifAlertIcon} **Warning:** This will stop the bot from monitoring this channel for gift codes."
                         ),
                         color=pimp.emColor2,
                     )
@@ -3485,7 +3729,7 @@ class GiftOperations(commands.Cog):
                     f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
                     f"{pimp.announceIcon} **Channel:** #{channel.name}\n"
                     f"{pimp.listIcon} **Scan Limit:** Up to 75 historical messages\n\n"
-                    f"{pimp.alertIcon} **Note:** This will scan historical messages in the channel to find "
+                    f"{pimp.gifAlertIcon} **Note:** This will scan historical messages in the channel to find "
                     f"potential gift codes. Use this carefully in channels with lots of non-gift-code messages.\n\n"
                     f"Do you want to proceed with the historical scan?"
                 ),
@@ -3541,7 +3785,7 @@ class GiftOperations(commands.Cog):
                     if existing_invalid > 0:
                         results_text += f"{pimp.deniedIcon} Previously Invalid: {existing_invalid}\n"
                     if existing_pending > 0:
-                        results_text += f"{pimp.alertIcon} Pending Validation: {existing_pending}\n"
+                        results_text += f"{pimp.gifAlertIcon} Pending Validation: {existing_pending}\n"
                     
                     results_text += f"\n{pimp.listIcon} **Note:** A detailed summary has been posted in #{channel.name}"
                 else:
@@ -3619,7 +3863,7 @@ class GiftOperations(commands.Cog):
                 alliances_with_counts.append((alliance_id, name, member_count))
 
         auto_gift_embed = discord.Embed(
-            title = f"{pimp.settingsIcon} Gift Code Settings",
+            title = f"{pimp.giftSettingsIcon} Gift Code Settings",
             description=(
                 "Select an alliance to configure automatic redemption:\n\n"
                 "**Alliance List**\n"
@@ -3653,15 +3897,31 @@ class GiftOperations(commands.Cog):
                     status = 1 if selected_value == "enable_all" else 0
                     
                     for alliance_id, _, _ in alliances_with_counts:
-                        self.cursor.execute(
-                            """
-                            INSERT INTO giftcodecontrol (alliance_id, status) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(alliance_id) 
-                            DO UPDATE SET status = excluded.status
-                            """,
-                            (alliance_id, status)
-                        )
+                        if status == 1:
+                            # When enabling, assign next available priority
+                            self.cursor.execute("SELECT COALESCE(MAX(priority), 0) + 1 FROM giftcodecontrol")
+                            next_priority = self.cursor.fetchone()[0]
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status,
+                                    priority = CASE WHEN giftcodecontrol.priority = 0 THEN excluded.priority ELSE giftcodecontrol.priority END
+                                """,
+                                (alliance_id, status, next_priority)
+                            )
+                        else:
+                            # When disabling, keep existing priority
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status)
+                                VALUES (?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status
+                                """,
+                                (alliance_id, status)
+                            )
                     self.conn.commit()
 
                     status_text = "enabled" if status == 1 else "disabled"
@@ -3690,7 +3950,7 @@ class GiftOperations(commands.Cog):
                 current_setting = "enabled" if current_status.get(alliance_id, 0) == 1 else "disabled"
                 
                 confirm_embed = discord.Embed(
-                    title = f"{pimp.settingsIcon} Automatic Redemption Configuration",
+                    title = f"{pimp.giftSettingsIcon} Automatic Redemption Configuration",
                     description=(
                         f"### **Alliance Details**\n\n"
                         f"{pimp.divider1}\n\n"
@@ -3707,16 +3967,32 @@ class GiftOperations(commands.Cog):
                 async def button_callback(button_interaction: discord.Interaction):
                     try:
                         status = 1 if button_interaction.data['custom_id'] == "confirm" else 0
-                        
-                        self.cursor.execute(
-                            """
-                            INSERT INTO giftcodecontrol (alliance_id, status) 
-                            VALUES (?, ?) 
-                            ON CONFLICT(alliance_id) 
-                            DO UPDATE SET status = excluded.status
-                            """,
-                            (alliance_id, status)
-                        )
+
+                        if status == 1:
+                            # When enabling, assign next available priority
+                            self.cursor.execute("SELECT COALESCE(MAX(priority), 0) + 1 FROM giftcodecontrol")
+                            next_priority = self.cursor.fetchone()[0]
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                                VALUES (?, ?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status,
+                                    priority = CASE WHEN giftcodecontrol.priority = 0 THEN excluded.priority ELSE giftcodecontrol.priority END
+                                """,
+                                (alliance_id, status, next_priority)
+                            )
+                        else:
+                            # When disabling, keep existing priority
+                            self.cursor.execute(
+                                """
+                                INSERT INTO giftcodecontrol (alliance_id, status)
+                                VALUES (?, ?)
+                                ON CONFLICT(alliance_id)
+                                DO UPDATE SET status = excluded.status
+                                """,
+                                (alliance_id, status)
+                            )
                         self.conn.commit()
 
                         status_text = "enabled" if status == 1 else "disabled"
@@ -3842,7 +4118,7 @@ class GiftOperations(commands.Cog):
                     description=(
                         f"**Gift Code:** `{giftcode}`\n"
                         f"**Alliance:** `{alliance_name}`\n\n"
-                        f"{pimp.alertIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
+                        f"{pimp.gifAlertIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
                         f"Please enable it first using the settings command."
                     ),
                     color = pimp.emColor2,
@@ -4081,14 +4357,14 @@ class GiftOperations(commands.Cog):
                 if response_status == "SIGN_ERROR":
                     self.logger.error(f"GiftOps: Sign error detected (likely wrong encrypt key). Stopping redemption for alliance {alliance_id}.")
                     
-                    embed.title = f"{pimp.settingsIcon} Sign Error: {giftcode}"
+                    embed.title = f"{pimp.giftSettingsIcon} Sign Error: {giftcode}"
                     embed.color = pimp.emColor2
                     embed.description = (
                         f"**Bot Configuration Error**\n"
                         f"{pimp.divider1}\n"
                         f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
                         f"{pimp.allianceIcon} **Alliance:** `{alliance_name}`\n"
-                        f"{pimp.settingsIcon} **Reason:** Sign Error (check bot config/encrypt key)\n"
+                        f"{pimp.giftSettingsIcon} **Reason:** Sign Error (check bot config/encrypt key)\n"
                         f"{pimp.listIcon} **Action:** Redemption stopped. Check bot configuration.\n"
                         f"{pimp.announceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
                         f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
@@ -4383,11 +4659,11 @@ class CreateGiftCodeModal(discord.ui.Modal):
                     )
                     self.cog.conn.commit()
                     
-                    final_embed.title = f"{pimp.alertIcon} Gift Code Added (Pending)"
+                    final_embed.title = f"{pimp.gifAlertIcon} Gift Code Added (Pending)"
                     final_embed.description = (
                         f"**Gift Code Details**\n{pimp.divider1}\n"
                         f"{pimp.giftIcon} **Gift Code:** `{code}`\n"
-                        f"{pimp.alertIcon} **Status:** {validation_msg}\n"
+                        f"{pimp.gifAlertIcon} **Status:** {validation_msg}\n"
                         f"{pimp.listIcon} **Action:** Added for later validation\n"
                         f"{pimp.divider1}\n"
                     )
@@ -4405,7 +4681,7 @@ class CreateGiftCodeModal(discord.ui.Modal):
         except Exception as final_edit_err:
             logger.exception(f"[CreateGiftCodeModal] Failed to edit interaction with final result for {code}: {final_edit_err}")
 
-class DeleteGiftCodeModal(discord.ui.Modal, title = f"{pimp.deleteGiftCodeIcon} Delete Gift Code"):
+class DeleteGiftCodeModal(discord.ui.Modal, title = f"{pimp.giftDeleteIcon} Delete Gift Code"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -4524,7 +4800,7 @@ class GiftView(discord.ui.View):
         label="Add Gift Code",
         style=discord.ButtonStyle.secondary,
         custom_id="create_gift",
-        emoji=f"{pimp.addGiftCodeIcon}",
+        emoji=f"{pimp.giftAddIcon}",
         row=0
     )
 
@@ -4533,7 +4809,7 @@ class GiftView(discord.ui.View):
 
     @discord.ui.button(
         label="Delete Gift Code",
-        emoji=f"{pimp.deleteGiftCodeIcon}",
+        emoji=f"{pimp.giftDeleteIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="delete_gift",
         row=0
@@ -4562,7 +4838,7 @@ class GiftView(discord.ui.View):
 
     @discord.ui.button(
         label="Use Gift Code",
-        emoji=f"{pimp.checkGiftCodeIcon}",
+        emoji=f"{pimp.giftCheckIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="use_gift_alliance",
         row=1
@@ -4599,7 +4875,7 @@ class GiftView(discord.ui.View):
                     alliances_with_counts.append((alliance_id, name, member_count))
 
             alliance_embed = discord.Embed(
-                title = f"{pimp.checkGiftCodeIcon} Use Gift Code",
+                title = f"{pimp.giftCheckIcon} Use Gift Code",
                 description=(
                     f"Select an alliance to use gift code:\n"
                     f"### **Alliance List**\n"
@@ -4671,7 +4947,7 @@ class GiftView(discord.ui.View):
                             selected_code = giftcode_interaction.data["values"][0]
                             
                             confirm_embed = discord.Embed(
-                                title = f"{pimp.alertIcon} Confirm Gift Code Usage",
+                                title = f"{pimp.gifAlertIcon} Confirm Gift Code Usage",
                                 description=(
                                     f"Are you sure you want to use this gift code?\n"
                                     f"### **Details**\n"
@@ -4839,7 +5115,7 @@ class GiftView(discord.ui.View):
 
     @discord.ui.button(
         label="Gift Code Settings",
-        emoji=f"{pimp.settingsIcon}",
+        emoji=f"{pimp.giftSettingsIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="gift_code_settings",
         row=2
@@ -4907,7 +5183,7 @@ class SettingsMenuView(discord.ui.View):
         label="CAPTCHA Settings",
         style=discord.ButtonStyle.secondary,
         custom_id="captcha_settings",
-        emoji=f"{pimp.settingsIcon}",
+        emoji=f"{pimp.giftSettingsIcon}",
         row=1
     )
     async def captcha_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4922,6 +5198,162 @@ class SettingsMenuView(discord.ui.View):
     )
     async def back_to_main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_gift_menu(interaction)
+
+class RedemptionPriorityView(discord.ui.View):
+    def __init__(self, cog, alliances_with_priority):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliances = alliances_with_priority  # List of (alliance_id, name, priority)
+        self.selected_alliance_id = None
+
+        # Alliance select menu
+        options = [
+            discord.SelectOption(
+                label=f"{idx}. {name}",
+                value=str(alliance_id),
+                description=f"Priority position {idx}"
+            )
+            for idx, (alliance_id, name, _) in enumerate(self.alliances, 1)
+        ]
+
+        if options:
+            self.alliance_select = discord.ui.Select(
+                placeholder="Select an alliance to move",
+                options=options[:25],  # Discord limit
+                row=0
+            )
+            self.alliance_select.callback = self.alliance_select_callback
+            self.add_item(self.alliance_select)
+
+    async def alliance_select_callback(self, interaction: discord.Interaction):
+        self.selected_alliance_id = int(self.alliance_select.values[0])
+
+        # Update embed to show selected alliance with marker
+        embed = discord.Embed(
+            title=f"{pimp.giftHashtagIcon} Redemption Priority",
+            description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+            color=pimp.emColor1
+        )
+
+        priority_list = []
+        for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
+            marker = pimp.importIcon if alliance_id == self.selected_alliance_id else ""
+            priority_list.append(f"`{idx}.` **{name}**{marker}")
+
+        embed.add_field(
+            name="Current Priority Order",
+            value="\n".join(priority_list) if priority_list else "No alliances configured",
+            inline=False
+        )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Move Up", style=discord.ButtonStyle.secondary, emoji=f"{pimp.infoIcon}", row=1)
+    async def move_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_alliance_id:
+            await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
+            return
+
+        # Find current position
+        current_idx = next((i for i, (aid, _, _) in enumerate(self.alliances) if aid == self.selected_alliance_id), None)
+        if current_idx is None or current_idx == 0:
+            await interaction.response.send_message("Alliance is already at the top.", ephemeral=True)
+            return
+
+        # Swap with the alliance above
+        await self._swap_priorities(current_idx, current_idx - 1)
+        await self._refresh_view(interaction)
+
+    @discord.ui.button(label="Move Down", style=discord.ButtonStyle.primary, emoji="⬇️", row=1)
+    async def move_down_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.selected_alliance_id:
+            await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
+            return
+
+        # Find current position
+        current_idx = next((i for i, (aid, _, _) in enumerate(self.alliances) if aid == self.selected_alliance_id), None)
+        if current_idx is None or current_idx >= len(self.alliances) - 1:
+            await interaction.response.send_message("Alliance is already at the bottom.", ephemeral=True)
+            return
+
+        # Swap with the alliance below
+        await self._swap_priorities(current_idx, current_idx + 1)
+        await self._refresh_view(interaction)
+
+    @discord.ui.button(label="Done", style=discord.ButtonStyle.secondary, emoji="✅", row=1)
+    async def done_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"{pimp.giftHashtagIcon} Priority Updated",
+                description="Redemption priority order has been saved.",
+                color=discord.Color.green()
+            ),
+            view=None
+        )
+
+    async def _swap_priorities(self, idx1, idx2):
+        """Swap the priorities of two alliances in the list and database."""
+        alliance1_id, name1, priority1 = self.alliances[idx1]
+        alliance2_id, name2, priority2 = self.alliances[idx2]
+
+        # Assign new sequential priorities based on position
+        new_priority1 = idx2 + 1
+        new_priority2 = idx1 + 1
+
+        # Update database
+        self.cog.cursor.execute("""
+            INSERT INTO giftcodecontrol (alliance_id, status, priority)
+            VALUES (?, 0, ?)
+            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+        """, (alliance1_id, new_priority1))
+
+        self.cog.cursor.execute("""
+            INSERT INTO giftcodecontrol (alliance_id, status, priority)
+            VALUES (?, 0, ?)
+            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+        """, (alliance2_id, new_priority2))
+
+        self.cog.conn.commit()
+
+        # Swap in local list
+        self.alliances[idx1] = (alliance1_id, name1, new_priority1)
+        self.alliances[idx2] = (alliance2_id, name2, new_priority2)
+        self.alliances[idx1], self.alliances[idx2] = self.alliances[idx2], self.alliances[idx1]
+
+    async def _refresh_view(self, interaction: discord.Interaction):
+        """Refresh the embed and view after a priority change."""
+        # Rebuild embed
+        embed = discord.Embed(
+            title=f"{pimp.giftHashtagIcon} Redemption Priority",
+            description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
+            color=discord.Color.blue()
+        )
+
+        priority_list = []
+        for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
+            marker = pimp.importIcon if alliance_id == self.selected_alliance_id else ""
+            priority_list.append(f"`{idx}.` **{name}**{marker}")
+
+        embed.add_field(
+            name="Current Priority Order",
+            value="\n".join(priority_list) if priority_list else "No alliances configured",
+            inline=False
+        )
+
+        # Rebuild select options
+        options = [
+            discord.SelectOption(
+                label=f"{idx}. {name}",
+                value=str(alliance_id),
+                description=f"Priority position {idx}"
+            )
+            for idx, (alliance_id, name, _) in enumerate(self.alliances, 1)
+        ]
+
+        if options:
+            self.alliance_select.options = options[:25]
+
+        await interaction.response.edit_message(embed=embed, view=self)
 
 class ClearCacheConfirmView(discord.ui.View):
     def __init__(self, parent_cog):
@@ -5213,7 +5645,7 @@ class OCRSettingsView(discord.ui.View):
             if save_path_str:
                 embed.add_field(name="📸 Captcha Image Saved", value=f"`{save_path_str}` in `{os.path.relpath(self.cog.captcha_solver.captcha_dir)}`", inline=False)
             elif save_error_str:
-                embed.add_field(name=f"{pimp.alertIcon} Image Save Error", value=save_error_str, inline=False)
+                embed.add_field(name=f"{pimp.gifAlertIcon} Image Save Error", value=save_error_str, inline=False)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
             logger.info(f"[Test Button] Test completed for user {user_id}.")
@@ -5233,7 +5665,7 @@ class OCRSettingsView(discord.ui.View):
 
         # Create confirmation embed
         embed = discord.Embed(
-            title = f"{pimp.alertIcon} Clear Redemption Cache",
+            title = f"{pimp.gifAlertIcon} Clear Redemption Cache",
             description=(
                 "This will **permanently delete** all gift code redemption records from the database.\n\n"
                 "**What this does:**\n"
@@ -5344,7 +5776,7 @@ class OCRSettingsView(discord.ui.View):
                  self.cog.logger.warning("Original message or progress message for OCR settings not found for final update.")
             except Exception as e_edit_final:
                  self.cog.logger.exception(f"Error editing messages after successful OCR settings update: {e_edit_final}")
-                 await progress_message.edit(content=f"{pimp.verifiedIcon} {message_from_task}\n{pimp.alertIcon} Couldn't fully refresh the view.")
+                 await progress_message.edit(content=f"{pimp.verifiedIcon} {message_from_task}\n{pimp.gifAlertIcon} Couldn't fully refresh the view.")
 
         else:
             self.cog.logger.error(f"OCR settings update failed: {message_from_task}")

@@ -214,7 +214,7 @@ class ReportTypeSelectView(discord.ui.View):
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         settings_view = AttendanceSettingsView(self.cog)
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Attendance Settings",
+            title=f"{pimp.giftSettingsIcon} Attendance Settings",
             description=(
                 "Configure your attendance system preferences:\n\n"
                 "**Available Settings**\n"
@@ -306,7 +306,7 @@ class ReportSortSelectView(discord.ui.View):
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         settings_view = AttendanceSettingsView(self.cog)
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Attendance Settings",
+            title=f"{pimp.giftSettingsIcon} Attendance Settings",
             description=(
                 "Configure your attendance system preferences:\n\n"
                 "**Available Settings**\n"
@@ -465,7 +465,7 @@ class AttendanceView(discord.ui.View):
 
     @discord.ui.button(
         label="Settings",
-        emoji=f"{pimp.settingsIcon}",
+        emoji=f"{pimp.giftSettingsIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="attendance_settings"
     )
@@ -485,7 +485,7 @@ class AttendanceView(discord.ui.View):
             settings_view = AttendanceSettingsView(self.cog)
 
             embed = discord.Embed(
-                title=f"{pimp.settingsIcon} Attendance Settings",
+                title=f"{pimp.giftSettingsIcon} Attendance Settings",
                 description=(
                     "Configure your attendance system preferences:\n\n"
                     "**Available Settings**\n"
@@ -1272,12 +1272,12 @@ class PlayerSelectView(discord.ui.View):
         self.update_clear_button_visibility()
         await self.update_main_embed(interaction)
     
-    @discord.ui.button(label=f"{pimp.settingsIcon} Edit Event", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label=f"{pimp.giftSettingsIcon} Edit Event", style=discord.ButtonStyle.secondary, row=1)
     async def edit_event_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Show view to edit event type and date
         view = EditEventDetailsView(self.session_id, self.session_name, self.event_type, self.event_date, self, is_edit=self.is_edit)
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Edit Event",
+            title=f"{pimp.giftSettingsIcon} Edit Event",
             description=(
                 f"**Session:** {self.session_name}\n"
                 f"**Current Event Type:** {self.event_type}\n"
@@ -2066,7 +2066,7 @@ class Attendance(commands.Cog):
                 "└ Create or modify attendance records\n\n"
                 f"{pimp.magnifyingIcon} **View Attendance**\n"
                 "└ View attendance records and export reports\n\n"
-                f"{pimp.settingsIcon} **Settings**\n"
+                f"{pimp.giftSettingsIcon} **Settings**\n"
                 "└ Configure attendance preferences\n"
                 f"{pimp.divider1}\n"
             ),

@@ -446,7 +446,7 @@ class IDChannelView(discord.ui.View):
                 return
 
             embed = discord.Embed(
-                title=f"{pimp.hashtagIcon} Active ID Channels",
+                title=f"{pimp.giftHashtagIcon} Active ID Channels",
                 color=pimp.emColor1
             )
 

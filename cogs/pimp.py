@@ -82,14 +82,16 @@ class CreateThemeModal(discord.ui.Modal):
                 default_emojis = [
                     '⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏',
                     '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '4️⃣',
-                    '5️⃣', '🔟', '🆕', '📍', '💾', '🎁', '🛍️', '⚠️', 
-                    '🤖', '⚔️', '💗', '🟰', '🛡️', '🎯', '🔄', '👥', 
-                    '📈', '🔢', '🔊', '🆘', '🏭', '📢', '🏛️', '🔬', 
-                    '⚔️', '🤪', '🐻', '📅', '📝', '⚙️', '⚙️', '⏳', 
-                    '🔇', '⚪', '⏰', '⏰', '🔍', '🐉', '🏞️', '⚒️', 
-                    '🏰', '✅', '🗑️', '➕', '🔄', '✅', '❓', '↔️', 
-                    '✖️', '➗', '❌', '➖', '➡️', '⬅️', '🔄', '🟰', 
-                    'ℹ️', '⚠️', '➕'
+                    '5️⃣', '🔟', '🆕', '📍', '💾', '🤖', '⚔️', '💗', 
+                    '🛡️', '🎯', '🔄', '👥', '📈', '🔊', '🆘', '🏭', 
+                    '📢', '🏛️', '🔬', '⚔️', '🤪', '🐻', '📅', '📝', 
+                    '⚙️', '⏳', '🔇', '⚪', '⏰', '🔍', '🐉', '🏞️', 
+                    '⚒️', '🏰', 
+                    '🎁', '🛍️', '➕', '⏰', '⚠️', '✅', '🟰', '🗑️', 
+                    '🔢', '⚙️', 
+                    '🔄', '✅', '❓', '↔️', '✖️', '➗', '❌', '➖', 
+                    '➡️', '⬅️', '🔄', '🟰', 'ℹ️', '⚠️', '➕', 
+                    '💤', '🚪', '👋', '🌙', '🔌', '🛑', '🎬', '✨'
                 ]
                 divider_values = ['━', '━', '━', 16, '━', '━', '━', 16]
                 color_values = ['#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#1F77B4', '#28A745']
@@ -728,7 +730,7 @@ class PaginationView(discord.ui.View):
         }
         
         embed = discord.Embed(
-            title=f"{pimp.settingsIcon} Edit {selected_emoji}",
+            title=f"{pimp.giftSettingsIcon} Edit {selected_emoji}",
             description=(
                 f"**Current Value:** {current_value}\n\n"
                 f"**Choose how to update this emoji:**\n"
@@ -899,22 +901,18 @@ class PIMP(commands.Cog):
                 columns_info = cursor.fetchall()
                 
                 icon_mapping = {
-                    'allianceOldIcon': 3, 'avatarOldIcon': 4, 'stoveOldIcon': 5, 
-                    'stateOldIcon': 6, 'allianceIcon': 7, 'avatarIcon': 8, 'stoveIcon': 9, 'stateIcon': 10, 
-                    'listIcon': 11, 'fidIcon': 12, 'timeIcon': 13, 'homeIcon': 14, 'num1Icon': 15, 
-                    'num2Icon': 16, 'num3Icon': 17, 'num4Icon': 18, 'num5Icon': 19, 'num10Icon': 20, 
-                    'newIcon': 21, 'pinIcon': 22, 'saveIcon': 23, 'giftIcon': 24, 'giftsIcon': 25, 
-                    'alertIcon': 26, 'robotIcon': 27, 'crossIcon': 28, 'heartIcon': 29, 'total2Icon': 30, 
-                    'shieldIcon': 31, 'targetIcon': 32, 'redeemIcon': 33, 'membersIcon': 34, 'averageIcon': 35, 
-                    'hashtagIcon': 36, 'messageIcon': 37, 'supportIcon': 38, 'foundryIcon': 39, 'announceIcon': 40, 
-                    'ministerIcon': 41, 'researchIcon': 42, 'trainingIcon': 43, 'crazyJoeIcon': 44, 'bearTrapIcon': 45, 
-                    'calendarIcon': 46, 'editListIcon': 47, 'settingsIcon': 48, 'settings2Icon': 49, 'hourglassIcon': 50, 
-                    'messageNoIcon': 51, 'blankListIcon': 52, 'alarmGiftIcon': 53, 'alarmClockIcon': 54, 'magnifyingIcon': 55, 
-                    'frostdragonIcon': 56, 'canyonClashIcon': 57, 'constructionIcon': 58, 'castleBattleIcon': 59, 'checkGiftCodeIcon': 60, 
-                    'deleteGiftCodeIcon': 61, 'addGiftCodeIcon': 62, 'processingIcon': 63, 'verifiedIcon': 64, 'questionIcon': 65, 
-                    'transferIcon': 66, 'multiplyIcon': 67, 'divideIcon': 68, 'deniedIcon': 69, 'deleteIcon': 70, 
-                    'exportIcon': 71, 'importIcon': 72, 'retryIcon': 73, 'totalIcon': 74, 'infoIcon': 75, 
-                    'warnIcon': 76, 'addIcon': 77
+                    'allianceOldIcon': 3, 'avatarOldIcon': 4, 'stoveOldIcon': 5, 'stateOldIcon': 6, 'allianceIcon': 7, 'avatarIcon': 8, 'stoveIcon': 9, 'stateIcon': 10, 
+                    'listIcon': 11, 'fidIcon': 12, 'timeIcon': 13, 'homeIcon': 14, 'num1Icon': 15, 'num2Icon': 16, 'num3Icon': 17, 'num4Icon': 18, 
+                    'num5Icon': 19, 'num10Icon': 20, 'newIcon': 21, 'pinIcon': 22, 'saveIcon': 23, 'robotIcon': 24, 'crossIcon': 25, 'heartIcon': 26, 
+                    'shieldIcon': 27, 'targetIcon': 28, 'redeemIcon': 29, 'membersIcon': 30, 'averageIcon': 31, 'messageIcon': 32, 'supportIcon': 33, 'foundryIcon': 34, 
+                    'announceIcon': 35, 'ministerIcon': 36, 'researchIcon': 37, 'trainingIcon': 38, 'crazyJoeIcon': 39, 'bearTrapIcon': 40, 'calendarIcon': 41, 'editListIcon': 42, 
+                    'settingsIcon': 43, 'hourglassIcon': 44, 'messageNoIcon': 45, 'blankListIcon': 46, 'alarmClockIcon': 47, 'magnifyingIcon': 48, 'frostdragonIcon': 49, 'canyonClashIcon': 50, 
+                    'constructionIcon': 51, 'castleBattleIcon': 52, 
+                    'giftIcon': 53, 'giftsIcon': 54, 'giftAddIcon': 55, 'giftAlarmIcon': 56, 'gifAlertIcon': 57, 'giftCheckIcon': 58, 'giftTotalIcon': 59, 'giftDeleteIcon': 60, 
+                    'giftHashtagIcon': 61, 'giftSettingsIcon': 62, 
+                    'processingIcon': 63, 'verifiedIcon': 64, 'questionIcon': 65, 'transferIcon': 66, 'multiplyIcon': 67, 'divideIcon': 68, 'deniedIcon': 69, 'deleteIcon': 70, 
+                    'exportIcon': 71, 'importIcon': 72, 'retryIcon': 73, 'totalIcon': 74, 'infoIcon': 75, 'warnIcon': 76, 'addIcon': 77, 
+                    'shutdownZzzIcon': 78, 'shutdownDoorIcon': 79, 'shutdownHandIcon': 80, 'shutdownMoonIcon': 81, 'shutdownPlugIcon': 82, 'shutdownStopIcon': 83, 'shutdownClapperIcon': 84, 'shutdownSparkleIcon': 85
                 }
                 
                 if emoji_name in icon_mapping:
@@ -1169,22 +1167,18 @@ class PIMP(commands.Cog):
             
             # Define icon names mapping to database indices
             icon_mapping = {
-                'allianceOldIcon': 3, 'avatarOldIcon': 4, 'stoveOldIcon': 5, 
-                'stateOldIcon': 6, 'allianceIcon': 7, 'avatarIcon': 8, 'stoveIcon': 9, 'stateIcon': 10, 
-                'listIcon': 11, 'fidIcon': 12, 'timeIcon': 13, 'homeIcon': 14, 'num1Icon': 15, 
-                'num2Icon': 16, 'num3Icon': 17, 'num4Icon': 18, 'num5Icon': 19, 'num10Icon': 20, 
-                'newIcon': 21, 'pinIcon': 22, 'saveIcon': 23, 'giftIcon': 24, 'giftsIcon': 25, 
-                'alertIcon': 26, 'robotIcon': 27, 'crossIcon': 28, 'heartIcon': 29, 'total2Icon': 30, 
-                'shieldIcon': 31, 'targetIcon': 32, 'redeemIcon': 33, 'membersIcon': 34, 'averageIcon': 35, 
-                'hashtagIcon': 36, 'messageIcon': 37, 'supportIcon': 38, 'foundryIcon': 39, 'announceIcon': 40, 
-                'ministerIcon': 41, 'researchIcon': 42, 'trainingIcon': 43, 'crazyJoeIcon': 44, 'bearTrapIcon': 45, 
-                'calendarIcon': 46, 'editListIcon': 47, 'settingsIcon': 48, 'settings2Icon': 49, 'hourglassIcon': 50, 
-                'messageNoIcon': 51, 'blankListIcon': 52, 'alarmGiftIcon': 53, 'alarmClockIcon': 54, 'magnifyingIcon': 55, 
-                'frostdragonIcon': 56, 'canyonClashIcon': 57, 'constructionIcon': 58, 'castleBattleIcon': 59, 'checkGiftCodeIcon': 60, 
-                'deleteGiftCodeIcon': 61, 'addGiftCodeIcon': 62, 'processingIcon': 63, 'verifiedIcon': 64, 'questionIcon': 65, 
-                'transferIcon': 66, 'multiplyIcon': 67, 'divideIcon': 68, 'deniedIcon': 69, 'deleteIcon': 70, 
-                'exportIcon': 71, 'importIcon': 72, 'retryIcon': 73, 'totalIcon': 74, 'infoIcon': 75, 
-                'warnIcon': 76, 'addIcon': 77
+                'allianceOldIcon': 3, 'avatarOldIcon': 4, 'stoveOldIcon': 5, 'stateOldIcon': 6, 'allianceIcon': 7, 'avatarIcon': 8, 'stoveIcon': 9, 'stateIcon': 10, 
+                'listIcon': 11, 'fidIcon': 12, 'timeIcon': 13, 'homeIcon': 14, 'num1Icon': 15, 'num2Icon': 16, 'num3Icon': 17, 'num4Icon': 18, 
+                'num5Icon': 19, 'num10Icon': 20, 'newIcon': 21, 'pinIcon': 22, 'saveIcon': 23, 'robotIcon': 24, 'crossIcon': 25, 'heartIcon': 26, 
+                'shieldIcon': 27, 'targetIcon': 28, 'redeemIcon': 29, 'membersIcon': 30, 'averageIcon': 31, 'messageIcon': 32, 'supportIcon': 33, 'foundryIcon': 34, 
+                'announceIcon': 35, 'ministerIcon': 36, 'researchIcon': 37, 'trainingIcon': 38, 'crazyJoeIcon': 39, 'bearTrapIcon': 40, 'calendarIcon': 41, 'editListIcon': 42, 
+                'settingsIcon': 43, 'hourglassIcon': 44, 'messageNoIcon': 45, 'blankListIcon': 46, 'alarmClockIcon': 47, 'magnifyingIcon': 48, 'frostdragonIcon': 49, 'canyonClashIcon': 50, 
+                'constructionIcon': 51, 'castleBattleIcon': 52, 
+                'giftIcon': 53, 'giftsIcon': 54, 'giftAddIcon': 55, 'giftAlarmIcon': 56, 'gifAlertIcon': 57, 'giftCheckIcon': 58, 'giftTotalIcon': 59, 'giftDeleteIcon': 60, 
+                'giftHashtagIcon': 61, 'giftSettingsIcon': 62, 
+                'processingIcon': 63, 'verifiedIcon': 64, 'questionIcon': 65, 'transferIcon': 66, 'multiplyIcon': 67, 'divideIcon': 68, 'deniedIcon': 69, 'deleteIcon': 70, 
+                'exportIcon': 71, 'importIcon': 72, 'retryIcon': 73, 'totalIcon': 74, 'infoIcon': 75, 'warnIcon': 76, 'addIcon': 77, 
+                'shutdownZzzIcon': 78, 'shutdownDoorIcon': 79, 'shutdownHandIcon': 80, 'shutdownMoonIcon': 81, 'shutdownPlugIcon': 82, 'shutdownStopIcon': 83, 'shutdownClapperIcon': 84, 'shutdownSparkleIcon': 85
             }
             
             # Extract icons using mapping
@@ -1192,51 +1186,51 @@ class PIMP(commands.Cog):
             
             # Extract divider and color data
             icons.update({
-                'dividerEmojiStart1': theme[78] if theme else "━",
-                'dividerEmojiPattern1': theme[79] if theme else "━",
-                'dividerEmojiEnd1': theme[80] if theme else "━",
-                'dividerLength1': theme[81] if theme else 9,
-                'dividerEmojiStart2': theme[82] if theme else "━",
-                'dividerEmojiPattern2': theme[83] if theme else "━",
-                'dividerEmojiEnd2': theme[84] if theme else "━",
-                'dividerLength2': theme[85] if theme else 9,
-                'emColorString1': theme[86] if theme else "#FFFFFF",
-                'emColorString2': theme[87] if theme else "#FFFFFF",
-                'emColorString3': theme[88] if theme else "#FFFFFF",
-                'emColorString4': theme[89] if theme else "#FFFFFF",
-                'headerColor1': theme[90] if theme else "#FFFFFF",
-                'headerColor2': theme[91] if theme else "#FFFFFF",
-                'furnaceLevel0Icon': theme[92] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel1Icon': theme[93] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel2Icon': theme[94] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel3Icon': theme[95] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel4Icon': theme[96] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel5Icon': theme[97] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel6Icon': theme[98] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel7Icon': theme[99] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel8Icon': theme[100] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel9Icon': theme[101] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel10Icon': theme[102] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel11Icon': theme[103] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel12Icon': theme[104] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel13Icon': theme[105] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel14Icon': theme[106] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel15Icon': theme[107] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel16Icon': theme[108] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel17Icon': theme[109] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel18Icon': theme[110] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel19Icon': theme[111] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel20Icon': theme[112] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel21Icon': theme[113] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel22Icon': theme[114] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel23Icon': theme[115] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel24Icon': theme[116] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel25Icon': theme[117] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel26Icon': theme[118] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel27Icon': theme[119] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel28Icon': theme[120] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel29Icon': theme[121] if theme else pimp.furnaceLevelImageDefaultURL,
-                'furnaceLevel30Icon': theme[122] if theme else pimp.furnaceLevelImageDefaultURL
+                'dividerEmojiStart1': theme[86].split(",") if theme else [elseEmoji],
+                'dividerEmojiPattern1': theme[87].split(",") if theme else [elseEmoji],
+                'dividerEmojiEnd1': theme[88].split(",") if theme else [elseEmoji],
+                'dividerLength1': theme[89] if theme else 12,
+                'dividerEmojiStart2': theme[90].split(",") if theme else [elseEmoji],
+                'dividerEmojiPattern2': theme[91].split(",") if theme else [elseEmoji],
+                'dividerEmojiEnd2': theme[92].split(",") if theme else [elseEmoji],
+                'dividerLength2': theme[93] if theme else 12,
+                'emColorString1': theme[94] if theme else "#FFFFFF",
+                'emColorString2': theme[95] if theme else "#FFFFFF",
+                'emColorString3': theme[96] if theme else "#FFFFFF",
+                'emColorString4': theme[97] if theme else "#FFFFFF",
+                'headerColor1': theme[98] if theme else "#FFFFFF",
+                'headerColor2': theme[99] if theme else "#FFFFFF",
+                'furnaceLevel0Icon': theme[100] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel1Icon': theme[101] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel2Icon': theme[102] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel3Icon': theme[103] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel4Icon': theme[104] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel5Icon': theme[105] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel6Icon': theme[106] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel7Icon': theme[107] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel8Icon': theme[108] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel9Icon': theme[109] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel10Icon': theme[110] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel11Icon': theme[111] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel12Icon': theme[112] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel13Icon': theme[113] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel14Icon': theme[114] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel15Icon': theme[115] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel16Icon': theme[116] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel17Icon': theme[117] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel18Icon': theme[118] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel19Icon': theme[119] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel20Icon': theme[120] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel21Icon': theme[121] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel22Icon': theme[122] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel23Icon': theme[123] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel24Icon': theme[124] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel25Icon': theme[125] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel26Icon': theme[126] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel27Icon': theme[127] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel28Icon': theme[128] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel29Icon': theme[129] if theme else pimp.furnaceLevelImageDefaultURL,
+                'furnaceLevel30Icon': theme[130] if theme else pimp.furnaceLevelImageDefaultURL
             })
             
             return icons
@@ -1245,25 +1239,18 @@ class PIMP(commands.Cog):
         """Build default theme lines with Twemoji CDN URLs."""
         
         default_icons = {
-            'allianceOldIcon': '2694', 'avatarOldIcon': '1f464', 'stoveOldIcon': '1f525', 'stateOldIcon': '1f30e',
-            'allianceIcon': '2694', 'avatarIcon': '1f464', 'stoveIcon': '1f525', 'stateIcon': '1f30f',
-            'listIcon': '1f4dc', 'fidIcon': '1f194', 'timeIcon': '1f570', 'homeIcon': '1f3e0',
-            'num1Icon': '31-20e3', 'num2Icon': '32-20e3', 'num3Icon': '33-20e3', 'num4Icon': '34-20e3', 'num5Icon': '35-20e3', 
-            'num10Icon': '1f51f', 'newIcon': '1f195',
-            'pinIcon': '1f4cd', 'saveIcon': '1f4be', 'giftIcon': '1f381', 'giftsIcon': '1f6cd', 
-            'alertIcon': '26a0', 'robotIcon': '1f916', 'crossIcon': '2694', 'heartIcon': '1f497', 
-            'total2Icon': '1f7f0', 'shieldIcon': '1f6e1', 'targetIcon': '1f3af', 'redeemIcon': '1f503', 
-            'membersIcon': '1f465', 'averageIcon': '1f4c8', 'hashtagIcon': '1f522', 'messageIcon': '1f50a', 
-            'supportIcon': '1f198', 'foundryIcon': '1f3ed', 'announceIcon': '1f4e2', 'ministerIcon': '1f3db', 
-            'researchIcon': '1f52c', 'trainingIcon': '2694', 'crazyJoeIcon': '1f92a ', 'bearTrapIcon': '1f43b', 
-            'calendarIcon': '1f4c5', 'editListIcon': '1f4dd', 'settingsIcon': '2699', 'settings2Icon': '2699', 
-            'hourglassIcon': '23f3', 'messageNoIcon': '1f507', 'blankListIcon': '26AA', 'alarmGiftIcon': '2795', 
-            'alarmClockIcon': '23f0', 'magnifyingIcon': '1f50d', 'frostdragonIcon': '1f409', 'canyonClashIcon': '1f3de', 
-            'constructionIcon': '2692', 'castleBattleIcon': '1f3f0', 'checkGiftCodeIcon': '2705', 'deleteGiftCodeIcon': '1f5d1', 
-            'addGiftCodeIcon': '2795', 'processingIcon': '1f504', 'verifiedIcon': '2705', 'questionIcon': '2753', 
-            'transferIcon': '2194', 'multiplyIcon': '2716', 'divideIcon': '2797', 'deniedIcon': '274c', 
-            'deleteIcon': '2796', 'exportIcon': '27a1', 'importIcon': '2b05', 'retryIcon': '1f501', 
-            'totalIcon': '1f7f0', 'infoIcon': '2139', 'warnIcon': '26a0', 'addIcon': '2795'
+            'allianceOldIcon': '2694', 'avatarOldIcon': '1f464', 'stoveOldIcon': '1f525', 'stateOldIcon': '1f30e', 'allianceIcon': '2694', 'avatarIcon': '1f464', 'stoveIcon': '1f525', 'stateIcon': '1f30f',
+            'listIcon': '1f4dc', 'fidIcon': '1f194', 'timeIcon': '1f570', 'homeIcon': '1f3e0', 'num1Icon': '31-20e3', 'num2Icon': '32-20e3', 'num3Icon': '33-20e3', 'num4Icon': '34-20e3', 
+            'num5Icon': '35-20e3', 'num10Icon': '1f51f', 'newIcon': '1f195', 'pinIcon': '1f4cd', 'saveIcon': '1f4be', 'robotIcon': '1f916', 'crossIcon': '2694', 'heartIcon': '1f497', 
+            'shieldIcon': '1f6e1', 'targetIcon': '1f3af', 'redeemIcon': '1f503', 'membersIcon': '1f465', 'averageIcon': '1f4c8', 'messageIcon': '1f50a', 'supportIcon': '1f198', 'foundryIcon': '1f3ed', 
+            'announceIcon': '1f4e2', 'ministerIcon': '1f3db', 'researchIcon': '1f52c', 'trainingIcon': '2694', 'crazyJoeIcon': '1f92a', 'bearTrapIcon': '1f43b', 'calendarIcon': '1f4c5', 'editListIcon': '1f4dd', 
+            'settingsIcon': '2699', 'hourglassIcon': '23f3', 'messageNoIcon': '1f507', 'blankListIcon': '26AA', 'alarmClockIcon': '23f0', 'magnifyingIcon': '1f50d', 'frostdragonIcon': '1f409', 'canyonClashIcon': '1f3de', 
+            'constructionIcon': '2692', 'castleBattleIcon': '1f3f0', 
+            'giftIcon': '1f381', 'giftsIcon': '1f6cd', 'giftAddIcon': '2795', 'giftAlarmIcon': '2795', 'gifAlertIcon': '26a0', 'giftCheckIcon': '2705', 'giftTotalIcon': '1f7f0', 'giftDeleteIcon': '1f5d1', 
+            'giftHashtagIcon': '1f522', 'giftSettingsIcon': '2699', 
+            'processingIcon': '1f504', 'verifiedIcon': '2705', 'questionIcon': '2753', 'transferIcon': '2194', 'multiplyIcon': '2716', 'divideIcon': '2797', 'deniedIcon': '274c', 'deleteIcon': '2796', 
+            'exportIcon': '27a1', 'importIcon': '2b05', 'retryIcon': '1f501', 'totalIcon': '1f7f0', 'infoIcon': '2139', 'warnIcon': '26a0', 'addIcon': '2795', 
+            'shutdownZzzIcon': '1f4a4', 'shutdownDoorIcon': '1f6aa', 'shutdownHandIcon': '1f44b', 'shutdownMoonIcon': '1f319', 'shutdownPlugIcon': '1f50c', 'shutdownStopIcon': '1f6d1', 'shutdownClapperIcon': '1f3ac', 'shutdownSparkleIcon': '2728'
         }
         
         cdn_base = "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/"
@@ -1713,22 +1700,18 @@ class PIMP(commands.Cog):
             
             # Map icon positions (same as _get_theme_data)
             icon_positions = [
-                'allianceOldIcon', 'avatarOldIcon', 'stoveOldIcon', 
-                'stateOldIcon', 'allianceIcon', 'avatarIcon', 'stoveIcon', 'stateIcon', 
-                'listIcon', 'fidIcon', 'timeIcon', 'homeIcon', 'num1Icon', 
-                'num2Icon', 'num3Icon', 'num4Icon', 'num5Icon', 'num10Icon', 
-                'newIcon', 'pinIcon', 'saveIcon', 'giftIcon', 'giftsIcon', 
-                'alertIcon', 'robotIcon', 'crossIcon', 'heartIcon', 'total2Icon', 
-                'shieldIcon', 'targetIcon', 'redeemIcon', 'membersIcon', 'averageIcon', 
-                'hashtagIcon', 'messageIcon', 'supportIcon', 'foundryIcon', 'announceIcon', 
-                'ministerIcon', 'researchIcon', 'trainingIcon', 'crazyJoeIcon', 'bearTrapIcon', 
-                'calendarIcon', 'editListIcon', 'settingsIcon', 'settings2Icon', 'hourglassIcon', 
-                'messageNoIcon', 'blankListIcon', 'alarmGiftIcon', 'alarmClockIcon', 'magnifyingIcon', 
-                'frostdragonIcon', 'canyonClashIcon', 'constructionIcon', 'castleBattleIcon', 'checkGiftCodeIcon', 
-                'deleteGiftCodeIcon', 'addGiftCodeIcon', 'processingIcon', 'verifiedIcon', 'questionIcon', 
-                'transferIcon', 'multiplyIcon', 'divideIcon', 'deniedIcon', 'deleteIcon', 
-                'exportIcon', 'importIcon', 'retryIcon', 'totalIcon', 'infoIcon', 
-                'warnIcon', 'addIcon'
+                'allianceOldIcon', 'avatarOldIcon', 'stoveOldIcon', 'stateOldIcon', 'allianceIcon', 'avatarIcon', 'stoveIcon', 'stateIcon', 
+                'listIcon', 'fidIcon', 'timeIcon', 'homeIcon', 'num1Icon', 'num2Icon', 'num3Icon', 'num4Icon', 
+                'num5Icon', 'num10Icon', 'newIcon', 'pinIcon', 'saveIcon', 'robotIcon', 'crossIcon', 'heartIcon', 
+                'shieldIcon', 'targetIcon', 'redeemIcon', 'membersIcon', 'averageIcon', 'messageIcon', 'supportIcon', 'foundryIcon', 
+                'announceIcon', 'ministerIcon', 'researchIcon', 'trainingIcon', 'crazyJoeIcon', 'bearTrapIcon', 'calendarIcon', 'editListIcon', 
+                'settingsIcon', 'hourglassIcon', 'messageNoIcon', 'blankListIcon', 'alarmClockIcon', 'magnifyingIcon', 'frostdragonIcon', 'canyonClashIcon', 
+                'constructionIcon', 'castleBattleIcon', 
+                'giftIcon', 'giftsIcon', 'giftAddIcon', 'giftAlarmIcon', 'gifAlertIcon', 'giftCheckIcon', 'giftTotalIcon', 'giftDeleteIcon', 
+                'giftHashtagIcon', 'giftSettingsIcon', 
+                'processingIcon', 'verifiedIcon', 'questionIcon', 'transferIcon', 'multiplyIcon', 'divideIcon', 'deniedIcon', 'deleteIcon', 
+                'exportIcon', 'importIcon', 'retryIcon', 'totalIcon', 'infoIcon', 'warnIcon', 'addIcon', 
+                'shutdownZzzIcon', 'shutdownDoorIcon', 'shutdownHandIcon', 'shutdownMoonIcon', 'shutdownPlugIcon', 'shutdownStopIcon', 'shutdownClapperIcon', 'shutdownSparkleIcon'
             ]
             
             # Build icon values list - ensure all values are strings

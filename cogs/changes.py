@@ -797,7 +797,7 @@ class MemberListView(discord.ui.View):
 
         custom_time_button = discord.ui.Button(
             label="Custom Time",
-            emoji=f"{pimp.settings2Icon}",
+            emoji=f"{pimp.settingsIcon}",
             style=discord.ButtonStyle.secondary,
             custom_id="custom_time",
             row=1
@@ -1023,7 +1023,7 @@ class MemberListViewNickname(discord.ui.View):
 
         custom_time_button = discord.ui.Button(
             label="Custom Time",
-            emoji=f"{pimp.settings2Icon}",
+            emoji=f"{pimp.settingsIcon}",
             style=discord.ButtonStyle.secondary,
             custom_id="custom_time_nick",
             row=1

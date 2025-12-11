@@ -279,7 +279,7 @@ class Control(commands.Cog):
                     # Get wait time from login handler
                     wait_time = self.login_handler._get_wait_time()
                     
-                    embed.description = f"{pimp.alertIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n{pimp.totalIcon} Progress: {checked_users}/{total_users} members"
+                    embed.description = f"{pimp.gifAlertIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n{pimp.totalIcon} Progress: {checked_users}/{total_users} members"
                     embed.color = discord.Color.orange()
                     if message:
                         await message.edit(embed=embed)
@@ -388,7 +388,7 @@ class Control(commands.Cog):
 
             # Send alert to channel
             alert_embed = discord.Embed(
-                title=f"{pimp.alertIcon} BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
+                title=f"{pimp.gifAlertIcon} BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
                 description=(
                     f"**Alliance Check Safety System Activated**\n"
                     f"{pimp.divider1}\n"
@@ -401,7 +401,7 @@ class Control(commands.Cog):
                     f"**Members that would have been removed:**\n"
                     + "\n".join([f"• `{fid}` ({nickname})" for fid, nickname, _ in members_to_remove[:10]])
                     + (f"\n• ... and {removal_count - 10} more" if removal_count > 10 else "")
-                    + f"\n\n{pimp.alertIcon} **Action Required:** Please verify these members manually or wait for API issues to resolve."
+                    + f"\n\n{pimp.gifAlertIcon} **Action Required:** Please verify these members manually or wait for API issues to resolve."
                 ),
                 color=pimp.emColor2
             )

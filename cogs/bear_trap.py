@@ -829,7 +829,7 @@ class RepeatOptionView(discord.ui.View):
                     f"**{pimp.hourglassIcon} Time:** {self.hour:02d}:{self.minute:02d} {self.timezone}\n"
                     f"**{pimp.announceIcon} Channel:** <#{self.channel_id}>\n"
                     f"**{pimp.listIcon} Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
-                    f"**{pimp.settings2Icon} Notification Type**\n{notification_types[self.notification_type]}\n\n"
+                    f"**{pimp.settingsIcon} Notification Type**\n{notification_types[self.notification_type]}\n\n"
                     f"**👥 Mentions:** {mention_display}\n"
                     f"**{pimp.processingIcon} Repeat:** {repeat_text}"
                 ),
@@ -2251,7 +2251,7 @@ class BearTrapView(discord.ui.View):
                             f"**{pimp.hourglassIcon} Time:** {selected_notif[3]:02d}:{selected_notif[4]:02d} ({selected_notif[5]})\n"
                             f"**{pimp.announceIcon} Channel:** {channel_display}\n"
                             f"**{pimp.listIcon} Description:** {selected_notif[6]}\n\n"
-                            f"**{pimp.settings2Icon} Notification Type:** \n{notification_type_desc}\n\n"
+                            f"**{pimp.settingsIcon} Notification Type:** \n{notification_type_desc}\n\n"
                             f"**👥 Mention:** {mention_display}\n"
                             f"**{pimp.processingIcon} Repeat:** {formatted_repeat}\n"),
                         color=discord.Color.blue()
@@ -2625,7 +2625,7 @@ class BearTrapView(discord.ui.View):
                     help_text = (
                         f"- **🔍 Search:** Filter the menu options based on specific keywords\n"
                         f"- **{pimp.listIcon} Edit:** Modify notification details.\n"
-                        f"- **{pimp.settings2Icon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
+                        f"- **{pimp.settingsIcon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
                         f"  - -# Click to toggle between enabling or disabling.\n"
                         f"  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
                         f"- **👀 Preview:** See how the notification will look when it's sent.\n"

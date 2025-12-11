@@ -1143,7 +1143,7 @@ class BotOperations(commands.Cog):
                     f"{pimp.divider1}\n\n"
                     f"{pimp.shieldIcon} **View Administrators**\n"
                     f"└ View and manage admin permissions\n\n"
-                    f"{pimp.settings2Icon} **Add Administrator**\n"
+                    f"{pimp.settingsIcon} **Add Administrator**\n"
                     f"└ Configure alliance control behaviors\n\n"
                     f"{pimp.robotIcon} **Remove Administrator**\n"
                     f"└ Check and manage updates\n\n"
@@ -1256,7 +1256,7 @@ class BotOperations(commands.Cog):
                 return
             
             embed = discord.Embed(
-                title=f"{pimp.settings2Icon} Control Settings",
+                title=f"{pimp.settingsIcon} Control Settings",
                 description=(
                     "Configure automatic control behaviors for each alliance.\n\n"
                     "**State Transfer Auto-Removal**\n"
@@ -1367,7 +1367,7 @@ class ControlSettingsView(discord.ui.View):
             notify_text = "Enabled" if self.notify_on_transfer else "Disabled"
             
             embed = discord.Embed(
-                title=f"{pimp.settings2Icon} Control Settings - {alliance_name}",
+                title=f"{pimp.settingsIcon} Control Settings - {alliance_name}",
                 description=(
                     f"**State Transfer Auto-Removal**\n"
                     f"Status: {status_emoji} **{status_text}**\n"
@@ -1383,7 +1383,7 @@ class ControlSettingsView(discord.ui.View):
         else:
             # No alliance selected yet
             embed = discord.Embed(
-                title=f"{pimp.settings2Icon} Control Settings",
+                title=f"{pimp.settingsIcon} Control Settings",
                 description=(
                     "**Please select an alliance from the dropdown menu above.**\n\n"
                     "Once selected, you can configure:\n"
