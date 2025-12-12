@@ -135,7 +135,10 @@ def safe_remove(path, is_dir=None):
     try:
         if is_dir:
             if sys.platform == "win32":
-                shutil.rmtree(path, onexc=remove_readonly)
+                if sys.version_info >= (3, 12): # check if python version >= 3.12 for onexc support
+                    shutil.rmtree(path, onexc=remove_readonly)
+                else:
+                    shutil.rmtree(path, onerror=remove_readonly)
             else:
                 shutil.rmtree(path)
         else:
