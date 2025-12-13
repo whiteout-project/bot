@@ -6,14 +6,14 @@ import ssl
 import time
 import asyncio
 import sqlite3
-
+from cogs import prettification_is_my_purpose as pimp
 class WCommand(commands.Cog):
+
     def __init__(self, bot):
         self.bot = bot
         self.conn = sqlite3.connect('db/changes.sqlite')
         self.c = self.conn.cursor()
         self.SECRET = "tB87#kPtkxqOS2"
-        
         self.level_mapping = {
             31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
             35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
@@ -27,7 +27,7 @@ class WCommand(commands.Cog):
             75: "FC 9", 76: "FC 9 - 1", 77: "FC 9 - 2", 78: "FC 9 - 3", 79: "FC 9 - 4",
             80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
         }
-
+ 
     def cog_unload(self):
         if hasattr(self, 'conn'):
             self.conn.close()
@@ -59,7 +59,20 @@ class WCommand(commands.Cog):
         except Exception as e:
             print(f"Autocomplete could not be loaded: {e}")
             return []
+    
+    async def parseemoji(self, emoji_string: str) -> str:
+        import re
 
+        # Match both static <:name:id> and animated <a:name:id> emojis
+        match = re.match(r'<a?:(\w+):(\d+)>', emoji_string)
+        
+        if match:
+            # It's a custom emoji, get the URL
+            emoji_id = match.group(2)
+            # Check if it's animated
+            is_animated = emoji_string.startswith("<a:")
+            emoji_ext = "gif" if is_animated else "png"
+            return f"https://cdn.discordapp.com/emojis/{emoji_id}.{emoji_ext}"
 
     async def fetch_user_info(self, interaction: discord.Interaction, fid: str):
         try:
@@ -109,31 +122,41 @@ class WCommand(commands.Cog):
                                         cursor = alliance_db.cursor()
                                         cursor.execute("SELECT name FROM alliance_list WHERE alliance_id=?", (user_info[-1],))
                                         alliance_info = cursor.fetchone()
+ 
 
                             embed = discord.Embed(
-                                title=f"👤 {nickname}",
+                                title=f"{pimp.avatarIcon} {nickname}",
                                 description=(
-                                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"**🆔 ID:** `{fid_value}`\n"
-                                    f"**🔥 Furnace Level:** `{stove_level_name}`\n"
-                                    f"**🌍 State:** `{kid}`\n"
-                                    "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"{pimp.divider1}\n\n"
+                                    f"**{pimp.fidIcon} FID:** `{fid_value}`\n"
+                                    f"**{pimp.stoveIcon} Furnace:** `{stove_level_name}`\n"
+                                    f"**{pimp.stateIcon} State:** `{kid}`\n\n"
+                                    f"{pimp.divider1}\n\n"
                                 ),
-                                color=discord.Color.blue()
+                                color=pimp.emColor3,
                             )
 
                             if alliance_info:
-                                embed.description += f"**🏰 Alliance:** `{alliance_info[0]}`\n━━━━━━━━━━━━━━━━━━━━━━\n"
-
-                            registration_status = "Registered on the List ✅" if user_info else "Not on the List ❌"
-                            embed.set_footer(text=registration_status)
+                                embed.description += f"**{pimp.allianceIcon} Alliance:** `{alliance_info[0]}`\n\n{pimp.divider1}\n\n"
 
                             if avatar_image:
-                                embed.set_image(url=avatar_image)
-                            if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
-                                embed.set_thumbnail(url=stove_lv_content)
+                                embed.set_image(url = avatar_image)
 
-                            await interaction.followup.send(embed=embed)
+                            if user_info:
+                                embed.set_footer(text = f"Registered on the List", icon_url = f"{await self.parseemoji(pimp.verifiedIcon)}")
+                            else:
+                                embed.set_footer(text = f"Not on the List", icon_url = f"{await self.parseemoji(pimp.deniedIcon)}")
+                           
+                            if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
+                                embed.set_thumbnail(url = stove_lv_content)
+                            elif stove_level <=30 and pimp.furnaceLevelImageURLs[stove_level] == None or pimp.furnaceLevelImageURLs[stove_level] == "":
+                                embed.set_thumbnail(url = pimp.furnaceLevelImageDefaultURL)
+                            elif stove_level <=30 and pimp.furnaceLevelImageURLs[stove_level].startswith("<:"):
+                                embed.set_thumbnail(url = pimp.furnaceLevelImageURLs[stove_level])
+                            else :
+                                embed.set_thumbnail(url = pimp.furnaceLevelImageURLs[stove_level])
+                            
+                            await interaction.followup.send(embed = embed)
                             return 
 
                         elif response.status == 429:

@@ -1,24 +1,24 @@
 import discord
 from discord.ext import commands
-
+from cogs import prettification_is_my_purpose as pimp
 class SupportOperations(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     async def show_support_menu(self, interaction: discord.Interaction):
         support_menu_embed = discord.Embed(
-            title="🎯 Support Operations",
+            title=f"{pimp.supportIcon} Support Operations",
             description=(
-                "Please select an operation:\n\n"
-                "**Available Operations**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "📝 **Request Support**\n"
-                "└ Get help and support\n\n"
-                "ℹ️ **About Project**\n"
-                "└ Project information\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"{pimp.divider1}\n"
+                f"\n"
+                f"{pimp.supportIcon} **Request Support**\n"
+                f"└ Get help and support\n\n"
+                f"{pimp.infoIcon} **About Project**\n"
+                f"└ Project information\n"
+                f"\n"
+                f"{pimp.divider1}"
             ),
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
 
         view = SupportView(self)
@@ -30,20 +30,27 @@ class SupportOperations(commands.Cog):
 
     async def show_support_info(self, interaction: discord.Interaction):
         support_embed = discord.Embed(
-            title="🤖 Bot Support Information",
+            title=f"{pimp.supportIcon} Support Information",
             description=(
-                "If you need help with the bot or are experiencing any issues, "
-                "please feel free to ask on our [Discord](https://discord.gg/apYByj6K2m)\n\n"
-                "**Additional resources:**\n"
-                "**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
-                "**Issues & Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n\n"
-                "This bot is open source and maintained by the WOSLand community. "
-                "You can report bugs, request features, or contribute to the project "
-                "through our Discord or GitHub repository.\n\n"
-                "For technical support, please make sure to provide "
-                "detailed information about your problem."
+                f"{pimp.divider1}\n"
+                f"\n"
+                f"If you need help with the bot or are experiencing any issues, "
+                f"please feel free to ask on our [Discord](https://discord.gg/apYByj6K2m)\n"
+                f"### **Additional resources:**\n"
+                f"{pimp.divider2}\n"
+                f"**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
+                f"**Issues & Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n"
+                f"{pimp.divider2}\n"
+                f"\n"
+                f"This bot is open source and maintained by the WOSLand community. "
+                f"You can report bugs, request features, or contribute to the project "
+                f"through our Discord or GitHub repository.\n\n"
+                f"For technical support, please make sure to provide "
+                f"detailed information about your problem.\n"
+                f"\n"
+                f"{pimp.divider1}\n"
             ),
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
         
         try:
@@ -52,7 +59,7 @@ class SupportOperations(commands.Cog):
                 await interaction.user.send(embed=support_embed)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Could not send DM because your DMs are closed!",
+                    f"{pimp.deleteIcon} Could not send DM because your DMs are closed!",
                     ephemeral=True
                 )
         except Exception as e:
@@ -65,54 +72,57 @@ class SupportView(discord.ui.View):
 
     @discord.ui.button(
         label="Request Support",
-        emoji="📝",
-        style=discord.ButtonStyle.primary,
-        custom_id="request_support"
+        emoji=f"{pimp.supportIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="request_support",
+        row=0
     )
     async def support_request_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_support_info(interaction)
 
     @discord.ui.button(
         label="About Project",
-        emoji="ℹ️",
-        style=discord.ButtonStyle.primary,
-        custom_id="about_project"
+        emoji=f"{pimp.infoIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="about_project",
+        row=0
     )
     async def about_project_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         about_embed = discord.Embed(
-            title="ℹ️ About Whiteout Project",
+            title=f"{pimp.infoIcon} About Whiteout Project",
             description=(
-                "**Open Source Bot**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "This is an open source Discord bot for Whiteout Survival.\n"
-                "The project is community-driven and freely available for everyone.\n"
-                "**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
-                "**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"
-                "**Features**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "• Alliance member management\n"
-                "• Gift code operations\n"
-                "• Automated member tracking\n"
-                "• Bear trap notifications\n"
-                "• ID channel verification\n"
-                "• and more...\n\n"
-                "**Contributing**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "Contributions are welcome! Please check our GitHub repository "
-                "to report issues, suggest features, or submit pull requests."
+                f"{pimp.divider1}\n"
+                f"### **Open Source Bot**\n"
+                f"{pimp.divider2}\n"
+                f"This is an open source Discord bot for Whiteout Survival.\n"
+                f"The project is community-driven and freely available for everyone.\n"
+                f"**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
+                f"**Community:** [Discord](https://discord.gg/apYByj6K2m)\n"
+                f"### **Features**\n"
+                f"{pimp.divider2}\n"
+                f"- Alliance member management\n"
+                f"- Gift code operations\n"
+                f"- Automated member tracking\n"
+                f"- Bear trap notifications\n"
+                f"- ID channel verification\n"
+                f"- and more...\n"
+                f"### **Contributing**\n"
+                f"{pimp.divider2}\n"
+                f"Contributions are welcome! Please check our GitHub repository "
+                f"to report issues, suggest features, or submit pull requests.\n\n"
+                f"{pimp.divider1}\n"
+                f"-# Made with {pimp.heartIcon} by the WOSLand Bot Team."
             ),
-            color=discord.Color.green()
+            color=pimp.emColor3
         )
 
-        about_embed.set_footer(text="Made with ❤️ by the WOSLand Bot Team.")
-        
         try:
             await interaction.response.send_message(embed=about_embed, ephemeral=True)
             try:
                 await interaction.user.send(embed=about_embed)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Could not send DM because your DMs are closed!",
+                    f"{pimp.deleteIcon} Could not send DM because your DMs are closed!",
                     ephemeral=True
                 )
         except Exception as e:
@@ -120,9 +130,10 @@ class SupportView(discord.ui.View):
 
     @discord.ui.button(
         label="Main Menu",
-        emoji="🏠",
+        emoji=f"{pimp.homeIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu"
+        custom_id="main_menu",
+        row=1
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         alliance_cog = self.cog.bot.get_cog("Alliance")

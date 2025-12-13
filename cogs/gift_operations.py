@@ -22,8 +22,10 @@ from .alliance import PaginatedChannelView
 from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
 from collections import deque
+from cogs import prettification_is_my_purpose as pimp
 
 class GiftOperations(commands.Cog):
+       
     def __init__(self, bot):
         self.bot = bot
         
@@ -319,7 +321,7 @@ class GiftOperations(commands.Cog):
         batch_id = queue_item.get('batch_id')
 
         self.logger.info(f"Processing gift code '{giftcode}' from queue (source: {source}, type: {operation_type})")
-
+        
         # Handle redemption
         if operation_type == 'redemption':
             if alliance_id:
@@ -337,15 +339,15 @@ class GiftOperations(commands.Cog):
 
                     # Send starting message only if interaction exists (non-batch)
                     progress_message = None
-                    if interaction and not batch_id:
+                    if interaction:
                         start_embed = discord.Embed(
-                            title="🔄 Processing Redemption",
+                            title = f"{pimp.processingIcon} Processing Redemption",
                             description=f"Starting gift code redemption for **{alliance_name}**...\n"
                                        f"**Gift Code:** `{giftcode}`",
-                            color=discord.Color.blue()
+                            color = pimp.emColor1,
                         )
                         progress_message = await interaction.followup.send(embed=start_embed, ephemeral=True)
-
+                    
                     # Execute the redemption
                     await self.use_giftcode_for_alliance(alliance_id, giftcode)
 
@@ -374,14 +376,14 @@ class GiftOperations(commands.Cog):
                     # Update the message with completion status if we have a message to update (non-batch)
                     elif interaction and progress_message:
                         complete_embed = discord.Embed(
-                            title="✅ Redemption Complete",
+                            title = f"{pimp.verifiedIcon} Redemption Complete",
                             description=f"Gift code redemption completed for **{alliance_name}**.\n"
                                        f"**Gift Code:** `{giftcode}`",
-                            color=discord.Color.green()
+                            color = pimp.emColor3,
                         )
                         try:
                             await progress_message.edit(embed=complete_embed)
-                        except:
+                        except: # If edit fails, just skip it
                             pass
                 except Exception as e:
                     self.logger.exception(f"Error in manual redemption for alliance {alliance_id}: {e}")
@@ -408,14 +410,14 @@ class GiftOperations(commands.Cog):
 
                     elif interaction:
                         error_embed = discord.Embed(
-                            title="❌ Redemption Error",
+                            title = f"{pimp.deniedIcon} Redemption Error",
                             description=f"An error occurred during redemption for **{alliance_name}**: {str(e)}",
-                            color=discord.Color.red()
+                            color = pimp.emColor2,
                         )
                         if progress_message:
                             try:
                                 await progress_message.edit(embed=error_embed)
-                            except:
+                            except: # If edit fails, send a new message
                                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                         else:
                             await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -433,9 +435,9 @@ class GiftOperations(commands.Cog):
         processing_message = None
         if message and channel:
             processing_embed = discord.Embed(
-                title="🔄 Processing Gift Code...",
+                title = f"{pimp.processingIcon} Processing Gift Code...",
                 description=f"Validating `{giftcode}` (Position in queue: Processing now)",
-                color=discord.Color.blue()
+                color = pimp.emColor1,
             )
             processing_message = await channel.send(embed=processing_embed)
         
@@ -452,55 +454,58 @@ class GiftOperations(commands.Cog):
     
     async def _send_existing_code_response(self, message, giftcode, channel):
         """Send response for existing gift code."""
-        reply_embed = discord.Embed(title="ℹ️ Gift Code Already Known", color=discord.Color.blue())
+        reply_embed = discord.Embed(title = f"{pimp.infoIcon} Gift Code Already Known", color = pimp.emColor1)
         reply_embed.description = (
-            f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 **Sender:** {message.author.mention}\n"
-            f"🎁 **Gift Code:** `{giftcode}`\n"
-            f"📝 **Status:** Already in database.\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"### **Gift Code Details**\n"
+            f"{pimp.divider1}\n"
+            f"\n"
+            f"{pimp.avatarIcon} **Sender:** {message.author.mention}\n"
+            f"{pimp.giftIcon} **Gift Code:** {giftcode}\n"
+            f"{pimp.listIcon} **Status:** Already in database.\n"
+            f"\n"
+            f"{pimp.divider1}\n"
         )
         await channel.send(embed=reply_embed)
         
         try:
-            await message.add_reaction("ℹ️")
+            await message.add_reaction(f"{infoIcon}")
         except (discord.Forbidden, discord.NotFound):
             pass
     
     async def _send_validation_response(self, message, giftcode, is_valid, validation_msg, processing_message=None):
         """Send validation response to channel."""
         if is_valid:
-            reply_embed = discord.Embed(title="✅ Gift Code Validated", color=discord.Color.green())
+            reply_embed = discord.Embed(title = f"{pimp.verifiedIcon} Gift Code Validated", color = pimp.emColor3,)
             reply_embed.description = (
-                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 **Sender:** {message.author.mention}\n"
-                f"🎁 **Gift Code:** `{giftcode}`\n"
-                f"✅ **Status:** {validation_msg}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**Gift Code Details**\n{pimp.divider1}\n"
+                f"{pimp.avatarIcon} **Sender:** {message.author.mention}\n"
+                f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                f"{pimp.verifiedIcon} **Status:** {validation_msg}\n"
+                f"{pimp.divider1}\n"
             )
-            reaction = "✅"
+            reaction = f"{pimp.verifiedIcon}"
         elif is_valid is False:
-            reply_embed = discord.Embed(title="❌ Invalid Gift Code", color=discord.Color.red())
+            reply_embed = discord.Embed(title = f"{pimp.deniedIcon} Invalid Gift Code", color = pimp.emColor2)
             reply_embed.description = (
-                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 **Sender:** {message.author.mention}\n"
-                f"🎁 **Gift Code:** `{giftcode}`\n"
-                f"❌ **Status:** {validation_msg}\n"
-                f"📝 **Action:** Code not added to database\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**Gift Code Details**\n{pimp.divider1}\n"
+                f"{pimp.avatarIcon} **Sender:** {message.author.mention}\n"
+                f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                f"{pimp.deniedIcon} **Status:** {validation_msg}\n"
+                f"{pimp.listIcon} **Action:** Code not added to database\n"
+                f"{pimp.divider1}\n"
             )
-            reaction = "❌"
+            reaction = f"{pimp.deniedIcon}"
         else:
-            reply_embed = discord.Embed(title="⚠️ Gift Code Added (Pending)", color=discord.Color.yellow())
+            reply_embed = discord.Embed(title = f"{alertIcon} Gift Code Added (Pending)", color = pimp.emColor5)
             reply_embed.description = (
-                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 **Sender:** {message.author.mention}\n"
-                f"🎁 **Gift Code:** `{giftcode}`\n"
-                f"⚠️ **Status:** {validation_msg}\n"
-                f"📝 **Action:** Added for later validation\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**Gift Code Details**\n{pimp.divider1}\n"
+                f"{pimp.avatarIcon} **Sender:** {message.author.mention}\n"
+                f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                f"{pimp.gifAlertIcon} **Status:** {validation_msg}\n"
+                f"{pimp.listIcon} **Action:** Added for later validation\n"
+                f"{pimp.divider1}\n"
             )
-            reaction = "⚠️"
+            reaction = f"{pimp.gifAlertIcon}"
         
         if processing_message:
             await processing_message.edit(embed=reply_embed)
@@ -514,7 +519,7 @@ class GiftOperations(commands.Cog):
     
     async def _process_auto_use(self, giftcode):
         """Process auto-use for valid gift codes."""
-        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
+        self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
         auto_alliances = self.cursor.fetchall()
         
         if auto_alliances:
@@ -624,16 +629,15 @@ class GiftOperations(commands.Cog):
             codes_completed = info.get('codes_completed', 0)
 
             if status == 'pending':
-                icon = "⏳"
+                icon = f"{pimp.hourglassIcon}"
             elif status == 'processing':
-                icon = "🔄"
+                icon = f"{pimp.processingIcon}"
             elif status == 'completed':
-                icon = "✅"
+                icon = f"{pimp.verifiedIcon}"
             elif status == 'error':
-                icon = "❌"
+                icon = f"{pimp.deniedIcon}"
             else:
-                icon = "⏳"
-
+                icon = f"{pimp.hourglassIcon}"
             # Show code progress for multi-code batches
             if total_codes > 1:
                 lines.append(f"{icon} **{info['name']}** ({codes_completed}/{total_codes} codes)")
@@ -650,9 +654,9 @@ class GiftOperations(commands.Cog):
             code_display = f"`{giftcodes[0]}`"
 
         embed = discord.Embed(
-            title="🎁 Batch Redemption Progress",
+            title=f"{pimp.giftIcon} Batch Redemption Progress",
             description=f"**Gift Code{'s' if total_codes > 1 else ''}:** {code_display}\n**Progress:** {completed_alliances}/{total_alliances} alliances\n\n" + "\n".join(lines),
-            color=discord.Color.green() if completed_alliances == total_alliances else discord.Color.blue()
+            color=pimp.emColor3 if completed_alliances == total_alliances else pimp.emColor1
         )
         return embed
 
@@ -1546,7 +1550,7 @@ class GiftOperations(commands.Cog):
                 
                 # Check if we've already reacted to this message
                 bot_reactions = {str(reaction.emoji) for reaction in message.reactions if reaction.me}
-                if bot_reactions.intersection(["✅", "❌", "⚠️", "❓", "ℹ️"]):
+                if bot_reactions.intersection([f"{pimp.verifiedIcon}", f"{pimp.deniedIcon}", f"{pimp.gifAlertIcon}", f"{pimp.questionIcon}", f"{pimp.infoIcon}"]):
                     continue
                 
                 messages_to_process.append(message)
@@ -1636,7 +1640,7 @@ class GiftOperations(commands.Cog):
                     # Add appropriate reaction to message
                     if giftcode in message_code_map:
                         message = message_code_map[giftcode]
-                        emoji = "✅" if is_valid else "❌"
+                        emoji = f"{pimp.verifiedIcon}" if is_valid else f"{pimp.deniedIcon}"
                         await message.add_reaction(emoji)
                     
                     # Small delay between validations
@@ -1645,15 +1649,15 @@ class GiftOperations(commands.Cog):
             # Add reactions to existing codes
             for giftcode in scan_results['existing_valid']:
                 if giftcode in message_code_map:
-                    await message_code_map[giftcode].add_reaction("✅")
+                    await message_code_map[giftcode].add_reaction(f"{pimp.verifiedIcon}")
             
             for giftcode in scan_results['existing_invalid']:
                 if giftcode in message_code_map:
-                    await message_code_map[giftcode].add_reaction("❌")
+                    await message_code_map[giftcode].add_reaction(f"{pimp.deniedIcon}")
                     
             for giftcode in scan_results['existing_pending']:
                 if giftcode in message_code_map:
-                    await message_code_map[giftcode].add_reaction("⚠️")
+                    await message_code_map[giftcode].add_reaction(f"{pimp.gifAlertIcon}")
             
             # Send consolidated results message
             await self._send_scan_results_message(channel, scan_results, alliance_id)
@@ -1698,9 +1702,9 @@ class GiftOperations(commands.Cog):
             
             # Build results embed
             embed = discord.Embed(
-                title="🔍 History Scan Results",
+                title = f"{pimp.magnifyingIcon} History Scan Results",
                 description=f"**Alliance:** {alliance_name}\n**Channel:** #{channel.name}",
-                color=discord.Color.blue()
+                color=emColor1,
             )
             
             # Summary stats
@@ -1708,7 +1712,7 @@ class GiftOperations(commands.Cog):
             messages_scanned = results['messages_scanned']
             
             embed.add_field(
-                name="📊 Scan Summary",
+                name=f"{pimp.announceIcon} Scan Summary",
                 value=f"**Messages Scanned:** {messages_scanned}\n**Total Codes Found:** {total_found}",
                 inline=False
             )
@@ -1720,7 +1724,7 @@ class GiftOperations(commands.Cog):
                 
                 validation_text = ""
                 if new_valid:
-                    validation_text += f"✅ **Valid Codes ({len(new_valid)}):**\n"
+                    validation_text += f"{pimp.verifiedIcon} **Valid Codes ({len(new_valid)}):**\n"
                     for code in new_valid[:5]: # Limit display to avoid message length issues
                         validation_text += f"  • `{code}`\n"
                     if len(new_valid) > 5:
@@ -1728,7 +1732,7 @@ class GiftOperations(commands.Cog):
                     validation_text += "\n"
                 
                 if new_invalid:
-                    validation_text += f"❌ **Invalid Codes ({len(new_invalid)}):**\n"
+                    validation_text += f"{pimp.deniedIcon} **Invalid Codes ({len(new_invalid)}):**\n"
                     for code in new_invalid[:5]:
                         validation_text += f"  • `{code}`\n"
                     if len(new_invalid) > 5:
@@ -1744,15 +1748,15 @@ class GiftOperations(commands.Cog):
             # Existing codes summary
             existing_summary = ""
             if results['existing_valid']:
-                existing_summary += f"✅ Previously Valid: {len(results['existing_valid'])}\n"
+                existing_summary += f"{pimp.verifiedIcon} Previously Valid: {len(results['existing_valid'])}\n"
             if results['existing_invalid']:
-                existing_summary += f"❌ Previously Invalid: {len(results['existing_invalid'])}\n"
+                existing_summary += f"{pimp.deniedIcon} Previously Invalid: {len(results['existing_invalid'])}\n"
             if results['existing_pending']:
-                existing_summary += f"⚠️ Pending Validation: {len(results['existing_pending'])}\n"
+                existing_summary += f"{pimp.gifAlertIcon} Pending Validation: {len(results['existing_pending'])}\n"
             
             if existing_summary:
                 embed.add_field(
-                    name="📋 Previously Found Codes",
+                    name=f"{pimp.listIcon} Previously Found Codes",
                     value=existing_summary,
                     inline=False
                 )
@@ -1877,10 +1881,10 @@ class GiftOperations(commands.Cog):
                                     admin_user = await self.bot.fetch_user(admin_id)
                                     if admin_user:
                                         embed = discord.Embed(
-                                            title="❌ Gift Code Invalidated",
+                                            title = f"{pimp.deniedIcon} Gift Code Invalidated",
                                             description=f"Code `{giftcode}` has been invalidated during periodic validation.\nStatus: {status}",
-                                            color=discord.Color.red(),
-                                            timestamp=datetime.now()
+                                            color = pimp.emColor2,
+                                            timestamp = datetime.now()
                                         )
                                         await admin_user.send(embed=embed)
                                 except Exception as e:
@@ -1899,7 +1903,7 @@ class GiftOperations(commands.Cog):
 
                                 try:
                                     await self._execute_with_retry(
-                                        lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
+                                        lambda: self.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1")
                                     )
                                     auto_alliances = self.cursor.fetchall() or []
                                 except sqlite3.OperationalError as e:
@@ -1936,9 +1940,9 @@ class GiftOperations(commands.Cog):
                                             admin_user = await self.bot.fetch_user(admin_id)
                                             if admin_user:
                                                 embed = discord.Embed(
-                                                    title="✅ Auto-Redemption Started",
+                                                    title = f"{pimp.verifiedIcon} Auto-Redemption Started",
                                                     description=f"Code `{giftcode}` has been validated and auto-redemption is now starting for {len(auto_alliances)} alliance(s).",
-                                                    color=discord.Color.green(),
+                                                    color = pimp.emColor3,
                                                     timestamp=datetime.now()
                                                 )
                                                 await admin_user.send(embed=embed)
@@ -2023,7 +2027,7 @@ class GiftOperations(commands.Cog):
                 admin_info = self.settings_cursor.fetchone()
 
                 if not admin_info or admin_info[0] != 1:
-                    error_msg = "❌ You don't have permission to access OCR settings."
+                    error_msg = f"{pimp.deniedIcon} You don't have permission to access OCR settings."
                     if interaction.response.is_done():
                         await interaction.followup.send(error_msg, ephemeral=True)
                     else:
@@ -2063,29 +2067,29 @@ class GiftOperations(commands.Cog):
                         solver_status_msg = "onnxruntime library missing"
 
                 save_options_text = {
-                    0: "❌ None", 1: "⚠️ Failed Only", 2: "✅ Success Only", 3: "💾 All"
+                    0: f"{pimp.deniedIcon} None", 1: f"{pimp.gifAlertIcon} Failed Only", 2: f"{pimp.verifiedIcon} Success Only", 3: f"💾 All"
                 }
                 save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
 
                 embed = discord.Embed(
-                    title="🔍 CAPTCHA Solver Settings (ONNX)",
+                    title = f"{pimp.magnifyingIcon} CAPTCHA Solver Settings (ONNX)",
                     description=(
                         f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
                         f"**Current Settings**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🤖 **OCR Enabled:** {'✅ Yes' if enabled == 1 else '❌ No'}\n"
+                        f"{pimp.divider1}\n"
+                        f"{pimp.robotIcon} **OCR Enabled:** {f'{pimp.verifiedIcon} Yes' if enabled == 1 else f'{pimp.deniedIcon} No'}\n"
                         f"💾 **Save CAPTCHA Images:** {save_images_display}\n"
-                        f"🆔 **Test ID:** `{current_test_fid}`\n"
-                        f"📦 **ONNX Runtime:** {'✅ Found' if onnx_available else '❌ Missing'}\n"
-                        f"⚙️ **Solver Status:** `{solver_status_msg}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{pimp.fidIcon} **Test ID:** `{current_test_fid}`\n"
+                        f"📦 **ONNX Runtime:** {f'{pimp.verifiedIcon} Found' if onnx_available else f'{pimp.deniedIcon} Missing'}\n"
+                        f"{pimp.giftSettingsIcon} **Solver Status:** `{solver_status_msg}`\n"
+                        f"{pimp.divider1}\n"
                     ),
-                    color=discord.Color.blue()
+                    color = pimp.emColor1,
                 )
 
                 if not onnx_available:
                     embed.add_field(
-                        name="⚠️ Missing Library",
+                        name=f"{pimp.gifAlertIcon} Missing Library",
                         value=(
                             "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
                             "The model files must be in the bot/models/ directory.\n"
@@ -2119,13 +2123,13 @@ class GiftOperations(commands.Cog):
                 stats_lines.append(f"• Avg. ID Processing Time: `{avg_time:.2f}s` (over `{total_fids}` IDs)")
 
                 embed.add_field(
-                    name="📊 Processing Statistics (Since Bot Start)",
+                    name=f"{pimp.announceIcon} Processing Statistics (Since Bot Start)",
                     value="\n".join(stats_lines),
                     inline=False
                 )
 
                 embed.add_field(
-                    name="⚠️ Important Note",
+                    name=f"{pimp.gifAlertIcon} Important Note",
                     value="Saving images (especially 'All') can consume significant disk space over time.",
                     inline=False
                 )
@@ -2145,13 +2149,13 @@ class GiftOperations(commands.Cog):
 
             except sqlite3.Error as db_err:
                 self.logger.exception(f"Database error in show_ocr_settings: {db_err}")
-                error_message = "❌ A database error occurred while loading OCR settings."
+                error_message = f"{pimp.deniedIcon} A database error occurred while loading OCR settings."
                 if interaction.response.is_done(): await interaction.followup.send(error_message, ephemeral=True)
                 else: await interaction.response.send_message(error_message, ephemeral=True)
             except Exception as e:
                 self.logger.exception(f"Error showing OCR settings: {e}")
                 traceback.print_exc()
-                error_message = "❌ An unexpected error occurred while loading OCR settings."
+                error_message = f"{pimp.deniedIcon} An unexpected error occurred while loading OCR settings."
                 if interaction.response.is_done():
                     await interaction.followup.send(error_message, ephemeral=True)
                 else:
@@ -2277,7 +2281,7 @@ class GiftOperations(commands.Cog):
 
             # Create embed
             embed = discord.Embed(
-                title="📊 Redemption Priority",
+                title=f"{pimp.giftHashtagIcon} Redemption Priority",
                 description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
                 color=discord.Color.blue()
             )
@@ -2348,17 +2352,17 @@ class GiftOperations(commands.Cog):
                     detailed_reason = reason_map.get(status, f"Code invalid ({status})")
 
                     admin_embed = discord.Embed(
-                        title="🎁 Gift Code Invalidated",
+                        title=f"{pimp.giftIcon} Gift Code Invalidated",
                         description=(
                             f"**Gift Code Details**\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"🎁 **Gift Code:** `{giftcode}`\n"
-                            f"❌ **Status:** {detailed_reason}\n"
-                            f"📝 **Action:** Code marked as invalid in database\n"
-                            f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"{pimp.divider1}\n"
+                            f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                            f"{pimp.deniedIcon} **Status:** {detailed_reason}\n"
+                            f"{pimp.listIcon} **Action:** Code marked as invalid in database\n"
+                            f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                            f"{pimp.divider1}\n"
                         ),
-                        color=discord.Color.orange()
+                        color=emColor4,
                     )
                     
                     for admin_id in admin_ids:
@@ -2397,16 +2401,16 @@ class GiftOperations(commands.Cog):
                 except:
                     pass
                 
-                await message.add_reaction("✅")
+                await message.add_reaction(f"{pimp.verifiedIcon}")
                 await message.reply("Gift code successfully added.", mention_author=False)
         elif status == "TIME_ERROR":
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("Gift code expired.", mention_author=False)
         elif status == "CDK_NOT_FOUND":
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("The gift code is incorrect.", mention_author=False)
         elif status == "USAGE_LIMIT":
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("Usage limit has been reached for this code.", mention_author=False)
 
     async def handle_already_received(self, message, giftcode):
@@ -2424,16 +2428,16 @@ class GiftOperations(commands.Cog):
                 except:
                     pass
                 
-                await message.add_reaction("✅")
+                await message.add_reaction(f"{pimp.verifiedIcon}")
                 await message.reply("Gift code successfully added.", mention_author=False)
         elif status == "TIME_ERROR":
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("Gift code expired.", mention_author=False)
         elif status == "CDK_NOT_FOUND":
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("The gift code is incorrect.", mention_author=False)
         elif status == "USAGE_LIMIT":
-            await message.add_reaction("❌")
+            await message.add_reaction(f"{pimp.deniedIcon}")
             await message.reply("Usage limit has been reached for this code.", mention_author=False)
 
     async def get_admin_info(self, user_id):
@@ -2507,7 +2511,7 @@ class GiftOperations(commands.Cog):
         admin_info = await self.get_admin_info(interaction.user.id)
         if not admin_info:
             await interaction.response.send_message(
-                "❌ You are not authorized to perform this action.",
+                f"{pimp.deniedIcon} You are not authorized to perform this action.",
                 ephemeral=True
             )
             return
@@ -2516,9 +2520,9 @@ class GiftOperations(commands.Cog):
         if not available_alliances:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Available Alliances",
+                    title = f"{pimp.deniedIcon} No Available Alliances",
                     description="You don't have access to any alliances.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
@@ -2536,14 +2540,14 @@ class GiftOperations(commands.Cog):
         current_channels = dict(self.cursor.fetchall())
 
         alliance_embed = discord.Embed(
-            title="📢 Gift Code Channel Setup",
+            title = f"{pimp.announceIcon} Gift Code Channel Setup",
             description=(
-                "Please select an alliance to set up gift code channel:\n\n"
-                "**Alliance List**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "Select an alliance from the list below:\n"
+                f"Please select an alliance to set up gift code channel:\n\n"
+                f"**Alliance List**\n"
+                f"{pimp.divider1}\n"
+                f"Select an alliance from the list below:\n"
             ),
-            color=discord.Color.blue()
+            color = pimp.emColor1,
         )
 
         view = AllianceSelectView(alliances_with_counts, self)
@@ -2553,15 +2557,15 @@ class GiftOperations(commands.Cog):
                 alliance_id = int(view.current_select.values[0])
                 
                 channel_embed = discord.Embed(
-                    title="📢 Gift Code Channel Setup",
+                    title = f"{pimp.announceIcon} Gift Code Channel Setup",
                     description=(
-                        "**Instructions:**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        "Please select a channel for gift codes\n\n"
-                        "**Page:** 1/1\n"
+                        f"**Instructions:**\n"
+                        f"{pimp.divider1}\n"
+                        f"Please select a channel for gift codes\n\n"
+                        f"**Page:** 1/1\n"
                         f"**Total Channels:** {len(select_interaction.guild.text_channels)}"
                     ),
-                    color=discord.Color.blue()
+                    color = pimp.emColor1,
                 )
 
                 async def channel_select_callback(channel_interaction: discord.Interaction):
@@ -2577,16 +2581,16 @@ class GiftOperations(commands.Cog):
                         alliance_name = next((name for aid, name in available_alliances if aid == alliance_id), "Unknown Alliance")
 
                         success_embed = discord.Embed(
-                            title="✅ Gift Code Channel Set",
+                            title = f"{pimp.verifiedIcon} Gift Code Channel Set",
                             description=(
                                 f"Successfully set gift code channel:\n\n"
-                                f"🏰 **Alliance:** {alliance_name}\n"
-                                f"📝 **Channel:** <#{channel_id}>\n\n"
-                                f"✅ Channel has been configured for gift code monitoring.\n"
+                                f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                                f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
+                                f"{pimp.verifiedIcon} Channel has been configured for gift code monitoring.\n"
                                 f"Use **Channel History Scan** in Gift Code Settings to scan historical messages on-demand.\n"
                                 f"**Tip:** Follow the official WOS #giftcodes channel in your gift code channel to easily find new codes."
                             ),
-                            color=discord.Color.green()
+                            color = pimp.emColor3,
                         )
 
                         await channel_interaction.response.edit_message(
@@ -2597,7 +2601,7 @@ class GiftOperations(commands.Cog):
                     except Exception as e:
                         self.logger.exception(f"Error setting gift code channel: {e}")
                         await channel_interaction.response.send_message(
-                            "❌ An error occurred while setting the gift code channel.",
+                            f"{pimp.deniedIcon} An error occurred while setting the gift code channel.",
                             ephemeral=True
                         )
 
@@ -2619,12 +2623,12 @@ class GiftOperations(commands.Cog):
                 self.logger.exception(f"Error in alliance selection: {e}")
                 if not select_interaction.response.is_done():
                     await select_interaction.response.send_message(
-                        "❌ An error occurred while processing your selection.",
+                        f"{pimp.deniedIcon} An error occurred while processing your selection.",
                         ephemeral=True
                     )
                 else:
                     await select_interaction.followup.send(
-                        "❌ An error occurred while processing your selection.",
+                        f"{pimp.deniedIcon} An error occurred while processing your selection.",
                         ephemeral=True
                     )
 
@@ -2638,30 +2642,31 @@ class GiftOperations(commands.Cog):
 
     async def show_gift_menu(self, interaction: discord.Interaction):
         gift_menu_embed = discord.Embed(
-            title="🎁 Gift Code Operations",
+            title=f"{pimp.giftIcon} Gift Code Operations",
             description=(
-                "Here you can manage everything related to gift code redemption.\n\n"
-                "The bot automatically retrieves new gift codes from our distribution API. "
-                "Codes are validated periodically, and automatically removed if they become invalid.\n\n"
-                "If you're new here, you'll want to head to **Settings** and configure some things:\n"
-                "- If you want codes to be automatically redeemed, go to **Auto Redemption** and enable it.\n"
-                "- You can set up a channel via **Channel Management** where the bot will scan for new codes.\n"
-                "- You can also adjust the order in which alliances redeem gift codes via **Redemption Priority**.\n\n"
-                "**Available Operations**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "🎫 **Add Gift Code**\n"
-                "└ Manually input a new gift code\n\n"
-                "📋 **List Gift Codes**\n"
-                "└ View all active, valid codes\n\n"
-                "🎯 **Redeem Gift Code**\n"
-                "└ Redeem gift code(s) for one or more alliances\n\n"
-                "⚙️ **Settings**\n"
-                "└ Set up a gift code channel, configure auto redemption, and more...\n\n"
-                "❌ **Delete Gift Code**\n"
-                "└ Remove existing codes (rarely needed)\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"\n{pimp.divider1}\n"
+                f"\n"
+                f"{pimp.giftAddIcon} **Add Gift Code**\n"
+                f"└ Input a new gift code\n"
+                f"\n"
+                f"{pimp.giftDeleteIcon} **Delete Gift Code**\n"
+                f"└ Remove existing codes\n"
+                f"\n"
+                f"{pimp.giftsIcon} **List Gift Codes**\n"
+                f"└ View all active, valid codes\n"
+                f"\n"
+                f"{pimp.giftCheckIcon} **Use Gift Code**\n"
+                f"└ Redeem gift code for alliance(s)\n"
+                f"\n"
+                f"{pimp.giftSettingsIcon} **Gift Code Settings**\n"
+                f"└ Edit automatic usage settings\n"
+                f"\n"
+                f"{pimp.homeIcon} **Main Menu**\n"
+                f"└ Return to main menu\n"
+                f"\n"
+                f"{pimp.divider1}"
             ),
-            color=discord.Color.gold()
+            color = pimp.emColor4,
         )
 
         view = GiftView(self)
@@ -2676,7 +2681,7 @@ class GiftOperations(commands.Cog):
         self.settings_cursor.execute("SELECT 1 FROM admin WHERE id = ?", (interaction.user.id,))
         if not self.settings_cursor.fetchone():
             await interaction.response.send_message(
-                "❌ You are not authorized to create gift codes.",
+                f"{pimp.deniedIcon} You are not authorized to create gift codes.",
                 ephemeral=True
             )
             return
@@ -2688,7 +2693,7 @@ class GiftOperations(commands.Cog):
             self.logger.exception(f"Error showing modal: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ An error occurred while showing the gift code creation form.",
+                    f"{pimp.deniedIcon} An error occurred while showing the gift code creation form.",
                     ephemeral=True
                 )
 
@@ -2715,17 +2720,24 @@ class GiftOperations(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🎁 Active Gift Codes",
-            description="Currently active and valid gift codes.",
-            color=discord.Color.blue()
+            title=f"{pimp.giftIcon} Active Gift Codes",
+            description="-# This is the current list of active and valid gift codes.",
+            color = pimp.emColor1,
         )
+
+        embed.add_field(name="", value=f"{pimp.divider1}\n", inline=False)
 
         for code, date, used_count in codes:
             embed.add_field(
-                name=f"Code: {code}",
-                value=f"Created: {date}\nUsed by: {used_count} users",
+                name=f"{pimp.giftHashtagIcon} {code}",
+                value=(
+                    f"Created: {date}\nUsed by: {used_count} users\n"
+                    f"{'\n' + pimp.divider2 if code != codes[-1][0] else ''}"
+                ),
                 inline=False
             )
+
+        embed.add_field(name="", value=f"\n{pimp.divider1}", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -2746,9 +2758,9 @@ class GiftOperations(commands.Cog):
             if not is_admin:
                 await interaction.response.send_message(
                     embed=discord.Embed(
-                        title="❌ Unauthorized Access",
+                        title = f"{pimp.deniedIcon} Unauthorized Access",
                         description="This action requires Global Admin privileges.",
-                        color=discord.Color.red()
+                        color = pimp.emColor2,
                     ),
                     ephemeral=True
                 )
@@ -2771,9 +2783,9 @@ class GiftOperations(commands.Cog):
             if not codes:
                 await interaction.response.send_message(
                     embed=discord.Embed(
-                        title="❌ No Gift Codes",
+                        title = f"{pimp.deniedIcon} No Gift Codes",
                         description="There are no gift codes in the database to delete.",
-                        color=discord.Color.red()
+                        color=emColor2,
                     ),
                     ephemeral=True
                 )
@@ -2784,21 +2796,27 @@ class GiftOperations(commands.Cog):
             codes_to_show = codes[:25] if total_codes > 25 else codes
             
             select_options = []
+            status_emoji = ""
             for code, date, validation_status, used_count in codes_to_show:
                 if validation_status == 'validated':
-                    status_display = "✅ Valid"
+                    status_display = "Valid"
+                    status_emoji = pimp.verifiedIcon
                 elif validation_status == 'invalid':
-                    status_display = "❌ Invalid"
+                    status_display = "Invalid"
+                    status_emoji = pimp.deniedIcon
                 elif validation_status == 'pending':
-                    status_display = "⚠️ Pending"
+                    status_display = "Pending"
+                    status_emoji = pimp.gifAlertIcon
                 else:
-                    status_display = "❓ Unknown"
+                    status_display = "Unknown"
+                    status_emoji = pimp.questionIcon
                 
                 select_options.append(
                     discord.SelectOption(
-                        label=f"Code: {code}",
-                        description=f"{status_display} | Created: {date} | Used: {used_count}",
-                        value=code
+                        label = f"Code: {code}",
+                        value = code,
+                        description = f"{status_display} | Created: {date} | Used: {used_count}",
+                        emoji = f"{status_emoji}"
                     )
                 )
             
@@ -2806,9 +2824,9 @@ class GiftOperations(commands.Cog):
             if not select_options:
                 await interaction.response.send_message(
                     embed=discord.Embed(
-                        title="❌ No Gift Codes Available",
+                        title = f"{pimp.deniedIcon} No Gift Codes Available",
                         description="No gift codes found in the database to delete.",
-                        color=discord.Color.red()
+                        color = pimp.emColor2,
                     ),
                     ephemeral=True
                 )
@@ -2823,7 +2841,7 @@ class GiftOperations(commands.Cog):
                 selected_code = select_interaction.data["values"][0]
                 
                 confirm = discord.ui.Button(
-                    style=discord.ButtonStyle.danger,
+                    style=discord.ButtonStyle.secondary,
                     label="Confirm Delete",
                     custom_id="confirm"
                 )
@@ -2842,16 +2860,16 @@ class GiftOperations(commands.Cog):
                                 self.conn.commit()
                                 
                                 success_embed = discord.Embed(
-                                    title="✅ Gift Code Deleted",
+                                    title = f"{pimp.verifiedIcon} Gift Code Deleted",
                                     description=(
                                         f"**Deletion Details**\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"🎁 **Gift Code:** `{selected_code}`\n"
-                                        f"👤 **Deleted by:** {button_interaction.user.mention}\n"
-                                        f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                        f"{pimp.divider1}\n"
+                                        f"{pimp.giftIcon} **Gift Code:** `{selected_code}`\n"
+                                        f"{avatarIcon} **Deleted by:** {button_interaction.user.mention}\n"
+                                        f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                                        f"{pimp.divider1}\n"
                                     ),
-                                    color=discord.Color.green()
+                                    color=pimp.emColor3,
                                 )
                                 
                                 await button_interaction.response.edit_message(
@@ -2861,15 +2879,15 @@ class GiftOperations(commands.Cog):
                                 
                             except Exception as e:
                                 await button_interaction.response.send_message(
-                                    "❌ An error occurred while deleting the gift code.",
+                                    f"{pimp.deniedIcon} An error occurred while deleting the gift code.",
                                     ephemeral=True
                                 )
 
                         else:
                             cancel_embed = discord.Embed(
-                                title="❌ Deletion Cancelled",
+                                title = f"{pimp.deniedIcon} Deletion Cancelled",
                                 description="The gift code deletion was cancelled.",
-                                color=discord.Color.red()
+                                color = pimp.emColor2,
                             )
                             await button_interaction.response.edit_message(
                                 embed=cancel_embed,
@@ -2880,12 +2898,12 @@ class GiftOperations(commands.Cog):
                         self.logger.exception(f"Button callback error: {str(e)}")
                         try:
                             await button_interaction.response.send_message(
-                                "❌ An error occurred while processing the request.",
+                                f"{pimp.deniedIcon} An error occurred while processing the request.",
                                 ephemeral=True
                             )
                         except:
                             await button_interaction.followup.send(
-                                "❌ An error occurred while processing the request.",
+                                f"{pimp.deniedIcon} An error occurred while processing the request.",
                                 ephemeral=True
                             )
 
@@ -2897,15 +2915,15 @@ class GiftOperations(commands.Cog):
                 confirm_view.add_item(cancel)
 
                 confirmation_embed = discord.Embed(
-                    title="⚠️ Confirm Deletion",
+                    title = f"{pimp.gifAlertIcon} Confirm Deletion",
                     description=(
                         f"**Gift Code Details**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎁 **Selected Code:** `{selected_code}`\n"
-                        f"⚠️ **Warning:** This action cannot be undone!\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{pimp.divider1}\n"
+                        f"{pimp.giftIcon} **Selected Code:** `{selected_code}`\n"
+                        f"{pimp.gifAlertIcon} **Warning:** This action cannot be undone!\n"
+                        f"{pimp.divider1}\n"
                     ),
-                    color=discord.Color.yellow()
+                    color = pimp.emColor4,
                 )
 
                 await select_interaction.response.edit_message(
@@ -2919,25 +2937,25 @@ class GiftOperations(commands.Cog):
 
             # Build description with truncation notice if needed
             description_text = (
-                f"**Instructions**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"1️⃣ Select a gift code from the menu below\n"
-                f"2️⃣ Confirm your selection\n"
-                f"3️⃣ The code will be permanently deleted\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"### **Instructions**\n"
+                f"{pimp.divider1}\n\n"
+                f"{pimp.num1Icon} Select a gift code from the menu below\n"
+                f"{pimp.num2Icon} Confirm your selection\n"
+                f"{pimp.num3Icon} The code will be permanently deleted\n\n"
+                f"{pimp.divider1}\n"
             )
             
             if total_codes > 25:
                 description_text += (
-                    f"\n⚠️ **Note:** Showing 25 of {total_codes} codes.\n"
+                    f"\n{pimp.gifAlertIcon} **Note:** Showing 25 of {total_codes} codes.\n"
                     f"Oldest codes are shown first.\n"
                     f"To delete newer codes, you'll need to delete the older ones first."
                 )
             
             initial_embed = discord.Embed(
-                title="🗑️ Delete Gift Code",
+                title = f"{pimp.giftDeleteIcon} Delete Gift Code",
                 description=description_text,
-                color=discord.Color.blue()
+                color = pimp.emColor1,
             )
 
             await interaction.response.send_message(
@@ -2947,9 +2965,9 @@ class GiftOperations(commands.Cog):
             )
 
         except Exception as e:
-            self.logger.exception(f"Delete gift code error: {str(e)}")
+            self.logger.exception(f"{pimp.giftDeleteIcon} Delete gift code error: {str(e)}")
             await interaction.response.send_message(
-                "❌ An error occurred while processing the request.",
+                f"{pimp.deniedIcon} An error occurred while processing the request.",
                 ephemeral=True
             )
 
@@ -2957,7 +2975,7 @@ class GiftOperations(commands.Cog):
         admin_info = await self.get_admin_info(interaction.user.id)
         if not admin_info:
             await interaction.response.send_message(
-                "❌ You are not authorized to perform this action.",
+                f"{pimp.deniedIcon} You are not authorized to perform this action.",
                 ephemeral=True
             )
             return
@@ -2966,9 +2984,9 @@ class GiftOperations(commands.Cog):
         if not available_alliances:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Available Alliances",
+                    title = f"{pimp.deniedIcon} No Available Alliances",
                     description="You don't have access to any alliances.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
@@ -2989,23 +3007,23 @@ class GiftOperations(commands.Cog):
         if not alliances_with_counts:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Channels Set",
+                    title = f"{pimp.deniedIcon} No Channels Set",
                     description="There are no gift code channels set for your alliances.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
             return
 
         remove_embed = discord.Embed(
-            title="🗑️ Remove Gift Code Channel",
+            title = f"{pimp.deleteIcon} Remove Gift Code Channel",
             description=(
-                "Select an alliance to remove its gift code channel:\n\n"
-                "**Current Log Channels**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "Select an alliance from the list below:\n"
+                f"Select an alliance to remove its gift code channel:\n\n"
+                f"**Current Log Channels**\n"
+                f"{pimp.divider1}\n"
+                f"Select an alliance from the list below:\n"
             ),
-            color=discord.Color.red()
+            color=emColor2,
         )
 
         view = AllianceSelectView(alliances_with_counts, self)
@@ -3020,14 +3038,14 @@ class GiftOperations(commands.Cog):
                 alliance_name = next((name for aid, name in available_alliances if aid == alliance_id), "Unknown Alliance")
                 
                 confirm_embed = discord.Embed(
-                    title="⚠️ Confirm Removal",
+                    title = f"{pimp.gifAlertIcon} Confirm Removal",
                     description=(
                         f"Are you sure you want to remove the gift code channel for:\n\n"
-                        f"🏰 **Alliance:** {alliance_name}\n"
-                        f"📝 **Channel:** <#{channel_id}>\n\n"
+                        f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                        f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                         "This action cannot be undone!"
                     ),
-                    color=discord.Color.yellow()
+                    color=pimp.emColor4,
                 )
 
                 confirm_view = discord.ui.View()
@@ -3038,13 +3056,13 @@ class GiftOperations(commands.Cog):
                         self.conn.commit()
 
                         success_embed = discord.Embed(
-                            title="✅ Gift Code Channel Removed",
+                            title = f"{pimp.verifiedIcon} Gift Code Channel Removed",
                             description=(
                                 f"Successfully removed gift code channel for:\n\n"
-                                f"🏰 **Alliance:** {alliance_name}\n"
-                                f"📝 **Channel:** <#{channel_id}>"
+                                f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                                f"{pimp.announceIcon} **Channel:** <#{channel_id}>"
                             ),
-                            color=discord.Color.green()
+                            color = pimp.emColor3,
                         )
 
                         await button_interaction.response.edit_message(
@@ -3055,15 +3073,15 @@ class GiftOperations(commands.Cog):
                     except Exception as e:
                         self.logger.exception(f"Error removing gift code channel: {e}")
                         await button_interaction.response.send_message(
-                            "❌ An error occurred while removing the gift code channel.",
+                            f"{pimp.deniedIcon} An error occurred while removing the gift code channel.",
                             ephemeral=True
                         )
 
                 async def cancel_callback(button_interaction: discord.Interaction):
                     cancel_embed = discord.Embed(
-                        title="❌ Removal Cancelled",
+                        title = f"{pimp.deniedIcon} Removal Cancelled",
                         description="The gift code channel removal has been cancelled.",
-                        color=discord.Color.red()
+                        color = pimp.emColor2,
                     )
                     await button_interaction.response.edit_message(
                         embed=cancel_embed,
@@ -3072,15 +3090,15 @@ class GiftOperations(commands.Cog):
 
                 confirm_button = discord.ui.Button(
                     label="Confirm",
-                    emoji="✅",
-                    style=discord.ButtonStyle.danger,
+                    emoji=f"{pimp.verifiedIcon}",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="confirm_remove"
                 )
                 confirm_button.callback = confirm_callback
 
                 cancel_button = discord.ui.Button(
                     label="Cancel",
-                    emoji="❌",
+                    emoji=f"{dpimp.eniedIcon}",
                     style=discord.ButtonStyle.secondary,
                     custom_id="cancel_remove"
                 )
@@ -3104,12 +3122,12 @@ class GiftOperations(commands.Cog):
                 self.logger.exception(f"Error in alliance selection: {e}")
                 if not select_interaction.response.is_done():
                     await select_interaction.response.send_message(
-                        "❌ An error occurred while processing your selection.",
+                        f"{pimp.deniedIcon} An error occurred while processing your selection.",
                         ephemeral=True
                     )
                 else:
                     await select_interaction.followup.send(
-                        "❌ An error occurred while processing your selection.",
+                        f"{pimp.deniedIcon} An error occurred while processing your selection.",
                         ephemeral=True
                     )
 
@@ -3130,7 +3148,7 @@ class GiftOperations(commands.Cog):
             
             if not result:
                 await interaction.response.send_message(
-                    "❌ No gift code channel is set for this alliance.",
+                    f"{pimp.deniedIcon} No gift code channel is set for this alliance.",
                     ephemeral=True
                 )
                 return
@@ -3143,14 +3161,14 @@ class GiftOperations(commands.Cog):
             
             # Create confirmation embed
             confirm_embed = discord.Embed(
-                title="⚠️ Confirm Channel Removal",
+                title = f"{pimp.gifAlertIcon} Confirm Channel Removal",
                 description=(
                     f"Are you sure you want to remove the gift code channel setting?\n\n"
-                    f"🏰 **Alliance:** {alliance_name}\n"
-                    f"📝 **Current Channel:** <#{channel_id}>\n\n"
+                    f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                    f"{pimp.announceIcon} **Current Channel:** <#{channel_id}>\n\n"
                     "This action cannot be undone!"
                 ),
-                color=discord.Color.yellow()
+                color=emColor4,
             )
             
             # Create confirmation buttons
@@ -3162,14 +3180,14 @@ class GiftOperations(commands.Cog):
                     self.conn.commit()
                     
                     success_embed = discord.Embed(
-                        title="✅ Channel Setting Removed",
+                        title = f"{pimp.verifiedIcon} Channel Setting Removed",
                         description=(
                             f"Successfully removed gift code channel setting:\n\n"
-                            f"🏰 **Alliance:** {alliance_name}\n"
-                            f"📝 **Channel:** <#{channel_id}>\n\n"
+                            f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                            f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
                             "You can set a new channel anytime by selecting a channel from the list above."
                         ),
-                        color=discord.Color.green()
+                        color = pimp.emColor3,
                     )
                     
                     await button_interaction.response.edit_message(
@@ -3180,15 +3198,15 @@ class GiftOperations(commands.Cog):
                 except Exception as e:
                     self.logger.exception(f"Error removing gift code channel for alliance {alliance_id}: {e}")
                     await button_interaction.response.send_message(
-                        "❌ An error occurred while removing the channel setting.",
+                        f"{pimp.deniedIcon} An error occurred while removing the channel setting.",
                         ephemeral=True
                     )
             
             async def cancel_removal(button_interaction: discord.Interaction):
                 cancel_embed = discord.Embed(
-                    title="❌ Removal Cancelled",
+                    title = f"{pimp.deniedIcon} Removal Cancelled",
                     description="The channel setting removal has been cancelled.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 )
                 await button_interaction.response.edit_message(
                     embed=cancel_embed,
@@ -3197,14 +3215,14 @@ class GiftOperations(commands.Cog):
             
             confirm_button = discord.ui.Button(
                 label="Remove Setting",
-                emoji="🗑️",
-                style=discord.ButtonStyle.danger
+                emoji=f"{pimp.deleteIcon}",
+                style=discord.ButtonStyle.secondary
             )
             confirm_button.callback = confirm_removal
             
             cancel_button = discord.ui.Button(
                 label="Cancel",
-                emoji="❌",
+                emoji=f"{pimp.deniedIcon}",
                 style=discord.ButtonStyle.secondary
             )
             cancel_button.callback = cancel_removal
@@ -3221,7 +3239,7 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Error in delete_gift_channel_for_alliance: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while processing the removal request.",
+                f"{pimp.deniedIcon} An error occurred while processing the removal request.",
                 ephemeral=True
             )
 
@@ -3230,28 +3248,28 @@ class GiftOperations(commands.Cog):
         admin_info = await self.get_admin_info(interaction.user.id)
         if not admin_info:
             await interaction.response.send_message(
-                "❌ You are not authorized to perform this action.",
+                f"{pimp.deniedIcon} You are not authorized to perform this action.",
                 ephemeral=True
             )
             return
         
         settings_embed = discord.Embed(
-            title="⚙️ Gift Code Settings",
+            title = f"{pimp.giftSettingsIcon} Gift Code Settings",
             description=(
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "📢 **Channel Management**\n"
-                "└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
-                "🎁 **Automatic Redemption**\n"
-                "└ Enable/disable auto-redemption of new valid gift codes\n\n"
-                "🔢 **Redemption Priority**\n"
-                "└ Change the order in which alliances auto-redeem new gift codes\n\n"
-                "🔍 **Channel History Scan**\n"
-                "└ Scan for gift codes in existing messages in a gift channel\n\n"
-                "⚙️ **CAPTCHA Settings**\n"
-                "└ Configure CAPTCHA-solver related settings and image saving\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"{pimp.divider1}\n\n"
+                f"{pimp.announceIcon} **Channel Management**\n"
+                f"└ Set up and manage the channel(s) where the bot scans for new codes\n\n"
+                f"{pimp.giftIcon} **Automatic Redemption**\n"
+                f"└ Enable/disable auto-redemption of new valid gift codes\n\n"
+                f"{pimp.giftHashtagIcon} **Redemption Priority**\n"
+                f"└ Change the order in which alliances auto-redeem new gift codes\n\n"
+                f"{pimp.magnifyingIcon} **Channel History Scan**\n"
+                f"└ Trigger an on-demand scan of existing messages in a gift channel\n\n"
+                f"{pimp.giftSettingsIcon} **CAPTCHA Settings**\n"
+                f"c└ Configure CAPTCHA-solver related settings and image saving\n"
+                f"\n{pimp.divider1}"
             ),
-            color=discord.Color.blue()
+            color = pimp.emColor1,
         )
         
         settings_view = SettingsMenuView(self)
@@ -3266,7 +3284,7 @@ class GiftOperations(commands.Cog):
         admin_info = await self.get_admin_info(interaction.user.id)
         if not admin_info:
             await interaction.response.send_message(
-                "❌ You are not authorized to perform this action.",
+                f"{pimp.deniedIcon} You are not authorized to perform this action.",
                 ephemeral=True
             )
             return
@@ -3275,9 +3293,9 @@ class GiftOperations(commands.Cog):
         if not available_alliances:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Available Alliances",
+                    title = f"{pimp.deniedIcon} No Available Alliances",
                     description="You don't have access to any alliances.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
@@ -3290,17 +3308,18 @@ class GiftOperations(commands.Cog):
             ORDER BY alliance_id
         """)
         channel_configs = self.cursor.fetchall()
-        
         alliance_names = {aid: name for aid, name in available_alliances}
-        main_embed = discord.Embed(
-            title="⚙️ Channel Management",
-            description="Manage gift code channels for your alliances.",
-            color=discord.Color.blue()
-        )
-        
+
         # Show configured channels
         if channel_configs:
+            pre_text = ""
             configured_text = ""
+            post_text = ""
+            description_text = ""
+            pre_text = f"Manage gift code channels for your alliances.\n"
+            pre_text += f"### {pimp.announceIcon} **Current Configurations**\n"
+            pre_text += f"{pimp.divider1}\n\n"
+            post_text += f"\n{pimp.divider1}\n"
             for alliance_id, channel_id in channel_configs:
                 if alliance_id in alliance_names:
                     alliance_name = alliance_names[alliance_id]
@@ -3310,36 +3329,33 @@ class GiftOperations(commands.Cog):
                         channel_name = f"<#{channel_id}>"
                     else:
                         channel_name = f"Unknown Channel ({channel_id})"
-                    configured_text += f"🏰 **{alliance_name}**\n📢 Channel: {channel_name}\n\n"
-            
+                    configured_text += f"{pimp.allianceIcon} **{alliance_name}**\n{pimp.announceIcon} Channel: {channel_name}\n"
             if configured_text:
-                main_embed.add_field(
-                    name="📋 Current Configurations",
-                    value=configured_text,
-                    inline=False
-                )
-        else:
-            main_embed.add_field(
-                name="📋 Current Configurations",
-                value="No gift code channels configured yet.",
-                inline=False
-            )
-        
+                description_text = pre_text + configured_text + post_text
+            else:
+                description_text = f"No gift code channels configured yet.\n\n"
+ 
+        main_embed = discord.Embed(
+            title = f"{pimp.giftSettingsIcon} Channel Management",
+            description = description_text,
+            color = pimp.emColor1,
+        )
+
         main_view = discord.ui.View(timeout=300)
         
         # Configure/Change Channel button
         config_button = discord.ui.Button(
             label="Configure Channel",
-            style=discord.ButtonStyle.primary,
-            emoji="📢"
+            style=discord.ButtonStyle.secondary,
+            emoji=f"{pimp.announceIcon}"
         )
         
         async def config_callback(config_interaction: discord.Interaction):
             # Show alliance selection for configuration
             alliance_embed = discord.Embed(
-                title="📢 Select Alliance to Configure",
+                title = f"{pimp.announceIcon} Select Alliance to Configure",
                 description="Choose an alliance to set up or change its gift code channel:",
-                color=discord.Color.blue()
+                color = pimp.emColor1,
             )
             
             alliance_options = []
@@ -3365,7 +3381,7 @@ class GiftOperations(commands.Cog):
                     label=name,
                     value=str(alliance_id),
                     description=description,
-                    emoji="🏰"
+                    emoji = f"{pimp.allianceIcon}"
                 ))
             
             alliance_select = discord.ui.Select(
@@ -3380,9 +3396,9 @@ class GiftOperations(commands.Cog):
                 alliance_name = alliance_names[alliance_id]
                 
                 channel_embed = discord.Embed(
-                    title=f"📢 Configure Channel for {alliance_name}",
+                    title=f"{pimp.announceIcon} Configure Channel for {alliance_name}",
                     description="Select a channel for gift codes:",
-                    color=discord.Color.blue()
+                    color = pimp.emColor1,
                 )
                 
                 # Using PaginatedChannelView from alliance.py for channel selection
@@ -3399,13 +3415,13 @@ class GiftOperations(commands.Cog):
                         self.conn.commit()
                         
                         success_embed = discord.Embed(
-                            title="✅ Channel Configured",
+                            title = f"{pimp.verifiedIcon} Channel Configured",
                             description=(
-                                f"🏰 **Alliance:** {alliance_name}\n"
-                                f"📢 **Channel:** <#{channel_id}>\n\n"
-                                f"✅ Channel has been successfully configured for gift code monitoring."
+                                f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                                f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
+                                f"{pimp.verifiedIcon} Channel has been successfully configured for gift code monitoring."
                             ),
-                            color=discord.Color.green()
+                            color=pimp.emColor3,
                         )
                         
                         await channel_interaction.response.edit_message(
@@ -3416,7 +3432,7 @@ class GiftOperations(commands.Cog):
                     except Exception as e:
                         self.logger.exception(f"Error configuring channel: {e}")
                         await channel_interaction.response.send_message(
-                            "❌ An error occurred while configuring the channel.",
+                            f"{pimp.deniedIcon} An error occurred while configuring the channel.",
                             ephemeral=True
                         )
                 
@@ -3446,17 +3462,17 @@ class GiftOperations(commands.Cog):
         # Remove Channel button (only show if there are configured channels)
         if channel_configs:
             remove_button = discord.ui.Button(
-                label="Remove Channel",
-                style=discord.ButtonStyle.danger,
-                emoji="🗑️"
+                label = "Remove Channel",
+                style = discord.ButtonStyle.secondary,
+                emoji = f"{pimp.deniedIcon}"
             )
             
             async def remove_callback(remove_interaction: discord.Interaction):
                 # Show alliance selection for removal
                 remove_embed = discord.Embed(
-                    title="🗑️ Select Alliance to Remove",
-                    description="Choose an alliance to remove its gift code channel configuration:",
-                    color=discord.Color.red()
+                    title = f"{pimp.deniedIcon} Select Alliance to Remove",
+                    description = "Choose an alliance to remove its gift code channel configuration:",
+                    color = pimp.emColor2,
                 )
                 
                 remove_options = []
@@ -3464,17 +3480,17 @@ class GiftOperations(commands.Cog):
                     if alliance_id in alliance_names:
                         name = alliance_names[alliance_id]
                         remove_options.append(discord.SelectOption(
-                            label=name,
-                            value=str(alliance_id),
-                            description=f"Remove channel <#{channel_id}>",
-                            emoji="🗑️"
+                            label = name,
+                            value = str(alliance_id),
+                            description = f"Remove channel <#{channel_id}>",
+                            emoji = f"{pimp.deniedIcon}"
                         ))
                 
                 remove_select = discord.ui.Select(
-                    placeholder="Select alliance to remove channel...",
-                    options=remove_options,
-                    min_values=1,
-                    max_values=1
+                    placeholder = "Select alliance to remove channel...",
+                    options = remove_options,
+                    min_values = 1,
+                    max_values = 1
                 )
                 
                 async def remove_select_callback(remove_select_interaction: discord.Interaction):
@@ -3486,7 +3502,7 @@ class GiftOperations(commands.Cog):
                     result = self.cursor.fetchone()
                     if not result:
                         await remove_select_interaction.response.send_message(
-                            "❌ Configuration not found.",
+                            f"{pimp.deniedIcon} Configuration not found.",
                             ephemeral=True
                         )
                         return
@@ -3495,28 +3511,28 @@ class GiftOperations(commands.Cog):
                     
                     # Confirmation embed
                     confirm_embed = discord.Embed(
-                        title="⚠️ Confirm Removal",
+                        title = f"{pimp.gifAlertIcon} Confirm Removal",
                         description=(
                             f"Are you sure you want to remove the gift code channel configuration?\n\n"
-                            f"🏰 **Alliance:** {alliance_name}\n"
-                            f"📢 **Channel:** <#{channel_id}>\n\n"
-                            f"⚠️ **Warning:** This will stop the bot from monitoring this channel for gift codes."
+                            f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                            f"{pimp.announceIcon} **Channel:** <#{channel_id}>\n\n"
+                            f"{pimp.gifAlertIcon} **Warning:** This will stop the bot from monitoring this channel for gift codes."
                         ),
-                        color=discord.Color.red()
+                        color=pimp.emColor2,
                     )
                     
                     confirm_view = discord.ui.View(timeout=60)
                     
                     confirm_button = discord.ui.Button(
                         label="Yes, Remove",
-                        style=discord.ButtonStyle.danger,
-                        emoji="✅"
+                        style=discord.ButtonStyle.secondary,
+                        emoji=f"{pimp.verifiedIcon}"
                     )
                     
                     cancel_button = discord.ui.Button(
                         label="Cancel",
                         style=discord.ButtonStyle.secondary,
-                        emoji="❌"
+                        emoji=f"{pimp.deniedIcon}"
                     )
                     
                     async def confirm_remove_callback(confirm_interaction: discord.Interaction):
@@ -3525,13 +3541,13 @@ class GiftOperations(commands.Cog):
                             self.conn.commit()
                             
                             success_embed = discord.Embed(
-                                title="✅ Channel Configuration Removed",
+                                title = f"{pimp.verifiedIcon} Channel Configuration Removed",
                                 description=(
                                     f"Successfully removed gift code channel configuration:\n\n"
-                                    f"🏰 **Alliance:** {alliance_name}\n"
-                                    f"📢 **Channel:** <#{channel_id}>"
+                                    f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                                    f"{pimp.announceIcon} **Channel:** <#{channel_id}>"
                                 ),
-                                color=discord.Color.green()
+                                color = pimp.emColor3,
                             )
                             
                             await confirm_interaction.response.edit_message(
@@ -3542,7 +3558,7 @@ class GiftOperations(commands.Cog):
                         except Exception as e:
                             self.logger.exception(f"Error removing channel configuration: {e}")
                             await confirm_interaction.response.send_message(
-                                f"❌ Error removing configuration: {str(e)}",
+                                f"{pimp.deniedIcon} Error removing configuration: {str(e)}",
                                 ephemeral=True
                             )
                     
@@ -3582,7 +3598,7 @@ class GiftOperations(commands.Cog):
         admin_info = await self.get_admin_info(interaction.user.id)
         if not admin_info:
             await interaction.response.send_message(
-                "❌ You are not authorized to perform this action.",
+                f"{pimp.deniedIcon} You are not authorized to perform this action.",
                 ephemeral=True
             )
             return
@@ -3591,9 +3607,9 @@ class GiftOperations(commands.Cog):
         if not available_alliances:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Available Alliances",
+                    title = f"{pimp.deniedIcon} No Available Alliances",
                     description="You don't have access to any alliances.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
@@ -3610,12 +3626,12 @@ class GiftOperations(commands.Cog):
         if not channel_configs:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Configured Channels",
+                    title = f"{pimp.deniedIcon} No Configured Channels",
                     description="No gift code channels have been configured yet.\nUse **Channel Management** to set up channels first.",
-                    color=discord.Color.red()
+                    color= pimp.emColor2,
                 ),
                 ephemeral=True
-            )
+         )
             return
         
         alliance_names = {aid: name for aid, name in available_alliances}
@@ -3630,9 +3646,9 @@ class GiftOperations(commands.Cog):
         if not accessible_configs:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Accessible Channels",
+                    title = f"{pimp.deniedIcon} No Accessible Channels",
                     description="You don't have access to any configured gift code channels.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
@@ -3640,9 +3656,9 @@ class GiftOperations(commands.Cog):
         
         # Create alliance selection menu
         scan_embed = discord.Embed(
-            title="🔍 Channel History Scan",
+            title = f"{pimp.magnifyingIcon} Channel History Scan",
             description="Select an alliance to scan its message history for potential gift codes:",
-            color=discord.Color.blue()
+            color = pimp.emColor1,
         )
         
         alliance_options = []
@@ -3656,17 +3672,17 @@ class GiftOperations(commands.Cog):
                 channel_display = f"Unknown Channel ({channel_id})"
 
             alliance_options.append(discord.SelectOption(
-                label=alliance_name,
-                value=str(alliance_id),
-                description=f"Scan {channel_display}",
-                emoji="🔍"
+                label = alliance_name,
+                value = str(alliance_id),
+                description = f"Scan {channel_display}",
+                emoji = f"{pimp.magnifyingIcon}"
             ))
         
         alliance_select = discord.ui.Select(
-            placeholder="Select alliance to scan...",
-            options=alliance_options,
-            min_values=1,
-            max_values=1
+            placeholder = "Select alliance to scan...",
+            options = alliance_options,
+            min_values = 1,
+            max_values = 1
         )
         
         async def alliance_select_callback(select_interaction: discord.Interaction):
@@ -3683,9 +3699,9 @@ class GiftOperations(commands.Cog):
             if not result:
                 await select_interaction.response.send_message(
                     embed=discord.Embed(
-                        title="❌ No Channel Configured",
+                        title = f"{pimp.deniedIcon} No Channel Configured",
                         description=f"No gift code channel is configured for {alliance_name}.",
-                        color=discord.Color.red()
+                        color = pimp.emColor2,
                     ),
                     ephemeral=True
                 )
@@ -3696,9 +3712,9 @@ class GiftOperations(commands.Cog):
             if not channel:
                 await select_interaction.response.send_message(
                     embed=discord.Embed(
-                        title="❌ Channel Not Found",
+                        title = f"{pimp.deniedIcon} Channel Not Found",
                         description="The configured channel could not be found.",
-                        color=discord.Color.red()
+                        color=emColor2,
                     ),
                     ephemeral=True
                 )
@@ -3706,32 +3722,32 @@ class GiftOperations(commands.Cog):
             
             # Create confirmation dialog
             confirm_embed = discord.Embed(
-                title="🔍 Confirm Historical Scan",
+                title = f"{pimp.magnifyingIcon} Confirm Historical Scan",
                 description=(
                     f"**Scan Details**\n"
-                    f"──────────────────────\n"
-                    f"🏰 **Alliance:** {alliance_name}\n"
-                    f"📢 **Channel:** #{channel.name}\n"
-                    f"📊 **Scan Limit:** Up to 75 historical messages\n\n"
-                    f"⚠️ **Note:** This will scan historical messages in the channel to find "
+                    f"{pimp.divider1}\n"
+                    f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                    f"{pimp.announceIcon} **Channel:** #{channel.name}\n"
+                    f"{pimp.listIcon} **Scan Limit:** Up to 75 historical messages\n\n"
+                    f"{pimp.gifAlertIcon} **Note:** This will scan historical messages in the channel to find "
                     f"potential gift codes. Use this carefully in channels with lots of non-gift-code messages.\n\n"
                     f"Do you want to proceed with the historical scan?"
                 ),
-                color=discord.Color.yellow()
+                color=emColor4,
             )
             
             confirm_view = discord.ui.View(timeout=60)
             
             confirm_button = discord.ui.Button(
                 label="Start Scan",
-                style=discord.ButtonStyle.success,
-                emoji="✅"
+                style=discord.ButtonStyle.secondary,
+                emoji=f"{pimp.verifiedIcon}"
             )
             
             cancel_button = discord.ui.Button(
                 label="Cancel",
                 style=discord.ButtonStyle.secondary,
-                emoji="❌"
+                emoji=f"{pimp.deniedIcon}"
             )
             
             async def confirm_scan_callback(confirm_interaction: discord.Interaction):
@@ -3752,34 +3768,34 @@ class GiftOperations(commands.Cog):
                 existing_pending = len(scan_results.get('existing_pending', []))
                 
                 results_text = f"**Scan Complete**\n"
-                results_text += f"──────────────────────\n"
-                results_text += f"🏰 **Alliance:** {alliance_name}\n"
-                results_text += f"📢 **Channel:** #{channel.name}\n"
-                results_text += f"📊 **Messages Scanned:** {messages_scanned}\n"
-                results_text += f"🎁 **Total Codes Found:** {total_found}\n\n"
+                results_text += f"{pimp.divider1}\n"
+                results_text += f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                results_text += f"{pimp.announceIcon} **Channel:** #{channel.name}\n"
+                results_text += f"{pimp.listIcon} **Messages Scanned:** {messages_scanned}\n"
+                results_text += f"{pimp.giftIcon} **Total Codes Found:** {total_found}\n\n"
                 
                 if total_found > 0:
                     results_text += f"**Validation Results:**\n"
                     if new_valid > 0:
-                        results_text += f"✅ New Valid Codes: {new_valid}\n"
+                        results_text += f"{pimp.verifiedIcon} New Valid Codes: {new_valid}\n"
                     if new_invalid > 0:
-                        results_text += f"❌ New Invalid Codes: {new_invalid}\n"
+                        results_text += f"{pimp.deniedIcon} New Invalid Codes: {new_invalid}\n"
                     if existing_valid > 0:
-                        results_text += f"✅ Previously Valid: {existing_valid}\n"
+                        results_text += f"{pimp.verifiedIcon} Previously Valid: {existing_valid}\n"
                     if existing_invalid > 0:
-                        results_text += f"❌ Previously Invalid: {existing_invalid}\n"
+                        results_text += f"{pimp.deniedIcon} Previously Invalid: {existing_invalid}\n"
                     if existing_pending > 0:
-                        results_text += f"⚠️ Pending Validation: {existing_pending}\n"
+                        results_text += f"{pimp.gifAlertIcon} Pending Validation: {existing_pending}\n"
                     
-                    results_text += f"\n📝 **Note:** A detailed summary has been posted in #{channel.name}"
+                    results_text += f"\n{pimp.listIcon} **Note:** A detailed summary has been posted in #{channel.name}"
                 else:
                     results_text += f"No gift codes found in the scanned messages."
                 
                 await confirm_interaction.edit_original_response(
                     embed=discord.Embed(
-                        title="🔍 History Scan Complete",
+                        title = f"{pimp.magnifyingIcon} History Scan Complete",
                         description=results_text,
-                        color=discord.Color.green()
+                        color=pimp.emColor3,
                     ),
                     view=None
                 )
@@ -3787,9 +3803,9 @@ class GiftOperations(commands.Cog):
             async def cancel_scan_callback(cancel_interaction: discord.Interaction):
                 await cancel_interaction.response.edit_message(
                     embed=discord.Embed(
-                        title="❌ Scan Cancelled",
+                        title = f"{pimp.deniedIcon} Scan Cancelled",
                         description="History scan has been cancelled.",
-                        color=discord.Color.red()
+                        color = pimp.emColor2,
                     ),
                     view=None
                 )
@@ -3818,7 +3834,7 @@ class GiftOperations(commands.Cog):
         admin_info = await self.get_admin_info(interaction.user.id)
         if not admin_info:
             await interaction.response.send_message(
-                "❌ You are not authorized to perform this action.",
+                f"{pimp.deniedIcon} You are not authorized to perform this action.",
                 ephemeral=True
             )
             return
@@ -3827,9 +3843,9 @@ class GiftOperations(commands.Cog):
         if not available_alliances:
             await interaction.response.send_message(
                 embed=discord.Embed(
-                    title="❌ No Available Alliances",
+                    title = f"{pimp.deniedIcon} No Available Alliances",
                     description="You don't have access to any alliances.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 ),
                 ephemeral=True
             )
@@ -3847,14 +3863,14 @@ class GiftOperations(commands.Cog):
                 alliances_with_counts.append((alliance_id, name, member_count))
 
         auto_gift_embed = discord.Embed(
-            title="⚙️ Gift Code Settings",
+            title = f"{pimp.giftSettingsIcon} Gift Code Settings",
             description=(
                 "Select an alliance to configure automatic redemption:\n\n"
                 "**Alliance List**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"{pimp.divider1}\n"
                 "Select an alliance from the list below:\n"
             ),
-            color=discord.Color.blue()
+            color = pimp.emColor1,
         )
 
         view = AllianceSelectView(alliances_with_counts, self)
@@ -3863,14 +3879,14 @@ class GiftOperations(commands.Cog):
             label="ENABLE ALL ALLIANCES",
             value="enable_all",
             description="Enable automatic redemption for all alliances",
-            emoji="✅"
+            emoji=f"{pimp.verifiedIcon}"
         ))
         
         view.current_select.options.insert(1, discord.SelectOption(
             label="DISABLE ALL ALLIANCES",
             value="disable_all",
             description="Disable automatic redemption for all alliances",
-            emoji="❌"
+            emoji=f"{pimp.deniedIcon}"
         ))
 
         async def alliance_callback(select_interaction: discord.Interaction):
@@ -3879,7 +3895,7 @@ class GiftOperations(commands.Cog):
                 
                 if selected_value in ["enable_all", "disable_all"]:
                     status = 1 if selected_value == "enable_all" else 0
-
+                    
                     for alliance_id, _, _ in alliances_with_counts:
                         if status == 1:
                             # When enabling, assign next available priority
@@ -3910,16 +3926,16 @@ class GiftOperations(commands.Cog):
 
                     status_text = "enabled" if status == 1 else "disabled"
                     success_embed = discord.Embed(
-                        title="✅ Automatic Redemption Updated",
+                        title = f"{pimp.verifiedIcon} Automatic Redemption Updated",
                         description=(
-                            f"**Configuration Details**\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"🌐 **Scope:** All Alliances\n"
-                            f"📊 **Status:** Automatic redemption {status_text}\n"
-                            f"👤 **Updated by:** {select_interaction.user.mention}\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"### **Configuration Details**\n"
+                            f"{pimp.divider1}\n\n"
+                            f"{pimp.allianceIcon} **Scope:** All Alliances\n"
+                            f"{pimp.announceIcon} **Status:** Automatic redemption {status_text}\n"
+                            f"{pimp.avatarIcon} **Updated by:** {select_interaction.user.mention}\n\n"
+                            f"{pimp.divider1}\n"
                         ),
-                        color=discord.Color.green()
+                        color = pimp.emColor3,
                     )
                     
                     await select_interaction.response.edit_message(
@@ -3934,16 +3950,16 @@ class GiftOperations(commands.Cog):
                 current_setting = "enabled" if current_status.get(alliance_id, 0) == 1 else "disabled"
                 
                 confirm_embed = discord.Embed(
-                    title="⚙️ Automatic Redemption Configuration",
+                    title = f"{pimp.giftSettingsIcon} Automatic Redemption Configuration",
                     description=(
-                        f"**Alliance Details**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🏰 **Alliance:** {alliance_name}\n"
-                        f"📊 **Current Status:** Automatic redemption is {current_setting}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"### **Alliance Details**\n\n"
+                        f"{pimp.divider1}\n\n"
+                        f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                        f"{pimp.announceIcon} **Current Status:** Automatic redemption is {current_setting}\n\n"
+                        f"{pimp.divider1}\n\n"
                         f"Do you want to enable or disable automatic redemption for this alliance?"
                     ),
-                    color=discord.Color.yellow()
+                    color = pimp.emColor4,
                 )
 
                 confirm_view = discord.ui.View()
@@ -3981,16 +3997,16 @@ class GiftOperations(commands.Cog):
 
                         status_text = "enabled" if status == 1 else "disabled"
                         success_embed = discord.Embed(
-                            title="✅ Automatic Redemption Updated",
+                            title = f"{pimp.verifiedIcon} Automatic Redemption Updated",
                             description=(
-                                f"**Configuration Details**\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                f"🏰 **Alliance:** {alliance_name}\n"
-                                f"📊 **Status:** Automatic redemption {status_text}\n"
-                                f"👤 **Updated by:** {button_interaction.user.mention}\n"
-                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"### **Configuration Details**\n"
+                                f"{pimp.divider1}\n\n"
+                                f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                                f"{pimp.announceIcon} **Status:** Automatic redemption {status_text}\n"
+                                f"{pimp.avatarIcon} **Updated by:** {button_interaction.user.mention}\n\n"
+                                f"{pimp.divider1}\n"
                             ),
-                            color=discord.Color.green()
+                            color = pimp.emColor3,
                         )
                         
                         await button_interaction.response.edit_message(
@@ -4002,27 +4018,27 @@ class GiftOperations(commands.Cog):
                         self.logger.exception(f"Button callback error: {str(e)}")
                         if not button_interaction.response.is_done():
                             await button_interaction.response.send_message(
-                                "❌ An error occurred while updating the settings.",
+                                f"{pimp.deniedIcon} An error occurred while updating the settings.",
                                 ephemeral=True
                             )
                         else:
                             await button_interaction.followup.send(
-                                "❌ An error occurred while updating the settings.",
+                                f"{pimp.deniedIcon} An error occurred while updating the settings.",
                                 ephemeral=True
                             )
 
                 confirm_button = discord.ui.Button(
                     label="Enable",
-                    emoji="✅",
-                    style=discord.ButtonStyle.success,
+                    emoji=f"{pimp.verifiedIcon}",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="confirm"
                 )
                 confirm_button.callback = button_callback
 
                 deny_button = discord.ui.Button(
                     label="Disable",
-                    emoji="❌",
-                    style=discord.ButtonStyle.danger,
+                    emoji=f"{pimp.deniedIcon}",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="deny"
                 )
                 deny_button.callback = button_callback
@@ -4045,12 +4061,12 @@ class GiftOperations(commands.Cog):
                 self.logger.exception(f"Error in alliance selection: {e}")
                 if not select_interaction.response.is_done():
                     await select_interaction.response.send_message(
-                        "❌ An error occurred while processing your selection.",
+                        f"{pimp.deniedIcon} An error occurred while processing your selection.",
                         ephemeral=True
                     )
                 else:
                     await select_interaction.followup.send(
-                        "❌ An error occurred while processing your selection.",
+                        f"{pimp.deniedIcon} An error occurred while processing your selection.",
                         ephemeral=True
                     )
 
@@ -4098,14 +4114,14 @@ class GiftOperations(commands.Cog):
             
             if not (ocr_enabled == 1 and self.captcha_solver):
                 error_embed = discord.Embed(
-                    title="❌ OCR/Captcha Solver Disabled",
+                    title = f"{pimp.deniedIcon} OCR/Captcha Solver Disabled",
                     description=(
                         f"**Gift Code:** `{giftcode}`\n"
                         f"**Alliance:** `{alliance_name}`\n\n"
-                        f"⚠️ Gift code redemption requires the OCR/captcha solver to be enabled.\n"
+                        f"{pimp.gifAlertIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
                         f"Please enable it first using the settings command."
                     ),
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 )
                 await channel.send(embed=error_embed)
                 self.logger.info(f"GiftOps: Skipping alliance {alliance_id} - OCR disabled or solver not ready")
@@ -4143,18 +4159,18 @@ class GiftOperations(commands.Cog):
 
             if final_invalid_reason_for_embed:
                 error_embed = discord.Embed(
-                    title="❌ Gift Code Invalid",
+                    title = f"{pimp.deniedIcon} Gift Code Invalid",
                     description=(
                         f"**Gift Code Details**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎁 **Gift Code:** `{giftcode}`\n"
-                        f"🏰 **Alliance:** `{alliance_name}`\n"
-                        f"❌ **Status:** {final_invalid_reason_for_embed}\n"
-                        f"📝 **Action:** Code status is 'invalid' in database\n"
-                        f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{pimp.divider1}\n"
+                        f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                        f"{pimp.allianceIcon} **Alliance:** `{alliance_name}`\n"
+                        f"{pimp.deniedIcon} **Status:** {final_invalid_reason_for_embed}\n"
+                        f"{pimp.listIcon} **Action:** Code status is 'invalid' in database\n"
+                        f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                        f"{pimp.divider1}\n"
                     ),
-                    color=discord.Color.red()
+                    color=emColor2,
                 )
                 await channel.send(embed=error_embed)
                 return False
@@ -4203,18 +4219,18 @@ class GiftOperations(commands.Cog):
             self.logger.info(f"GiftOps: Pre-processed {len(cached_member_statuses)} members from cache. {len(active_members_to_process)} remaining.")
 
             # Progress Embed
-            embed = discord.Embed(title=f"🎁 Gift Code Redemption: {giftcode}", color=discord.Color.blue())
+            embed = discord.Embed(title=f"{pimp.giftIcon} Gift Code Redemption: {giftcode}", color=pimp.emColor1)
             def update_embed_description(include_errors=False):
                 base_description = (
-                    f"**Status for Alliance:** `{alliance_name}`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👥 **Total Members:** `{total_members}`\n"
-                    f"✅ **Success:** `{success_count}`\n"
-                    f"ℹ️ **Already Redeemed:** `{received_count}`\n"
-                    f"🔄 **Retrying:** `{len(retry_queue)}`\n"
-                    f"❌ **Failed:** `{failed_count}`\n"
-                    f"⏳ **Processed:** `{processed_count}/{total_members}`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"### **Status for Alliance:** `{alliance_name}`\n"
+                    f"\n{pimp.divider1}\n\n"
+                    f"{pimp.allianceIcon} **Total Members:** `{total_members}`\n"
+                    f"{pimp.verifiedIcon} **Success:** `{success_count}`\n"
+                    f"{pimp.infoIcon} **Already Redeemed:** `{received_count}`\n"
+                    f"{pimp.processingIcon} **Retrying:** `{len(retry_queue)}`\n"
+                    f"{pimp.deniedIcon} **Failed:** `{failed_count}`\n"
+                    f"{pimp.timeIcon} **Processed:** `{processed_count}/{total_members}`\n"
+                    f"\n{pimp.divider1}\n"
                 )
                 
                 if include_errors and failed_count > 0:
@@ -4222,17 +4238,17 @@ class GiftOperations(commands.Cog):
                     if non_success_errors:
                         # Define user-friendly messages for each error type
                         error_descriptions = {
-                            "TOO_POOR_SPEND_MORE": "💸 **{count}** members failed to spend enough to reach VIP12.",
-                            "TOO_SMALL_SPEND_MORE": "🔥 **{count}** members failed due to insufficient furnace level.",
-                            "TIMEOUT_RETRY": "⏱️ **{count}** members were staring into the void, until the void finally timed out on them.",
-                            "LOGIN_EXPIRED_MID_PROCESS": "🔒 **{count}** members login failed mid-process. How'd that even happen?",
-                            "LOGIN_FAILED": "🔐 **{count}** members failed due to login issues. Try logging it off and on again!",
-                            "CAPTCHA_SOLVING_FAILED": "🤖 **{count}** members lost the battle against CAPTCHA. You sure those weren't just bots?",
-                            "CAPTCHA_SOLVER_ERROR": "🔧 **{count}** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
-                            "OCR_DISABLED": "🚫 **{count}** members failed since OCR is disabled. Try turning it on first!",
-                            "SIGN_ERROR": "🔐 **{count}** members failed due to a signature error. Something went wrong.",
-                            "ERROR": "❌ **{count}** members failed due to a general error. Might want to check the logs.",
-                            "UNKNOWN_API_RESPONSE": "❓ **{count}** members failed with an unknown API response. Say what?"
+                            f"TOO_POOR_SPEND_MORE": f"💸 **{count}** members failed to spend enough to reach VIP12.",
+                            f"TOO_SMALL_SPEND_MORE": f"🔥 **{count}** members failed due to insufficient furnace level.",
+                            f"TIMEOUT_RETRY": f"{pimp.timeIcon} **{count}** members were staring into the void, until the void finally timed out on them.",
+                            f"LOGIN_EXPIRED_MID_PROCESS": f"🔒 **{count}** members login failed mid-process. How'd that even happen?",
+                            f"LOGIN_FAILED": f"🔐 **{count}** members failed due to login issues. Try logging it off and on again!",
+                            f"CAPTCHA_SOLVING_FAILED": f"{pimp.robotIcon} **{count}** members lost the battle against CAPTCHA. You sure those weren't just bots?",
+                            f"CAPTCHA_SOLVER_ERROR": f"🔧 **{count}** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
+                            f"OCR_DISABLED": f"🚫 **{count}** members failed since OCR is disabled. Try turning it on first!",
+                            f"SIGN_ERROR": f"🔐 **{count}** members failed due to a signature error. Something went wrong.",
+                            f"ERROR": f"{pimp.deniedIcon} **{count}** members failed due to a general error. Might want to check the logs.",
+                            f"UNKNOWN_API_RESPONSE": f"{pimp.questionIcon} **{count}** members failed with an unknown API response. Say what?"
                         }
                         
                         base_description += "\n**Error Breakdown:**\n"
@@ -4312,18 +4328,18 @@ class GiftOperations(commands.Cog):
                     }
                     status_reason_runtime = reason_map_runtime.get(response_status, f"Code invalid ({response_status})")
                     
-                    embed.title = f"❌ Gift Code Invalid: {giftcode}" 
-                    embed.color = discord.Color.red()
+                    embed.title = f"{pimp.deniedIcon} Gift Code Invalid: {giftcode}" 
+                    embed.color = pimp.emColor2
                     embed.description = (
                         f"**Gift Code Redemption Halted**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎁 **Gift Code:** `{giftcode}`\n"
-                        f"🏰 **Alliance:** `{alliance_name}`\n"
-                        f"❌ **Reason:** {status_reason_runtime}\n"
-                        f"📝 **Action:** Code marked as invalid in database. Remaining members for this alliance will not be processed.\n"
-                        f"📊 **Processed before halt:** {processed_count}/{total_members}\n"
-                        f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{pimp.divider1}\n"
+                        f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                        f"{pimp.allianceIcon} **Alliance:** `{alliance_name}`\n"
+                        f"{pimp.deniedIcon} **Reason:** {status_reason_runtime}\n"
+                        f"{pimp.listIcon} **Action:** Code marked as invalid in database. Remaining members for this alliance will not be processed.\n"
+                        f"{pimp.announceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
+                        f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                        f"{pimp.divider1}\n"
                     )
                     embed.clear_fields()
 
@@ -4341,18 +4357,18 @@ class GiftOperations(commands.Cog):
                 if response_status == "SIGN_ERROR":
                     self.logger.error(f"GiftOps: Sign error detected (likely wrong encrypt key). Stopping redemption for alliance {alliance_id}.")
                     
-                    embed.title = f"⚙️ Sign Error: {giftcode}"
-                    embed.color = discord.Color.red()
+                    embed.title = f"{pimp.giftSettingsIcon} Sign Error: {giftcode}"
+                    embed.color = pimp.emColor2
                     embed.description = (
                         f"**Bot Configuration Error**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎁 **Gift Code:** `{giftcode}`\n"
-                        f"🏰 **Alliance:** `{alliance_name}`\n"
-                        f"⚙️ **Reason:** Sign Error (check bot config/encrypt key)\n"
-                        f"📝 **Action:** Redemption stopped. Check bot configuration.\n"
-                        f"📊 **Processed before halt:** {processed_count}/{total_members}\n"
-                        f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{pimp.divider1}\n"
+                        f"{pimp.giftIcon} **Gift Code:** `{giftcode}`\n"
+                        f"{pimp.allianceIcon} **Alliance:** `{alliance_name}`\n"
+                        f"{pimp.giftSettingsIcon} **Reason:** Sign Error (check bot config/encrypt key)\n"
+                        f"{pimp.listIcon} **Action:** Redemption stopped. Check bot configuration.\n"
+                        f"{pimp.announceIcon} **Processed before halt:** {processed_count}/{total_members}\n"
+                        f"{pimp.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                        f"{pimp.divider1}\n"
                     )
                     embed.clear_fields()
                     
@@ -4471,13 +4487,13 @@ class GiftOperations(commands.Cog):
             # Final Embed Update
             if not code_is_invalid:
                 self.logger.info(f"GiftOps: Alliance {alliance_id} processing loop finished. Preparing final update.")
-                final_title = f"🎁 Gift Code Process Complete: {giftcode}"
-                final_color = discord.Color.green() if failed_count == 0 and total_members > 0 else \
-                              discord.Color.orange() if success_count > 0 or received_count > 0 else \
-                              discord.Color.red()
+                final_title = f"{pimp.giftIcon} Gift Code Process Complete: {giftcode}"
+                final_color = pimp.emColor3 if failed_count == 0 and total_members > 0 else \
+                              pimp.emColor4 if success_count > 0 or received_count > 0 else \
+                              pimp.emColor2
                 if total_members == 0:
-                    final_title = f"ℹ️ No Members to Process for Code: {giftcode}"
-                    final_color = discord.Color.light_grey()
+                    final_title = f"{pimp.infoIcon} No Members to Process for Code: {giftcode}"
+                    final_color = pimp.emColor1
 
                 embed.title = final_title
                 embed.color = final_color
@@ -4551,13 +4567,13 @@ class GiftOperations(commands.Cog):
             self.logger.exception(f"GiftOps: UNEXPECTED ERROR in use_giftcode_for_alliance for {alliance_id}/{giftcode}: {str(e)}")
             self.logger.exception(f"Traceback: {traceback.format_exc()}")
             try:
-                if 'channel' in locals() and channel: await channel.send(f"⚠️ An unexpected error occurred processing `{giftcode}` for {alliance_name}.")
+                if 'channel' in locals() and channel: await channel.send(f"{alertIcon} An unexpected error occurred processing `{giftcode}` for {alliance_name}.")
             except Exception: pass
             return False
 
 class CreateGiftCodeModal(discord.ui.Modal):
     def __init__(self, cog):
-        super().__init__(title="Create Gift Code")
+        super().__init__(title = f"Create Gift Code")
         self.cog = cog
         
         self.giftcode = discord.ui.TextInput(
@@ -4575,27 +4591,28 @@ class CreateGiftCodeModal(discord.ui.Modal):
 
         code = self.cog.clean_gift_code(self.giftcode.value)
         logger.info(f"[CreateGiftCodeModal] Code entered: {code}")
-        final_embed = discord.Embed(title="🎁 Gift Code Creation Result")
+        final_embed = discord.Embed(title=f"{pimp.giftIcon} Gift Code Creation Result")
 
         # Check if code already exists
         self.cog.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (code,))
         if self.cog.cursor.fetchone():
             logger.info(f"[CreateGiftCodeModal] Code {code} already exists in DB.")
-            final_embed.title = "ℹ️ Gift Code Exists"
+            final_embed.title = f"{pimp.infoIcon} Gift Code Exists"
             final_embed.description = (
-                f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"🎁 **Gift Code:** `{code}`\n"
-                f"✅ **Status:** Code already exists in database.\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**Gift Code Details**"
+                f"\n{pimp.divider1}\n"
+                f"{pimp.giftIcon} **Gift Code:** `{code}`\n"
+                f"{pimp.verifiedIcon} **Status:** Code already exists in database.\n"
+                f"{pimp.divider1}\n"
             )
-            final_embed.color = discord.Color.blue()
+            final_embed.color = pimp.emColor1,
         else: # Validate the code immediately
             logger.info(f"[CreateGiftCodeModal] Validating code {code} before adding to DB.")
             
             validation_embed = discord.Embed(
-                title="🔄 Validating Gift Code...",
-                description=f"Checking if `{code}` is valid...",
-                color=discord.Color.blue()
+                title = f"{pimp.processingIcon} Validating Gift Code...",
+                description = f"Checking if `{code}` is valid...",
+                color = pimp.emColor1,
             )
             await interaction.edit_original_response(embed=validation_embed)
             
@@ -4607,28 +4624,29 @@ class CreateGiftCodeModal(discord.ui.Modal):
                 if hasattr(self.cog, 'api') and self.cog.api:
                     asyncio.create_task(self.cog.api.add_giftcode(code))
                 
-                final_embed.title = "✅ Gift Code Validated"
+                final_embed.title = f"{pimp.verifiedIcon} Gift Code Validated"
                 final_embed.description = (
-                    f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🎁 **Gift Code:** `{code}`\n"
-                    f"✅ **Status:** {validation_msg}\n"
-                    f"📝 **Action:** Added to database and sent to API\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**Gift Code Details**"
+                    f"\n{pimp.divider1}\n"
+                    f"{pimp.giftIcon} **Gift Code:** `{code}`\n"
+                    f"{pimp.verifiedIcon} **Status:** {validation_msg}\n"
+                    f"{pimp.listIcon} **Action:** Added to database and sent to API\n"
+                    f"{pimp.divider1}\n"
                 )
-                final_embed.color = discord.Color.green()
+                final_embed.color = pimp.emColor3,
                 
             elif is_valid is False: # Invalid code - do not add
                 logger.warning(f"[CreateGiftCodeModal] Code '{code}' is invalid: {validation_msg}")
                 
-                final_embed.title = "❌ Invalid Gift Code"
+                final_embed.title = f"{pimp.deniedIcon} Invalid Gift Code"
                 final_embed.description = (
-                    f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🎁 **Gift Code:** `{code}`\n"
-                    f"❌ **Status:** {validation_msg}\n"
-                    f"📝 **Action:** Code not added to database\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"**Gift Code Details**\n{pimp.divider1}\n"
+                    f"{pimp.giftIcon} **Gift Code:** `{code}`\n"
+                    f"{pimp.deniedIcon} **Status:** {validation_msg}\n"
+                    f"{pimp.listIcon} **Action:** Code not added to database\n"
+                    f"{pimp.divider1}\n"
                 )
-                final_embed.color = discord.Color.red()
+                final_embed.color = pimp.emColor2,
                 
             else: # Validation inconclusive - add as pending
                 logger.warning(f"[CreateGiftCodeModal] Code '{code}' validation inconclusive: {validation_msg}")
@@ -4641,21 +4659,21 @@ class CreateGiftCodeModal(discord.ui.Modal):
                     )
                     self.cog.conn.commit()
                     
-                    final_embed.title = "⚠️ Gift Code Added (Pending)"
+                    final_embed.title = f"{pimp.gifAlertIcon} Gift Code Added (Pending)"
                     final_embed.description = (
-                        f"**Gift Code Details**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🎁 **Gift Code:** `{code}`\n"
-                        f"⚠️ **Status:** {validation_msg}\n"
-                        f"📝 **Action:** Added for later validation\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"**Gift Code Details**\n{pimp.divider1}\n"
+                        f"{pimp.giftIcon} **Gift Code:** `{code}`\n"
+                        f"{pimp.gifAlertIcon} **Status:** {validation_msg}\n"
+                        f"{pimp.listIcon} **Action:** Added for later validation\n"
+                        f"{pimp.divider1}\n"
                     )
-                    final_embed.color = discord.Color.yellow()
+                    final_embed.color = pimp.emColor4,
                     
                 except sqlite3.Error as db_err:
                     logger.exception(f"[CreateGiftCodeModal] DB Error inserting code '{code}': {db_err}")
-                    final_embed.title = "❌ Database Error"
+                    final_embed.title = f"{pimp.deniedIcon} Database Error"
                     final_embed.description = f"Failed to save gift code `{code}` to the database. Please check logs."
-                    final_embed.color = discord.Color.red()
+                    final_embed.color = pimp.emColor2,
 
         try:
             await interaction.edit_original_response(embed=final_embed)
@@ -4663,7 +4681,7 @@ class CreateGiftCodeModal(discord.ui.Modal):
         except Exception as final_edit_err:
             logger.exception(f"[CreateGiftCodeModal] Failed to edit interaction with final result for {code}: {final_edit_err}")
 
-class DeleteGiftCodeModal(discord.ui.Modal, title="Delete Gift Code"):
+class DeleteGiftCodeModal(discord.ui.Modal, title = f"{pimp.giftDeleteIcon} Delete Gift Code"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -4680,7 +4698,7 @@ class DeleteGiftCodeModal(discord.ui.Modal, title="Delete Gift Code"):
         self.cog.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (code,))
         if not self.cog.cursor.fetchone():
             await interaction.response.send_message(
-                "❌ Gift code not found!",
+                f"{pimp.deniedIcon} Gift code not found!",
                 ephemeral=True
             )
             return
@@ -4690,14 +4708,14 @@ class DeleteGiftCodeModal(discord.ui.Modal, title="Delete Gift Code"):
         self.cog.conn.commit()
         
         embed = discord.Embed(
-            title="✅ Gift Code Deleted",
+            title = f"{pimp.verifiedIcon} Gift Code Deleted",
             description=f"Gift code `{code}` has been deleted successfully.",
-            color=discord.Color.green()
+            color = pimp.emColor3,
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-class TestIDModal(discord.ui.Modal, title="Change Test ID"):
+class TestIDModal(discord.ui.Modal, title = f"Change Test ID"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -4727,7 +4745,7 @@ class TestIDModal(discord.ui.Modal, title="Change Test ID"):
             new_fid = self.test_fid.value.strip()
             
             if not new_fid.isdigit():
-                await interaction.followup.send("❌ Invalid ID format. Please enter a numeric ID.", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} Invalid ID format. Please enter a numeric ID.", ephemeral=True)
                 return
             
             is_valid, message = await self.cog.verify_test_fid(new_fid)
@@ -4737,79 +4755,101 @@ class TestIDModal(discord.ui.Modal, title="Change Test ID"):
                 
                 if success:
                     embed = discord.Embed(
-                        title="✅ Test ID Updated",
+                        title = f"{pimp.verifiedIcon} Test ID Updated",
                         description=(
                             f"**Test ID Configuration**\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"🆔 **ID:** `{new_fid}`\n"
-                            f"✅ **Status:** Validated\n"
-                            f"📝 **Action:** Updated in database\n"
-                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                            f"{pimp.divider1}\n"
+                            f"{pimp.fidIcon} **ID:** `{new_fid}`\n"
+                            f"{pimp.verifiedIcon} **Status:** Validated\n"
+                            f"{pimp.listIcon} **Action:** Updated in database\n"
+                            f"{pimp.divider1}\n"
                         ),
-                        color=discord.Color.green()
+                        color=pimp.emColor3,
                     )
                     await interaction.followup.send(embed=embed, ephemeral=True)
                     
                     await self.cog.show_ocr_settings(interaction)
                 else:
-                    await interaction.followup.send("❌ Failed to update test ID in database. Check logs for details.", ephemeral=True)
+                    await interaction.followup.send(f"{pimp.deniedIcon} Failed to update test ID in database. Check logs for details.", ephemeral=True)
             else:
                 embed = discord.Embed(
-                    title="❌ Invalid Test ID",
+                    title = f"{pimp.deniedIcon} Invalid Test ID",
                     description=(
                         f"**Test ID Validation**\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🆔 **ID:** `{new_fid}`\n"
-                        f"❌ **Status:** Invalid ID\n"
-                        f"📝 **Reason:** {message}\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{pimp.divider1}\n"
+                        f"{pimp.fidIcon} **ID:** `{new_fid}`\n"
+                        f"{pimp.deniedIcon} **Status:** Invalid ID\n"
+                        f"{pimp.listIcon} **Reason:** {message}\n"
+                        f"{pimp.divider1}\n"
                     ),
-                    color=discord.Color.red()
+                    color = pimp.emColor2,
                 )
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 
         except Exception as e:
             self.cog.logger.exception(f"Error updating test ID: {e}")
-            await interaction.followup.send(f"❌ An error occurred: {str(e)}", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred: {str(e)}", ephemeral=True)
 
 class GiftView(discord.ui.View):
+    
     def __init__(self, cog):
         super().__init__(timeout=7200)
         self.cog = cog
 
     @discord.ui.button(
         label="Add Gift Code",
-        style=discord.ButtonStyle.green,
+        style=discord.ButtonStyle.secondary,
         custom_id="create_gift",
-        emoji="🎫",
+        emoji=f"{pimp.giftAddIcon}",
         row=0
     )
+
     async def create_gift(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.create_gift_code(interaction)
-        
+
     @discord.ui.button(
-        label="List Gift Codes",
-        style=discord.ButtonStyle.blurple,
-        custom_id="list_gift",
-        emoji="📋",
+        label="Delete Gift Code",
+        emoji=f"{pimp.giftDeleteIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="delete_gift",
         row=0
     )
+
+    async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await self.cog.delete_gift_code(interaction)
+        except Exception as e:
+            self.logger.exception(f"Delete gift button error: {e}")
+            await interaction.response.send_message(
+                f"{pimp.deniedIcon} An error occurred while processing delete request.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="List Gift Codes",
+        style=discord.ButtonStyle.secondary,
+        custom_id="giftsIcon",
+        emoji=f"{pimp.giftsIcon}",
+        row=1
+    )
+
     async def list_gift(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.list_gift_codes(interaction)
 
     @discord.ui.button(
-        label="Redeem Gift Code",
-        emoji="🎯",
-        style=discord.ButtonStyle.primary,
+        label="Use Gift Code",
+        emoji=f"{pimp.giftCheckIcon}",
+        style=discord.ButtonStyle.secondary,
         custom_id="use_gift_alliance",
-        row=0
+        row=1
     )
+
     async def use_gift_alliance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             admin_info = await self.cog.get_admin_info(interaction.user.id)
             if not admin_info:
                 await interaction.response.send_message(
-                    "❌ You are not authorized to perform this action.",
+                    f"{pimp.deniedIcon} You are not authorized to perform this action.",
                     ephemeral=True
                 )
                 return
@@ -4818,9 +4858,9 @@ class GiftView(discord.ui.View):
             if not available_alliances:
                 await interaction.response.send_message(
                     embed=discord.Embed(
-                        title="❌ No Available Alliances",
+                        title = f"{pimp.deniedIcon} No Available Alliances",
                         description="You don't have access to any alliances.",
-                        color=discord.Color.red()
+                        color=emColor2,
                     ),
                     ephemeral=True
                 )
@@ -4835,42 +4875,31 @@ class GiftView(discord.ui.View):
                     alliances_with_counts.append((alliance_id, name, member_count))
 
             alliance_embed = discord.Embed(
-                title="🎯 Redeem Gift Code",
+                title = f"{pimp.giftCheckIcon} Use Gift Code",
                 description=(
-                    "Select an alliance to use gift code:\n\n"
-                    "**Alliance List**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "Select an alliance from the list below:\n"
+                    f"Select an alliance to use gift code:\n"
+                    f"### **Alliance List**\n"
+                    f"{pimp.divider1}\n\n"
+                    f"Select an alliance from the list below:\n"
                 ),
-                color=discord.Color.blue()
+                color = pimp.emColor1,
             )
 
             view = AllianceSelectView(alliances_with_counts, self.cog)
-
+            
             view.current_select.options.insert(0, discord.SelectOption(
                 label="ALL ALLIANCES",
                 value="all",
                 description=f"Apply to all {len(alliances_with_counts)} alliances",
-                emoji="🌐"
+                emoji=f"{pimp.allianceIcon}"
             ))
 
             async def alliance_callback(select_interaction: discord.Interaction):
                 try:
                     selected_value = view.current_select.values[0]
-
+                    
                     if selected_value == "all":
-                        # Get alliances ordered by priority
-                        alliance_ids = [aid for aid, _, _ in alliances_with_counts]
-                        placeholders = ','.join('?' * len(alliance_ids))
-                        self.cog.cursor.execute(f"""
-                            SELECT alliance_id FROM giftcodecontrol
-                            WHERE alliance_id IN ({placeholders})
-                            ORDER BY priority ASC, alliance_id ASC
-                        """, alliance_ids)
-                        prioritized = [row[0] for row in self.cog.cursor.fetchall()]
-                        # Add any alliances not in giftcodecontrol at the end, ordered by ID
-                        remaining = sorted([aid for aid in alliance_ids if aid not in prioritized])
-                        all_alliances = prioritized + remaining
+                        all_alliances = [aid for aid, name, _ in alliances_with_counts]
                     else:
                         alliance_id = int(selected_value)
                         all_alliances = [alliance_id]
@@ -4891,14 +4920,14 @@ class GiftView(discord.ui.View):
                         return
 
                     giftcode_embed = discord.Embed(
-                        title="🎁 Select Gift Code",
+                        title=f"{pimp.giftIcon} Select Gift Code",
                         description=(
-                            "Select a gift code to use:\n\n"
-                            "**Gift Code List**\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            "Select a gift code from the list below:\n"
+                            f"Select a gift code to use:\n"
+                            f"### **Gift Code List**\n"
+                            f"{pimp.divider1}\n\n"
+                            f"Select a gift code from the list below:\n"
                         ),
-                        color=discord.Color.blue()
+                        color = pimp.emColor1,
                     )
 
                     select_giftcode = discord.ui.Select(
@@ -4908,120 +4937,96 @@ class GiftView(discord.ui.View):
                                 label=f"Code: {code}",
                                 value=code,
                                 description=f"Created: {date}",
-                                emoji="🎁"
+                                emoji=f"{pimp.giftIcon}"
                             ) for code, date in gift_codes
                         ]
                     )
 
-                    # Add ALL CODES option at the beginning
-                    select_giftcode.options.insert(0, discord.SelectOption(
-                        label="ALL CODES",
-                        value="all_codes",
-                        description=f"Redeem all {len(gift_codes)} active codes",
-                        emoji="📦"
-                    ))
-
                     async def giftcode_callback(giftcode_interaction: discord.Interaction):
                         try:
-                            selected_code_value = giftcode_interaction.data["values"][0]
-
-                            # Handle ALL CODES selection
-                            if selected_code_value == "all_codes":
-                                selected_codes = [code for code, date in gift_codes]
-                                code_display = f"ALL ({len(selected_codes)} codes)"
-                            else:
-                                selected_codes = [selected_code_value]
-                                code_display = f"`{selected_code_value}`"
-
-                            alliance_display = 'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')
-                            total_redemptions = len(selected_codes) * len(all_alliances)
-
+                            selected_code = giftcode_interaction.data["values"][0]
+                            
                             confirm_embed = discord.Embed(
-                                title="⚠️ Confirm Gift Code Usage",
+                                title = f"{pimp.gifAlertIcon} Confirm Gift Code Usage",
                                 description=(
-                                    f"Are you sure you want to use {'these gift codes' if len(selected_codes) > 1 else 'this gift code'}?\n\n"
-                                    f"**Details**\n"
-                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"🎁 **Gift Code{'s' if len(selected_codes) > 1 else ''}:** {code_display}\n"
-                                    f"🏰 **Alliances:** {alliance_display} ({len(all_alliances)})\n"
-                                    f"📊 **Total redemptions:** {total_redemptions}\n"
-                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                    f"Are you sure you want to use this gift code?\n"
+                                    f"### **Details**\n"
+                                    f"\n{pimp.divider1}\n\n"
+                                    f"{pimp.giftIcon} **Gift Code:** `{selected_code}`\n"
+                                    f"{pimp.allianceIcon} **Alliances:** {'ALL' if selected_value == 'all' else next((name for aid, name, _ in alliances_with_counts if aid == alliance_id), 'Unknown')}\n"
+                                    f"\n{pimp.divider1}\n"
                                 ),
-                                color=discord.Color.yellow()
+                                color = pimp.emColor4,
                             )
 
                             confirm_view = discord.ui.View()
                             
                             async def confirm_callback(button_interaction: discord.Interaction):
                                 try:
-                                    # Defer first so followup.send works for batch progress
-                                    await button_interaction.response.defer()
-
                                     await self.cog.add_manual_redemption_to_queue(
-                                        selected_codes, all_alliances, button_interaction
+                                        selected_code, all_alliances, button_interaction
                                     )
-
+                                    
                                     queue_status = await self.cog.get_queue_status()
-
+                                    
                                     alliance_names = []
                                     for aid in all_alliances[:3]:  # Show first 3 alliance names
                                         name = next((n for a_id, n, _ in alliances_with_counts if a_id == aid), 'Unknown')
                                         alliance_names.append(name)
-
+                                    
                                     alliance_list = ", ".join(alliance_names)
                                     if len(all_alliances) > 3:
                                         alliance_list += f" and {len(all_alliances) - 3} more"
-
+                                    
                                     queue_summary = []
                                     your_position = None
-
+                                    
                                     for code, items in queue_status['queue_by_code'].items():
                                         alliance_count = len([i for i in items if i.get('alliance_id')])
-
-                                        if code in selected_codes and your_position is None:
+                                        
+                                        if code == selected_code and your_position is None:
                                             your_position = min(i['position'] for i in items)
-
+                                        
                                         queue_summary.append(f"• `{code}` - {alliance_count} alliance{'s' if alliance_count != 1 else ''}")
-
+                                    
                                     queue_info = "\n".join(queue_summary) if queue_summary else "Queue is empty"
-
+                                    
                                     queue_embed = discord.Embed(
-                                        title="✅ Redemptions Queued Successfully",
+                                        title = f"{pimp.verifiedIcon} Redemptions Queued Successfully",
                                         description=(
                                             f"Gift code redemptions added to the queue.\n\n"
-                                            f"**Your Redemption**\n"
-                                            f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            f"🎁 **Gift Code{'s' if len(selected_codes) > 1 else ''}:** {code_display}\n"
-                                            f"🏰 **Alliances:** {alliance_list}\n"
-                                            f"📊 **Total redemptions:** {len(selected_codes) * len(all_alliances)}\n"
-                                            f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                                            f"### **Your Redemption**\n"
+                                            f"{pimp.divider1}\n\n"
+                                            f"{pimp.giftIcon} **Gift Code:** `{selected_code}`\n"
+                                            f"{pimp.allianceIcon} **Alliances:** {alliance_list}\n"
+                                            f"\n{pimp.divider1}\n\n"
                                             f"**Full Queue Details**\n"
                                             f"{queue_info}\n\n"
-                                            f"📊 **Total items in queue:** {queue_status['queue_length']}\n"
-                                            f"📍 **Your position:** #{your_position if your_position else 'Processing'}\n\n"
-                                            f"💡 You'll receive notifications as each alliance is processed."
+                                            f"{pimp.announceIcon} **Total items in queue:** {queue_status['queue_length']}\n"
+                                            f"{pimp.pinIcon} **Your position:** #{your_position if your_position else 'Processing'}\n\n"
+                                            f"{pimp.announceIcon} You'll receive notifications as each alliance is processed."
                                         ),
-                                        color=discord.Color.green()
+                                        color = pimp.emColor3,
                                     )
                                     queue_embed.set_footer(text="Gift codes are processed sequentially to prevent issues.")
-
-                                    await button_interaction.edit_original_response(
+                                    
+                                    await button_interaction.response.edit_message(
                                         embed=queue_embed,
                                         view=None
                                     )
 
                                 except Exception as e:
                                     self.logger.exception(f"Error queueing gift code redemptions: {e}")
-                                    await button_interaction.followup.send(
-                                        "❌ An error occurred while queueing the gift code redemptions.",
+                                    await button_interaction.response.send_message(
+                                        f"{pimp.deniedIcon} An error occurred while queueing the gift code redemptions.",
                                         ephemeral=True
                                     )
 
                             async def cancel_callback(button_interaction: discord.Interaction):
                                 cancel_embed = discord.Embed(
-                                    title="❌ Operation Cancelled",
+                                    title = f"{pimp.deniedIcon} Operation Cancelled",
                                     description="The gift code usage has been cancelled.",
-                                    color=discord.Color.red()
+                                    color = pimp.emColor2,
                                 )
                                 await button_interaction.response.edit_message(
                                     embed=cancel_embed,
@@ -5030,16 +5035,18 @@ class GiftView(discord.ui.View):
 
                             confirm_button = discord.ui.Button(
                                 label="Confirm",
-                                style=discord.ButtonStyle.success,
-                                emoji="✅"
+                                emoji=f"{pimp.verifiedIcon}",
+                                style=discord.ButtonStyle.secondary,
+                                custom_id="confirm"
                             )
+                            confirm_button.callback = confirm_callback
+
                             cancel_button = discord.ui.Button(
                                 label="Cancel",
-                                style=discord.ButtonStyle.danger,
-                                emoji="❌"
+                                emoji=f"{pimp.deniedIcon}",
+                                style=discord.ButtonStyle.secondary,
+                                custom_id="cancel"
                             )
-
-                            confirm_button.callback = confirm_callback
                             cancel_button.callback = cancel_callback
 
                             confirm_view.add_item(confirm_button)
@@ -5049,75 +5056,82 @@ class GiftView(discord.ui.View):
                                 embed=confirm_embed,
                                 view=confirm_view
                             )
+
                         except Exception as e:
-                            self.logger.exception(f"Gift code callback error: {e}")
-                            await giftcode_interaction.response.send_message(
-                                "❌ An error occurred while processing the gift code.",
-                                ephemeral=True
-                            )
+                            self.logger.exception(f"Error in gift code selection: {e}")
+                            if not giftcode_interaction.response.is_done():
+                                await giftcode_interaction.response.send_message(
+                                    f"{pimp.deniedIcon} An error occurred while processing your selection.",
+                                    ephemeral=True
+                                )
+                            else:
+                                await giftcode_interaction.followup.send(
+                                    f"{pimp.deniedIcon} An error occurred while processing your selection.",
+                                    ephemeral=True
+                                )
 
                     select_giftcode.callback = giftcode_callback
                     giftcode_view = discord.ui.View()
                     giftcode_view.add_item(select_giftcode)
 
-                    await select_interaction.response.edit_message(
-                        embed=giftcode_embed,
-                        view=giftcode_view
-                    )
-                except Exception as e:
-                    self.logger.exception(f"Alliance callback error: {e}")
-                    await select_interaction.response.send_message(
-                        "❌ An error occurred while processing the alliance selection.",
-                        ephemeral=True
-                    )
+                    if not select_interaction.response.is_done():
+                        await select_interaction.response.edit_message(
+                            embed=giftcode_embed,
+                            view=giftcode_view
+                        )
+                    else:
+                        await select_interaction.message.edit(
+                            embed=giftcode_embed,
+                            view=giftcode_view
+                        )
 
-            view.current_select.callback = alliance_callback
+                except Exception as e:
+                    self.logger.exception(f"Error in alliance selection: {e}")
+                    if not select_interaction.response.is_done():
+                        await select_interaction.response.send_message(
+                            f"{pimp.deniedIcon} An error occurred while processing your selection.",
+                            ephemeral=True
+                        )
+                    else:
+                        await select_interaction.followup.send(
+                            f"{pimp.deniedIcon} An error occurred while processing your selection.",
+                            ephemeral=True
+                        )
+
+            view.callback = alliance_callback
+
             await interaction.response.send_message(
                 embed=alliance_embed,
                 view=view,
                 ephemeral=True
             )
+
         except Exception as e:
-            self.logger.exception(f"Use gift alliance button error: {e}")
+            self.logger.exception(f"Error in use_gift_alliance_button: {str(e)}")
             await interaction.response.send_message(
-                "❌ An error occurred while processing the request.",
+                f"{pimp.deniedIcon} An error occurred while processing the request.",
                 ephemeral=True
             )
 
     @discord.ui.button(
-        label="Settings",
+        label="Gift Code Settings",
+        emoji=f"{pimp.giftSettingsIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="gift_code_settings",
-        emoji="⚙️",
-        row=1
+        row=2
     )
+    
     async def gift_code_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
     @discord.ui.button(
-        label="Delete Gift Code",
-        emoji="🗑️",
-        style=discord.ButtonStyle.danger,
-        custom_id="delete_gift",
-        row=1
+        label = "Main Menu",
+        emoji = f"{pimp.homeIcon}",
+        style = discord.ButtonStyle.secondary,
+        custom_id = "main_menu",
+        row=3
     )
-    async def delete_gift_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await self.cog.delete_gift_code(interaction)
-        except Exception as e:
-            self.logger.exception(f"Delete gift button error: {e}")
-            await interaction.response.send_message(
-                "❌ An error occurred while processing delete request.",
-                ephemeral=True
-            )
-
-    @discord.ui.button(
-        label="Main Menu",
-        emoji="🏠",
-        style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
-        row=2
-    )
+    
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             alliance_cog = self.cog.bot.get_cog("Alliance")
@@ -5137,9 +5151,9 @@ class SettingsMenuView(discord.ui.View):
     
     @discord.ui.button(
         label="Channel Management",
-        style=discord.ButtonStyle.green,
+        style=discord.ButtonStyle.secondary,
         custom_id="channel_management",
-        emoji="📢",
+        emoji=f"{pimp.announceIcon}",
         row=0
     )
     async def channel_management_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5147,29 +5161,19 @@ class SettingsMenuView(discord.ui.View):
     
     @discord.ui.button(
         label="Automatic Redemption",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="auto_gift_settings",
-        emoji="🎁",
+        emoji=f"{pimp.giftIcon}",
         row=0
     )
     async def auto_gift_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.setup_giftcode_auto(interaction)
-
-    @discord.ui.button(
-        label="Redemption Priority",
-        style=discord.ButtonStyle.primary,
-        custom_id="redemption_priority",
-        emoji="📊",
-        row=0
-    )
-    async def redemption_priority_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_redemption_priority(interaction)
-
+    
     @discord.ui.button(
         label="Channel History Scan",
         style=discord.ButtonStyle.secondary,
         custom_id="channel_history_scan",
-        emoji="🔍",
+        emoji=f"{pimp.magnifyingIcon}",
         row=1
     )
     async def channel_history_scan_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5179,16 +5183,17 @@ class SettingsMenuView(discord.ui.View):
         label="CAPTCHA Settings",
         style=discord.ButtonStyle.secondary,
         custom_id="captcha_settings",
-        emoji="⚙️",
+        emoji=f"{pimp.giftSettingsIcon}",
         row=1
     )
     async def captcha_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_ocr_settings(interaction)
     
     @discord.ui.button(
-        label="⬅️ Back",
+        label=f"Back",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main",
+        emoji=f"{pimp.importIcon}",
         row=2
     )
     async def back_to_main_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5225,14 +5230,14 @@ class RedemptionPriorityView(discord.ui.View):
 
         # Update embed to show selected alliance with marker
         embed = discord.Embed(
-            title="📊 Redemption Priority",
+            title=f"{pimp.giftHashtagIcon} Redemption Priority",
             description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
 
         priority_list = []
         for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
-            marker = " ◀" if alliance_id == self.selected_alliance_id else ""
+            marker = pimp.importIcon if alliance_id == self.selected_alliance_id else ""
             priority_list.append(f"`{idx}.` **{name}**{marker}")
 
         embed.add_field(
@@ -5243,7 +5248,7 @@ class RedemptionPriorityView(discord.ui.View):
 
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="Move Up", style=discord.ButtonStyle.primary, emoji="⬆️", row=1)
+    @discord.ui.button(label="Move Up", style=discord.ButtonStyle.secondary, emoji=f"{pimp.infoIcon}", row=1)
     async def move_up_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.selected_alliance_id:
             await interaction.response.send_message("Please select an alliance first.", ephemeral=True)
@@ -5279,7 +5284,7 @@ class RedemptionPriorityView(discord.ui.View):
     async def done_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(
             embed=discord.Embed(
-                title="📊 Priority Updated",
+                title=f"{pimp.giftHashtagIcon} Priority Updated",
                 description="Redemption priority order has been saved.",
                 color=discord.Color.green()
             ),
@@ -5319,14 +5324,14 @@ class RedemptionPriorityView(discord.ui.View):
         """Refresh the embed and view after a priority change."""
         # Rebuild embed
         embed = discord.Embed(
-            title="📊 Redemption Priority",
+            title=f"{pimp.giftHashtagIcon} Redemption Priority",
             description="Configure the order in which alliances receive gift codes.\nSelect an alliance and use the buttons to change its position.",
             color=discord.Color.blue()
         )
 
         priority_list = []
         for idx, (alliance_id, name, _) in enumerate(self.alliances, 1):
-            marker = " ◀" if alliance_id == self.selected_alliance_id else ""
+            marker = pimp.importIcon if alliance_id == self.selected_alliance_id else ""
             priority_list.append(f"`{idx}.` **{name}**{marker}")
 
         embed.add_field(
@@ -5355,7 +5360,7 @@ class ClearCacheConfirmView(discord.ui.View):
         super().__init__(timeout=60)
         self.parent_cog = parent_cog
 
-    @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger, emoji="✅")
+    @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.secondary, emoji=f"{pimp.verifiedIcon}")
     async def confirm_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         try: # Clear the user_giftcodes table
             self.parent_cog.cursor.execute("DELETE FROM user_giftcodes")
@@ -5363,9 +5368,9 @@ class ClearCacheConfirmView(discord.ui.View):
             self.parent_cog.conn.commit()
             
             success_embed = discord.Embed(
-                title="✅ Redemption Cache Cleared",
+                title = f"{pimp.verifiedIcon} Redemption Cache Cleared",
                 description=f"Successfully deleted {deleted_count:,} redemption records.\n\nUsers can now attempt to redeem gift codes again.",
-                color=discord.Color.green()
+                color = pimp.emColor3,
             )
             
             self.parent_cog.logger.info(f"Redemption cache cleared by user {interaction.user.id}: {deleted_count} records deleted")
@@ -5375,21 +5380,21 @@ class ClearCacheConfirmView(discord.ui.View):
         except Exception as e:
             self.parent_cog.logger.exception(f"Error clearing redemption cache: {e}")
             error_embed = discord.Embed(
-                title="❌ Error",
+                title = f"{pimp.deniedIcon} Error",
                 description=f"Failed to clear redemption cache: {str(e)}",
-                color=discord.Color.red()
+                color = pimp.emColor2,
             )
             try:
                 await interaction.response.edit_message(embed=error_embed, view=None)
             except discord.InteractionResponded:
                 await interaction.followup.edit_message(interaction.message.id, embed=error_embed, view=None)
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji=f"{pimp.deniedIcon}")
     async def cancel_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
         cancel_embed = discord.Embed(
-            title="❌ Operation Cancelled",
+            title = f"{pimp.deniedIcon} Operation Cancelled",
             description="Redemption cache was not cleared.",
-            color=discord.Color.blue()
+            color = pimp.emColor1,
         )
         await interaction.response.edit_message(embed=cancel_embed, view=None)
 
@@ -5399,9 +5404,9 @@ class ClearCacheConfirmView(discord.ui.View):
             item.disabled = True
         try:
             timeout_embed = discord.Embed(
-                title="⏰ Timeout",
+                title = f"{pimp.timeIcon} Timeout",
                 description="Confirmation timed out. Redemption cache was not cleared.",
-                color=discord.Color.orange()
+                color=pimp.emColor4,
             )
         except:
             pass
@@ -5417,10 +5422,10 @@ class OCRSettingsView(discord.ui.View):
 
         # Row 0: Enable/Disable Button, Test Button
         self.enable_ocr_button_item = discord.ui.Button(
-            emoji="✅" if self.enabled == 1 else "🚫",
+            emoji=f"{pimp.verifiedIcon}" if self.enabled == 1 else "🚫",
             custom_id="enable_ocr", row=0,
             label="Disable CAPTCHA Solver" if self.enabled == 1 else "Enable CAPTCHA Solver",
-            style=discord.ButtonStyle.danger if self.enabled == 1 else discord.ButtonStyle.success,
+            style=discord.ButtonStyle.secondary if self.enabled == 1 else discord.ButtonStyle.secondary,
             disabled=self.disable_controls
         )
         self.enable_ocr_button_item.callback = self.enable_ocr_button
@@ -5436,7 +5441,7 @@ class OCRSettingsView(discord.ui.View):
 
         # Add the Change Test ID Button
         self.change_test_fid_button_item = discord.ui.Button(
-            label="Change Test ID", style=discord.ButtonStyle.primary, emoji="🔄",
+            label="Change Test ID", style=discord.ButtonStyle.secondary, emoji=f"{processingIcon}",
             custom_id="change_test_fid", row=0,
             disabled=self.disable_controls
         )
@@ -5445,7 +5450,7 @@ class OCRSettingsView(discord.ui.View):
 
         # Add the Clear Redemption Cache Button
         self.clear_cache_button_item = discord.ui.Button(
-            label="Clear Redemption Cache", style=discord.ButtonStyle.danger, emoji="🗑️",
+            label="Clear Redemption Cache", style=discord.ButtonStyle.secondary, emoji=f"{deleteIcon}",
             custom_id="clear_redemption_cache", row=1,
             disabled=self.disable_controls
         )
@@ -5472,13 +5477,13 @@ class OCRSettingsView(discord.ui.View):
     async def change_test_fid_button(self, interaction: discord.Interaction):
         """Handle the change test ID button click."""
         if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         await interaction.response.send_modal(TestIDModal(self.cog))
 
     async def enable_ocr_button(self, interaction: discord.Interaction):
         if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         
         await interaction.response.defer(ephemeral=True)
@@ -5492,16 +5497,16 @@ class OCRSettingsView(discord.ui.View):
         current_time = time.time()
 
         if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
         if not self.cog.captcha_solver or not self.cog.captcha_solver.is_initialized:
-            await interaction.response.send_message("❌ CAPTCHA solver is not initialized. Ensure OCR is enabled.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} CAPTCHA solver is not initialized. Ensure OCR is enabled.", ephemeral=True)
             return
 
         last_test_time = self.cog.test_captcha_cooldowns.get(user_id, 0)
         if current_time - last_test_time < self.cog.test_captcha_delay:
             remaining_time = int(self.cog.test_captcha_delay - (current_time - last_test_time))
-            await interaction.response.send_message(f"❌ Please wait {remaining_time} more seconds before testing again.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Please wait {remaining_time} more seconds before testing again.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -5526,12 +5531,12 @@ class OCRSettingsView(discord.ui.View):
                 player_info_json = response_stove_info.json()
                 if player_info_json.get("msg") != "success":
                     logger.error(f"[Test Button] Login failed for test ID {test_fid}: {player_info_json.get('msg')}")
-                    await interaction.followup.send(f"❌ Login failed with test ID {test_fid}. Please check if the ID is valid.", ephemeral=True)
+                    await interaction.followup.send(f"{pimp.deniedIcon} Login failed with test ID {test_fid}. Please check if the ID is valid.", ephemeral=True)
                     return
                 logger.info(f"[Test Button] Successfully logged in with test ID {test_fid}")
             except Exception as json_err:
                 logger.error(f"[Test Button] Error parsing login response: {json_err}")
-                await interaction.followup.send("❌ Error processing login response.", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} Error processing login response.", ephemeral=True)
                 return
             
             logger.info(f"[Test Button] Fetching captcha for test ID {test_fid} using established session...")
@@ -5539,7 +5544,7 @@ class OCRSettingsView(discord.ui.View):
             logger.info(f"[Test Button] Captcha fetch result: Error='{error}', HasImage={captcha_image_base64 is not None}")
 
             if error:
-                await interaction.followup.send(f"❌ Error fetching test captcha from the API: `{error}`", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} Error fetching test captcha from the API: `{error}`", ephemeral=True)
                 return
 
             if captcha_image_base64:
@@ -5552,11 +5557,11 @@ class OCRSettingsView(discord.ui.View):
                     logger.info("[Test Button] Successfully decoded base64 image.")
                 except Exception as decode_err:
                     logger.error(f"[Test Button] Failed to decode base64 image: {decode_err}")
-                    await interaction.followup.send("❌ Failed to decode captcha image data.", ephemeral=True)
+                    await interaction.followup.send(f"{pimp.deniedIcon} Failed to decode captcha image data.", ephemeral=True)
                     return
             else:
                 logger.error("[Test Button] Captcha fetch returned no image data.")
-                await interaction.followup.send("❌ Failed to retrieve captcha image data from API.", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} Failed to retrieve captcha image data from API.", ephemeral=True)
                 return
 
             if image_bytes:
@@ -5570,20 +5575,21 @@ class OCRSettingsView(discord.ui.View):
                 logger.info(f"[Test Button] Solve result: Success={success}, Code='{captcha_code}', Method='{method}', Conf={log_confidence_str}. Duration: {solve_duration:.2f}s")
             else:
                  logger.error("[Test Button] Logic error: image_bytes is None before solving.")
-                 await interaction.followup.send("❌ Internal error before solving captcha.", ephemeral=True)
+                 await interaction.followup.send(f"{pimp.deniedIcon} Internal error before solving captcha.", ephemeral=True)
                  return
 
             confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
             embed = discord.Embed(
-                title="🧪 CAPTCHA Solver Test Results (ONNX)",
+                title = f"🧪 CAPTCHA Solver Test Results (ONNX)",
                 description=(
-                    f"**Test Summary**\n━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🤖 **OCR Success:** {'✅ Yes' if success else '❌ No'}\n"
-                    f"🔍 **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
-                    f"📊 **Confidence:** `{confidence_str}`\n"
-                    f"⏱️ **Solve Time:** `{solve_duration:.2f}s`\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                ), color=discord.Color.green() if success else discord.Color.red()
+                    f"**Test Summary**"
+                    f"\n{pimp.divider1}\n"
+                    f"{pimp.robotIcon} **OCR Success:** {'{pimp.verifiedIcon} Yes' if success else '{pimp.deniedIcon} No'}\n"
+                    f"{pimp.magnifyingIcon} **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
+                    f"{pimp.announceIcon} **Confidence:** `{confidence_str}`\n"
+                    f"{pimp.timeIcon} **Solve Time:** `{solve_duration:.2f}s`\n"
+                    f"{pimp.divider1}\n"
+                ), color=pimp.emColor3 if success else emColor2,
             )
 
             save_path_str = None
@@ -5639,7 +5645,7 @@ class OCRSettingsView(discord.ui.View):
             if save_path_str:
                 embed.add_field(name="📸 Captcha Image Saved", value=f"`{save_path_str}` in `{os.path.relpath(self.cog.captcha_solver.captcha_dir)}`", inline=False)
             elif save_error_str:
-                embed.add_field(name="⚠️ Image Save Error", value=save_error_str, inline=False)
+                embed.add_field(name=f"{pimp.gifAlertIcon} Image Save Error", value=save_error_str, inline=False)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
             logger.info(f"[Test Button] Test completed for user {user_id}.")
@@ -5647,19 +5653,19 @@ class OCRSettingsView(discord.ui.View):
         except Exception as e:
             logger.exception(f"[Test Button] UNEXPECTED Error during test for user {user_id}: {e}")
             try:
-                await interaction.followup.send(f"❌ An unexpected error occurred during the test: `{e}`. Please check the bot logs.", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} An unexpected error occurred during the test: `{e}`. Please check the bot logs.", ephemeral=True)
             except Exception as followup_err:
                 logger.error(f"[Test Button] Failed to send final error followup to user {user_id}: {followup_err}")
 
     async def clear_redemption_cache_button(self, interaction: discord.Interaction):
         """Handle the clear redemption cache button click."""
         if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
 
         # Create confirmation embed
         embed = discord.Embed(
-            title="⚠️ Clear Redemption Cache",
+            title = f"{pimp.gifAlertIcon} Clear Redemption Cache",
             description=(
                 "This will **permanently delete** all gift code redemption records from the database.\n\n"
                 "**What this does:**\n"
@@ -5668,7 +5674,7 @@ class OCRSettingsView(discord.ui.View):
                 "• Useful for development testing and image collection\n\n"
                 "**Warning:** This action cannot be undone!"
             ),
-            color=discord.Color.orange()
+            color = pimp.emColor4,
         )
 
         # Get current count for display
@@ -5676,14 +5682,14 @@ class OCRSettingsView(discord.ui.View):
             self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
             current_count = self.cog.cursor.fetchone()[0]
             embed.add_field(
-                name="📊 Current Records",
+                name=f"{pimp.announceIcon} Current Records",
                 value=f"{current_count:,} redemption records will be deleted",
                 inline=False
             )
         except Exception as e:
             self.cog.logger.error(f"Error getting user_giftcodes count: {e}")
             embed.add_field(
-                name="📊 Current Records", 
+                name=f"{pimp.announceIcon} Current Records", 
                 value="Unable to count records",
                 inline=False
             )
@@ -5694,7 +5700,7 @@ class OCRSettingsView(discord.ui.View):
 
     async def image_save_select_callback(self, interaction: discord.Interaction):
         if not self.onnx_available:
-            await interaction.response.send_message("❌ Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True) 
@@ -5712,13 +5718,13 @@ class OCRSettingsView(discord.ui.View):
                 for option in self.image_save_select_item.options:
                     option.default = (str(self.save_images_setting) == option.value)
             else:
-                await interaction.followup.send(f"❌ {message}", ephemeral=True)
+                await interaction.followup.send(f"{pimp.deniedIcon} {message}", ephemeral=True)
 
         except ValueError:
-            await interaction.followup.send("❌ Invalid selection value for image saving.", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} Invalid selection value for image saving.", ephemeral=True)
         except Exception as e:
             self.cog.logger.exception("Error processing image save selection in OCRSettingsView.")
-            await interaction.followup.send("❌ An error occurred while updating image saving settings.", ephemeral=True)
+            await interaction.followup.send(f"{pimp.deniedIcon} An error occurred while updating image saving settings.", ephemeral=True)
         
         async def update_task(save_images_value):
             self.cog.logger.info(f"Task started: Updating OCR save_images to {save_images_value}")
@@ -5730,7 +5736,7 @@ class OCRSettingsView(discord.ui.View):
             return _success, _message
 
         update_job = asyncio.create_task(update_task(selected_value))
-        initial_followup_message = "⏳ Your settings are being updated... Please wait."
+        initial_followup_message = f"{pimp.hourglassIcon} Your settings are being updated... Please wait."
         try:
             progress_message = await interaction.followup.send(initial_followup_message, ephemeral=True)
         except discord.HTTPException as e:
@@ -5741,11 +5747,11 @@ class OCRSettingsView(discord.ui.View):
             success, message_from_task = await asyncio.wait_for(update_job, timeout=60.0)
         except asyncio.TimeoutError:
             self.cog.logger.error("Timeout waiting for OCR settings update task to complete.")
-            await progress_message.edit(content="⌛️ Timed out waiting for settings to update. Please try again or check logs.")
+            await progress_message.edit(content=f"{pimp.hourglassIcon} Timed out waiting for settings to update. Please try again or check logs.")
             return
         except Exception as e_task:
             self.cog.logger.exception(f"Exception in OCR settings update task: {e_task}")
-            await progress_message.edit(content=f"❌ An error occurred during the update: {e_task}")
+            await progress_message.edit(content=f"{pimp.deniedIcon} An error occurred during the update: {e_task}")
             return
 
         if success:
@@ -5765,16 +5771,16 @@ class OCRSettingsView(discord.ui.View):
                     embed=new_embed, 
                     view=self
                 )
-                await progress_message.edit(content=f"✅ {message_from_task}")
+                await progress_message.edit(content=f"{pimp.verifiedIcon} {message_from_task}")
             except discord.NotFound:
                  self.cog.logger.warning("Original message or progress message for OCR settings not found for final update.")
             except Exception as e_edit_final:
                  self.cog.logger.exception(f"Error editing messages after successful OCR settings update: {e_edit_final}")
-                 await progress_message.edit(content=f"✅ {message_from_task}\n⚠️ Couldn't fully refresh the view.")
+                 await progress_message.edit(content=f"{pimp.verifiedIcon} {message_from_task}\n{pimp.gifAlertIcon} Couldn't fully refresh the view.")
 
         else:
             self.cog.logger.error(f"OCR settings update failed: {message_from_task}")
-            await progress_message.edit(content=f"❌ {message_from_task}")
+            await progress_message.edit(content=f"{pimp.deniedIcon} {message_from_task}")
 
 async def setup(bot):
     await bot.add_cog(GiftOperations(bot)) 

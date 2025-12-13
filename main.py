@@ -3,6 +3,7 @@ import sys
 import os
 import shutil
 import stat
+from cogs import prettification_is_my_purpose as pimp
 
 def is_container() -> bool:
     return os.path.exists("/.dockerenv") or os.path.exists("/var/run/secrets/kubernetes.io")
@@ -561,7 +562,7 @@ def check_vcredist():
         except FileNotFoundError:
             # VC++ Redist not found - show warning
             download_url = f"https://aka.ms/vc14/vc_redist.{arch}.exe"
-            print(F.YELLOW + f"⚠️ Microsoft Visual C++ Redistributable ({arch}) not found!" + R)
+            print(F.YELLOW + f"{pimp.warnIcon} Microsoft Visual C++ Redistributable ({arch}) not found!" + R)
             print(F.YELLOW + "Gift code redemption (captcha solver) will not work until this is installed." + R)
             print(F.YELLOW + f"Download and install from: " + F.CYAN + download_url + R)
             print(F.YELLOW + "Then restart the bot, and the gift code redemption should work." + R)
@@ -958,6 +959,7 @@ if __name__ == "__main__":
         "conn_changes": "db/changes.sqlite",
         "conn_users": "db/users.sqlite",
         "conn_settings": "db/settings.sqlite",
+        "conn_pimpsettings":"db/pimpsettings.sqlite",
     }
 
     connections = {name: sqlite3.connect(path) for name, path in databases.items()}
@@ -965,6 +967,198 @@ if __name__ == "__main__":
     print(F.GREEN + "Database connections have been successfully established." + R)
 
     def create_tables():
+
+        with connections["conn_pimpsettings"] as conn_pimpsettings:
+            conn_pimpsettings.execute("""CREATE TABLE IF NOT EXISTS pimpsettings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                themeName TEXT,
+                themeCreator TEXT,
+                allianceOldIcon TEXT,
+                avatarOldIcon TEXT,
+                stoveOldIcon TEXT,
+                stateOldIcon TEXT,
+                allianceIcon TEXT,
+                avatarIcon TEXT,
+                stoveIcon TEXT,
+                stateIcon TEXT,
+                listIcon TEXT,
+                fidIcon TEXT,
+                timeIcon TEXT,
+                homeIcon TEXT,
+                num1Icon TEXT,
+                num2Icon TEXT,
+                num3Icon TEXT,
+                num4Icon TEXT,
+                num5Icon TEXT,
+                num10Icon TEXT,
+                newIcon TEXT,
+                pinIcon TEXT,
+                saveIcon TEXT,
+                robotIcon TEXT,
+                crossIcon TEXT,
+                heartIcon TEXT,
+                shieldIcon TEXT,
+                targetIcon TEXT,
+                redeemIcon TEXT,
+                membersIcon TEXT,
+                averageIcon TEXT,
+                messageIcon TEXT,
+                supportIcon TEXT,
+                foundryIcon TEXT,
+                announceIcon TEXT,
+                ministerIcon TEXT,
+                researchIcon TEXT,
+                trainingIcon TEXT,
+                crazyJoeIcon TEXT,
+                bearTrapIcon TEXT,
+                calendarIcon TEXT,
+                editListIcon TEXT,
+                settingsIcon TEXT,
+                hourglassIcon TEXT,
+                messageNoIcon TEXT,
+                blankListIcon TEXT,
+                alarmClockIcon TEXT,
+                magnifyingIcon TEXT,
+                frostdragonIcon TEXT,
+                canyonClashIcon TEXT,
+                constructionIcon TEXT,
+                castleBattleIcon TEXT,
+                giftIcon TEXT,
+                giftsIcon TEXT,
+                giftAddIcon TEXT,
+                giftAlarmIcon TEXT,
+                gifAlertIcon TEXT,
+                giftCheckIcon TEXT,
+                giftTotalIcon TEXT,
+                giftDeleteIcon TEXT,
+                giftHashtagIcon TEXT,
+                giftSettingsIcon TEXT,
+                processingIcon TEXT,
+                verifiedIcon TEXT,
+                questionIcon TEXT,
+                transferIcon TEXT,
+                multiplyIcon TEXT,
+                divideIcon TEXT,
+                deniedIcon TEXT,
+                deleteIcon TEXT,
+                exportIcon TEXT,
+                importIcon TEXT,
+                retryIcon TEXT,
+                totalIcon TEXT,
+                infoIcon TEXT,
+                warnIcon TEXT,
+                addIcon TEXT,
+                shutdownZzzIcon TEXT,
+                shutdownDoorIcon TEXT,
+                shutdownHandIcon TEXT,
+                shutdownMoonIcon TEXT,
+                shutdownPlugIcon TEXT,
+                shutdownStopIcon TEXT,
+                shutdownClapperIcon TEXT,
+                shutdownSparkleIcon TEXT,
+                dividerEmojiStart1 TEXT,
+                dividerEmojiPattern1 TEXT,
+                dividerEmojiEnd1 TEXT,
+                dividerLength1 INTEGER,
+                dividerEmojiStart2 TEXT,
+                dividerEmojiPattern2 TEXT,
+                dividerEmojiEnd2 TEXT,
+                dividerLength2 INTEGER,
+                emColorString1 TEXT,
+                emColorString2 TEXT,
+                emColorString3 TEXT,
+                emColorString4 TEXT,
+                HeaderColor1 TEXT,
+                HeaderColor2 TEXT,
+                furnaceLevel0Icon TEXT,
+                furnaceLevel1Icon TEXT,
+                furnaceLevel2Icon TEXT,
+                furnaceLevel3Icon TEXT,
+                furnaceLevel4Icon TEXT,
+                furnaceLevel5Icon TEXT,
+                furnaceLevel6Icon TEXT,
+                furnaceLevel7Icon TEXT,
+                furnaceLevel8Icon TEXT,
+                furnaceLevel9Icon TEXT,
+                furnaceLevel10Icon TEXT,
+                furnaceLevel11Icon TEXT,
+                furnaceLevel12Icon TEXT,
+                furnaceLevel13Icon TEXT,
+                furnaceLevel14Icon TEXT,
+                furnaceLevel15Icon TEXT,
+                furnaceLevel16Icon TEXT,
+                furnaceLevel17Icon TEXT,
+                furnaceLevel18Icon TEXT,
+                furnaceLevel19Icon TEXT,
+                furnaceLevel20Icon TEXT,
+                furnaceLevel21Icon TEXT,
+                furnaceLevel22Icon TEXT,
+                furnaceLevel23Icon TEXT,
+                furnaceLevel24Icon TEXT,
+                furnaceLevel25Icon TEXT,
+                furnaceLevel26Icon TEXT,
+                furnaceLevel27Icon TEXT,
+                furnaceLevel28Icon TEXT,
+                furnaceLevel29Icon TEXT,
+                furnaceLevel30Icon TEXT,
+                is_active INTEGER DEFAULT 0
+            )""")
+            cursor = conn_pimpsettings.cursor()
+            cursor.execute("SELECT COUNT(*) FROM pimpsettings")
+            tableIsEmpty = cursor.fetchone()[0] == 0
+            if tableIsEmpty:
+                conn_pimpsettings.execute("""INSERT INTO pimpsettings (
+                    themeName, themeCreator, 
+                    allianceOldIcon, avatarOldIcon, stoveOldIcon, stateOldIcon, allianceIcon, avatarIcon, stoveIcon, stateIcon, 
+                    listIcon, fidIcon, timeIcon, homeIcon, num1Icon, num2Icon, num3Icon, num4Icon, 
+                    num5Icon, num10Icon, newIcon, pinIcon, saveIcon, robotIcon, crossIcon, heartIcon, 
+                    shieldIcon, targetIcon, redeemIcon, membersIcon, averageIcon, messageIcon, supportIcon, foundryIcon, 
+                    announceIcon, ministerIcon, researchIcon, trainingIcon, crazyJoeIcon, bearTrapIcon, calendarIcon, editListIcon, 
+                    settingsIcon, hourglassIcon, messageNoIcon, blankListIcon, alarmClockIcon, magnifyingIcon, frostdragonIcon, canyonClashIcon, 
+                    constructionIcon, castleBattleIcon, 
+                    giftIcon, giftsIcon, giftAddIcon, giftAlarmIcon, gifAlertIcon, giftCheckIcon, giftTotalIcon, giftDeleteIcon, 
+                    giftHashtagIcon, giftSettingsIcon, 
+                    processingIcon, verifiedIcon, questionIcon, transferIcon, multiplyIcon, divideIcon, deniedIcon, deleteIcon, 
+                    exportIcon, importIcon, retryIcon, totalIcon, infoIcon, warnIcon, addIcon, 
+                    shutdownZzzIcon, shutdownDoorIcon, shutdownHandIcon, shutdownMoonIcon, shutdownPlugIcon, shutdownStopIcon, shutdownClapperIcon, shutdownSparkleIcon,
+                    dividerEmojiStart1, dividerEmojiPattern1, dividerEmojiEnd1, dividerLength1,
+                    dividerEmojiStart2, dividerEmojiPattern2, dividerEmojiEnd2, dividerLength2,
+                    emColorString1, emColorString2, emColorString3, emColorString4, HeaderColor1, HeaderColor2, 
+                    furnaceLevel0Icon,
+                    furnaceLevel1Icon, furnaceLevel2Icon, furnaceLevel3Icon, furnaceLevel4Icon, furnaceLevel5Icon, 
+                    furnaceLevel6Icon, furnaceLevel7Icon, furnaceLevel8Icon, furnaceLevel9Icon, furnaceLevel10Icon, 
+                    furnaceLevel11Icon, furnaceLevel12Icon, furnaceLevel13Icon, furnaceLevel14Icon, furnaceLevel15Icon, 
+                    furnaceLevel16Icon, furnaceLevel17Icon, furnaceLevel18Icon, furnaceLevel19Icon, furnaceLevel20Icon, 
+                    furnaceLevel21Icon, furnaceLevel22Icon, furnaceLevel23Icon, furnaceLevel24Icon, furnaceLevel25Icon,
+                    furnaceLevel26Icon, furnaceLevel27Icon, furnaceLevel28Icon, furnaceLevel29Icon, furnaceLevel30Icon,
+                    is_active
+                ) VALUES (
+                    'default', '@WOSLand',
+                    '⚔️', '👤', '🔥', '🌎', '⚔️', '👤', '🔥', '🌏',
+                    '📜', '🆔', '🕰️', '🏠', '1️⃣', '2️⃣', '3️⃣', '4️⃣',
+                    '5️⃣', '🔟', '🆕', '📍', '💾', '🤖', '⚔️', '💗', 
+                    '🛡️', '🎯', '🔄', '👥', '📈', '🔊', '🆘', '🏭', 
+                    '📢', '🏛️', '🔬', '⚔️', '🤪', '🐻', '📅', '📝', 
+                    '⚙️', '⏳', '🔇', '⚪', '⏰', '🔍', '🐉', '🏞️', 
+                    '⚒️', '🏰', 
+                    '🎁', '🛍️', '➕', '⏰', '⚠️', '✅', '🟰', '🗑️', 
+                    '🔢', '⚙️', 
+                    '🔄', '✅', '❓', '↔️', '✖️', '➗', '❌', '➖', 
+                    '➡️', '⬅️', '🔄', '🟰', 'ℹ️', '⚠️', '➕', 
+                    '💤', '🚪', '👋', '🌙', '🔌', '🛑', '🎬', '✨', 
+                    '━', '━', '━', 16,
+                    '━', '━', '━', 16,
+                    '#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#1F77B4', '#28A745',
+                    "https://cdn-icons-png.freepik.com/512/12388/12388244.png", 
+                    "https://cdn-icons-png.freepik.com/512/9932/9932935.png", "https://cdn-icons-png.freepik.com/512/9933/9933057.png", "https://cdn-icons-png.freepik.com/512/9933/9933179.png", "https://cdn-icons-png.freepik.com/512/9933/9933300.png", "https://cdn-icons-png.freepik.com/512/9933/9933423.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933543.png", "https://cdn-icons-png.freepik.com/512/9933/9933662.png", "https://cdn-icons-png.freepik.com/512/9933/9933786.png", "https://cdn-icons-png.freepik.com/512/9933/9933890.png", "https://cdn-icons-png.freepik.com/512/9932/9932941.png",
+                    "https://cdn-icons-png.freepik.com/512/9932/9932961.png", "https://cdn-icons-png.freepik.com/512/9932/9932971.png", "https://cdn-icons-png.freepik.com/512/9932/9932980.png", "https://cdn-icons-png.freepik.com/512/9932/9932990.png", "https://cdn-icons-png.freepik.com/512/9933/9933000.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933014.png", "https://cdn-icons-png.freepik.com/512/9933/9933025.png", "https://cdn-icons-png.freepik.com/512/9933/9933036.png", "https://cdn-icons-png.freepik.com/512/9933/9933047.png", "https://cdn-icons-png.freepik.com/512/9933/9933068.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933080.png", "https://cdn-icons-png.freepik.com/512/9933/9933089.png", "https://cdn-icons-png.freepik.com/512/9933/9933103.png", "https://cdn-icons-png.freepik.com/512/9933/9933114.png", "https://cdn-icons-png.freepik.com/512/9933/9933126.png",
+                    "https://cdn-icons-png.freepik.com/512/9933/9933137.png", "https://cdn-icons-png.freepik.com/512/9933/9933147.png", "https://cdn-icons-png.freepik.com/512/9933/9933157.png", "https://cdn-icons-png.freepik.com/512/9933/9933168.png", "https://cdn-icons-png.freepik.com/512/9933/9933190.png",
+                    1
+                );""")
+
         with connections["conn_changes"] as conn_changes:
             conn_changes.execute("""CREATE TABLE IF NOT EXISTS nickname_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -1035,7 +1229,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "bear_trap_schedule", "id_channel", "backup_operations", "bear_trap_editor", "bear_trap_templates", "bear_trap_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "registration"]
+        cogs = ["olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "bear_trap_schedule", "id_channel", "backup_operations", "bear_trap_editor", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "registration", "pimp"]
 
         failed_cogs = []
         
@@ -1047,7 +1241,7 @@ if __name__ == "__main__":
                 failed_cogs.append(cog)
         
         if failed_cogs:
-            print(F.RED + f"\n⚠️  {len(failed_cogs)} cog(s) failed to load:" + R)
+            print(F.RED + f"\n{pimp.warnIcon}  {len(failed_cogs)} cog(s) failed to load:" + R)
             for cog in failed_cogs:
                 print(F.YELLOW + f"   • {cog}" + R)
             print(F.YELLOW + "\nThe bot will continue with reduced functionality." + R)
@@ -1064,20 +1258,21 @@ if __name__ == "__main__":
 
     async def main():
         await load_cogs()
+        
         await bot.start(bot_token)
 
     def run_bot():
         import signal
 
         shutdown_messages = [
-            "🛑 Ctrl+C detected! The bot is powering down... beep boop!",
-            "👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
-            "🔌 Ctrl+C pressed! Unplugging the bot. See you next time!",
-            "🚪 Exit signal received! The bot has left the building...",
-            "💤 Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
-            "🎬 And that's a wrap! Bot shutting down gracefully.",
-            "🌙 Trying to turn the bot off and not on again. Ctrl+C ya later!",
-            "✨ Ctrl+C and poof! The bot vanishes into thin air...",
+            f"🛑 Ctrl+C detected! The bot is powering down... beep boop!",
+            f"👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
+            f"🔌 Ctrl+C pressed! Unplugging the bot. See you next time!",
+            f"🚪 Exit signal received! The bot has left the building...",
+            f"💤 Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
+            f"🎬 And that's a wrap! Bot shutting down gracefully.",
+            f"🌙 Trying to turn the bot off and not on again. Ctrl+C ya later!",
+            f"✨ Ctrl+C and poof! The bot vanishes into thin air...",
         ]
 
         def get_shutdown_message():
@@ -1119,4 +1314,4 @@ if __name__ == "__main__":
             print(f"\n{F.YELLOW}{get_shutdown_message()}{R}")
 
     if __name__ == "__main__":
-        run_bot()
+        asyncio.run(main())

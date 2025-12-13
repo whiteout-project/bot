@@ -1,15 +1,16 @@
+from logging import exception
 import discord
 from discord.ext import commands
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
-from .bear_event_types import get_event_icon
+import traceback
 
 def format_repeat_interval(repeat_minutes, notification_id=None) -> str:
     if repeat_minutes == 0:
         return "❌ No repeat"
 
-    if repeat_minutes == -1:
+    if repeat_minutes == "fixed":
         if notification_id is None:
             return "Custom Days"
 
@@ -131,7 +132,7 @@ class EmbedFieldModal(discord.ui.Modal):
 
 class EmbedDataView(discord.ui.View):
     def __init__(self, cog, notification_id, title, description, color, image_url, thumbnail_url, footer, author,
-                 mention_message, event_type=None, hour=0, minute=0, next_notification=None):
+                 mention_message):
         super().__init__(timeout=None)
         self.cog = cog
         self.notification_id = notification_id
@@ -144,57 +145,24 @@ class EmbedDataView(discord.ui.View):
         self.author = author
         self.mention_message = mention_message
         self.message = None
-        self.event_type = event_type
-        self.hour = hour
-        self.minute = minute
-        self.next_notification = next_notification
-
-    def _replace_variables(self, text):
-        """Replace notification variables with sample values for preview."""
-        if not text:
-            return text
-
-        example_time = "30 minutes"
-        example_name = self.event_type if self.event_type else "Event"
-        example_emoji = get_event_icon(self.event_type) if self.event_type else "📅"
-        example_event_time = f"{self.hour:02d}:{self.minute:02d}"
-
-        # Get date from next_notification if available
-        if self.next_notification:
-            try:
-                next_dt = datetime.fromisoformat(self.next_notification.replace("+00:00", ""))
-                example_date = next_dt.strftime("%b %d")
-            except:
-                example_date = "Dec 06"
-        else:
-            example_date = "Dec 06"
-
-        return (text
-            .replace("%t", example_time)
-            .replace("{time}", example_time)
-            .replace("%n", example_name)
-            .replace("%e", example_event_time)
-            .replace("%d", example_date)
-            .replace("%i", example_emoji))
 
     async def update_embed_view(self, interaction: discord.Interaction):
         """Update the embed message when changes are made."""
         embed = discord.Embed(
-            title=self._replace_variables(self.title),
-            description=self._replace_variables(self.embed_description),
+            title=self.title,
+            description=self.embed_description,
             color=self.color,
         )
         if self.footer:
-            embed.set_footer(text=self._replace_variables(self.footer))
+            embed.set_footer(text=self.footer)
         if self.author:
-            embed.set_author(name=self._replace_variables(self.author))
+            embed.set_author(name=self.author)
         if self.image_url:
             embed.set_image(url=self.image_url)
         if self.thumbnail_url:
             embed.set_thumbnail(url=self.thumbnail_url)
 
-        mention_preview = self._replace_variables(self.mention_message) if self.mention_message else ""
-        await self.message.edit(content=mention_preview, embed=embed, view=self)
+        await self.message.edit(content=self.mention_message, embed=embed, view=self)
 
     @discord.ui.button(label="Title", style=discord.ButtonStyle.primary)
     async def edit_title(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -250,7 +218,7 @@ class EmbedDataView(discord.ui.View):
                 parent_view=self,
                 field_name="mention_message",
                 label="mention message",
-                placeholder="Variables: %t=time left, %n=name, %e=time, %d=date, %i=emoji, @tag=mention",
+                placeholder="Enter notification message... You can use @tag for mentions and %t or {time} for time",
                 default=self.mention_message or "",
                 required=False
             )
@@ -381,7 +349,7 @@ class PlainEditorView(discord.ui.View):
         self.notification_type = notification_type
         self.message = None
 
-        if self.repeat == -1:
+        if self.repeat == "fixed":
             try:
                 conn = sqlite3.connect("db/beartime.sqlite")
                 cursor = conn.cursor()
@@ -448,7 +416,7 @@ class PlainEditorView(discord.ui.View):
                     saved_description = plain_message_part.replace("PLAIN_MESSAGE:", "")
 
                     self.description = discord.ui.TextInput(label="Message",
-                                                            placeholder="Variables: %t=time left, %n=name, %e=time, %d=date, %i=emoji, @tag=mention",
+                                                            placeholder="Enter notification message... You can use @tag for mentions and %t or {time} for time",
                                                             style=discord.TextStyle.paragraph, required=True,
                                                             default=saved_description, max_length=2000)
                     self.add_item(self.description)
@@ -622,7 +590,7 @@ class PlainEditorView(discord.ui.View):
                         selected_weekdays = [weekdays_index[d] for d in self.selected_days]
                         sorted_days = sorted(selected_weekdays)
 
-                        self.parent_view.repeat = -1
+                        self.parent_view.repeat = "fixed"
                         self.parent_view.weekdays = "|".join(str(d) for d in sorted_days)
 
                         await self.parent_view.cog.update_notification(self.parent_view)
@@ -858,7 +826,7 @@ class NotificationEditor(commands.Cog):
         conn = sqlite3.connect("db/beartime.sqlite")
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT channel_id, hour, minute, description, mention_type, repeat_minutes, next_notification, timezone, notification_type, event_type FROM bear_notifications WHERE id = ?",
+            "SELECT channel_id, hour, minute, description, mention_type, repeat_minutes, next_notification, timezone, notification_type FROM bear_notifications WHERE id = ?",
             (notification_id,))
         result = cursor.fetchone()
 
@@ -866,7 +834,7 @@ class NotificationEditor(commands.Cog):
             await interaction.response.send_message("❌ Notification ID not found.", ephemeral=True)
             return
 
-        channel_id, hours, minutes, description, mention, repeat, next_notification, timezone, notification_type, event_type = result
+        channel_id, hours, minutes, description, mention, repeat, next_notification, timezone, notification_type = result
         if "EMBED_MESSAGE" in description:
             cursor.execute(
                 "SELECT title, description, color, image_url, thumbnail_url, footer, author, mention_message FROM bear_notification_embeds WHERE notification_id = ?",
@@ -875,31 +843,28 @@ class NotificationEditor(commands.Cog):
             title, embed_description, color, image_url, thumbnail_url, footer, author, mention_message = embed_results
 
             view = EmbedDataView(self, notification_id, title, embed_description, color, image_url, thumbnail_url,
-                                 footer, author, mention_message, event_type, hours, minutes, next_notification)
+                                 footer, author, mention_message)
 
-            # Replace variables for initial display
             embed = discord.Embed(
-                title=view._replace_variables(title),
-                description=view._replace_variables(embed_description),
+                title=title,
+                description=embed_description,
                 color=color,
             )
             if footer:
-                embed.set_footer(text=view._replace_variables(footer))
+                embed.set_footer(text=footer)
             if author:
-                embed.set_author(name=view._replace_variables(author))
+                embed.set_author(name=author)
             if image_url:
                 embed.set_image(url=image_url)
             if thumbnail_url:
                 embed.set_thumbnail(url=thumbnail_url)
 
-            mention_preview = view._replace_variables(mention_message) if mention_message else ""
-
             await interaction.response.defer()
             if original_message:
-                await original_message.edit(content=mention_preview, embed=embed, view=view)
+                await original_message.edit(content=mention_message, embed=embed, view=view)
                 message = original_message
             else:
-                message = await interaction.followup.send(content=mention_preview, embed=embed, view=view,
+                message = await interaction.followup.send(content=mention_message, embed=embed, view=view,
                                                           ephemeral=True)
 
         elif "PLAIN_MESSAGE" in description:
@@ -939,7 +904,7 @@ class NotificationEditor(commands.Cog):
         conn = sqlite3.connect("db/beartime.sqlite")
         cursor = conn.cursor()
 
-        if view.repeat == -1:
+        if view.repeat == "fixed":
             cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (view.notification_id,))
 
             weekday = getattr(view, "weekdays", "")
@@ -953,19 +918,7 @@ class NotificationEditor(commands.Cog):
              view.next_notification, view.notification_type, view.notification_id)
         )
         conn.commit()
-
-        # Get guild_id for schedule board update
-        cursor.execute("SELECT guild_id FROM bear_notifications WHERE id = ?", (view.notification_id,))
-        result = cursor.fetchone()
-        guild_id = result[0] if result else None
-
         conn.close()
-
-        # Notify schedule boards of update
-        if guild_id:
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                await schedule_cog.on_notification_updated(guild_id, view.channel_id)
 
     async def update_embed_notification(self, view):
         conn = sqlite3.connect("db/beartime.sqlite")
@@ -977,20 +930,7 @@ class NotificationEditor(commands.Cog):
              view.author, view.mention_message, view.notification_id)
         )
         conn.commit()
-
-        # Get guild_id and channel_id for schedule board update
-        cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (view.notification_id,))
-        result = cursor.fetchone()
-
         conn.close()
-
-        if result:
-            guild_id, channel_id = result
-
-            # Notify schedule boards of update
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
-            if schedule_cog:
-                await schedule_cog.on_notification_updated(guild_id, channel_id)
 
 async def setup(bot):
     await bot.add_cog(NotificationEditor(bot))

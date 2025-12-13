@@ -4,7 +4,7 @@ from discord.ext import commands
 import sqlite3  
 import asyncio
 from datetime import datetime
-
+from cogs import prettification_is_my_purpose as pimp
 class Alliance(commands.Cog):
     def __init__(self, bot, conn):
         self.bot = bot
@@ -43,7 +43,7 @@ class Alliance(commands.Cog):
     async def view_alliances(self, interaction: discord.Interaction):
         
         if interaction.guild is None:
-            await interaction.response.send_message("❌ This command must be used in a server, not in DMs.", ephemeral=True)
+            await interaction.response.send_message(f"{pimp.deniedIcon} This command must be used in a server, not in DMs.", ephemeral=True)
             return
 
         user_id = interaction.user.id
@@ -85,7 +85,7 @@ class Alliance(commands.Cog):
                 member_count = self.c_users.fetchone()[0]
                 
                 interval_text = f"{interval} minutes" if interval > 0 else "No automatic control"
-                alliance_list += f"🛡️ **{alliance_id}: {name}**\n👥 Members: {member_count}\n⏱️ Control Interval: {interval_text}\n\n"
+                alliance_list += f"{pimp.allianceIcon} **{alliance_id}: {name}**\n{pimp.avatarIcon} Members: {member_count}\n{pimp.hourglassIcon} Control Interval: {interval_text}\n\n"
 
             if not alliance_list:
                 alliance_list = "No alliances found."
@@ -93,7 +93,7 @@ class Alliance(commands.Cog):
             embed = discord.Embed(
                 title="Existing Alliances",
                 description=alliance_list,
-                color=discord.Color.blue()
+                color=pimp.emColor1
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -110,8 +110,8 @@ class Alliance(commands.Cog):
                 perm_check = interaction.guild.get_member(interaction.client.user.id)
                 if not perm_check.guild_permissions.administrator:
                     await interaction.response.send_message(
-                        "Beeb boop 🤖 I need **Administrator** permissions to function. "
-                        "Go to server settings --> Roles --> find my role --> scroll down and turn on Administrator", 
+                        f"Beeb boop {pimp.robotIcon} I need **Administrator** permissions to function. "
+                        f"Go to server settings --> Roles --> find my role --> scroll down and turn on Administrator", 
                         ephemeral=True
                     )
                     return
@@ -129,13 +129,13 @@ class Alliance(commands.Cog):
                 self.conn_settings.commit()
 
                 first_use_embed = discord.Embed(
-                    title="🎉 First Time Setup",
+                    title="{pimp.newIcon} First Time Setup",
                     description=(
                         "This command has been used for the first time and no administrators were found.\n\n"
                         f"**{interaction.user.name}** has been added as the Global Administrator.\n\n"
                         "You can now access all administrative functions."
                     ),
-                    color=discord.Color.green()
+                    color = pimp.emColor3
                 )
                 await interaction.response.send_message(embed=first_use_embed, ephemeral=True)
                 
@@ -152,75 +152,84 @@ class Alliance(commands.Cog):
                 return
 
             embed = discord.Embed(
-                title="⚙️ Settings Menu",
+                title=f"{pimp.giftSettingsIcon} Settings Menu",
                 description=(
-                    "Please select a category:\n\n"
-                    "**Menu Categories**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "🏰 **Alliance Operations**\n"
-                    "└ Manage alliances and settings\n\n"
-                    "👥 **Alliance Member Operations**\n"
-                    "└ Add, remove, and view members\n\n"
-                    "🤖 **Bot Operations**\n"
-                    "└ Configure bot settings\n\n"
-                    "🎁 **Gift Code Operations**\n"
-                    "└ Manage gift codes and rewards\n\n"
-                    "📜 **Alliance History**\n"
-                    "└ View alliance changes and history\n\n"
-                    "🆘 **Support Operations**\n"
-                    "└ Access support features\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.allianceIcon} **Alliance Operations**\n"
+                    f"└ Manage alliances and settings\n\n"
+                    f"{pimp.avatarIcon} **Member Operations**\n"
+                    f"└ Add, remove, and view members\n\n"
+                    f"{pimp.robotIcon} **Bot Operations**\n"
+                    f"└ Configure bot settings\n\n"
+                    f"{pimp.giftIcon} **Gift Code Operations**\n"
+                    f"└ Manage gift codes and rewards\n\n"
+                    f"{pimp.listIcon} **Alliance History**\n"
+                    f"└ View alliance changes and history\n\n"
+                    f"{pimp.supportIcon} **Support Operations**\n"
+                    f"└ Access support features\n\n"
+                    f"{pimp.pinIcon} **PIMP my Bot**\n"
+                    f"└ PIMP your bot with custom themes\n\n"
+                    f"{pimp.settingsIcon} Other Features\n"
+                    f"└ Access additional features\n\n"
+                    f"{pimp.divider1}"
                 ),
-                color=discord.Color.blue()
+                color = pimp.emColor1
             )
             
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji="🏰",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.allianceIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Member Operations",
-                emoji="👥",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.avatarIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="member_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Operations",
-                emoji="🤖",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.robotIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="bot_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
-                label="Gift Operations",
-                emoji="🎁",
-                style=discord.ButtonStyle.primary,
+                label="Gift Code Operations",
+                emoji=pimp.giftIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance History",
-                emoji="📜",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.listIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_history",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji="🆘",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.supportIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
             ))
             view.add_item(discord.ui.Button(
+                label="PIMP my Bot",
+                emoji=pimp.pinIcon,
+                style=discord.ButtonStyle.secondary,
+                custom_id="pimp_my_bot",
+                row=3
+            ))
+            view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji="🔧",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.settingsIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
             ))
@@ -243,75 +252,84 @@ class Alliance(commands.Cog):
         """Display the main settings menu - can be called by other cogs"""
         try:
             embed = discord.Embed(
-                title="⚙️ Settings Menu",
+                title=f"{pimp.giftSettingsIcon} Settings Menu",
                 description=(
-                    "Please select a category:\n\n"
-                    "**Menu Categories**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "🏰 **Alliance Operations**\n"
-                    "└ Manage alliances and settings\n\n"
-                    "👥 **Alliance Member Operations**\n"
-                    "└ Add, remove, and view members\n\n"
-                    "🤖 **Bot Operations**\n"
-                    "└ Configure bot settings\n\n"
-                    "🎁 **Gift Code Operations**\n"
-                    "└ Manage gift codes and rewards\n\n"
-                    "📜 **Alliance History**\n"
-                    "└ View alliance changes and history\n\n"
-                    "🆘 **Support Operations**\n"
-                    "└ Access support features\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                    f"{pimp.divider1}\n\n"
+                    f"{pimp.allianceIcon} **Alliance Operations**\n"
+                    f"└ Manage alliances and settings\n\n"
+                    f"{pimp.avatarIcon} **Member Operations**\n"
+                    f"└ Add, remove, and view members\n\n"
+                    f"{pimp.robotIcon} **Bot Operations**\n"
+                    f"└ Configure bot settings\n\n"
+                    f"{pimp.giftIcon} **Gift Code Operations**\n"
+                    f"└ Manage gift codes and rewards\n\n"
+                    f"{pimp.listIcon} **Alliance History**\n"
+                    f"└ View alliance changes and history\n\n"
+                    f"{pimp.supportIcon} **Support Operations**\n"
+                    f"└ Access support features\n\n"
+                    f"{pimp.pinIcon} **PIMP my Bot**\n"
+                    f"└ PIMP your bot with custom themes\n\n"
+                    f"{pimp.settingsIcon} Other Features\n"
+                    f"└ Access additional features\n\n"
+                    f"{pimp.divider1}"
                 ),
-                color=discord.Color.blue()
+                color = pimp.emColor1
             )
             
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji="🏰",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.allianceIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Member Operations",
-                emoji="👥",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.avatarIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="member_operations",
                 row=0
             ))
             view.add_item(discord.ui.Button(
                 label="Bot Operations",
-                emoji="🤖",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.robotIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="bot_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
-                label="Gift Operations",
-                emoji="🎁",
-                style=discord.ButtonStyle.primary,
+                label="Gift Code Operations",
+                emoji=pimp.giftIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="gift_code_operations",
                 row=1
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance History",
-                emoji="📜",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.listIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="alliance_history",
                 row=2
             ))
             view.add_item(discord.ui.Button(
                 label="Support Operations",
-                emoji="🆘",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.supportIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="support_operations",
                 row=2
             ))
             view.add_item(discord.ui.Button(
+                label="PIMP my Bot",
+                emoji=pimp.pinIcon,
+                style=discord.ButtonStyle.secondary,
+                custom_id="pimp_my_bot",
+                row=3
+            ))
+            view.add_item(discord.ui.Button(
                 label="Other Features",
-                emoji="🔧",
-                style=discord.ButtonStyle.primary,
+                emoji=pimp.settingsIcon,
+                style=discord.ButtonStyle.secondary,
                 custom_id="other_features",
                 row=3
             ))
@@ -339,63 +357,69 @@ class Alliance(commands.Cog):
             try:
                 if custom_id == "alliance_operations":
                     embed = discord.Embed(
-                        title="🏰 Alliance Operations",
+                        title=f"{pimp.allianceIcon} Alliance Operations",
                         description=(
-                            "Please select an operation:\n\n"
-                            "**Available Operations**\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            "➕ **Add Alliance**\n"
-                            "└ Create a new alliance\n\n"
-                            "✏️ **Edit Alliance**\n"
-                            "└ Modify existing alliance settings\n\n"
-                            "🗑️ **Delete Alliance**\n"
-                            "└ Remove an existing alliance\n\n"
-                            "👀 **View Alliances**\n"
-                            "└ List all available alliances\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"{pimp.divider1}\n\n"
+                            f"{pimp.addIcon} **Add Alliance**\n"
+                            f"└ Create a new alliance\n\n"
+                            f"{pimp.processingIcon} **Edit Alliance**\n"
+                            f"└ Modify existing alliance settings\n\n"
+                            f"{pimp.deleteIcon} **Delete Alliance**\n"
+                            f"└ Remove an existing alliance\n\n"
+                            f"{pimp.verifiedIcon} **Check Alliance**\n"
+                            f"└ Check for changes in alliance(s)\n\n"
+                            f"{pimp.magnifyingIcon} **View Alliances**\n"
+                            f"└ View existing alliance(s)\n\n"
+                            f"{pimp.divider1}\n"
                         ),
-                        color=discord.Color.blue()
+                        color = pimp.emColor1
                     )
                     
                     view = discord.ui.View()
                     view.add_item(discord.ui.Button(
                         label="Add Alliance", 
-                        emoji="➕",
-                        style=discord.ButtonStyle.success, 
+                        emoji=pimp.addIcon,
+                        style=discord.ButtonStyle.secondary, 
                         custom_id="add_alliance", 
+                        row = 0,
                         disabled=admin[1] != 1
                     ))
                     view.add_item(discord.ui.Button(
                         label="Edit Alliance", 
-                        emoji="✏️",
-                        style=discord.ButtonStyle.primary, 
+                        emoji=pimp.processingIcon,
+                        style=discord.ButtonStyle.secondary, 
                         custom_id="edit_alliance", 
+                        row = 0,
                         disabled=admin[1] != 1
                     ))
                     view.add_item(discord.ui.Button(
                         label="Delete Alliance", 
-                        emoji="🗑️",
-                        style=discord.ButtonStyle.danger, 
+                        emoji=pimp.deleteIcon,
+                        style=discord.ButtonStyle.secondary, 
                         custom_id="delete_alliance", 
+                        row = 1,
                         disabled=admin[1] != 1
                     ))
                     view.add_item(discord.ui.Button(
-                        label="View Alliances", 
-                        emoji="👀",
-                        style=discord.ButtonStyle.primary, 
-                        custom_id="view_alliances"
+                        label="Check Alliance", 
+                        emoji=pimp.verifiedIcon,
+                        style=discord.ButtonStyle.secondary, 
+                        custom_id="check_alliance",
+                        row = 1
                     ))
                     view.add_item(discord.ui.Button(
-                        label="Check Alliance", 
-                        emoji="🔍",
-                        style=discord.ButtonStyle.primary, 
-                        custom_id="check_alliance"
+                        label="View Alliances", 
+                        emoji=pimp.magnifyingIcon,
+                        style=discord.ButtonStyle.secondary, 
+                        custom_id="view_alliances",
+                        row = 2
                     ))
                     view.add_item(discord.ui.Button(
                         label="Main Menu", 
-                        emoji="🏠",
+                        emoji=pimp.homeIcon,
                         style=discord.ButtonStyle.secondary, 
-                        custom_id="main_menu"
+                        custom_id="main_menu",
+                        row = 3
                     ))
 
                     await interaction.response.edit_message(embed=embed, view=view)
@@ -424,7 +448,7 @@ class Alliance(commands.Cog):
                             label="Check All Alliances",
                             value="all",
                             description="Start control process for all alliances",
-                            emoji="🔄"
+                            emoji=pimp.verifiedIcon
                         )
                     ]
                     
@@ -460,16 +484,18 @@ class Alliance(commands.Cog):
                                 initial_queue_pos = queue_info['queue_size'] + 1
                                 
                                 progress_embed = discord.Embed(
-                                    title="⏳ Alliance Control Operation",
+                                    title=f"{pimp.hourglassIcon} Alliance Control Operation",
                                     description=(
-                                        "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"📊 **Type:** All Alliances ({len(alliances)} total)\n"
-                                        f"🏰 **Alliances:** {len(alliances)} alliances\n"
-                                        f"📍 **Status:** Queued\n"
-                                        f"🔢 **Queue Position:** {initial_queue_pos}\n"
-                                        "━━━━━━━━━━━━━━━━━━━━━━"
+                                        f"{pimp.divider1}\n"
+                                        f"\n"
+                                        f"{pimp.stateIcon} **Type:** All Alliances ({len(alliances)} total)\n"
+                                        f"{pimp.allianceIcon} **Alliances:** {len(alliances)} alliances\n"
+                                        f"{pimp.pinIcon} **Status:** Queued\n"
+                                        f"{pimp.giftHashtagIcon} **Queue Position:** {initial_queue_pos}\n"
+                                        f"\n"
+                                        f"{pimp.divider1}"
                                     ),
-                                    color=discord.Color.blue()
+                                    color = pimp.emColor1
                                 )
                                 await select_interaction.response.send_message(embed=progress_embed, ephemeral=True)
                                 msg = await select_interaction.original_response()
@@ -527,16 +553,18 @@ class Alliance(commands.Cog):
                                 queue_position = queue_info['queue_size'] + 1
                                 
                                 status_embed = discord.Embed(
-                                    title="⏳ Alliance Control Operation",
+                                    title=f"{pimp.hourglassIcon} Alliance Control Operation",
                                     description=(
-                                        "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"📊 **Type:** Single Alliance\n"
-                                        f"🏰 **Alliance:** {alliance_name}\n"
-                                        f"📍 **Status:** Queued\n"
-                                        f"🔢 **Queue Position:** {queue_position}\n"
-                                        "━━━━━━━━━━━━━━━━━━━━━━"
+                                        f"{pimp.divider1}\n"
+                                        f"\n"
+                                        f"{pimp.allianceIcon} **Type:** Single Alliance\n"
+                                        f"{pimp.allianceIcon} **Alliance:** {alliance_name}\n"
+                                        f"{pimp.pinIcon} **Status:** Queued\n"
+                                        f"{pimp.giftHashtagIcon} **Queue Position:** {queue_position}\n"
+                                        f"\n"
+                                        f"{pimp.divider1}\n"
                                     ),
-                                    color=discord.Color.blue()
+                                    color = pimp.emColor1
                                 )
                                 await select_interaction.response.send_message(embed=status_embed, ephemeral=True)
                                 msg = await select_interaction.original_response()
@@ -561,18 +589,16 @@ class Alliance(commands.Cog):
                     view.add_item(select)
 
                     embed = discord.Embed(
-                        title="🔍 Alliance Control",
+                        title=f"{pimp.magnifyingIcon} Alliance Control",
                         description=(
-                            "Please select an alliance to check:\n\n"
-                            "**Information**\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            "• Select 'Check All Alliances' to process all alliances\n"
-                            "• Control process may take a few minutes\n"
-                            "• Results will be shared in the designated channel\n"
-                            "• Other controls will be queued during the process\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"{pimp.divider1}\n\n"
+                            f"• Select 'Check All Alliances' to process all alliances\n"
+                            f"• Control process may take a few minutes\n"
+                            f"• Results will be shared in the designated channel\n"
+                            f"• Other controls will be queued during the process\n\n"
+                            f"{pimp.divider1}"
                         ),
-                        color=discord.Color.blue()
+                        color=pimp.emColor1
                     )
                     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -586,7 +612,7 @@ class Alliance(commands.Cog):
                             await bot_ops_cog.show_bot_operations_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "❌ Bot Operations module not found.",
+                                f"{pimp.multiplyIcon} Bot Operations module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -603,6 +629,30 @@ class Alliance(commands.Cog):
                                 ephemeral=True
                             )
 
+                elif custom_id == "pimp_my_bot":
+                    try:
+                        pimp_cog = interaction.client.get_cog("PIMP")
+                        if pimp_cog:
+                            await pimp_cog.show_pimp_cog_menu(interaction)
+                        else:
+                            await interaction.response.send_message(
+                                f"{pimp.multiplyIcon} PIMP module not found.",
+                                ephemeral=True
+                            )
+                    except Exception as e:
+                        if not any(error_code in str(e) for error_code in ["10062", "40060"]):
+                            print(f"PIMP error: {e}")
+                        if not interaction.response.is_done():
+                            await interaction.response.send_message(
+                                "An error occurred while loading PIMP.",
+                                ephemeral=True
+                            )
+                        else:
+                            await interaction.followup.send(
+                                "An error occurred while loading PIMP.",
+                                ephemeral=True
+                            )
+
                 elif custom_id == "gift_code_operations":
                     try:
                         gift_ops_cog = interaction.client.get_cog("GiftOperations")
@@ -610,7 +660,7 @@ class Alliance(commands.Cog):
                             await gift_ops_cog.show_gift_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "❌ Gift Operations module not found.",
+                                f"{pimp.multiplyIcon} Gift Operations module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -651,7 +701,7 @@ class Alliance(commands.Cog):
                             await support_ops_cog.show_support_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "❌ Support Operations module not found.",
+                                f"{pimp.supportIcon} Support Operations module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -675,7 +725,7 @@ class Alliance(commands.Cog):
                             await changes_cog.show_alliance_history_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "❌ Alliance History module not found.",
+                                f"{pimp.multiplyIcon} Alliance History module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -698,7 +748,7 @@ class Alliance(commands.Cog):
                             await other_features_cog.show_other_features_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "❌ Other Features module not found.",
+                                f"{pimp.multiplyIcon} Other Features module not found.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -740,13 +790,14 @@ class Alliance(commands.Cog):
             embed = discord.Embed(
                 title="Channel Selection",
                 description=(
-                    "**Instructions:**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "Please select a channel for the alliance\n\n"
-                    "**Page:** 1/1\n"
+                    f"### **Instructions:**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"Please select a channel for the alliance\n\n"
+                    f"**Page:** 1/1\n"
                     f"**Total Channels:** {len(interaction.guild.text_channels)}"
                 ),
-                color=discord.Color.blue()
+                color=pimp.emColor1
             )
 
             async def channel_select_callback(select_interaction: discord.Interaction):
@@ -758,7 +809,7 @@ class Alliance(commands.Cog):
                         error_embed = discord.Embed(
                             title="Error",
                             description="An alliance with this name already exists.",
-                            color=discord.Color.red()
+                            color = pimp.emColor2
                         )
                         await select_interaction.response.edit_message(embed=error_embed, view=None)
                         return
@@ -779,16 +830,16 @@ class Alliance(commands.Cog):
                     self.conn_giftcode.commit()
 
                     result_embed = discord.Embed(
-                        title="✅ Alliance Successfully Created",
+                        title=f"{pimp.verifiedIcon} Alliance Successfully Created",
                         description="The alliance has been created with the following details:",
-                        color=discord.Color.green()
+                        color = pimp.emColor3
                     )
                     
                     info_section = (
-                        f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
-                        f"**🔢 Alliance ID**\n{alliance_id}\n\n"
-                        f"**📢 Channel**\n<#{channel_id}>\n\n"
-                        f"**⏱️ Control Interval**\n{interval} minutes"
+                        f"**{pimp.allianceIcon} Alliance Name**\n{alliance_name}\n\n"
+                        f"**{pimp.giftHashtagIcon} Alliance ID**\n{alliance_id}\n\n"
+                        f"**{pimp.announceIcon} Channel**\n<#{channel_id}>\n\n"
+                        f"**{pimp.hourglassIcon} Control Interval**\n{interval} minutes"
                     )
                     result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
                     
@@ -801,7 +852,7 @@ class Alliance(commands.Cog):
                     error_embed = discord.Embed(
                         title="Error",
                         description=f"Error creating alliance: {str(e)}",
-                        color=discord.Color.red()
+                        color = pimp.emColor2
                     )
                     await select_interaction.response.edit_message(embed=error_embed, view=None)
 
@@ -813,14 +864,14 @@ class Alliance(commands.Cog):
             error_embed = discord.Embed(
                 title="Error",
                 description="Invalid interval value. Please enter a number.",
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
             await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
         except Exception as e:
             error_embed = discord.Embed(
                 title="Error",
                 description=f"Error: {str(e)}",
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
             await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
 
@@ -835,12 +886,12 @@ class Alliance(commands.Cog):
         
         if not alliances:
             no_alliance_embed = discord.Embed(
-                title="❌ No Alliances Found",
+                title=f"{pimp.multiplyIcon} No Alliances Found",
                 description=(
                     "There are no alliances registered in the database.\n"
                     "Please create an alliance first using the `/alliance create` command."
                 ),
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
             no_alliance_embed.set_footer(text="Use /alliance create to add a new alliance")
             return await interaction.response.send_message(embed=no_alliance_embed, ephemeral=True)
@@ -877,18 +928,20 @@ class Alliance(commands.Cog):
                 self.add_item(select)
                 
                 previous_button = discord.ui.Button(
-                    label="◀️",
-                    style=discord.ButtonStyle.grey,
+                    label="",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="previous",
+                    emoji=pimp.importIcon,
                     disabled=(self.current_page == 0)
                 )
                 previous_button.callback = self.previous_callback
                 self.add_item(previous_button)
 
                 next_button = discord.ui.Button(
-                    label="▶️",
-                    style=discord.ButtonStyle.grey,
+                    label="",
+                    style=discord.ButtonStyle.secondary,
                     custom_id="next",
+                    emoji=pimp.exportIcon,
                     disabled=(self.current_page == len(self.pages) - 1)
                 )
                 next_button.callback = self.next_callback
@@ -900,13 +953,15 @@ class Alliance(commands.Cog):
                 
                 embed = interaction.message.embeds[0]
                 embed.description = (
-                    "**Instructions:**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "1️⃣ Select an alliance from the dropdown menu\n"
-                    "2️⃣ Use ◀️ ▶️ buttons to navigate between pages\n\n"
+                    f"### **Instructions:**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"{pimp.num1Icon} Select an alliance from the dropdown menu\n"
+                    f"{pimp.num2Icon} Use {pimp.importIcon} {pimp.exportIcon} buttons to navigate between pages\n\n"
                     f"**Current Page:** {self.current_page + 1}/{self.total_pages}\n"
                     f"**Total Alliances:** {sum(len(page) for page in self.pages)}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                    f"\n"
+                    f"{pimp.divider1}"
                 )
                 await interaction.response.edit_message(embed=embed, view=self)
 
@@ -916,13 +971,15 @@ class Alliance(commands.Cog):
                 
                 embed = interaction.message.embeds[0]
                 embed.description = (
-                    "**Instructions:**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "1️⃣ Select an alliance from the dropdown menu\n"
-                    "2️⃣ Use ◀️ ▶️ buttons to navigate between pages\n\n"
+                    f"### **Instructions:**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"{pimp.num1Icon} Select an alliance from the dropdown menu\n"
+                    f"{pimp.num2Icon} Use {pimp.importIcon} {pimp.exportIcon} buttons to navigate between pages\n\n"
                     f"**Current Page:** {self.current_page + 1}/{self.total_pages}\n"
                     f"**Total Alliances:** {sum(len(page) for page in self.pages)}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                    f"\n"
+                    f"{pimp.divider1}"
                 )
                 await interaction.response.edit_message(embed=embed, view=self)
 
@@ -951,16 +1008,18 @@ class Alliance(commands.Cog):
                     interval = int(modal.interval.value.strip())
 
                     embed = discord.Embed(
-                        title="🔄 Channel Selection",
+                        title=f"{pimp.announceIcon} Channel Selection",
                         description=(
-                            "**Current Channel Information**\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"📢 Current channel: {f'<#{settings_data[1]}>' if settings_data else 'Not set'}\n"
-                            "**Page:** 1/1\n"
+                            f"**Current Channel Information**\n"
+                            f"{pimp.divider1}\n"
+                            f"\n"
+                            f"{pimp.announceIcon} Current channel: {f'<#{settings_data[1]}>' if settings_data else 'Not set'}\n"
+                            f"**Page:** 1/1\n"
                             f"**Total Channels:** {len(interaction.guild.text_channels)}\n"
-                            "━━━━━━━━━━━━━━━━━━━━━━"
+                            f"\n"
+                            f"{pimp.divider1}"
                         ),
-                        color=discord.Color.blue()
+                        color=pimp.emColor1
                     )
 
                     async def channel_select_callback(channel_interaction: discord.Interaction):
@@ -985,16 +1044,16 @@ class Alliance(commands.Cog):
                             self.conn.commit()
 
                             result_embed = discord.Embed(
-                                title="✅ Alliance Successfully Updated",
+                                title=f"{pimp.verifiedIcon} Alliance Successfully Updated",
                                 description="The alliance details have been updated as follows:",
-                                color=discord.Color.green()
+                                color = pimp.emColor3
                             )
                             
                             info_section = (
-                                f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
-                                f"**🔢 Alliance ID**\n{alliance_id}\n\n"
-                                f"**📢 Channel**\n<#{channel_id}>\n\n"
-                                f"**⏱️ Control Interval**\n{interval} minutes"
+                                f"**{pimp.allianceIcon} Alliance Name**\n{alliance_name}\n\n"
+                                f"**{pimp.giftHashtagIcon} Alliance ID**\n{alliance_id}\n\n"
+                                f"**{pimp.announceIcon} Channel**\n<#{channel_id}>\n\n"
+                                f"**{pimp.hourglassIcon} Control Interval**\n{interval} minutes"
                             )
                             result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
                             
@@ -1005,9 +1064,9 @@ class Alliance(commands.Cog):
 
                         except Exception as e:
                             error_embed = discord.Embed(
-                                title="❌ Error",
+                                title=f"{pimp.multiplyIcon} Error",
                                 description=f"An error occurred while updating the alliance: {str(e)}",
-                                color=discord.Color.red()
+                                color = pimp.emColor2
                             )
                             await channel_interaction.response.edit_message(embed=error_embed, view=None)
 
@@ -1019,22 +1078,22 @@ class Alliance(commands.Cog):
                     error_embed = discord.Embed(
                         title="Error",
                         description="Invalid interval value. Please enter a number.",
-                        color=discord.Color.red()
+                        color = pimp.emColor2
                     )
                     await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
                 except Exception as e:
                     error_embed = discord.Embed(
                         title="Error",
                         description=f"Error: {str(e)}",
-                        color=discord.Color.red()
+                        color = pimp.emColor2
                     )
                     await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
 
             except Exception as e:
                 error_embed = discord.Embed(
-                    title="❌ Error",
+                    title=f"{pimp.multiplyIcon} Error",
                     description=f"An error occurred: {str(e)}",
-                    color=discord.Color.red()
+                    color = pimp.emColor2
                 )
                 if not select_interaction.response.is_done():
                     await select_interaction.response.send_message(embed=error_embed, ephemeral=True)
@@ -1043,19 +1102,22 @@ class Alliance(commands.Cog):
 
         view = PaginatedAllianceView(option_pages, select_callback)
         embed = discord.Embed(
-            title="🛡️ Alliance Edit Menu",
+            title=f"{pimp.allianceIcon} Alliance Edit Menu",
             description=(
-                "**Instructions:**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "1️⃣ Select an alliance from the dropdown menu\n"
-                "2️⃣ Use ◀️ ▶️ buttons to navigate between pages\n\n"
+                f"### **Instructions:**\n"
+                f"{pimp.divider1}\n"
+                f"\n"
+                f"{pimp.num1Icon} Select an alliance from the dropdown menu\n"
+                f"{pimp.num2Icon} Use {pimp.importIcon} {pimp.exportIcon} buttons to navigate between pages\n\n"
                 f"**Current Page:** {1}/{total_pages}\n"
                 f"**Total Alliances:** {len(alliances)}\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"\n"
+                f"{pimp.divider1}\n"
+                f"-# Use the dropdown menu below to select an alliance to edit its details."
             ),
-            color=discord.Color.blue()
+            color=pimp.emColor1
         )
-        embed.set_footer(text="Use the dropdown menu below to select an alliance")
+        embed.set_footer(text="Last Updated: ")
         embed.timestamp = discord.utils.utcnow()
         
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -1067,9 +1129,9 @@ class Alliance(commands.Cog):
             
             if not alliances:
                 no_alliance_embed = discord.Embed(
-                    title="❌ No Alliances Found",
+                    title=f"{pimp.multiplyIcon} No Alliances Found",
                     description="There are no alliances to delete.",
-                    color=discord.Color.red()
+                    color = pimp.emColor2
                 )
                 await interaction.response.send_message(embed=no_alliance_embed, ephemeral=True)
                 return
@@ -1085,27 +1147,29 @@ class Alliance(commands.Cog):
                 discord.SelectOption(
                     label=f"{name[:40]} (ID: {alliance_id})",
                     value=f"{alliance_id}",
-                    description=f"👥 Members: {alliance_members[alliance_id]} | Click to delete",
-                    emoji="🗑️"
+                    description=f"{pimp.avatarIcon} Members: {alliance_members[alliance_id]} | Click to delete",
+                    emoji=pimp.deleteIcon
                 ) for alliance_id, name in alliances
             ]
             
             option_pages = [all_options[i:i + items_per_page] for i in range(0, len(all_options), items_per_page)]
             
             embed = discord.Embed(
-                title="🗑️ Delete Alliance",
+                title=f"{pimp.deleteIcon} Delete Alliance",
                 description=(
-                    "**⚠️ Warning: This action cannot be undone!**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "1️⃣ Select an alliance from the dropdown menu\n"
-                    "2️⃣ Use ◀️ ▶️ buttons to navigate between pages\n\n"
+                    f"**{pimp.warnIcon} Warning: This action cannot be undone!**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"{pimp.num1Icon} Select an alliance from the dropdown menu\n"
+                    f"{pimp.num2Icon} Use {pimp.importIcon} {pimp.exportIcon} buttons to navigate between pages\n\n"
                     f"**Current Page:** 1/{len(option_pages)}\n"
                     f"**Total Alliances:** {len(alliances)}\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                    f"\n"
+                    f"{pimp.divider1}"
                 ),
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
-            embed.set_footer(text="⚠️ Warning: Deleting an alliance will remove all its data!")
+            embed.set_footer(text=f"{pimp.warnIcon} Warning: Deleting an alliance will remove all its data!")
             embed.timestamp = discord.utils.utcnow()
 
             view = PaginatedDeleteView(option_pages, self.alliance_delete_callback)
@@ -1115,9 +1179,9 @@ class Alliance(commands.Cog):
         except Exception as e:
             print(f"Error in delete_alliance: {e}")
             error_embed = discord.Embed(
-                title="❌ Error",
+                title=f"{pimp.multiplyIcon} Error",
                 description="An error occurred while loading the delete menu.",
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
             await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
@@ -1150,22 +1214,27 @@ class Alliance(commands.Cog):
             gift_code_control_count = self.c_giftcode.fetchone()[0]
 
             confirm_embed = discord.Embed(
-                title="⚠️ Confirm Alliance Deletion",
+                title=f"{pimp.warnIcon} Confirm Alliance Deletion",
                 description=(
                     f"Are you sure you want to delete this alliance?\n\n"
-                    f"**Alliance Details:**\n"
-                    f"🛡️ **Name:** {alliance_name}\n"
-                    f"🔢 **ID:** {alliance_id}\n"
-                    f"👥 **Members:** {users_count}\n\n"
+                    f"### **Alliance Details:**\n"
+                    f"{pimp.divider1}\n"
+                    f"\n"
+                    f"{pimp.allianceIcon} **Name:** {alliance_name}\n"
+                    f"{pimp.giftHashtagIcon} **ID:** {alliance_id}\n"
+                    f"{pimp.avatarIcon} **Members:** {users_count}\n\n"
                     f"**Data to be Deleted:**\n"
-                    f"⚙️ Alliance Settings: {settings_count}\n"
-                    f"👥 User Records: {users_count}\n"
-                    f"🏰 Admin Server Records: {admin_server_count}\n"
-                    f"📢 Gift Channels: {gift_channels_count}\n"
-                    f"📊 Gift Code Controls: {gift_code_control_count}\n\n"
-                    "**⚠️ WARNING: This action cannot be undone!**"
+                    f"{pimp.allianceIcon} Alliance Settings: {settings_count}\n"
+                    f"{pimp.avatarIcon} User Records: {users_count}\n"
+                    f"{pimp.avatarIcon} Admin Server Records: {admin_server_count}\n"
+                    f"{pimp.announceIcon} Gift Channels: {gift_channels_count}\n"
+                    f"{pimp.giftIcon} Gift Code Controls: {gift_code_control_count}\n\n"
+                    f"**{pimp.warnIcon} WARNING: This action cannot be undone!**\n"
+                    f"\n"
+                    f"{pimp.divider1}\n"
+
                 ),
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
             
             confirm_view = discord.ui.View(timeout=60)
@@ -1197,18 +1266,18 @@ class Alliance(commands.Cog):
                     self.conn_giftcode.commit()
 
                     cleanup_embed = discord.Embed(
-                        title="✅ Alliance Successfully Deleted",
+                        title=f"{pimp.verifiedIcon} Alliance Successfully Deleted",
                         description=(
                             f"Alliance **{alliance_name}** has been deleted.\n\n"
-                            "**Cleaned Up Data:**\n"
-                            f"🛡️ Alliance Records: {alliance_count}\n"
-                            f"👥 Users Removed: {users_count_deleted}\n"
-                            f"⚙️ Alliance Settings: {admin_settings_count}\n"
-                            f"🏰 Admin Server Records: {admin_server_count}\n"
-                            f"📢 Gift Channels: {gift_channels_count}\n"
-                            f"📊 Gift Code Controls: {gift_code_control_count}"
+                            f"**Cleaned Up Data:**\n"
+                            f"{pimp.allianceIcon} Alliance Records: {alliance_count}\n"
+                            f"{pimp.avatarIcon} Users Removed: {users_count_deleted}\n"
+                            f"{pimp.allianceIcon} Alliance Settings: {admin_settings_count}\n"
+                            f"{pimp.avatarIcon} Admin Server Records: {admin_server_count}\n"
+                            f"{pimp.announceIcon} Gift Channels: {gift_channels_count}\n"
+                            f"{pimp.giftIcon} Gift Code Controls: {gift_code_control_count}"
                         ),
-                        color=discord.Color.green()
+                        color = pimp.emColor3
                     )
                     cleanup_embed.set_footer(text="All related data has been successfully removed")
                     cleanup_embed.timestamp = discord.utils.utcnow()
@@ -1217,22 +1286,22 @@ class Alliance(commands.Cog):
                     
                 except Exception as e:
                     error_embed = discord.Embed(
-                        title="❌ Error",
+                        title=f"{pimp.multiplyIcon} Error",
                         description=f"An error occurred while deleting the alliance: {str(e)}",
-                        color=discord.Color.red()
+                        color = pimp.emColor2
                     )
                     await button_interaction.response.edit_message(embed=error_embed, view=None)
 
             async def cancel_callback(button_interaction: discord.Interaction):
                 cancel_embed = discord.Embed(
-                    title="❌ Deletion Cancelled",
+                    title=f"{pimp.multiplyIcon} Deletion Cancelled",
                     description="Alliance deletion has been cancelled.",
-                    color=discord.Color.grey()
+                    color = pimp.emColor1
                 )
                 await button_interaction.response.edit_message(embed=cancel_embed, view=None)
 
-            confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.danger)
-            cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.grey)
+            confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.secondary, emoji=pimp.verifiedIcon)
+            cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji=pimp.deniedIcon)
             confirm_button.callback = confirm_callback
             cancel_button.callback = cancel_callback
             confirm_view.add_item(confirm_button)
@@ -1243,9 +1312,9 @@ class Alliance(commands.Cog):
         except Exception as e:
             print(f"Error in alliance_delete_callback: {e}")
             error_embed = discord.Embed(
-                title="❌ Error",
+                title=f"{pimp.multiplyIcon} Error",
                 description="An error occurred while processing the deletion.",
-                color=discord.Color.red()
+                color = pimp.emColor2
             )
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
@@ -1295,18 +1364,20 @@ class PaginatedDeleteView(discord.ui.View):
         self.add_item(select)
         
         previous_button = discord.ui.Button(
-            label="◀️",
-            style=discord.ButtonStyle.grey,
+            label="",
+            style=discord.ButtonStyle.secondary,
             custom_id="previous",
+            emoji=pimp.importIcon,
             disabled=(self.current_page == 0)
         )
         previous_button.callback = self.previous_callback
         self.add_item(previous_button)
 
         next_button = discord.ui.Button(
-            label="▶️",
-            style=discord.ButtonStyle.grey,
+            label="",
+            style=discord.ButtonStyle.secondary,
             custom_id="next",
+            emoji=pimp.exportIcon,
             disabled=(self.current_page == len(self.pages) - 1)
         )
         next_button.callback = self.next_callback
@@ -1317,19 +1388,21 @@ class PaginatedDeleteView(discord.ui.View):
         self.update_view()
         
         embed = discord.Embed(
-            title="🗑️ Delete Alliance",
+            title=f"{pimp.deleteIcon} Delete Alliance",
             description=(
-                "**⚠️ Warning: This action cannot be undone!**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "1️⃣ Select an alliance from the dropdown menu\n"
-                "2️⃣ Use ◀️ ▶️ buttons to navigate between pages\n\n"
+                f"**{pimp.warnIcon} Warning: This action cannot be undone!**\n"
+                f"{pimp.divider1}\n"
+                f"\n"
+                f"{pimp.num1Icon} Select an alliance from the dropdown menu\n"
+                f"{pimp.num2Icon} Use {pimp.importIcon} {pimp.exportIcon} buttons to navigate between pages\n\n"
                 f"**Current Page:** {self.current_page + 1}/{self.total_pages}\n"
                 f"**Total Alliances:** {sum(len(page) for page in self.pages)}\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"\n"
+                f"{pimp.divider1}"
             ),
-            color=discord.Color.red()
+            color = pimp.emColor2
         )
-        embed.set_footer(text="⚠️ Warning: Deleting an alliance will remove all its data!")
+        embed.set_footer(text=f"{pimp.warnIcon} Warning: Deleting an alliance will remove all its data!")
         embed.timestamp = discord.utils.utcnow()
         
         await interaction.response.edit_message(embed=embed, view=self)
@@ -1339,19 +1412,21 @@ class PaginatedDeleteView(discord.ui.View):
         self.update_view()
         
         embed = discord.Embed(
-            title="🗑️ Delete Alliance",
+            title=f"{pimp.deleteIcon} Delete Alliance",
             description=(
-                "**⚠️ Warning: This action cannot be undone!**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "1️⃣ Select an alliance from the dropdown menu\n"
-                "2️⃣ Use ◀️ ▶️ buttons to navigate between pages\n\n"
+                f"**{pimp.warnIcon} Warning: This action cannot be undone!**\n"
+                f"{pimp.divider1}\n"
+                f"\n"
+                f"{pimp.num1Icon} Select an alliance from the dropdown menu\n"
+                f"{pimp.num2Icon} Use {pimp.importIcon} {pimp.exportIcon} buttons to navigate between pages\n\n"
                 f"**Current Page:** {self.current_page + 1}/{self.total_pages}\n"
                 f"**Total Alliances:** {sum(len(page) for page in self.pages)}\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"\n"
+                f"{pimp.divider1}"
             ),
-            color=discord.Color.red()
+            color = pimp.emColor2
         )
-        embed.set_footer(text="⚠️ Warning: Deleting an alliance will remove all its data!")
+        embed.set_footer(text=f"{pimp.warnIcon} Warning: Deleting an alliance will remove all its data!")
         embed.timestamp = discord.utils.utcnow()
         
         await interaction.response.edit_message(embed=embed, view=self)
@@ -1385,7 +1460,7 @@ class PaginatedChannelView(discord.ui.View):
                 label=channel_label,
                 value=str(channel.id),
                 description=option_description,
-                emoji="📢"
+                emoji=pimp.announceIcon
             ))
         
         select = discord.ui.Select(
@@ -1397,18 +1472,20 @@ class PaginatedChannelView(discord.ui.View):
         
         if self.total_pages > 1:
             previous_button = discord.ui.Button(
-                label="◀️",
-                style=discord.ButtonStyle.grey,
+                label="",
+                style=discord.ButtonStyle.secondary,
                 custom_id="previous",
+                emoji=pimp.importIcon,
                 disabled=(self.current_page == 0)
             )
             previous_button.callback = self.previous_callback
             self.add_item(previous_button)
 
             next_button = discord.ui.Button(
-                label="▶️",
-                style=discord.ButtonStyle.grey,
+                label="",
+                style=discord.ButtonStyle.secondary,
                 custom_id="next",
+                emoji=pimp.exportIcon,
                 disabled=(self.current_page == len(self.pages) - 1)
             )
             next_button.callback = self.next_callback
