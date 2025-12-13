@@ -519,7 +519,7 @@ class WizardChannelSelectView(discord.ui.View):
             placeholder="Select notification channel",
             min_values=1,
             max_values=1,
-            channel_types=[discord.ChannelType.text]
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news]
         )
         channel_select.callback = self.channel_selected
         self.add_item(channel_select)
