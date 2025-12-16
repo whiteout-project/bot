@@ -93,13 +93,26 @@ class Control(commands.Cog):
             """)
         
         self.conn_alliance.commit()
-        
+
+        # Create invalid_id_tracker table for 3-strike removal system
+        self.cursor_settings.execute("""
+            CREATE TABLE IF NOT EXISTS invalid_id_tracker (
+                fid TEXT PRIMARY KEY,
+                alliance_id TEXT,
+                nickname TEXT,
+                fail_count INTEGER DEFAULT 1,
+                first_failure TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_failure TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.conn_settings.commit()
+
         self.db_lock = asyncio.Lock()
         self.proxies = self.load_proxies()
         self.alliance_tasks = {}
         self.is_running = {}
         self.monitor_started = False
-        
+
         # Initialize login handler for centralized queue management
         self.login_handler = LoginHandler()
 
@@ -124,13 +137,50 @@ class Control(commands.Cog):
     def get_transfer_notification_setting(self, alliance_id):
         """Get the notify_on_transfer setting for a specific alliance"""
         self.cursor_alliance.execute("""
-            SELECT notify_on_transfer 
-            FROM alliancesettings 
+            SELECT notify_on_transfer
+            FROM alliancesettings
             WHERE alliance_id = ?
         """, (alliance_id,))
         result = self.cursor_alliance.fetchone()
         # Default to 0 (disabled) if not set
         return result[0] if result and result[0] is not None else 0
+
+    def increment_invalid_counter(self, fid: str, alliance_id: str, nickname: str) -> int:
+        """Increment the 40004 error counter for a player. Returns new fail_count."""
+        self.cursor_settings.execute(
+            "SELECT fail_count FROM invalid_id_tracker WHERE fid = ?", (fid,)
+        )
+        result = self.cursor_settings.fetchone()
+
+        if result:
+            new_count = result[0] + 1
+            self.cursor_settings.execute("""
+                UPDATE invalid_id_tracker
+                SET fail_count = ?, last_failure = CURRENT_TIMESTAMP, nickname = ?, alliance_id = ?
+                WHERE fid = ?
+            """, (new_count, nickname, alliance_id, fid))
+        else:
+            new_count = 1
+            self.cursor_settings.execute("""
+                INSERT INTO invalid_id_tracker (fid, alliance_id, nickname, fail_count)
+                VALUES (?, ?, ?, 1)
+            """, (fid, alliance_id, nickname))
+
+        self.conn_settings.commit()
+        return new_count
+
+    def reset_invalid_counter(self, fid: str):
+        """Reset/remove the 40004 error counter for a player (called on successful check)."""
+        self.cursor_settings.execute("DELETE FROM invalid_id_tracker WHERE fid = ?", (fid,))
+        self.conn_settings.commit()
+
+    def get_invalid_count(self, fid: str) -> int:
+        """Get current fail count for a player."""
+        self.cursor_settings.execute(
+            "SELECT fail_count FROM invalid_id_tracker WHERE fid = ?", (fid,)
+        )
+        result = self.cursor_settings.fetchone()
+        return result[0] if result else 0
 
     async def fetch_user_data(self, fid, proxy=None):
         """Fetch user data using the centralized login handler"""
@@ -291,9 +341,15 @@ class Control(commands.Cog):
                         
                         # Check if this is a permanently invalid ID (not found)
                         if error_msg == 'not_found':
-                            # Mark for removal (will check bulk threshold later)
-                            members_to_remove.append((fid, old_nickname, "Player does not exist (error 40004)"))
-                            check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (Pending removal)")
+                            fail_count = self.increment_invalid_counter(fid, alliance_id, old_nickname)
+
+                            if fail_count >= 3:
+                                # Mark for removal after 3 consecutive failures
+                                members_to_remove.append((fid, old_nickname, "Player does not exist (error 40004 - 3x confirmed)"))
+                                check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (3x confirmed - Pending removal)")
+                            else:
+                                # Not enough failures yet - just monitor
+                                check_fail_list.append(f"⚠️ `{fid}` ({old_nickname}) - Player not found ({fail_count}/3 - monitoring)")
                         else:
                             # For other errors, just report without removing
                             check_fail_list.append(f"❌ `{fid}` - {error_msg}")
@@ -308,6 +364,9 @@ class Control(commands.Cog):
                         new_kid = user_data.get('kid', 0)
                         new_stove_lv_content = user_data['stove_lv_content']
                         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                        # Reset 40004 error counter on successful check
+                        self.reset_invalid_counter(fid)
 
                         async with self.db_lock:
                             if new_stove_lv_content != old_stove_lv_content:
