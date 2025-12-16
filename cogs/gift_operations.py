@@ -1075,7 +1075,7 @@ class GiftOperations(commands.Cog):
             self.logger.exception(f"Error validating gift code '{giftcode}': {e}")
             return None, f"Validation error: {str(e)}"
 
-    def encode_data(self, data, debug_sign_error=False):
+    def encode_data(self, data):
         secret = self.wos_encrypt_key
         sorted_keys = sorted(data.keys())
         encoded_data = "&".join(
@@ -1085,15 +1085,6 @@ class GiftOperations(commands.Cog):
             ]
         )
         sign = hashlib.md5(f"{encoded_data}{secret}".encode()).hexdigest()
-
-        if debug_sign_error: # Debug logging for sign error when requested
-            self.logger.error(f"[SIGN ERROR DEBUG] Input data: {data}")
-            self.logger.error(f"[SIGN ERROR DEBUG] Encoded data: {encoded_data}")
-            self.logger.error(f"[SIGN ERROR DEBUG] String being hashed: {encoded_data}{secret}")
-            self.logger.error(f"[SIGN ERROR DEBUG] Secret key: {secret}")
-            self.logger.error(f"[SIGN ERROR DEBUG] Generated signature: {sign}")
-            self.logger.error(f"[SIGN ERROR DEBUG] Final payload: {{'sign': '{sign}', **{data}}}")
-        
         return {"sign": sign, **data}
 
     def batch_insert_user_giftcodes(self, user_giftcode_data):
@@ -5777,4 +5768,4 @@ class OCRSettingsView(discord.ui.View):
             await progress_message.edit(content=f"❌ {message_from_task}")
 
 async def setup(bot):
-    await bot.add_cog(GiftOperations(bot)) 
+    await bot.add_cog(GiftOperations(bot))

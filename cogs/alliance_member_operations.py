@@ -216,7 +216,7 @@ class AllianceMemberOperations(commands.Cog):
                     view = AllianceSelectView(alliances_with_counts, self.cog)
                     
                     async def select_callback(interaction: discord.Interaction):
-                        alliance_id = view.current_select.values[0]
+                        alliance_id = int(view.current_select.values[0])
                         await interaction.response.send_modal(AddMemberModal(alliance_id))
 
                     view.callback = select_callback
@@ -662,7 +662,7 @@ class AllianceMemberOperations(commands.Cog):
                             member_list = ""
                             for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
                                 level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
-                                member_list += f"👤 {nickname}\n└ ⚔ {level}\n└ 🆔 FID: {fid}\n└ 👑 State: {kid}\n\n"
+                                member_list += f"👤 {nickname}\n└ ⚔ {level}\n└ 🆔 ID: {fid}\n└ 👑 State: {kid}\n\n"
 
                             embed.description += member_list
                             
@@ -2363,7 +2363,7 @@ class ExportColumnSelectView(discord.ui.View):
                 elif item.custom_id == 'toggle_state':
                     item.style = discord.ButtonStyle.primary if self.selected_columns['state'] else discord.ButtonStyle.secondary
                     item.label = "✅ State" if self.selected_columns['state'] else "❌ State"
-    
+
     async def toggle_alliance_button(self, interaction: discord.Interaction):
         if self.include_alliance:
             self.selected_columns['alliance'] = not self.selected_columns.get('alliance', True)

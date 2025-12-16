@@ -192,9 +192,9 @@ class Register(commands.Cog):
                 error_msg = api_response.get("msg", "Unknown error")
                 
                 if "role not exist" in error_msg.lower():
-                    display_msg = "❌ Invalid FID. Please try again."
+                    display_msg = "❌ Invalid ID. Please try again."
                 else:
-                    display_msg = f"❌ Invalid FID: {error_msg}"
+                    display_msg = f"❌ Invalid ID: {error_msg}"
                 
                 await interaction.response.send_message(
                     display_msg,
