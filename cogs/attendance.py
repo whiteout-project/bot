@@ -2097,6 +2097,61 @@ class Attendance(commands.Cog):
             result = cursor.fetchone()
             return result[0] if result else "Unknown Alliance"
 
+    async def _handle_permission_check(self, interaction):
+        """Check admin permissions and get alliances for the user."""
+        user_id = interaction.user.id
+        guild_id = interaction.guild_id
+
+        admin_result = await self._check_admin_permissions(user_id)
+        if not admin_result:
+            error_embed = self._create_error_embed(
+                "❌ Access Denied",
+                "You do not have permission to use this command."
+            )
+            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+            await interaction.response.edit_message(embed=error_embed, view=back_view)
+            return None
+
+        alliances, _, _ = await self.get_admin_alliances(user_id, guild_id)
+        if not alliances:
+            error_embed = self._create_error_embed(
+                "❌ No Alliances Found",
+                "No alliances found for your permissions."
+            )
+            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
+            await interaction.response.edit_message(embed=error_embed, view=back_view)
+            return None
+
+        return alliances, admin_result[0]
+
+    def _get_alliances_with_counts(self, alliances):
+        """Get alliance member counts with optimized single query"""
+        alliance_ids = [aid for aid, _ in alliances]
+        alliances_with_counts = []
+
+        # Validate that all alliance IDs are integers to prevent SQL injection
+        if alliance_ids and not all(isinstance(aid, int) for aid in alliance_ids):
+            raise ValueError("Invalid alliance IDs detected - all IDs must be integers")
+
+        if alliance_ids:
+            with sqlite3.connect('db/users.sqlite') as db:
+                cursor = db.cursor()
+                placeholders = ','.join('?' * len(alliance_ids))
+                cursor.execute(f"""
+                    SELECT alliance, COUNT(*)
+                    FROM users
+                    WHERE alliance IN ({placeholders})
+                    GROUP BY alliance
+                """, [str(aid) for aid in alliance_ids])
+                counts = dict(cursor.fetchall())
+
+            alliances_with_counts = [
+                (aid, name, counts.get(str(aid), 0))
+                for aid, name in alliances
+            ]
+
+        return alliances_with_counts
+
     async def get_user_report_preference(self, user_id):
         """Get user's report preference"""
         try:
