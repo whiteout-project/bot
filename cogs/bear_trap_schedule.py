@@ -1392,7 +1392,7 @@ class CreateBoardChannelSelectView(discord.ui.View):
         if board_type == "channel":
             target_select = discord.ui.ChannelSelect(
                 placeholder="Select channel to track notifications for",
-                channel_types=[discord.ChannelType.text],
+                channel_types=[discord.ChannelType.text, discord.ChannelType.news],
                 min_values=1,
                 max_values=1,
                 row=0
@@ -1402,7 +1402,7 @@ class CreateBoardChannelSelectView(discord.ui.View):
 
         display_select = discord.ui.ChannelSelect(
             placeholder="Select where to post the board",
-            channel_types=[discord.ChannelType.text],
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
             min_values=1,
             max_values=1,
             row=1
@@ -2143,7 +2143,7 @@ class BoardManagementView(discord.ui.View):
         try:
             channel_select = discord.ui.ChannelSelect(
                 placeholder="Select channel to monitor events from",
-                channel_types=[discord.ChannelType.text],
+                channel_types=[discord.ChannelType.text, discord.ChannelType.news],
                 min_values=1,
                 max_values=1
             )
@@ -2190,7 +2190,7 @@ class BoardManagementView(discord.ui.View):
         try:
             channel_select = discord.ui.ChannelSelect(
                 placeholder="Select new channel to post the board",
-                channel_types=[discord.ChannelType.text],
+                channel_types=[discord.ChannelType.text, discord.ChannelType.news],
                 min_values=1,
                 max_values=1
             )

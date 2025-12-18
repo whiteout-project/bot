@@ -5,6 +5,44 @@ from datetime import datetime
 import re
 from .bear_event_types import get_event_icon
 
+def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
+    """
+    Check if user typed a literal @mention instead of {tag} or @tag.
+    Returns a warning message if misuse detected, None otherwise.
+
+    Args:
+        text: The message text to check
+        is_embed: If True, warn on ALL @ mentions (including @everyone/@here)
+                  since they don't work in embed fields
+    """
+    # Skip if {tag} or @tag is already used correctly
+    if "{tag}" in text or "@tag" in text:
+        return None
+
+    if is_embed:
+        # In embeds, NO @ mentions work - warn on everything
+        pattern = r'@(\w+)'
+    else:
+        # In plain messages, @everyone/@here work - only warn on usernames/roles
+        pattern = r'@(?!everyone|here)(\w+)'
+
+    matches = re.findall(pattern, text)
+
+    if matches:
+        examples = ", ".join(f"@{m}" for m in matches[:3])
+        if is_embed:
+            return (
+                f"⚠️ You typed `{examples}` but mentions don't work inside embeds.\n"
+                f"Use `{{tag}}` instead - it will add the mention above the embed."
+            )
+        else:
+            return (
+                f"⚠️ You typed `{examples}` but this won't ping anyone.\n"
+                f"Use `{{tag}}` instead - it will be replaced with your configured mention."
+            )
+    return None
+
+
 def format_repeat_interval(repeat_minutes, notification_id=None) -> str:
     if repeat_minutes == 0:
         return "❌ No repeat"
@@ -108,6 +146,14 @@ class EmbedFieldModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
+
+        # Check for @ mention misuse in embed text fields and show warning
+        text_fields = ("title", "embed_description", "footer", "author", "mention_message")
+        if self.field_name in text_fields:
+            warning = check_mention_placeholder_misuse(self.input_field.value, is_embed=True)
+            if warning:
+                await interaction.followup.send(warning, ephemeral=True)
+
         try:
             value = self.input_field.value
             if self.field_name == "color":
@@ -448,13 +494,19 @@ class PlainEditorView(discord.ui.View):
                     saved_description = plain_message_part.replace("PLAIN_MESSAGE:", "")
 
                     self.description = discord.ui.TextInput(label="Message",
-                                                            placeholder="Variables: %t=time left, %n=name, %e=time, %d=date, %i=emoji, @tag=mention",
+                                                            placeholder="Variables: {tag}=mention, {time}=time left, %n=name, %e=time, %d=date, %i=emoji",
                                                             style=discord.TextStyle.paragraph, required=True,
                                                             default=saved_description, max_length=2000)
                     self.add_item(self.description)
 
                 async def on_submit(self, modal_interaction: discord.Interaction):
                     await modal_interaction.response.defer()
+
+                    # Check for potential @mention misuse and show warning
+                    warning = check_mention_placeholder_misuse(self.description.value)
+                    if warning:
+                        await modal_interaction.followup.send(warning, ephemeral=True)
+
                     try:
                         # Preserve CUSTOM_TIMES if it exists
                         parts = self.parent_view.description.split("|")
@@ -476,7 +528,7 @@ class PlainEditorView(discord.ui.View):
     async def edit_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         channel_select = discord.ui.ChannelSelect(
             placeholder="Select a channel for notifications",
-            channel_types=[discord.ChannelType.text],
+            channel_types=[discord.ChannelType.text, discord.ChannelType.news],
             min_values=1,
             max_values=1
         )
