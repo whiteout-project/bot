@@ -42,7 +42,6 @@ def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str |
             )
     return None
 
-
 def format_repeat_interval(repeat_minutes, notification_id=None) -> str:
     if repeat_minutes == 0:
         return "❌ No repeat"

@@ -814,6 +814,12 @@ class BearTrapSchedule(commands.Cog):
             else:
                 time_str = next_time_tz.strftime('%H:%M')
 
+            # Get emoji for this event type
+            emoji = get_event_icon(event_type) if event_type else "📅"
+            event_name = event_type if event_type else "Event"
+            event_time_str = next_time_tz.strftime('%H:%M')
+            event_date_str = next_time_tz.strftime('%b %d')
+
             # Extract notification name
             if "EMBED_MESSAGE:" in description:
                 # Get embed title
@@ -831,15 +837,31 @@ class BearTrapSchedule(commands.Cog):
             else:
                 name = description[:30] if len(description) > 30 else description
 
-            # Get emoji for this event type
-            emoji = get_event_icon(event_type) if event_type else "📅"
+            # Replace all placeholders in the name (from templates)
+            name = (name
+                .replace("%i", emoji)
+                .replace("%n", event_name)
+                .replace("%e", event_time_str)
+                .replace("%d", event_date_str)
+                .replace("%t", "")  # Time remaining doesn't make sense in schedule board title
+                .replace("{time}", "")
+                .replace("{tag}", "")  # Mentions don't make sense in schedule board title
+                .replace("@tag", "")
+            )
+            # Clean up any double spaces from removed placeholders
+            while "  " in name:
+                name = name.replace("  ", " ")
+            name = name.strip()
 
             # Strip "Notification" suffix if present (for backwards compatibility)
             if name.endswith(" Notification"):
                 name = name[:-13]
 
-            # Build line: **time** - emoji name
-            line = f"**{time_str}** - {emoji} {name}"
+            # Build line: **time** - emoji name (avoid duplicate emoji if name already starts with it)
+            if name.startswith(emoji):
+                line = f"**{time_str}** - {name}"
+            else:
+                line = f"**{time_str}** - {emoji} {name}"
             if show_channel:
                 line += f" <#{channel_id}>"
 

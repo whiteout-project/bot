@@ -2361,17 +2361,37 @@ class WizardPreviewView(discord.ui.View):
                 if not event_next_occurrence:
                     event_next_occurrence = now  # Fallback to now for custom events
 
-                # Prepare embed data with image and thumbnail URLs
-                embed_data = {
-                    'title': f"{event_name} Notification",
-                    'description': event_config.get('description', ''),
-                    'color': discord.Color.blue().value,
-                    'image_url': event_config.get('image_url', ''),
-                    'thumbnail_url': event_config.get('thumbnail_url', ''),
-                    'footer': None,
-                    'author': None,
-                    'mention_message': None
-                }
+                # Check for customized template first
+                template_data = None
+                templates_cog = bear_trap_cog.bot.get_cog("BearTrapTemplates")
+                if templates_cog:
+                    templates = templates_cog.get_templates_by_event_type(event_name)
+                    if templates:
+                        template_data = templates_cog.get_template(templates[0]["template_id"])
+
+                # Prepare embed data
+                if template_data:
+                    embed_data = {
+                        'title': template_data.get('embed_title') or f"{event_name} Notification",
+                        'description': template_data.get('embed_description') or event_config.get('description', ''),
+                        'color': int(template_data.get('embed_color') or discord.Color.blue().value),
+                        'image_url': template_data.get('embed_image_url') or event_config.get('image_url', ''),
+                        'thumbnail_url': template_data.get('embed_thumbnail_url') or event_config.get('thumbnail_url', ''),
+                        'footer': None,
+                        'author': None,
+                        'mention_message': None
+                    }
+                else:
+                    embed_data = {
+                        'title': f"{event_name} Notification",
+                        'description': event_config.get('description', ''),
+                        'color': discord.Color.blue().value,
+                        'image_url': event_config.get('image_url', ''),
+                        'thumbnail_url': event_config.get('thumbnail_url', ''),
+                        'footer': None,
+                        'author': None,
+                        'mention_message': None
+                    }
 
                 # Set embed data on the bear_trap_cog so save_notification can use it
                 bear_trap_cog.current_embed_data = embed_data

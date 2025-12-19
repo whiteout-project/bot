@@ -2059,7 +2059,7 @@ class EventTypeSelectView(discord.ui.View):
 
             content = (
                 "📝 **Embed Editor**\n\n"
-                "**Available variables:** `%t` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji), `@tag` (mention)\n\n"
+                "**Available variables:** `{tag}` (mention), `{time}` (time left), `%n` (name), `%e` (event time), `%d` (date), `%i` (emoji)\n\n"
                 f"**Preview values:** {example_emoji} {example_name} at {example_event_time} on {example_date}, {example_time} remaining"
             )
 
