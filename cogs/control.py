@@ -182,6 +182,26 @@ class Control(commands.Cog):
         result = self.cursor_settings.fetchone()
         return result[0] if result else 0
 
+    def is_connection_error(self, error_msg: str) -> bool:
+        """Check if error message indicates a network/connection issue vs actual player error"""
+        network_indicators = [
+            'timeout',
+            'connection',
+            'connect',
+            'timed out',
+            'refused',
+            'unreachable',
+            'reset',
+            'dns',
+            'network',
+            'socket',
+            'ssl',
+            'certificate',
+            'host'
+        ]
+        error_lower = error_msg.lower()
+        return any(indicator in error_lower for indicator in network_indicators)
+
     async def fetch_user_data(self, fid, proxy=None):
         """Fetch user data using the centralized login handler"""
         result = await self.login_handler.fetch_player_data(fid, use_proxy=proxy)
@@ -305,6 +325,7 @@ class Control(commands.Cog):
 
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
         members_to_remove = []  # Track members that should be removed for bulk check
+        connection_errors = []  # Track network/connection issues separately (not invalid members)
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -350,11 +371,15 @@ class Control(commands.Cog):
                             else:
                                 # Not enough failures yet - just monitor
                                 check_fail_list.append(f"⚠️ `{fid}` ({old_nickname}) - Player not found ({fail_count}/3 - monitoring)")
+                        elif self.is_connection_error(error_msg):
+                            # Network/connection issue - NOT an invalid member, just a connection issue
+                            connection_errors.append(f"⚠️ `{fid}` ({old_nickname}) - Connection issue (will retry next check)")
+                            self.logger.warning(f"Connection issue checking ID {fid}: {error_msg}")
                         else:
-                            # For other errors, just report without removing
+                            # For other API errors, report without removing
                             check_fail_list.append(f"❌ `{fid}` - {error_msg}")
                             self.logger.warning(f"Failed to check ID {fid}: {error_msg}")
-                        
+
                         checked_users += 1
                     elif 'data' in data:
                         # Process successful response
@@ -483,7 +508,7 @@ class Control(commands.Cog):
         end_time = datetime.now()
         duration = end_time - start_time
 
-        if furnace_changes or nickname_changes or kid_changes or check_fail_list:
+        if furnace_changes or nickname_changes or kid_changes or check_fail_list or connection_errors:
             if furnace_changes:
                 await self.send_embed(
                     channel=channel,
@@ -527,6 +552,16 @@ class Control(commands.Cog):
                     footer=footer_text
                 )
 
+            if connection_errors:
+                # Connection issues are informational - members NOT removed
+                await self.send_embed(
+                    channel=channel,
+                    title=f"⚠️ **{alliance_name}** Connection Issues",
+                    description=safe_list(connection_errors),
+                    color=discord.Color.orange(),
+                    footer=f"📊 {len(connection_errors)} connection issue(s) - Members NOT affected"
+                )
+
             embed.color = discord.Color.green()
             embed.set_field_at(
                 0,
@@ -552,6 +587,10 @@ class Control(commands.Cog):
             check_failure_count = sum(1 for item in check_fail_list if 'Auto-removed' not in item)
             if check_failure_count > 0:
                 changes_text += f"\n❌ {check_failure_count} check failures"
+
+            # Add connection issues count if any (informational only)
+            if connection_errors:
+                changes_text += f"\n⚠️ {len(connection_errors)} connection issue(s)"
 
             embed.add_field(
                 name="📈 Total Changes",
@@ -580,7 +619,7 @@ class Control(commands.Cog):
         # Update ephemeral message at completion if provided
         if interaction_message:
             try:
-                changes_detected = bool(furnace_changes or nickname_changes or kid_changes or check_fail_list)
+                changes_detected = bool(furnace_changes or nickname_changes or kid_changes or check_fail_list or connection_errors)
                 
                 if is_batch and batch_info:
                     # Check if this is the last alliance in the batch
