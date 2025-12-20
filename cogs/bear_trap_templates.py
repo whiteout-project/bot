@@ -51,6 +51,44 @@ class BearTrapTemplates(commands.Cog):
         if self.cursor.fetchone()[0] == 0:
             self._populate_default_templates()
 
+        # Always sync non-customized templates with latest defaults from bear_event_types.py
+        self._sync_default_templates()
+
+    def _sync_default_templates(self):
+        """Sync non-customized templates with latest values from bear_event_types.py"""
+        # First, handle any renamed events (old_name -> new_name)
+        renamed_events = {
+            "Mercenary Bosses": "Mercenary Prestige",
+        }
+        for old_name, new_name in renamed_events.items():
+            # Update templates table
+            self.cursor.execute("""
+                UPDATE notification_templates
+                SET event_type = ?, template_name = ?
+                WHERE event_type = ?
+            """, (new_name, new_name, old_name))
+            # Also update bear_notifications table
+            self.cursor.execute("""
+                UPDATE bear_notifications
+                SET event_type = ?
+                WHERE event_type = ?
+            """, (new_name, old_name))
+
+        # Now sync values from EVENT_CONFIG
+        for event_name, config in EVENT_CONFIG.items():
+            image_url = config.get("image_url", "")
+            thumbnail_url = config.get("thumbnail_url", "")
+            description = config.get("description", "")
+
+            # Only update templates that haven't been customized (is_global = 1)
+            self.cursor.execute("""
+                UPDATE notification_templates
+                SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?
+                WHERE event_type = ? AND is_global = 1
+            """, (image_url, thumbnail_url, description, event_name))
+
+        self.conn.commit()
+
     def _populate_default_templates(self):
         """Populate database with pre-built templates for all event types"""
         templates = []
@@ -181,6 +219,34 @@ class BearTrapTemplates(commands.Cog):
         """, (embed_title, embed_description, embed_image_url, embed_thumbnail_url, user_id, template_id))
         self.conn.commit()
 
+    def reset_template_to_default(self, template_id: int, event_type: str) -> bool:
+        """Reset a template to its default values from bear_event_types.py"""
+        config = EVENT_CONFIG.get(event_type)
+
+        # If not found, try to find a matching event by partial name match
+        if not config:
+            for event_name, event_config in EVENT_CONFIG.items():
+                if event_type in event_name or event_name in event_type:
+                    config = event_config
+                    event_type = event_name  # Update to the correct name
+                    break
+
+        if not config:
+            return False
+
+        image_url = config.get("image_url", "")
+        thumbnail_url = config.get("thumbnail_url", "")
+        description = config.get("description", "")
+
+        self.cursor.execute("""
+            UPDATE notification_templates
+            SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?,
+                embed_title = '%i %n', is_global = 1, event_type = ?, template_name = ?
+            WHERE template_id = ?
+        """, (image_url, thumbnail_url, description, event_type, event_type, template_id))
+        self.conn.commit()
+        return True
+
     def get_templates_by_event_type(self, event_type: Optional[str] = None) -> List[Dict]:
         """Get all templates, optionally filtered by event type"""
         if event_type:
@@ -256,8 +322,8 @@ class TemplateBrowseView(discord.ui.View):
         for template in page_templates:
             icon = get_event_icon(template["event_type"])
 
-            # Check if template has been customized
-            is_customized = not template["is_global"] or template.get("created_by")
+            # Check if template has been customized (is_global = 0 means customized)
+            is_customized = template["is_global"] == 0
 
             # Simple display: just event name with customization status
             value = "✏️ Customized" if is_customized else "*Default template*"
@@ -314,8 +380,7 @@ class TemplateSelectDropdown(discord.ui.Select):
             options.append(discord.SelectOption(
                 label=template["template_name"],
                 value=str(template["template_id"]),
-                emoji=icon,
-                description=template["description"][:100] if template["description"] else "No description"
+                emoji=icon
             ))
 
         super().__init__(
@@ -530,11 +595,21 @@ class TemplatePreviewView(discord.ui.View):
         edit_button.callback = self.edit_template
         self.add_item(edit_button)
 
+        # Add reset to default button (only show if template is customized)
+        if template.get("is_global") == 0:
+            reset_button = discord.ui.Button(
+                label="Reset to Default",
+                emoji="🔄",
+                style=discord.ButtonStyle.danger
+            )
+            reset_button.callback = self.reset_to_default
+            self.add_item(reset_button)
+
         # Add back button
         back_button = discord.ui.Button(
             label="Back",
             emoji="◀️",
-            style=discord.ButtonStyle.primary
+            style=discord.ButtonStyle.secondary
         )
         back_button.callback = self.back_to_browse
         self.add_item(back_button)
@@ -546,11 +621,58 @@ class TemplatePreviewView(discord.ui.View):
         modal = TemplateEditModal(self.cog, self.template)
         await interaction.response.send_modal(modal)
 
+    async def reset_to_default(self, interaction: discord.Interaction):
+        """Show reset confirmation"""
+        confirm_view = ResetConfirmView(self.cog, self.template, self.all_templates)
+        await interaction.response.send_message(
+            "⚠️ **Reset Template to Default?**\n\n"
+            "This will restore the original image, thumbnail, title, and description from the system defaults.\n\n"
+            "Any customizations you made will be lost.",
+            view=confirm_view,
+            ephemeral=True
+        )
+
     async def back_to_browse(self, interaction: discord.Interaction):
         """Return to template browser"""
-        templates = self.all_templates if self.all_templates else self.cog.get_templates_by_event_type()
+        # Always fetch fresh data from database
+        templates = self.cog.get_templates_by_event_type()
         view = TemplateBrowseView(self.cog, templates)
         await view.show_page(interaction, 0)
+
+class ResetConfirmView(discord.ui.View):
+    """Confirmation view for resetting a template to default"""
+
+    def __init__(self, cog: BearTrapTemplates, template: Dict, all_templates: List[Dict] = None):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.template = template
+        self.all_templates = all_templates or []
+
+    @discord.ui.button(label="Yes, Reset", style=discord.ButtonStyle.danger)
+    async def confirm_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        success = self.cog.reset_template_to_default(
+            self.template["template_id"],
+            self.template["event_type"]
+        )
+        if success:
+            await interaction.response.edit_message(
+                content="✅ Template has been reset to default values.",
+                view=None
+            )
+        else:
+            await interaction.response.edit_message(
+                content="❌ Could not find default values for this event type.",
+                view=None
+            )
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(
+            content="Reset cancelled.",
+            view=None
+        )
+        self.stop()
 
 async def setup(bot):
     await bot.add_cog(BearTrapTemplates(bot))

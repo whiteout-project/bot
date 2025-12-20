@@ -123,7 +123,7 @@ EVENT_CONFIG = {
         "image_url": "",
         "thumbnail_url": "https://i.imgur.com/HUwpmTd.png",
     },
-    "Mercenary Bosses": {
+    "Mercenary Prestige": {
         "emoji": "🗡️",
         "duration_minutes": 60,  # Each boss session ~1 hour
         "schedule_type": "global_4weekly_multiday",
@@ -133,7 +133,7 @@ EVENT_CONFIG = {
         "event_duration_days": 3,
         "time_slots": "5min",
         "max_instances": 5,  # Up to 5 mercenary bosses
-        "description": "%n is spawning in %t. Prepare to send only one march as instructed!",
+        "description": "%n boss is spawning in %t. Prepare to send only one march as instructed!",
         "default_notification_type": 2,
         "image_url": "",
         "thumbnail_url": "https://i.imgur.com/zb6y3Dg.png",

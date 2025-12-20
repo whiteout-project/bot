@@ -79,7 +79,7 @@ class BearTrapWizard(commands.Cog):
                 "**The events you can configure include:**\n"
                 "• Bear Trap (Trap 1 & 2)\n"
                 "• Crazy Joe\n"
-                "• Mercenary Bosses\n"
+                "• Mercenary Prestige\n"
                 "• Foundry Battle\n"
                 "• Canyon Clash\n"
                 "• Fortress Battle\n"
@@ -160,7 +160,7 @@ class WizardSession:
             "Frostfire Mine": self.frostfire_data,
             "Castle Battle": self.sunfire_data,
             "SvS": self.svs_data,
-            "Mercenary Bosses": self.mercenary_bosses_data,
+            "Mercenary Prestige": self.mercenary_bosses_data,
             "Daily Reset": self.daily_reset_data
         }
         return mapping.get(event_type, {})
@@ -310,7 +310,7 @@ class WizardSession:
                     "phase": notif.get("instance_identifier")
                 })
 
-        elif event_type == "Mercenary Bosses":
+        elif event_type == "Mercenary Prestige":
             if "bosses" not in self.mercenary_bosses_data:
                 self.mercenary_bosses_data["bosses"] = []
             for notif in notifications:
@@ -864,7 +864,7 @@ class EventSelectionHubView(discord.ui.View):
         self.event_types = [
             "Bear Trap",
             "Crazy Joe",
-            "Mercenary Bosses",
+            "Mercenary Prestige",
             "Foundry Battle",
             "Canyon Clash",
             "Fortress Battle",
@@ -976,7 +976,6 @@ class EventSelectionHubView(discord.ui.View):
                     ephemeral=True
                 )
 
-
 class EventConfigRouter:
     """Routes to appropriate event configuration view"""
     def __init__(self, cog: BearTrapWizard, session: WizardSession, event_type: str, hub_view: EventSelectionHubView):
@@ -996,14 +995,13 @@ class EventConfigRouter:
             "Frostfire Mine": FrostfireConfigView(self.cog, self.session, self.hub_view),
             "Castle Battle": SunfireConfigView(self.cog, self.session, self.hub_view),
             "SvS": SvSConfigView(self.cog, self.session, self.hub_view),
-            "Mercenary Bosses": MercenaryBossesConfigView(self.cog, self.session, self.hub_view),
+            "Mercenary Prestige": MercenaryBossesConfigView(self.cog, self.session, self.hub_view),
             "Daily Reset": DailyResetConfigView(self.cog, self.session, self.hub_view)
         }
 
         view = view_mapping.get(self.event_type)
         if view:
             await view.show(interaction)
-
 
 class BearTrapConfigView:
     """Configuration for Bear Trap events"""
@@ -1742,7 +1740,7 @@ class SvSConfigView(PhaseToggleConfigView):
         super().__init__(cog, session, hub_view, "SvS", "svs_data", phases)
 
 class MercenaryBossesConfigView(discord.ui.View):
-    """Configuration for Mercenary Bosses (up to 5 instances during 3-day window)"""
+    """Configuration for Mercenary Prestige (up to 5 instances during 3-day window)"""
     def __init__(self, cog: BearTrapWizard, session: WizardSession, hub_view: EventSelectionHubView):
         super().__init__(timeout=3600)
         self.cog = cog
@@ -1761,10 +1759,10 @@ class MercenaryBossesConfigView(discord.ui.View):
                 })
 
     async def show(self, interaction: discord.Interaction):
-        """Show Mercenary Bosses configuration"""
-        icon = get_event_icon("Mercenary Bosses")
-        config = get_event_config("Mercenary Bosses")
-        next_date = calculate_next_occurrence("Mercenary Bosses")
+        """Show Mercenary Prestige configuration"""
+        icon = get_event_icon("Mercenary Prestige")
+        config = get_event_config("Mercenary Prestige")
+        next_date = calculate_next_occurrence("Mercenary Prestige")
 
         # Calculate the 3-day window
         window_text = "N/A"
@@ -1784,9 +1782,9 @@ class MercenaryBossesConfigView(discord.ui.View):
             boss_list = "*No bosses scheduled yet*"
 
         embed = discord.Embed(
-            title=f"{icon} Configure Mercenary Bosses",
+            title=f"{icon} Configure Mercenary Prestige",
             description=(
-                f"Mercenary Bosses occur **every 4 weeks during a 3-day window**.\n\n"
+                f"Mercenary Prestige occur **every 4 weeks during a 3-day window**.\n\n"
                 f"**Next Event Window:** {window_text}\n"
                 f"**Duration:** 3 consecutive days\n\n"
                 f"You can schedule **up to 5 mercenary bosses** at any time during the 3-day window.\n"
@@ -1892,7 +1890,7 @@ class MercenaryBossesConfigView(discord.ui.View):
             "bosses": self.boss_times  # List of {day, hour, minute}
         }
         # Mark as configured and return to hub
-        self.session.mark_event_configured("Mercenary Bosses")
+        self.session.mark_event_configured("Mercenary Prestige")
         await self.hub_view.show(interaction)
 
 class MercenaryBossTimeModal(discord.ui.Modal, title="Add Mercenary Boss"):
@@ -2144,7 +2142,7 @@ class WizardPreviewView(discord.ui.View):
                         value=f"└ Times: {times_list}",
                         inline=False
                     )
-            elif event == "Mercenary Bosses" and data:
+            elif event == "Mercenary Prestige" and data:
                 bosses = data.get("bosses", [])
                 if bosses:
                     boss_lines = []
@@ -2212,8 +2210,8 @@ class WizardPreviewView(discord.ui.View):
                 return f"{hour:02d}:{minute:02d}"
             return instance_id
 
-        # Mercenary Bosses: boss_0 -> "Boss 1"
-        if event_name == "Mercenary Bosses" and instance_id.startswith("boss_"):
+        # Mercenary Prestige: boss_0 -> "Boss 1"
+        if event_name == "Mercenary Prestige" and instance_id.startswith("boss_"):
             try:
                 idx = int(instance_id.split("_")[1])
                 return f"Boss {idx + 1}"
@@ -2354,7 +2352,7 @@ class WizardPreviewView(discord.ui.View):
 
                 # Get event config for image/thumbnail URLs and calculate next occurrence
                 from .bear_event_types import get_event_config, calculate_next_occurrence
-                event_config = get_event_config(event_name)
+                event_config = get_event_config(event_name) or {}
 
                 # Calculate next occurrence for global events (returns None for custom events like Bear Trap)
                 event_next_occurrence = calculate_next_occurrence(event_name)
@@ -2642,7 +2640,7 @@ class WizardPreviewView(discord.ui.View):
                             display = self._get_instance_display_name(event_name, old_phase, notif.get("hour"), notif.get("minute"))
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
 
-                elif event_name == "Mercenary Bosses":
+                elif event_name == "Mercenary Prestige":
                     # Boss times across 3-day window (repeats every 4 weeks)
                     repeat_minutes = 28 * 24 * 60
                     bosses = event_data.get("bosses", [])
