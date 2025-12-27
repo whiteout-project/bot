@@ -429,6 +429,40 @@ def download_requirements_from_release(beta_mode=False):
         print(f"Error downloading requirements.txt: {e}")
         return False
 
+def is_onnxruntime_nightly():
+    """Check if installed onnxruntime is a nightly build."""
+    try:
+        import onnxruntime
+        version = onnxruntime.__version__
+        # Nightly versions contain 'dev' or '+' (e.g., "1.20.0.dev20251115001")
+        return "dev" in version or "+" in version
+    except ImportError:
+        return False
+
+def install_onnxruntime_nightly():
+    """Install onnxruntime from nightly feed for Python 3.14+ compatibility."""
+    print("Installing onnxruntime from nightly build (Python 3.14+)...")
+    cmd = [
+        sys.executable, "-m", "pip", "install", "--pre",
+        "--extra-index-url", "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ORT-Nightly/pypi/simple/",
+        "onnxruntime", "--no-cache-dir"
+    ]
+    if break_system_packages_arg():
+        cmd.append("--break-system-packages")
+    result = subprocess.run(cmd, timeout=1200, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"✗ Failed to install onnxruntime nightly: {result.stderr}")
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print("✓ onnxruntime nightly installed successfully")
+
+def install_onnxruntime_stable(version_spec="onnxruntime>=1.18.1"):
+    """Install onnxruntime from stable PyPI."""
+    print("Installing stable onnxruntime from PyPI...")
+    cmd = [sys.executable, "-m", "pip", "install", version_spec, "--no-cache-dir", "--force-reinstall"]
+    if break_system_packages_arg():
+        cmd.append("--break-system-packages")
+    subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 def check_and_install_requirements():
     """Check each requirement and install missing ones."""
     if not os.path.exists("requirements.txt"):
@@ -464,6 +498,13 @@ def check_and_install_requirements():
                 import numpy
             elif package_name.lower() == "onnxruntime":
                 import onnxruntime
+                # Check if we need to switch versions based on Python version
+                if sys.version_info >= (3, 14) and not is_onnxruntime_nightly():
+                    # Has stable but needs nightly - mark for reinstall
+                    raise ImportError("Need nightly for Python 3.14+")
+                elif sys.version_info < (3, 14) and is_onnxruntime_nightly():
+                    # Has nightly but can use stable - mark for reinstall
+                    raise ImportError("Should use stable for Python <3.14")
             else:
                 __import__(package_name)
                         
@@ -473,17 +514,27 @@ def check_and_install_requirements():
     
     if missing_packages: # Install missing packages
         print(f"Installing {len(missing_packages)} missing packages...")
-        
+
         for package in missing_packages:
+            package_name = package.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
+
+            # Handle onnxruntime specially based on Python version
+            if package_name.lower() == "onnxruntime":
+                if sys.version_info >= (3, 14):
+                    install_onnxruntime_nightly()
+                else:
+                    install_onnxruntime_stable(package)
+                continue
+
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
-                
+
                 if break_system_packages_arg():
                     cmd.append("--break-system-packages")
-                
+
                 subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"✓ {package} installed successfully")
-                
+
             except Exception as e:
                 print(f"✗ Failed to install {package}: {e}")
                 return False
