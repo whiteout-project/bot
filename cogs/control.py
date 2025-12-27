@@ -418,7 +418,7 @@ class Control(commands.Cog):
                                         if admin_data:
                                             user = await self.bot.fetch_user(admin_data[0])
                                             if user:
-                                                await user.send(f"❌ {old_nickname} ({fid}) was removed from the users table due to state transfer.")
+                                                await user.send(f"❌ {old_nickname} `{fid}` was removed from the users table due to state transfer.")
                                 else:
                                     # Just update kid without removing (default behavior)
                                     self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
