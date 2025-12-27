@@ -1149,6 +1149,12 @@ class Alliance(commands.Cog):
             self.c_giftcode.execute("SELECT COUNT(*) FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
             gift_code_control_count = self.c_giftcode.fetchone()[0]
 
+            self.c_settings.execute("SELECT COUNT(*) FROM invalid_id_tracker WHERE alliance_id = ?", (str(alliance_id),))
+            invalid_tracker_count = self.c_settings.fetchone()[0]
+
+            self.c_settings.execute("SELECT COUNT(*) FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
+            alliance_logs_count = self.c_settings.fetchone()[0]
+
             confirm_embed = discord.Embed(
                 title="⚠️ Confirm Alliance Deletion",
                 description=(
@@ -1162,7 +1168,9 @@ class Alliance(commands.Cog):
                     f"👥 User Records: {users_count}\n"
                     f"🏰 Admin Server Records: {admin_server_count}\n"
                     f"📢 Gift Channels: {gift_channels_count}\n"
-                    f"📊 Gift Code Controls: {gift_code_control_count}\n\n"
+                    f"📊 Gift Code Controls: {gift_code_control_count}\n"
+                    f"🚫 Invalid ID Tracker: {invalid_tracker_count}\n"
+                    f"📋 Alliance Logs: {alliance_logs_count}\n\n"
                     "**⚠️ WARNING: This action cannot be undone!**"
                 ),
                 color=discord.Color.red()
@@ -1186,6 +1194,13 @@ class Alliance(commands.Cog):
 
                     self.c_settings.execute("DELETE FROM adminserver WHERE alliances_id = ?", (alliance_id,))
                     admin_server_count = self.c_settings.rowcount
+
+                    self.c_settings.execute("DELETE FROM invalid_id_tracker WHERE alliance_id = ?", (str(alliance_id),))
+                    invalid_tracker_deleted = self.c_settings.rowcount
+
+                    self.c_settings.execute("DELETE FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
+                    alliance_logs_deleted = self.c_settings.rowcount
+
                     self.conn_settings.commit()
 
                     self.c_giftcode.execute("DELETE FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
@@ -1206,7 +1221,9 @@ class Alliance(commands.Cog):
                             f"⚙️ Alliance Settings: {admin_settings_count}\n"
                             f"🏰 Admin Server Records: {admin_server_count}\n"
                             f"📢 Gift Channels: {gift_channels_count}\n"
-                            f"📊 Gift Code Controls: {gift_code_control_count}"
+                            f"📊 Gift Code Controls: {gift_code_control_count}\n"
+                            f"🚫 Invalid ID Tracker: {invalid_tracker_deleted}\n"
+                            f"📋 Alliance Logs: {alliance_logs_deleted}"
                         ),
                         color=discord.Color.green()
                     )
