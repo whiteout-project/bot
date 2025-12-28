@@ -364,16 +364,12 @@ class Control(commands.Cog):
                         if error_msg == 'not_found':
                             fail_count = self.increment_invalid_counter(fid, alliance_id, old_nickname)
 
-                            if fail_count >= 3:
-                                # Mark for removal after 3 consecutive failures
-                                members_to_remove.append((fid, old_nickname, "Player does not exist (error 40004 - 3x confirmed)"))
-                                check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found (3x confirmed - Pending removal)")
-                            else:
-                                # Not enough failures yet - just monitor
-                                check_fail_list.append(f"⚠️ `{fid}` ({old_nickname}) - Player not found ({fail_count}/3 - monitoring)")
+                            if fail_count >= 3:  # Silently track failures 1 and 2, remove after 3
+                                members_to_remove.append((fid, old_nickname, "Player does not exist (3x confirmed)"))
+                                check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found 3x in a row - Pending removal")
                         elif self.is_connection_error(error_msg):
                             # Network/connection issue - NOT an invalid member, just a connection issue
-                            connection_errors.append(f"⚠️ `{fid}` ({old_nickname}) - Connection issue (will retry next check)")
+                            connection_errors.append(f"⚠️ `{fid}` ({old_nickname}) - Connection issue (will retry, check bot connectivity)")
                             self.logger.warning(f"Connection issue checking ID {fid}: {error_msg}")
                         else:
                             # For other API errors, report without removing
@@ -487,7 +483,7 @@ class Control(commands.Cog):
             # Update check_fail_list to show blocked status instead of pending
             for i, item in enumerate(check_fail_list):
                 if "Pending removal" in item:
-                    check_fail_list[i] = item.replace("Pending removal", "REMOVAL BLOCKED (Safety)")
+                    check_fail_list[i] = item.replace("Pending removal", "Removal blocked (safety)")
         else:
             # Safe to proceed with removals
             if members_to_remove:
@@ -500,7 +496,7 @@ class Control(commands.Cog):
                     for i, item in enumerate(check_fail_list):
                         if f"`{fid}`" in item and "Pending removal" in item:
                             if removed:
-                                check_fail_list[i] = item.replace("Pending removal", "Auto-removed")
+                                check_fail_list[i] = item.replace("Pending removal", "Removed")
                             else:
                                 check_fail_list[i] = item.replace("Pending removal", "Failed to remove")
                             break
