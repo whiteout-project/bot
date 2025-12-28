@@ -101,16 +101,14 @@ class IDChannel(commands.Cog):
                     if message.author.bot:
                         continue
 
-                    has_bot_reaction = False
+                    # Check if bot already processed this message by checking for bot reactions
+                    already_processed = False
                     for reaction in message.reactions:
-                        async for user in reaction.users():
-                            if user == self.bot.user:
-                                has_bot_reaction = True
-                                break
-                        if has_bot_reaction:
+                        if reaction.me:
+                            already_processed = True
                             break
 
-                    if has_bot_reaction:
+                    if already_processed:
                         continue
 
                     content = message.content.strip()
@@ -333,25 +331,19 @@ class IDChannel(commands.Cog):
                 if not channel:
                     continue
 
-                messages_to_check = []
-                async for message in channel.history(limit=50):
-                    if message.created_at.timestamp() < five_minutes_ago:
-                        has_bot_reaction = False
-                        for reaction in message.reactions:
-                            async for user in reaction.users():
-                                if user == self.bot.user:
-                                    has_bot_reaction = True
-                                    break
-                            if has_bot_reaction:
-                                break
-                        
-                        if not has_bot_reaction:
-                            messages_to_check.append(message)
-                    else:
-                        break
-
-                for message in messages_to_check:
+                # Only check messages from the last 5 minutes that haven't been processed
+                async for message in channel.history(limit=50, after=datetime.fromtimestamp(five_minutes_ago, tz=None)):
                     if message.author.bot:
+                        continue
+
+                    # Check if bot already processed this message (by checking for bot reactions)
+                    already_processed = False
+                    for reaction in message.reactions:
+                        if reaction.me:
+                            already_processed = True
+                            break
+
+                    if already_processed:
                         continue
 
                     content = message.content.strip()
