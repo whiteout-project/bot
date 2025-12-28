@@ -288,7 +288,8 @@ class BearTrap(commands.Cog):
                                   description: str, notification_type: int, mention_type: str,
                                   repeat_minutes: int = 0, selected_weekdays: list[int] = None,
                                   event_type: str = None, embed_data: dict = None,
-                                  instance_identifier: str = None, skip_board_update: bool = False) -> bool:
+                                  instance_identifier: str = None, skip_board_update: bool = False,
+                                  start_date: datetime = None) -> bool:
         """Update an existing notification"""
         try:
             notification_description = description
@@ -298,13 +299,19 @@ class BearTrap(commands.Cog):
                 title = embed_data.get("title", "true") if embed_data else "true"
                 notification_description = f"EMBED_MESSAGE:{title}"
             tz = pytz.timezone(timezone)
-            self.cursor.execute("SELECT next_notification FROM bear_notifications WHERE id = ?", (notification_id,))
-            row = self.cursor.fetchone()
-            if row:
-                current_next = datetime.fromisoformat(row[0])
-                next_notification = current_next.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            # If start_date is provided, use it as the base date (for wizard updates)
+            if start_date:
+                next_notification = start_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
             else:
-                next_notification = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
+                # Fall back to existing behavior: keep current date, update time only
+                self.cursor.execute("SELECT next_notification FROM bear_notifications WHERE id = ?", (notification_id,))
+                row = self.cursor.fetchone()
+                if row:
+                    current_next = datetime.fromisoformat(row[0])
+                    next_notification = current_next.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                else:
+                    next_notification = datetime.now(tz).replace(hour=hour, minute=minute, second=0, microsecond=0)
             self.cursor.execute("""
                 UPDATE bear_notifications
                 SET hour = ?, minute = ?, timezone = ?, description = ?, notification_type = ?,

@@ -2263,7 +2263,8 @@ class WizardPreviewView(discord.ui.View):
                 event_type=event_name,
                 embed_data=embed_data,
                 instance_identifier=instance_id,
-                skip_board_update=True
+                skip_board_update=True,
+                start_date=start_date
             )
             # Re-enable if it was disabled
             if not existing.get("is_enabled", 1):
