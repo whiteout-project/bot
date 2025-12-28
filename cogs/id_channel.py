@@ -176,7 +176,9 @@ class IDChannel(commands.Cog):
                 existing_alliance = cursor.fetchone()
                 
                 if existing_alliance:
-                    if existing_alliance[0] == alliance_id:
+                    # Convert to int for comparison (users.alliance is stored as TEXT)
+                    existing_alliance_id = int(existing_alliance[0]) if existing_alliance[0] else None
+                    if existing_alliance_id == alliance_id:
                         await message.add_reaction('⚠️')
                         await message.reply(f"This ID ({fid}) is already registered in this alliance!", delete_after=10)
                         return
