@@ -1784,7 +1784,7 @@ class MercenaryBossesConfigView(discord.ui.View):
         embed = discord.Embed(
             title=f"{icon} Configure Mercenary Prestige",
             description=(
-                f"Mercenary Prestige occur **every 4 weeks during a 3-day window**.\n\n"
+                f"Mercenary Prestige occurs **every 3 weeks during a 3-day window**.\n\n"
                 f"**Next Event Window:** {window_text}\n"
                 f"**Duration:** 3 consecutive days\n\n"
                 f"You can schedule **up to 5 mercenary bosses** at any time during the 3-day window.\n"
@@ -1840,6 +1840,16 @@ class MercenaryBossesConfigView(discord.ui.View):
         clear_button.callback = self.clear_all_bosses
         self.add_item(clear_button)
 
+        # Back button - row 1 middle
+        back_button = discord.ui.Button(
+            label="Back",
+            emoji="◀️",
+            style=discord.ButtonStyle.secondary,
+            row=1
+        )
+        back_button.callback = self.go_back
+        self.add_item(back_button)
+
         # Continue button (disabled if no bosses) - row 1 right side
         continue_button = discord.ui.Button(
             label="Continue",
@@ -1876,6 +1886,10 @@ class MercenaryBossesConfigView(discord.ui.View):
         """Clear all configured bosses"""
         self.boss_times.clear()
         await self.show(interaction)
+
+    async def go_back(self, interaction: discord.Interaction):
+        """Return to Event Selection Hub without saving"""
+        await self.hub_view.show(interaction)
 
     async def continue_to_next(self, interaction: discord.Interaction):
         """Save boss times and proceed"""
@@ -2641,8 +2655,8 @@ class WizardPreviewView(discord.ui.View):
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name == "Mercenary Prestige":
-                    # Boss times across 3-day window (repeats every 4 weeks)
-                    repeat_minutes = 28 * 24 * 60
+                    # Boss times across 3-day window (repeats every 3 weeks)
+                    repeat_minutes = 21 * 24 * 60
                     bosses = event_data.get("bosses", [])
                     processed_instances = set()
 
