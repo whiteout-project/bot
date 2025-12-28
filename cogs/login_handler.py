@@ -281,14 +281,14 @@ class LoginHandler:
                                 'error_message': None
                             }
                         
-                        # Check if this is specifically error 40004 (role not exist)
-                        elif data.get('err_code') == 40004:
+                        # Check if this is a "player not found" error (40004 or 40001 with "role not exist")
+                        elif data.get('err_code') == 40004 or (data.get('err_code') == 40001 and 'role not exist' in str(data.get('msg', '')).lower()):
                             return {
                                 'status': 'not_found',
                                 'data': None,
                                 'api_used': api_num,
                                 'error_message': 'Player does not exist (role not exist)',
-                                'err_code': 40004
+                                'err_code': data.get('err_code')
                             }
                         
                         # Other cases where data is empty but not error 40004
