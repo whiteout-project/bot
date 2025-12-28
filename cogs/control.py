@@ -533,12 +533,12 @@ class Control(commands.Cog):
                 )
 
             if check_fail_list:
-                # Count auto-removed entries
-                auto_removed_count = sum(1 for item in check_fail_list if "Auto-removed" in item)
-                
+                # Count removed entries
+                removed_count = sum(1 for item in check_fail_list if "- Removed" in item)
+
                 footer_text = f"📊 Total Issues: {len(check_fail_list)}"
-                if auto_removed_count > 0:
-                    footer_text += f" | 🗑️ Auto-removed: {auto_removed_count}"
+                if removed_count > 0:
+                    footer_text += f" | 🗑️ Removed: {removed_count}"
                 
                 await self.send_embed(
                     channel=channel,
@@ -574,13 +574,13 @@ class Control(commands.Cog):
             total_changes = len(furnace_changes) + len(nickname_changes) + len(kid_changes)
             changes_text = f"🔄 {total_changes} changes detected"
 
-            # Add auto-removed count if any
-            auto_removed_count = sum(1 for item in check_fail_list if 'Auto-removed' in item)
-            if auto_removed_count > 0:
-                changes_text += f"\n🗑️ {auto_removed_count} invalid IDs removed"
+            # Add removed count if any
+            removed_count = sum(1 for item in check_fail_list if '- Removed' in item)
+            if removed_count > 0:
+                changes_text += f"\n🗑️ {removed_count} invalid IDs removed"
 
             # Add check failures count if any
-            check_failure_count = sum(1 for item in check_fail_list if 'Auto-removed' not in item)
+            check_failure_count = sum(1 for item in check_fail_list if '- Removed' not in item)
             if check_failure_count > 0:
                 changes_text += f"\n❌ {check_failure_count} check failures"
 
