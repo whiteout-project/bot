@@ -166,7 +166,7 @@ class IDChannel(commands.Cog):
             await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            await message.add_reaction('❌')
+            pass  # Don't react on exceptions to avoid reaction spam
 
     async def process_fid(self, message, fid, alliance_id):
         try:
