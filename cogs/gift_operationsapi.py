@@ -487,7 +487,7 @@ class GiftCodeAPI:
                             return False
                             
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP request error: {e}")
+                    self.logger.warning(f"Connection error syncing with Gift Code API: {type(e).__name__}")
                     return False
             
         except Exception as e:
@@ -559,7 +559,7 @@ class GiftCodeAPI:
                             return False
 
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP error adding code {giftcode}: {e}")
+                    self.logger.warning(f"Connection error adding code {giftcode} to API: {type(e).__name__}")
                     return False
             
         except Exception as e:
@@ -615,7 +615,7 @@ class GiftCodeAPI:
                             await asyncio.sleep(backoff_time)
                             return False
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP error removing code {giftcode}: {e}")
+                    self.logger.warning(f"Connection error removing code {giftcode} from API: {type(e).__name__}")
                     return False
         except Exception as e:
             self.logger.exception(f"Unexpected error removing code {giftcode}: {e}")
@@ -647,7 +647,7 @@ class GiftCodeAPI:
                             await asyncio.sleep(backoff_time)
                             return False
                 except aiohttp.ClientError as e:
-                    self.logger.exception(f"HTTP error checking code {giftcode}: {e}")
+                    self.logger.warning(f"Connection error checking code {giftcode} in API: {type(e).__name__}")
                     return False
         except Exception as e:
             self.logger.exception(f"Unexpected error checking code {giftcode}: {e}")

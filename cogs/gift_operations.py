@@ -897,6 +897,15 @@ class GiftOperations(commands.Cog):
                 self.logger.info(f"Test ID {fid} is invalid. Error: {error_msg}")
                 return False, f"Login failed: {error_msg}"
         
+        except requests.exceptions.ConnectionError:
+            self.logger.warning(f"Connection error verifying test ID {fid}. Check bot connectivity to the WOS Gift Code API.")
+            return False, "Connection error: WOS API unavailable"
+        except requests.exceptions.Timeout:
+            self.logger.warning(f"Timeout verifying test ID {fid}. Check bot connectivity to the WOS Gift Code API.")
+            return False, "Connection error: Request timed out"
+        except requests.exceptions.RequestException as e:
+            self.logger.warning(f"Request error verifying test ID {fid}: {type(e).__name__}")
+            return False, f"Connection error: {type(e).__name__}"
         except Exception as e:
             self.logger.exception(f"Error verifying test ID {fid}: {e}")
             return False, f"Verification error: {str(e)}"
@@ -1207,13 +1216,23 @@ class GiftOperations(commands.Cog):
             "time": f"{int(datetime.now().timestamp())}",
         }
         data = self.encode_data(data_to_encode)
-        
-        response_stove_info = session.post(
-            self.wos_player_info_url,
-            headers=headers,
-            data=data,
-        )
-        return session, response_stove_info
+
+        try:
+            response_stove_info = session.post(
+                self.wos_player_info_url,
+                headers=headers,
+                data=data,
+            )
+            return session, response_stove_info
+        except requests.exceptions.ConnectionError as e:
+            self.logger.warning(f"Connection error reaching WOS API for player {player_id}: {type(e).__name__}")
+            raise
+        except requests.exceptions.Timeout as e:
+            self.logger.warning(f"Timeout reaching WOS API for player {player_id}")
+            raise
+        except requests.exceptions.RequestException as e:
+            self.logger.warning(f"Request error reaching WOS API for player {player_id}: {type(e).__name__}")
+            raise
 
     async def attempt_gift_code_with_api(self, player_id, giftcode, session):
         """Attempt to redeem a gift code."""
@@ -1447,6 +1466,15 @@ class GiftOperations(commands.Cog):
                     self.giftlog.exception(f"DATABASE ERROR saving/replacing status for {player_id}/{giftcode}: {db_err}\n")
                     self.giftlog.exception(f"STACK TRACE: {traceback.format_exc()}\n")
                 
+        except requests.exceptions.ConnectionError:
+            self.logger.warning(f"GiftOps: Connection error for ID {player_id}. Check bot connectivity to the WOS Gift Code API.")
+            status = "CONNECTION_ERROR"
+        except requests.exceptions.Timeout:
+            self.logger.warning(f"GiftOps: Timeout for ID {player_id}. Check bot connectivity to the WOS Gift Code API.")
+            status = "CONNECTION_ERROR"
+        except requests.exceptions.RequestException as e:
+            self.logger.warning(f"GiftOps: Request error for ID {player_id}: {type(e).__name__}")
+            status = "CONNECTION_ERROR"
         except Exception as e:
             error_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             error_details = traceback.format_exc()
@@ -2046,7 +2074,12 @@ class GiftOperations(commands.Cog):
                         solver_status_msg = "Error (Instance missing flags)"
                 else:
                     try:
+                        # Suppress ONNX C++ GPU warning (writes to fd 2, not sys.stderr)
+                        import sys, os as _os
+                        _fd, _null = sys.stderr.fileno(), _os.open(_os.devnull, _os.O_WRONLY)
+                        _bak = _os.dup(_fd); _os.dup2(_null, _fd); _os.close(_null)
                         import onnxruntime
+                        _os.dup2(_bak, _fd); _os.close(_bak)
                         onnx_available = True
                         solver_status_msg = "Disabled or Init Failed"
                     except ImportError:
@@ -4223,7 +4256,8 @@ class GiftOperations(commands.Cog):
                             "OCR_DISABLED": "🚫 **{count}** members failed since OCR is disabled. Try turning it on first!",
                             "SIGN_ERROR": "🔐 **{count}** members failed due to a signature error. Something went wrong.",
                             "ERROR": "❌ **{count}** members failed due to a general error. Might want to check the logs.",
-                            "UNKNOWN_API_RESPONSE": "❓ **{count}** members failed with an unknown API response. Say what?"
+                            "UNKNOWN_API_RESPONSE": "❓ **{count}** members failed with an unknown API response. Say what?",
+                            "CONNECTION_ERROR": "🌐 **{count}** members failed due to bot connection issues. Did the admin trip over the cable again?"
                         }
                         
                         base_description += "\n**Error Breakdown:**\n"
@@ -5635,6 +5669,24 @@ class OCRSettingsView(discord.ui.View):
             await interaction.followup.send(embed=embed, ephemeral=True)
             logger.info(f"[Test Button] Test completed for user {user_id}.")
 
+        except requests.exceptions.ConnectionError:
+            logger.warning(f"[Test Button] Connection error for user {user_id}. WOS API may be unavailable.")
+            try:
+                await interaction.followup.send("❌ Connection error: Unable to reach WOS API. Please check your internet connection.", ephemeral=True)
+            except Exception:
+                pass
+        except requests.exceptions.Timeout:
+            logger.warning(f"[Test Button] Timeout for user {user_id}. WOS API may be slow.")
+            try:
+                await interaction.followup.send("❌ Connection error: Request timed out. WOS API may be overloaded or unavailable.", ephemeral=True)
+            except Exception:
+                pass
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[Test Button] Request error for user {user_id}: {type(e).__name__}")
+            try:
+                await interaction.followup.send(f"❌ Connection error: {type(e).__name__}. Please try again later.", ephemeral=True)
+            except Exception:
+                pass
         except Exception as e:
             logger.exception(f"[Test Button] UNEXPECTED Error during test for user {user_id}: {e}")
             try:

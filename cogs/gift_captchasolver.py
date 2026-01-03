@@ -10,7 +10,12 @@ import logging.handlers
 import json
 
 try:
+    # Suppress ONNX C++ GPU warning (writes to fd 2, not sys.stderr)
+    import sys
+    _fd, _null = sys.stderr.fileno(), os.open(os.devnull, os.O_WRONLY)
+    _bak = os.dup(_fd); os.dup2(_null, _fd); os.close(_null)
     import onnxruntime as ort
+    os.dup2(_bak, _fd); os.close(_bak)
     import numpy as np
     from PIL import Image
     ONNX_AVAILABLE = True
