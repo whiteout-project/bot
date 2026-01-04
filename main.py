@@ -4,6 +4,20 @@ import os
 import shutil
 import stat
 
+# Python version check
+MIN_PYTHON = (3, 11)
+print(f"Bot running Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+
+if sys.version_info < MIN_PYTHON:
+    print(f"ERROR: Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required.")
+    print("\nTo upgrade Python:")
+    print("  1. Download Python 3.11 or newer from: https://www.python.org/downloads/")
+    print("  2. Run the installer (check 'Add Python to PATH' during installation)")
+    print("  3. Delete the 'bot_venv' folder in your bot directory")
+    print("  4. Run the bot again")
+    print("\nYou should now see 'Bot running Python 3...' with your new version.")
+    sys.exit(1)
+
 def is_container() -> bool:
     return os.path.exists("/.dockerenv") or os.path.exists("/var/run/secrets/kubernetes.io")
 
@@ -555,7 +569,7 @@ def check_and_install_requirements():
 
 def setup_dependencies(beta_mode=False):
     """Main function to set up all dependencies."""
-    print("\nChecking dependencies...")
+    print("Checking dependencies...")
     
     removed_obsolete = False
     if has_obsolete_requirements():
