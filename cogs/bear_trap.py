@@ -544,21 +544,50 @@ class BearTrap(commands.Cog):
             VALUES (?, ?, ?, ?, ?, ?)
         """, (notification_id, notification_time, message_id, channel_id, delete_at_str, current_time_str))
 
-    async def delete_previous_notifications(self, notification_id: int, channel_id: int):
-        """Delete messages from previous notifications (for non-last notifications)"""
+    async def delete_previous_notifications(self, notification_id: int, channel_id: int,
+                                            event_type: str = None, instance_identifier: str = None):
+        """Delete messages from previous notifications (for non-last notifications).
+
+        For multi-instance events (SvS, Castle Battle), also deletes messages from
+        sibling instances of the same event type in the same channel.
+        """
         try:
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 return
 
             # Find messages that should be deleted on next notification (scheduled_delete_at IS NULL)
-            self.cursor.execute("""
-                SELECT id, message_id FROM notification_history
-                WHERE notification_id = ?
-                  AND scheduled_delete_at IS NULL
-                  AND deleted_at IS NULL
-                  AND message_id IS NOT NULL
-            """, (notification_id,))
+            if event_type and instance_identifier:
+                # Get sibling notification IDs (same event_type, same channel, different instance)
+                self.cursor.execute("""
+                    SELECT id FROM bear_notifications
+                    WHERE channel_id = ?
+                      AND event_type = ?
+                      AND instance_identifier != ?
+                      AND is_enabled = 1
+                """, (channel_id, event_type, instance_identifier))
+                sibling_ids = [row[0] for row in self.cursor.fetchall()]
+
+                # Include current notification + siblings
+                all_notification_ids = [notification_id] + sibling_ids
+                placeholders = ','.join('?' * len(all_notification_ids))
+
+                self.cursor.execute(f"""
+                    SELECT id, message_id FROM notification_history
+                    WHERE notification_id IN ({placeholders})
+                      AND scheduled_delete_at IS NULL
+                      AND deleted_at IS NULL
+                      AND message_id IS NOT NULL
+                """, all_notification_ids)
+            else:
+                # For non-multi-instance events
+                self.cursor.execute("""
+                    SELECT id, message_id FROM notification_history
+                    WHERE notification_id = ?
+                      AND scheduled_delete_at IS NULL
+                      AND deleted_at IS NULL
+                      AND message_id IS NOT NULL
+                """, (notification_id,))
 
             rows = self.cursor.fetchall()
             for history_id, message_id in rows:
@@ -693,7 +722,7 @@ class BearTrap(commands.Cog):
 
             if should_notify:
                 # Delete previous notifications before sending new ones
-                await self.delete_previous_notifications(id, channel_id)
+                await self.delete_previous_notifications(id, channel_id, event_type, instance_identifier)
 
                 # Track message IDs for deletion
                 sent_message_ids = []
