@@ -11,11 +11,25 @@ print(f"Bot running Python {sys.version_info.major}.{sys.version_info.minor}.{sy
 if sys.version_info < MIN_PYTHON:
     print(f"ERROR: Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]}+ is required.")
     print("\nTo upgrade Python:")
-    print("  1. Download Python 3.11 or newer from: https://www.python.org/downloads/")
-    print("  2. Run the installer (check 'Add Python to PATH' during installation)")
-    print("  3. Delete the 'bot_venv' folder in your bot directory")
-    print("  4. Run the bot again")
-    print("\nYou should now see 'Bot running Python 3...' with your new version.")
+
+    if sys.platform == "win32":
+        print("  1. Download Python 3.13 or newer from: https://www.python.org/downloads/")
+        print("  2. Run the installer (check 'Add Python to PATH' during installation)")
+        print("  3. Delete the 'bot_venv' folder in your bot directory")
+        print("  4. Run the bot again")
+    elif os.path.exists("/.dockerenv"):
+        print("  Update your Dockerfile to use a newer Python base image, such as:")
+        print("    FROM python:3.12.12-slim-bookworm")
+        print("  Then rebuild your container")
+    elif os.path.exists("/var/run/secrets/kubernetes.io"):
+        print("  Update your container image to use Python 3.11 or newer.")
+    else:
+        print("  1. Install Python 3.13 using pyenv:")
+        print("       pyenv install 3.13")
+        print("       pyenv local 3.13")
+        print("  2. Delete the 'bot_venv' folder in your bot directory")
+        print("  3. Run the bot again")
+
     sys.exit(1)
 
 def is_container() -> bool:
