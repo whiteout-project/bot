@@ -142,6 +142,10 @@ class GiftCodeAPI:
             backoff = self.current_backoff * random.uniform(0.75, 1.25)
             self.current_backoff = min(self.current_backoff * 2, self.max_backoff_time)
             return backoff
+        elif response.status == 400 and "previously marked invalid" in response_text:
+            # Expected behavior for expired/invalid codes - log at debug level
+            self.logger.info(f"Code already marked invalid on API: {response_text[:100]}")
+            return 0  # No backoff needed for expected invalid codes
         else: # Other errors - standard backoff
             self.logger.error(f"API error: {response.status}, {response_text[:200]}")
             return self.current_backoff * random.uniform(0.75, 1.25)
@@ -465,15 +469,24 @@ class GiftCodeAPI:
                                                 self.logger.info(f"Successfully pushed code {db_code} to API")
                                             else:
                                                 response_text = await post_response.text()
-                                                self.logger.warning(f"Failed to push code {db_code}: {post_response.status}, {response_text[:200]}")
-                                                
-                                                if "invalid" in response_text.lower(): # Code was rejected as invalid by API, mark it as invalid locally
-                                                    self.logger.warning(f"Code {db_code} marked invalid by API, updating local status")
+
+                                                # Check if this is an expected "previously marked invalid" response
+                                                if post_response.status == 400 and "previously marked invalid" in response_text:
+                                                    self.logger.info(f"Code {db_code} already expired/invalid on API - updating local status")
                                                     self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (db_code,))
                                                     await self._safe_commit(self.conn, "mark code invalid")
-                                                
+                                                elif "invalid" in response_text.lower():
+                                                    # Other invalid code responses
+                                                    self.logger.info(f"Code {db_code} rejected as invalid by API - updating local status")
+                                                    self.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (db_code,))
+                                                    await self._safe_commit(self.conn, "mark code invalid")
+                                                else:
+                                                    # Unexpected error - log as warning
+                                                    self.logger.warning(f"Failed to push code {db_code}: {post_response.status}, {response_text[:200]}")
+
                                                 backoff_time = await self._handle_api_error(post_response, response_text)
-                                                await asyncio.sleep(backoff_time)
+                                                if backoff_time > 0:
+                                                    await asyncio.sleep(backoff_time)
                                     except Exception as e:
                                         self.logger.exception(f"Error pushing code {db_code} to API: {e}")
                                         await asyncio.sleep(self.error_backoff_time)
