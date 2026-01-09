@@ -10,6 +10,7 @@ import traceback
 import time
 import re
 from .bear_event_types import get_event_types, get_event_icon
+from .permission_handler import PermissionManager
 
 
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
@@ -1261,21 +1262,14 @@ class BearTrap(commands.Cog):
                 )
 
     async def check_admin(self, interaction: discord.Interaction) -> bool:
-        try:
-            conn = sqlite3.connect('db/settings.sqlite')
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM admin WHERE id = ?", (interaction.user.id,))
-            is_admin = cursor.fetchone() is not None
-            conn.close()
-
-            if not is_admin:
-                await interaction.response.send_message("❌ You don't have permission to use this command!",
-                                                        ephemeral=True)
-                return False
-            return True
-        except Exception as e:
-            print(f"Error in admin check: {e}")
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin:
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
             return False
+        return True
 
     async def show_channel_selection(self, interaction: discord.Interaction, start_date, hour, minute, timezone,
                                      message_data, channels, event_type=None):

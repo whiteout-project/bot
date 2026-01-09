@@ -7,6 +7,7 @@ import os
 import re
 from io import BytesIO
 import uuid
+from .permission_handler import PermissionManager
 
 try:
     import matplotlib.pyplot as plt
@@ -365,7 +366,7 @@ class AttendanceView(discord.ui.View):
         self.admin_result = await self.cog._check_admin_permissions(self.user_id)
         
         if self.admin_result:
-            self.alliances, _, _ = await self.cog.get_admin_alliances(self.user_id, self.guild_id)
+            self.alliances, _ = PermissionManager.get_admin_alliances(self.user_id, self.guild_id)
 
     async def _handle_permission_check(self, interaction):
         """Consolidated permission checking using cached results."""
@@ -2112,7 +2113,7 @@ class Attendance(commands.Cog):
             await interaction.response.edit_message(embed=error_embed, view=back_view)
             return None
 
-        alliances, _, _ = await self.get_admin_alliances(user_id, guild_id)
+        alliances, _ = PermissionManager.get_admin_alliances(user_id, guild_id)
         if not alliances:
             error_embed = self._create_error_embed(
                 "❌ No Alliances Found",
@@ -2284,64 +2285,6 @@ class Attendance(commands.Cog):
         else:
             await interaction.response.edit_message(embed=embed, view=view, attachments=[])
 
-    async def get_admin_alliances(self, user_id: int, guild_id: int):
-        """Get alliances that the user has admin access to"""
-        try:
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (user_id,))
-                admin_result = cursor.fetchone()
-                
-                if not admin_result:
-                    return [], [], False
-                    
-                is_initial = admin_result[0]
-                
-            if is_initial == 1:
-                # Global admin - can access all alliances
-                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                    cursor = alliance_db.cursor()
-                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
-                    alliances = cursor.fetchall()
-                    return alliances, [], True
-            
-            # Non-global admin - get only alliances they've been assigned to
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("""
-                    SELECT alliances_id 
-                    FROM adminserver 
-                    WHERE admin = ?
-                """, (user_id,))
-                admin_alliance_ids = cursor.fetchall()
-                
-            if admin_alliance_ids:
-                # Validate that all alliance IDs are integers to prevent SQL injection
-                validated_ids = []
-                for aid_tuple in admin_alliance_ids:
-                    if isinstance(aid_tuple[0], int):
-                        validated_ids.append(aid_tuple[0])
-                    else:
-                        pass
-                
-                if validated_ids:
-                    with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                        cursor = alliance_db.cursor()
-                        placeholders = ','.join('?' * len(validated_ids))
-                        cursor.execute(f"""
-                            SELECT DISTINCT alliance_id, name
-                            FROM alliance_list
-                            WHERE alliance_id IN ({placeholders})
-                            ORDER BY name
-                        """, validated_ids)
-                    alliances = cursor.fetchall()
-                    return alliances, alliances, False
-            
-            return [], [], False
-                
-        except Exception as e:
-            return [], [], False
-
     async def show_alliance_selection_for_marking(self, interaction: discord.Interaction):
         """Show alliance selection specifically for marking attendance"""
         try:
@@ -2354,44 +2297,22 @@ class Attendance(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
                 return
                 
-            # Get admin permissions
-            admin_result = await self._check_admin_permissions(interaction.user.id)
-            if not admin_result:
+            # Get admin permissions using centralized PermissionManager
+            is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+            if not is_admin:
                 error_embed = self._create_error_embed(
-                    "❌ Access Denied", 
+                    "❌ Access Denied",
                     "You do not have permission to use this command."
                 )
                 back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
                 await interaction.response.edit_message(embed=error_embed, view=back_view)
                 return
-            
-            is_initial = admin_result[0]
-            
-            # Get alliances based on permissions
-            if is_initial == 1:
-                # Global admin - get all alliances
-                with sqlite3.connect('db/alliance.sqlite') as db:
-                    cursor = db.cursor()
-                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY alliance_id")
-                    alliances = cursor.fetchall()
-            else:
-                # Non-global admin - get alliances from adminserver
-                with sqlite3.connect('db/settings.sqlite') as settings_db:
-                    cursor = settings_db.cursor()
-                    cursor.execute("SELECT alliances_id FROM adminserver WHERE admin = ?", (interaction.user.id,))
-                    special_permissions_raw = cursor.fetchall()
-                    allowed_alliances = set(row[0] for row in special_permissions_raw)
-                
-                if allowed_alliances:
-                    with sqlite3.connect('db/alliance.sqlite') as db:
-                        cursor = db.cursor()
-                        placeholders = ','.join('?' * len(allowed_alliances))
-                        cursor.execute(f"SELECT alliance_id, name FROM alliance_list WHERE alliance_id IN ({placeholders}) ORDER BY alliance_id", 
-                                     list(allowed_alliances))
-                        alliances = cursor.fetchall()
-                else:
-                    alliances = []
-            
+
+            guild_id = interaction.guild.id
+
+            # Get alliances based on permissions using centralized PermissionManager
+            alliances, is_global = PermissionManager.get_admin_alliances(interaction.user.id, guild_id)
+
             if not alliances:
                 error_embed = self._create_error_embed(
                     "❌ No Alliances Found",
@@ -2408,8 +2329,8 @@ class Attendance(commands.Cog):
                     "Please select an alliance to mark attendance:\n\n"
                     "**Permission Details**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                    f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                    f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                    f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                     f"📊 **Available Alliances:** `{len(alliances)}`\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
                 ),

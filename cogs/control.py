@@ -88,10 +88,16 @@ class Control(commands.Cog):
         
         if 'notify_on_transfer' not in columns:
             self.cursor_alliance.execute("""
-                ALTER TABLE alliancesettings 
+                ALTER TABLE alliancesettings
                 ADD COLUMN notify_on_transfer INTEGER DEFAULT 0
             """)
-        
+
+        if 'start_time' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings
+                ADD COLUMN start_time TEXT DEFAULT NULL
+            """)
+
         self.conn_alliance.commit()
 
         # Create invalid_id_tracker table for 3-strike removal system
@@ -112,6 +118,7 @@ class Control(commands.Cog):
         self.alliance_tasks = {}
         self.is_running = {}
         self.monitor_started = False
+        self.current_task_settings = {}  # {alliance_id: (channel_id, interval, start_time)}
 
         # Initialize login handler for centralized queue management
         self.login_handler = LoginHandler()
@@ -368,8 +375,8 @@ class Control(commands.Cog):
                                 members_to_remove.append((fid, old_nickname, "Player does not exist (3x confirmed)"))
                                 check_fail_list.append(f"❌ `{fid}` ({old_nickname}) - Player not found 3x in a row - Pending removal")
                         elif self.is_connection_error(error_msg):
-                            # Network/connection issue - NOT an invalid member, just a connection issue
-                            connection_errors.append(f"⚠️ `{fid}` ({old_nickname}) - Connection issue (will retry, check bot connectivity)")
+                            # Network/connection issue - NOT an invalid member, just track FID for summary
+                            connection_errors.append(fid)
                             self.logger.warning(f"Connection issue checking ID {fid}: {error_msg}")
                         else:
                             # For other API errors, report without removing
@@ -550,10 +557,20 @@ class Control(commands.Cog):
 
             if connection_errors:
                 # Connection issues are informational - members NOT removed
+                if len(connection_errors) <= 5:
+                    # Show specific IDs for small numbers
+                    description = "\n".join([f"⚠️ `{fid}` - Connection issue" for fid in connection_errors])
+                else:
+                    # Show summary for large numbers (API likely down)
+                    description = (
+                        f"📊 **{len(connection_errors)}** member(s) had connection issues\n"
+                        f"🔌 Unable to reach game API - these members will be checked on next scheduled run\n\n"
+                        f"Members NOT affected - no data was changed."
+                    )
                 await self.send_embed(
                     channel=channel,
                     title=f"⚠️ **{alliance_name}** Connection Issues",
-                    description=safe_list(connection_errors),
+                    description=description,
                     color=discord.Color.orange(),
                     footer=f"📊 {len(connection_errors)} connection issue(s) - Members NOT affected"
                 )
@@ -701,47 +718,91 @@ class Control(commands.Cog):
             embed.set_footer(text=footer)
             await channel.send(embed=embed)
 
-    async def schedule_alliance_check(self, channel, alliance_id, current_interval):
+    def _calculate_initial_delay(self, start_time: str, interval: int) -> int:
+        """Calculate seconds until next scheduled run based on start_time.
+
+        If start_time is set (HH:MM format, UTC), calculate delay until that time.
+        If the time has passed today, calculate when the next interval-aligned run would be.
+        If start_time is None, return 0 (start immediately with interval delay).
+        """
+        if not start_time:
+            return interval * 60  # No start_time, use interval as initial delay
+
         try:
-            await asyncio.sleep(current_interval * 60)
-            
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+            hour, minute = map(int, start_time.split(':'))
+
+            # Create target time for today
+            target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+            # If target time has passed, find the next interval-aligned occurrence
+            if target <= now:
+                # Calculate how many intervals have passed since target
+                seconds_since_target = (now - target).total_seconds()
+                interval_seconds = interval * 60
+                intervals_passed = int(seconds_since_target / interval_seconds) + 1
+                target = target.replace(day=target.day) + __import__('datetime').timedelta(seconds=intervals_passed * interval_seconds)
+
+            delay_seconds = (target - now).total_seconds()
+            return max(0, int(delay_seconds))
+        except (ValueError, AttributeError) as e:
+            print(f"[CONTROL] Invalid start_time format '{start_time}': {e}")
+            return interval * 60  # Fall back to interval delay
+
+    async def schedule_alliance_check(self, alliance_id):
+        """Schedule periodic alliance checks. Settings are fetched fresh from DB."""
+        try:
+            # Get initial settings
+            cached = self.current_task_settings.get(alliance_id)
+            if not cached:
+                print(f"[CONTROL] No cached settings for alliance {alliance_id}, stopping")
+                return
+
+            channel_id, interval, start_time = cached
+
+            # Calculate initial delay based on start_time
+            initial_delay = self._calculate_initial_delay(start_time, interval)
+            if initial_delay > 0:
+                await asyncio.sleep(initial_delay)
+
             while self.is_running.get(alliance_id, False):
                 try:
-                    async with self.db_lock:
-                        self.cursor_alliance.execute("""
-                            SELECT interval 
-                            FROM alliancesettings 
-                            WHERE alliance_id = ?
-                        """, (alliance_id,))
-                        result = self.cursor_alliance.fetchone()
-                        
-                        if not result or result[0] == 0:
-                            print(f"[CONTROL] Stopping checks for alliance {alliance_id} - interval disabled")
-                            self.is_running[alliance_id] = False
-                            break
-                        
-                        new_interval = result[0]
-                        if new_interval != current_interval:
-                            print(f"[CONTROL] Interval changed for alliance {alliance_id}: {current_interval} -> {new_interval}")
-                            self.is_running[alliance_id] = False
-                            self.alliance_tasks[alliance_id] = asyncio.create_task(
-                                self.schedule_alliance_check(channel, alliance_id, new_interval)
-                            )
-                            break
+                    # Fetch fresh settings from cache (updated by monitor loop)
+                    cached = self.current_task_settings.get(alliance_id)
+                    if not cached:
+                        print(f"[CONTROL] Alliance {alliance_id} removed from settings, stopping")
+                        break
 
+                    channel_id, interval, start_time = cached
+
+                    # Get the channel fresh each time
+                    channel = self.bot.get_channel(channel_id)
+                    if channel is None:
+                        print(f"[CONTROL] Channel {channel_id} not found for alliance {alliance_id}")
+                        await asyncio.sleep(60)
+                        continue
+
+                    # Queue the control check
                     await self.login_handler.queue_operation({
                         'type': 'alliance_control',
                         'callback': lambda ch=channel, aid=alliance_id: self.check_agslist(ch, aid, interaction_message=None),
                         'description': f'Scheduled control check for alliance {alliance_id}',
                         'alliance_id': alliance_id
                     })
-                    
-                    await asyncio.sleep(current_interval * 60)
-                    
+
+                    # Sleep for the interval
+                    await asyncio.sleep(interval * 60)
+
+                except asyncio.CancelledError:
+                    self.logger.info(f"Task cancelled for alliance {alliance_id}")
+                    raise
                 except Exception as e:
                     print(f"[ERROR] Error in schedule_alliance_check for alliance {alliance_id}: {e}")
                     await asyncio.sleep(60)
-                    
+
+        except asyncio.CancelledError:
+            self.logger.info(f"Schedule task cancelled for alliance {alliance_id}")
         except Exception as e:
             print(f"[ERROR] Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             traceback.print_exc()
@@ -770,35 +831,40 @@ class Control(commands.Cog):
                     task.cancel()
             self.alliance_tasks.clear()
             self.is_running.clear()
+            self.current_task_settings.clear()
 
             async with self.db_lock:
                 self.cursor_alliance.execute("""
-                    SELECT alliance_id, channel_id, interval 
-                    FROM alliancesettings
-                    WHERE interval > 0
+                    SELECT s.alliance_id, s.channel_id, s.interval, s.start_time, a.name
+                    FROM alliancesettings s
+                    JOIN alliance_list a ON s.alliance_id = a.alliance_id
+                    WHERE s.interval > 0
                 """)
                 alliances = self.cursor_alliance.fetchall()
 
                 if not alliances:
-                    print("[CONTROL] No alliances with intervals found")
+                    self.logger.info("No alliances with intervals found")
                     return
 
-                print(f"[CONTROL] Found {len(alliances)} alliances with intervals")
-                
-                for alliance_id, channel_id, interval in alliances:
+                scheduled_alliances = []
+                for alliance_id, channel_id, interval, start_time, alliance_name in alliances:
                     channel = self.bot.get_channel(channel_id)
                     if channel is not None:
-                        print(f"[CONTROL] Scheduling alliance {alliance_id} with interval {interval} minutes")
-                        
-                        # Don't queue an immediate check - let the schedule handle it
+                        scheduled_alliances.append(alliance_name)
                         self.is_running[alliance_id] = True
+                        self.current_task_settings[alliance_id] = (channel_id, interval, start_time)
                         self.alliance_tasks[alliance_id] = asyncio.create_task(
-                            self.schedule_alliance_check(channel, alliance_id, interval)
+                            self.schedule_alliance_check(alliance_id)
                         )
-                        
+
                         await asyncio.sleep(0.5)  # Small delay to prevent overwhelming the system
                     else:
-                        print(f"[CONTROL] Channel not found for alliance {alliance_id}")
+                        self.logger.warning(f"Channel not found for alliance {alliance_id}")
+
+                if scheduled_alliances:
+                    msg = f"Scheduled controls for {len(scheduled_alliances)} alliance(s): {', '.join(scheduled_alliances)}"
+                    print(f"[CONTROL] {msg}")
+                    self.logger.info(msg)
 
         except Exception as e:
             print(f"[ERROR] Error in start_alliance_checks: {e}")
@@ -816,36 +882,66 @@ class Control(commands.Cog):
     async def monitor_alliance_changes(self):
         try:
             async with self.db_lock:
-                self.cursor_alliance.execute("SELECT alliance_id, channel_id, interval FROM alliancesettings")
+                self.cursor_alliance.execute("SELECT alliance_id, channel_id, interval, start_time FROM alliancesettings")
                 current_settings = {
-                    alliance_id: (channel_id, interval)
-                    for alliance_id, channel_id, interval in self.cursor_alliance.fetchall()
+                    alliance_id: (channel_id, interval, start_time)
+                    for alliance_id, channel_id, interval, start_time in self.cursor_alliance.fetchall()
                 }
 
-                for alliance_id, (channel_id, interval) in current_settings.items():
+                for alliance_id, (channel_id, interval, start_time) in current_settings.items():
                     task_exists = alliance_id in self.alliance_tasks
-                    
+                    cached_settings = self.current_task_settings.get(alliance_id)
+
+                    # If interval is 0, stop the task
                     if interval == 0 and task_exists:
+                        print(f"[CONTROL] Stopping alliance {alliance_id} - interval set to 0")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
                         del self.alliance_tasks[alliance_id]
+                        if alliance_id in self.current_task_settings:
+                            del self.current_task_settings[alliance_id]
                         continue
 
+                    # Check if settings changed (channel, interval, or start_time)
+                    settings_changed = cached_settings and cached_settings != (channel_id, interval, start_time)
+                    if settings_changed and task_exists:
+                        old_channel, old_interval, old_start = cached_settings
+                        print(f"[CONTROL] Settings changed for alliance {alliance_id}:")
+                        if old_channel != channel_id:
+                            print(f"  Channel: {old_channel} -> {channel_id}")
+                        if old_interval != interval:
+                            print(f"  Interval: {old_interval} -> {interval}")
+                        if old_start != start_time:
+                            print(f"  Start time: {old_start} -> {start_time}")
+                        # Cancel existing task to restart with new settings
+                        self.is_running[alliance_id] = False
+                        if not self.alliance_tasks[alliance_id].done():
+                            self.alliance_tasks[alliance_id].cancel()
+                        del self.alliance_tasks[alliance_id]
+                        task_exists = False
+
+                    # Start new task if needed
                     if interval > 0 and (not task_exists or self.alliance_tasks[alliance_id].done()):
                         channel = self.bot.get_channel(channel_id)
                         if channel is not None:
+                            self.logger.info(f"Starting task for alliance {alliance_id} (interval: {interval}min, start_time: {start_time})")
                             self.is_running[alliance_id] = True
+                            self.current_task_settings[alliance_id] = (channel_id, interval, start_time)
                             self.alliance_tasks[alliance_id] = asyncio.create_task(
-                                self.schedule_alliance_check(channel, alliance_id, interval)
+                                self.schedule_alliance_check(alliance_id)
                             )
 
+                # Clean up tasks for removed alliances
                 for alliance_id in list(self.alliance_tasks.keys()):
                     if alliance_id not in current_settings:
+                        print(f"[CONTROL] Removing task for deleted alliance {alliance_id}")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
                         del self.alliance_tasks[alliance_id]
+                        if alliance_id in self.current_task_settings:
+                            del self.current_task_settings[alliance_id]
 
         except Exception as e:
             print(f"[ERROR] Error in monitor_alliance_changes: {e}")

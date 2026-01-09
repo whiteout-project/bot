@@ -10,6 +10,7 @@ import logging
 import logging.handlers
 import asyncio
 from .bear_event_types import get_event_icon
+from .permission_handler import PermissionManager
 
 class BearTrapSchedule(commands.Cog):
     def __init__(self, bot):
@@ -275,6 +276,15 @@ class BearTrapSchedule(commands.Cog):
             # Check bot permissions
             if not channel.permissions_for(channel.guild.me).send_messages:
                 return (None, "Bot doesn't have permission to send messages in that channel!")
+
+            # Check if a board with same configuration already exists
+            self.cursor.execute("""
+                SELECT board_id FROM notification_schedule_boards
+                WHERE guild_id = ? AND channel_id = ? AND board_type = ? AND target_channel_id = ?
+            """, (guild_id, channel_id, board_type, target_channel_id))
+            existing = self.cursor.fetchone()
+            if existing:
+                return (None, "A board with this configuration already exists in this channel. Delete the existing board first or choose a different channel.")
 
             # Generate initial embed
             embed = await self.generate_schedule_embed_for_new_board(
@@ -1143,23 +1153,14 @@ class BearTrapSchedule(commands.Cog):
         await self.update_boards_for_notification_channel(guild_id, channel_id)
 
     async def check_admin(self, interaction: discord.Interaction) -> bool:
-        """Check if user is admin (same as bear_trap.py)"""
-        try:
-            admin_conn = sqlite3.connect('db/settings.sqlite')
-            admin_cursor = admin_conn.cursor()
-            admin_cursor.execute("SELECT id FROM admin WHERE id = ?", (interaction.user.id,))
-            is_admin = admin_cursor.fetchone() is not None
-            admin_conn.close()
-
-            if not is_admin:
-                await interaction.response.send_message(
-                    "❌ You don't have permission to use this command!",
-                    ephemeral=True
-                )
-            return is_admin
-        except Exception as e:
-            print(f"[ERROR] Error checking admin: {e}")
-            return False
+        """Check if user is admin"""
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin:
+            await interaction.response.send_message(
+                "❌ You don't have permission to use this command!",
+                ephemeral=True
+            )
+        return is_admin
 
     async def show_main_menu(self, interaction: discord.Interaction, force_new: bool = False):
         """Shows the main schedule board management menu

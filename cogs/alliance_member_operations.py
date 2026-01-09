@@ -10,6 +10,7 @@ import os
 import csv
 import io
 from .login_handler import LoginHandler
+from .permission_handler import PermissionManager
 
 class PaginationView(discord.ui.View):
     def __init__(self, chunks: List[discord.Embed], author_id: int):
@@ -151,44 +152,17 @@ class AllianceMemberOperations(commands.Cog):
             )
             async def add_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
-                    is_admin = False
-                    is_initial = 0
-                    
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        result = cursor.fetchone()
-                        
-                        if result:
-                            is_admin = True
-                            is_initial = result[0] if result[0] is not None else 0
-                        
-                    if not is_admin:
-                        await button_interaction.response.send_message(
-                            "❌ You don't have permission to use this command.", 
-                            ephemeral=True
-                        )
-                        return
-
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
+                    alliances, is_global = PermissionManager.get_admin_alliances(
+                        button_interaction.user.id,
                         button_interaction.guild_id
                     )
-                    
+
                     if not alliances:
                         await button_interaction.response.send_message(
-                            "❌ No alliances found for your permissions.", 
+                            "❌ No alliances found for your permissions.",
                             ephemeral=True
                         )
                         return
-
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = "\n\n**Special Access Alliances**\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
 
                     select_embed = discord.Embed(
                         title="📋 Alliance Selection",
@@ -196,11 +170,10 @@ class AllianceMemberOperations(commands.Cog):
                             "Please select an alliance to add members:\n\n"
                             "**Permission Details**\n"
                             "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                            f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                             f"📊 **Available Alliances:** `{len(alliances)}`\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
-                            f"{special_alliance_text}"
                         ),
                         color=discord.Color.green()
                     )
@@ -242,39 +215,17 @@ class AllianceMemberOperations(commands.Cog):
             )
             async def remove_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        admin_result = cursor.fetchone()
-                        
-                        if not admin_result:
-                            await button_interaction.response.send_message(
-                                "❌ You are not authorized to use this command.", 
-                                ephemeral=True
-                            )
-                            return
-                            
-                        is_initial = admin_result[0]
-
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
+                    alliances, is_global = PermissionManager.get_admin_alliances(
+                        button_interaction.user.id,
                         button_interaction.guild_id
                     )
-                    
+
                     if not alliances:
                         await button_interaction.response.send_message(
-                            "❌ Your authorized alliance was not found.", 
+                            "❌ Your authorized alliance was not found.",
                             ephemeral=True
                         )
                         return
-
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = "\n\n**Special Access Alliances**\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
 
                     select_embed = discord.Embed(
                         title="🗑️ Alliance Selection - Member Deletion",
@@ -282,11 +233,10 @@ class AllianceMemberOperations(commands.Cog):
                             "Please select an alliance to remove members:\n\n"
                             "**Permission Details**\n"
                             "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                            f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                             f"📊 **Available Alliances:** `{len(alliances)}`\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
-                            f"{special_alliance_text}"
                         ),
                         color=discord.Color.red()
                     )
@@ -548,39 +498,17 @@ class AllianceMemberOperations(commands.Cog):
             )
             async def view_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        admin_result = cursor.fetchone()
-                        
-                        if not admin_result:
-                            await button_interaction.response.send_message(
-                                "❌ You do not have permission to use this command.", 
-                                ephemeral=True
-                            )
-                            return
-                            
-                        is_initial = admin_result[0]
-
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
+                    alliances, is_global = PermissionManager.get_admin_alliances(
+                        button_interaction.user.id,
                         button_interaction.guild_id
                     )
-                    
+
                     if not alliances:
                         await button_interaction.response.send_message(
-                            "❌ No alliance found that you have permission for.", 
+                            "❌ No alliance found that you have permission for.",
                             ephemeral=True
                         )
                         return
-
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = "\n\n**Special Access Alliances**\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
 
                     select_embed = discord.Embed(
                         title="👥 Alliance Selection",
@@ -588,11 +516,10 @@ class AllianceMemberOperations(commands.Cog):
                             "Please select an alliance to view members:\n\n"
                             "**Permission Details**\n"
                             "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                            f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                             f"📊 **Available Alliances:** `{len(alliances)}`\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
-                            f"{special_alliance_text}"
                         ),
                         color=discord.Color.blue()
                     )
@@ -711,42 +638,17 @@ class AllianceMemberOperations(commands.Cog):
             )
             async def export_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
-                    # Check admin permissions
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        admin_result = cursor.fetchone()
-                        
-                        if not admin_result:
-                            await button_interaction.response.send_message(
-                                "❌ You do not have permission to use this command.", 
-                                ephemeral=True
-                            )
-                            return
-                            
-                        is_initial = admin_result[0]
-
-                    # Get available alliances
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
+                    alliances, is_global = PermissionManager.get_admin_alliances(
+                        button_interaction.user.id,
                         button_interaction.guild_id
                     )
-                    
+
                     if not alliances:
                         await button_interaction.response.send_message(
-                            "❌ No alliance found with your permissions.", 
+                            "❌ No alliance found with your permissions.",
                             ephemeral=True
                         )
                         return
-
-                    # Create special alliance text for display
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = "\n\n**Special Access Alliances**\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
 
                     select_embed = discord.Embed(
                         title="📊 Alliance Selection - Export Members",
@@ -754,11 +656,10 @@ class AllianceMemberOperations(commands.Cog):
                             "Select the alliance to export members from:\n\n"
                             "**Permission Details**\n"
                             "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                            f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                             f"📊 **Available Alliances:** `{len(alliances)}`\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
-                            f"{special_alliance_text}"
                         ),
                         color=discord.Color.blue()
                     )
@@ -852,39 +753,17 @@ class AllianceMemberOperations(commands.Cog):
             @discord.ui.button(label="Transfer Members", emoji="🔄", style=discord.ButtonStyle.primary, row=0)
             async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
                 try:
-                    with sqlite3.connect('db/settings.sqlite') as settings_db:
-                        cursor = settings_db.cursor()
-                        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (button_interaction.user.id,))
-                        admin_result = cursor.fetchone()
-                        
-                        if not admin_result:
-                            await button_interaction.response.send_message(
-                                "❌ You do not have permission to use this command.", 
-                                ephemeral=True
-                            )
-                            return
-                            
-                        is_initial = admin_result[0]
-
-                    alliances, special_alliances, is_global = await self.cog.get_admin_alliances(
-                        button_interaction.user.id, 
+                    alliances, is_global = PermissionManager.get_admin_alliances(
+                        button_interaction.user.id,
                         button_interaction.guild_id
                     )
-                    
+
                     if not alliances:
                         await button_interaction.response.send_message(
-                            "❌ No alliance found with your permissions.", 
+                            "❌ No alliance found with your permissions.",
                             ephemeral=True
                         )
                         return
-
-                    special_alliance_text = ""
-                    if special_alliances:
-                        special_alliance_text = "\n\n**Special Access Alliances**\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                        for _, name in special_alliances:
-                            special_alliance_text += f"🔸 {name}\n"
-                        special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
 
                     select_embed = discord.Embed(
                         title="🔄 Alliance Selection - Member Transfer",
@@ -892,11 +771,10 @@ class AllianceMemberOperations(commands.Cog):
                             "Select the **source** alliance from which you want to transfer members:\n\n"
                             "**Permission Details**\n"
                             "━━━━━━━━━━━━━━━━━━━━━━\n"
-                            f"👤 **Access Level:** `{'Global Admin' if is_initial == 1 else 'Server Admin'}`\n"
-                            f"🔍 **Access Type:** `{'All Alliances' if is_initial == 1 else 'Server + Special Access'}`\n"
+                            f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                            f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                             f"📊 **Available Alliances:** `{len(alliances)}`\n"
                             "━━━━━━━━━━━━━━━━━━━━━━"
-                            f"{special_alliance_text}"
                         ),
                         color=discord.Color.blue()
                     )
@@ -1594,69 +1472,8 @@ class AllianceMemberOperations(commands.Cog):
         self.conn_alliance.close()
 
     async def get_admin_alliances(self, user_id: int, guild_id: int):
-        try:
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (user_id,))
-                admin_result = cursor.fetchone()
-                
-                if not admin_result:
-                    self.log_message(f"User {user_id} is not an admin")
-                    return [], [], False
-                    
-                is_initial = admin_result[0]
-                
-            if is_initial == 1:
-                
-                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                    cursor = alliance_db.cursor()
-                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY name")
-                    alliances = cursor.fetchall()
-                    return alliances, [], True
-            
-            server_alliances = []
-            special_alliances = []
-            
-            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                cursor = alliance_db.cursor()
-                cursor.execute("""
-                    SELECT DISTINCT alliance_id, name 
-                    FROM alliance_list 
-                    WHERE discord_server_id = ?
-                    ORDER BY name
-                """, (guild_id,))
-                server_alliances = cursor.fetchall()
-            
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("""
-                    SELECT alliances_id 
-                    FROM adminserver 
-                    WHERE admin = ?
-                """, (user_id,))
-                special_alliance_ids = cursor.fetchall()
-                
-            if special_alliance_ids:
-                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                    cursor = alliance_db.cursor()
-                    placeholders = ','.join('?' * len(special_alliance_ids))
-                    cursor.execute(f"""
-                        SELECT DISTINCT alliance_id, name
-                        FROM alliance_list
-                        WHERE alliance_id IN ({placeholders})
-                        ORDER BY name
-                    """, [aid[0] for aid in special_alliance_ids])
-                    special_alliances = cursor.fetchall()
-            
-            all_alliances = list({(aid, name) for aid, name in (server_alliances + special_alliances)})
-            
-            if not all_alliances and not special_alliances:
-                return [], [], False
-            
-            return all_alliances, special_alliances, False
-                
-        except Exception as e:
-            return [], [], False
+        """Get alliances for admin from centralized PermissionManager"""
+        return PermissionManager.get_admin_alliances(user_id, guild_id)
 
     async def handle_button_interaction(self, interaction: discord.Interaction):
         custom_id = interaction.data["custom_id"]

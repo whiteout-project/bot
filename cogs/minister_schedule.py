@@ -1266,7 +1266,7 @@ class MinisterSchedule(commands.Cog):
 
         is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can save archives.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can save archives.", ephemeral=True)
             return
 
         # Get archive cog
@@ -1292,7 +1292,7 @@ class MinisterSchedule(commands.Cog):
 
         is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can view archives.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can view archives.", ephemeral=True)
             return
 
         # Get archive cog
@@ -1353,7 +1353,7 @@ class MinisterSchedule(commands.Cog):
 
         is_admin, is_global_admin, _ = await minister_menu_cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can view change history.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can view change history.", ephemeral=True)
             return
 
         # Get archive cog

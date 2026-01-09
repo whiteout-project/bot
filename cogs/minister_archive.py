@@ -442,7 +442,7 @@ class MinisterArchive(commands.Cog):
         """Show the main archive menu"""
         # Check global admin permission
         if not await self.is_global_admin(interaction.user.id):
-            await interaction.response.send_message("❌ Only Global Admins can access archives.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can access archives.", ephemeral=True)
             return
 
         embed = discord.Embed(

@@ -1,11 +1,11 @@
 import discord
 from discord.ext import commands
 import sqlite3
-import asyncio
 import time
 import hashlib
 import aiohttp
 from aiohttp_socks import ProxyConnector
+from .permission_handler import PermissionManager
 
 SECRET = 'tB87#kPtkxqOS2'
 
@@ -312,9 +312,9 @@ class ClearConfirmationView(discord.ui.View):
             color=discord.Color.green()
         )
         
-        view = MinisterSettingsView(self.cog.bot, self.cog)
+        view = MinisterSettingsView(self.cog.bot, self.cog, self.is_global_admin)
         await interaction.followup.send(embed=embed, view=view)
-    
+
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="❌")
     async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_filtered_user_select(interaction, self.activity_name)
@@ -347,10 +347,20 @@ class ActivitySelectView(discord.ui.View):
         await self.cog.show_settings_menu(interaction)
 
 class MinisterSettingsView(discord.ui.View):
-    def __init__(self, bot, cog):
+    def __init__(self, bot, cog, is_global: bool = False):
         super().__init__(timeout=None)
         self.bot = bot
         self.cog = cog
+        self.is_global = is_global
+
+        # Disable global-admin-only buttons for non-global admins
+        if not is_global:
+            for child in self.children:
+                if isinstance(child, discord.ui.Button) and child.label in [
+                    "Schedule List Type", "Time Slot Mode",
+                    "Delete All Reservations", "Clear Channels", "Delete Server ID"
+                ]:
+                    child.disabled = True
 
     @discord.ui.button(label="Update Names", style=discord.ButtonStyle.secondary, emoji="📝", row=1)
     async def update_names(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -384,7 +394,7 @@ class MinisterSettingsView(discord.ui.View):
         # Check if user is global admin
         is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can clear reservations.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can clear reservations.", ephemeral=True)
             return
         
         await self.cog.show_activity_selection_for_clear(interaction)
@@ -394,7 +404,7 @@ class MinisterSettingsView(discord.ui.View):
         # Check if user is global admin
         is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can clear channel configurations.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can clear channel configurations.", ephemeral=True)
             return
         
         await self.cog.show_clear_channels_selection(interaction)
@@ -404,7 +414,7 @@ class MinisterSettingsView(discord.ui.View):
         # Check if user is global admin
         is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can delete server configuration.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can delete server configuration.", ephemeral=True)
             return
         
         try:
@@ -422,10 +432,20 @@ class MinisterSettingsView(discord.ui.View):
         await self.cog.show_minister_channel_menu(interaction)
 
 class MinisterChannelView(discord.ui.View):
-    def __init__(self, bot, cog):
+    def __init__(self, bot, cog, is_global: bool = False):
         super().__init__(timeout=None)
         self.bot = bot
         self.cog = cog
+        self.is_global = is_global
+
+        # Disable global-admin-only buttons for non-global admins
+        # Note: Channel Setup is server-specific, so it's allowed for server admins
+        if not is_global:
+            for child in self.children:
+                if isinstance(child, discord.ui.Button) and child.label in [
+                    "Event Archive"
+                ]:
+                    child.disabled = True
 
     @discord.ui.button(label="Construction Day", style=discord.ButtonStyle.primary, emoji="🔨")
     async def construction_day(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -441,12 +461,11 @@ class MinisterChannelView(discord.ui.View):
 
     @discord.ui.button(label="Channel Setup", style=discord.ButtonStyle.success, emoji="📝", row=1)
     async def channel_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if user is global admin
-        is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
-        if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can configure channels.", ephemeral=True)
+        # Channel setup is server-specific, so any admin can configure it
+        if not await self.cog.is_admin(interaction.user.id):
+            await interaction.response.send_message("❌ You do not have permission to configure channels.", ephemeral=True)
             return
-        
+
         await self.cog.show_channel_setup_menu(interaction)
 
     @discord.ui.button(label="Event Archive", style=discord.ButtonStyle.secondary, emoji="🗃️", row=1)
@@ -454,7 +473,7 @@ class MinisterChannelView(discord.ui.View):
         # Check if user is global admin
         is_admin, is_global_admin, _ = await self.cog.get_admin_permissions(interaction.user.id)
         if not is_global_admin:
-            await interaction.response.send_message("❌ Only Global Admins can access archives.", ephemeral=True)
+            await interaction.response.send_message("❌ Only global administrators can access archives.", ephemeral=True)
             return
 
         # Get archive cog
@@ -778,8 +797,9 @@ class MinisterMenu(commands.Cog):
         # Store the original interaction for later updates
         self.original_interaction = interaction
 
-        # Get channel status
+        # Get channel status and permissions
         channel_status, embed_color = await self.get_channel_status_display()
+        _, is_global, _ = await self.get_admin_permissions(interaction.user.id)
 
         embed = discord.Embed(
             title="🏛️ Minister Scheduling",
@@ -808,7 +828,7 @@ class MinisterMenu(commands.Cog):
             color=embed_color
         )
 
-        view = MinisterChannelView(self.bot, self)
+        view = MinisterChannelView(self.bot, self, is_global)
 
         try:
             await interaction.response.edit_message(embed=embed, view=view)
@@ -901,64 +921,31 @@ class MinisterMenu(commands.Cog):
         return status_text, embed_color
 
     async def get_admin_permissions(self, user_id: int):
-        """Get admin permissions for a user - returns (is_admin, is_global_admin, alliance_ids)"""
-        self.settings_cursor = sqlite3.connect('db/settings.sqlite').cursor()
-
-        # Check if user is bot owner
-        if user_id == self.bot.owner_id:
-            return True, True, []
-
-        # Check admin table
-        self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id=?", (user_id,))
-        admin_result = self.settings_cursor.fetchone()
-
-        if not admin_result:
-            return False, False, []
-
-        is_global_admin = admin_result[0] == 1
-
-        if is_global_admin:
-            return True, True, []
-
-        # Get alliance-specific permissions
-        self.settings_cursor.execute("SELECT alliances_id FROM adminserver WHERE admin=?", (user_id,))
-        alliance_permissions = self.settings_cursor.fetchall()
-        alliance_ids = [row[0] for row in alliance_permissions] if alliance_permissions else []
-
-        return True, False, alliance_ids
-    
-    async def get_users_for_admin(self, user_id: int):
-        """Get list of users based on admin permissions"""
-        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(user_id)
-        
+        """Get admin permissions - delegates to centralized PermissionManager"""
+        is_admin, is_global = PermissionManager.is_admin(user_id)
         if not is_admin:
-            return []
-        
-        if is_global_admin:
-            # Get all users
-            self.users_cursor.execute("SELECT fid, nickname, alliance FROM users ORDER BY LOWER(nickname)")
-            return self.users_cursor.fetchall()
-        else:
-            # Get users only from allowed alliances
-            if not alliance_ids:
-                return []
-            
-            placeholders = ','.join('?' for _ in alliance_ids)
-            query = f"SELECT fid, nickname, alliance FROM users WHERE alliance IN ({placeholders}) ORDER BY LOWER(nickname)"
-            self.users_cursor.execute(query, alliance_ids)
-            return self.users_cursor.fetchall()
-    
+            return False, False, []
+        if is_global:
+            return True, True, []
+        # Get alliance-specific permissions for server admin
+        with sqlite3.connect('db/settings.sqlite') as db:
+            cursor = db.cursor()
+            cursor.execute("SELECT alliances_id FROM adminserver WHERE admin=?", (user_id,))
+            alliance_ids = [row[0] for row in cursor.fetchall()]
+        return True, False, alliance_ids
+
     async def show_filtered_user_select(self, interaction: discord.Interaction, activity_name: str):
         """Show the filtered user selection view"""
         # Check admin permissions
         is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id)
-        
+
         if not is_admin:
             await interaction.response.send_message("❌ You do not have permission to manage minister appointments.", ephemeral=True)
             return
-        
+
         # Get users based on permissions
-        users = await self.get_users_for_admin(interaction.user.id)
+        guild_id = interaction.guild.id if interaction.guild else None
+        users = PermissionManager.get_admin_users(interaction.user.id, guild_id)
         
         if not users:
             await interaction.response.send_message("❌ No users found in your allowed alliances.", ephemeral=True)
@@ -1019,7 +1006,8 @@ class MinisterMenu(commands.Cog):
     async def show_filtered_user_select_with_message(self, interaction: discord.Interaction, activity_name: str, message: str, is_error: bool = False):
         """Show the filtered user selection view with a status message"""
         # Get users based on permissions
-        users = await self.get_users_for_admin(interaction.user.id)
+        guild_id = interaction.guild.id if interaction.guild else None
+        users = PermissionManager.get_admin_users(interaction.user.id, guild_id)
         
         if not users:
             await interaction.response.send_message("❌ No users found in your allowed alliances.", ephemeral=True)
@@ -1105,6 +1093,7 @@ class MinisterMenu(commands.Cog):
             result_msg += f" ({failed_count} failed)"
         
         # Return to settings menu with success message
+        _, is_global, _ = await self.get_admin_permissions(interaction.user.id)
         embed = discord.Embed(
             title="⚙️ Minister Settings",
             description=(
@@ -1126,8 +1115,8 @@ class MinisterMenu(commands.Cog):
             ),
             color=discord.Color.green()
         )
-        
-        view = MinisterSettingsView(self.bot, self)
+
+        view = MinisterSettingsView(self.bot, self, is_global)
         await interaction.followup.send(embed=embed, view=view)
     
     async def show_clear_confirmation(self, interaction: discord.Interaction, activity_name: str):
@@ -1545,13 +1534,13 @@ class MinisterMenu(commands.Cog):
                         color=discord.Color.green()
                     )
                     
-                    view = MinisterSettingsView(self.parent_cog.bot, self.parent_cog)
+                    view = MinisterSettingsView(self.parent_cog.bot, self.parent_cog, is_global=True)
                     await interaction.followup.edit_message(
                         message_id=interaction.message.id,
                         embed=embed,
                         view=view
                     )
-                    
+
                 except Exception as e:
                     await interaction.followup.send(f"❌ Error clearing channels: {e}", ephemeral=True)
             
@@ -1599,6 +1588,7 @@ class MinisterMenu(commands.Cog):
     
     async def show_settings_menu(self, interaction: discord.Interaction):
         """Show the minister settings menu"""
+        _, is_global, _ = await self.get_admin_permissions(interaction.user.id)
         embed = discord.Embed(
             title="⚙️ Minister Settings",
             description=(
@@ -1621,9 +1611,9 @@ class MinisterMenu(commands.Cog):
             ),
             color=discord.Color.blue()
         )
-        
-        view = MinisterSettingsView(self.bot, self)
-        
+
+        view = MinisterSettingsView(self.bot, self, is_global)
+
         try:
             await interaction.response.edit_message(content=None, embed=embed, view=view)
         except discord.InteractionResponded:

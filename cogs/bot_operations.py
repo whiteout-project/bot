@@ -5,6 +5,7 @@ import sqlite3
 import asyncio
 import requests
 from .alliance_member_operations import AllianceSelectView
+from .permission_handler import PermissionManager
 
 class BotOperations(commands.Cog):
     def __init__(self, bot, conn):
@@ -69,12 +70,11 @@ class BotOperations(commands.Cog):
         
         if custom_id == "alliance_control_messages":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.", 
+                        "❌ Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -149,16 +149,15 @@ class BotOperations(commands.Cog):
         
         elif custom_id == "control_settings":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can manage control settings.", 
+                        "❌ Only administrators can manage control settings.",
                         ephemeral=True
                     )
                     return
-                
+
                 await self.show_control_settings_menu(interaction)
                 
             except Exception as e:
@@ -173,18 +172,17 @@ class BotOperations(commands.Cog):
             try:
                 if custom_id == "assign_alliance":
                     try:
+                        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                        if not is_admin or not is_global:
+                            await interaction.response.send_message(
+                                "❌ Only global administrators can use this command.",
+                                ephemeral=True
+                            )
+                            return
+
                         with sqlite3.connect('db/settings.sqlite') as settings_db:
                             cursor = settings_db.cursor()
-                            cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                            result = cursor.fetchone()
-                            
-                            if not result or result[0] != 1:
-                                await interaction.response.send_message(
-                                    "❌ Only global administrators can use this command.", 
-                                    ephemeral=True
-                                )
-                                return
-
                             cursor.execute("""
                                 SELECT id, is_initial 
                                 FROM admin 
@@ -423,12 +421,11 @@ class BotOperations(commands.Cog):
                             pass
                 elif custom_id == "add_admin":
                     try:
-                        self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                        result = self.settings_cursor.fetchone()
-                        
-                        if not result or result[0] != 1:
+                        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                        if not is_admin or not is_global:
                             await interaction.response.send_message(
-                                "❌ Only global administrators can use this command", 
+                                "❌ Only global administrators can use this command",
                                 ephemeral=True
                             )
                             return
@@ -486,18 +483,17 @@ class BotOperations(commands.Cog):
 
                 elif custom_id == "remove_admin":
                     try:
-                        self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                        result = self.settings_cursor.fetchone()
-                        
-                        if not result or result[0] != 1:
+                        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                        if not is_admin or not is_global:
                             await interaction.response.send_message(
-                                "❌ Only global administrators can use this command.", 
+                                "❌ Only global administrators can use this command.",
                                 ephemeral=True
                             )
                             return
 
                         self.settings_cursor.execute("""
-                            SELECT id, is_initial FROM admin 
+                            SELECT id, is_initial FROM admin
                             ORDER BY is_initial DESC, id
                         """)
                         admins = self.settings_cursor.fetchall()
@@ -548,37 +544,40 @@ class BotOperations(commands.Cog):
                         async def admin_callback(select_interaction: discord.Interaction):
                             try:
                                 selected_admin_id = int(select_interaction.data["values"][0])
-                                
-                                self.settings_cursor.execute("""
-                                    SELECT id, is_initial FROM admin WHERE id = ?
-                                """, (selected_admin_id,))
-                                admin_info = self.settings_cursor.fetchone()
+                                guild_id = select_interaction.guild.id
+                                guild_name = select_interaction.guild.name
 
-                                self.settings_cursor.execute("""
-                                    SELECT alliances_id
-                                    FROM adminserver
-                                    WHERE admin = ?
-                                """, (selected_admin_id,))
-                                admin_alliances = self.settings_cursor.fetchall()
+                                # Use PermissionManager to get admin info and alliances
+                                _, is_global = PermissionManager.is_admin(selected_admin_id)
+                                alliances, _ = PermissionManager.get_admin_alliances(selected_admin_id, guild_id)
 
-                                alliance_names = []
-                                if admin_alliances: 
-                                    alliance_ids = [alliance[0] for alliance in admin_alliances]
-                                    
-                                    alliance_cursor = self.alliance_db.cursor()
-                                    placeholders = ','.join('?' * len(alliance_ids))
-                                    query = f"SELECT alliance_id, name FROM alliance_list WHERE alliance_id IN ({placeholders})"
-                                    alliance_cursor.execute(query, alliance_ids)
-                                    
-                                    alliance_results = alliance_cursor.fetchall()
-                                    alliance_names = [alliance[1] for alliance in alliance_results]
+                                # Determine role, access type, and alliance names
+                                if is_global:
+                                    role = "Global Admin"
+                                    access_type = "All Alliances"
+                                    alliance_names = []
+                                else:
+                                    # Check if admin has specific assignments
+                                    with sqlite3.connect('db/settings.sqlite') as settings_db:
+                                        cursor = settings_db.cursor()
+                                        cursor.execute("SELECT COUNT(*) FROM adminserver WHERE admin = ?", (selected_admin_id,))
+                                        has_assignments = cursor.fetchone()[0] > 0
+
+                                    if has_assignments:
+                                        role = "Alliance Admin"
+                                        access_type = f"Specific Alliances on {guild_name}"
+                                    else:
+                                        role = "Server Admin"
+                                        access_type = f"All Alliances on {guild_name}"
+
+                                    alliance_names = [name for _, name in alliances]
 
                                 try:
                                     user = await self.bot.fetch_user(selected_admin_id)
                                     admin_name = user.name
                                     avatar_url = user.display_avatar.url
                                 except Exception as e:
-                                    admin_name = f"Bilinmeyen Kullanıcı ({selected_admin_id})"
+                                    admin_name = f"Unknown User ({selected_admin_id})"
                                     avatar_url = None
 
                                 info_embed = discord.Embed(
@@ -588,27 +587,28 @@ class BotOperations(commands.Cog):
                                         f"━━━━━━━━━━━━━━━━━━━━━━\n"
                                         f"👤 **Name:** `{admin_name}`\n"
                                         f"🆔 **Discord ID:** `{selected_admin_id}`\n"
-                                        f"👤 **Access Level:** `{'Global Admin' if admin_info[1] == 1 else 'Server Admin'}`\n"
-                                        f"🔍 **Access Type:** `{'All Alliances' if admin_info[1] == 1 else 'Server + Special Access'}`\n"
-                                        f"📊 **Available Alliances:** `{len(alliance_names)}`\n"
+                                        f"👑 **Role:** `{role}`\n"
+                                        f"🔍 **Access Type:** `{access_type}`\n"
                                         "━━━━━━━━━━━━━━━━━━━━━━\n"
                                     ),
                                     color=discord.Color.yellow()
                                 )
 
-                                if alliance_names:
-                                    info_embed.add_field(
-                                        name="🏰 Alliances Authorized",
-                                        value="\n".join([f"• {name}" for name in alliance_names[:10]]) + 
-                                              ("\n• ..." if len(alliance_names) > 10 else ""),
-                                        inline=False
-                                    )
-                                else:
-                                    info_embed.add_field(
-                                        name="🏰 Alliances Authorized",
-                                        value="This manager does not yet have an authorized alliance.",
-                                        inline=False
-                                    )
+                                # Only show alliance list for non-global admins
+                                if not is_global:
+                                    if alliance_names:
+                                        info_embed.add_field(
+                                            name="🏰 Managing Alliances",
+                                            value="\n".join([f"• {name}" for name in alliance_names[:10]]) +
+                                                  (f"\n• ... and {len(alliance_names) - 10} more" if len(alliance_names) > 10 else ""),
+                                            inline=False
+                                        )
+                                    else:
+                                        info_embed.add_field(
+                                            name="🏰 Managing Alliances",
+                                            value="No alliances on this server",
+                                            inline=False
+                                        )
 
                                 if avatar_url:
                                     info_embed.set_thumbnail(url=avatar_url)
@@ -730,18 +730,17 @@ class BotOperations(commands.Cog):
 
         elif custom_id == "view_admin_permissions":
             try:
+                is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin or not is_global:
+                    await interaction.response.send_message(
+                        "❌ Only global administrators can use this command.",
+                        ephemeral=True
+                    )
+                    return
+
                 with sqlite3.connect('db/settings.sqlite') as settings_db:
                     cursor = settings_db.cursor()
-                    cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                    result = cursor.fetchone()
-                    
-                    if not result or result[0] != 1:
-                        await interaction.response.send_message(
-                            "❌ Only global administrators can use this command.", 
-                            ephemeral=True
-                        )
-                        return
-
                     with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                         alliance_cursor = alliance_db.cursor()
                         
@@ -916,18 +915,17 @@ class BotOperations(commands.Cog):
 
         elif custom_id == "view_administrators":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.", 
+                        "❌ Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
 
                 self.settings_cursor.execute("""
-                    SELECT a.id, a.is_initial 
+                    SELECT a.id, a.is_initial
                     FROM admin a
                     ORDER BY a.is_initial DESC, a.id
                 """)
@@ -946,47 +944,56 @@ class BotOperations(commands.Cog):
                     color=discord.Color.blue()
                 )
 
+                guild_id = interaction.guild.id
+                guild_name = interaction.guild.name
+
                 for admin_id, is_initial in admins:
                     try:
                         user = await self.bot.fetch_user(admin_id)
                         admin_name = user.name
-                        admin_avatar = user.display_avatar.url
 
-                        self.settings_cursor.execute("""
-                            SELECT alliances_id 
-                            FROM adminserver 
-                            WHERE admin = ?
-                        """, (admin_id,))
-                        alliance_ids = self.settings_cursor.fetchall()
+                        # Use PermissionManager to get admin info and alliances
+                        _, admin_is_global = PermissionManager.is_admin(admin_id)
+                        alliances, _ = PermissionManager.get_admin_alliances(admin_id, guild_id)
 
-                        alliance_names = []
-                        if alliance_ids:
-                            alliance_id_list = [aid[0] for aid in alliance_ids]
-                            placeholders = ','.join('?' * len(alliance_id_list))
-                            self.c_alliance.execute(f"""
-                                SELECT name 
-                                FROM alliance_list 
-                                WHERE alliance_id IN ({placeholders})
-                            """, alliance_id_list)
-                            alliance_names = [name[0] for name in self.c_alliance.fetchall()]
+                        # Determine role, access type, and alliances based on admin type
+                        if admin_is_global:
+                            role = "Global Admin"
+                            access_type = "All Alliances"
+                            alliance_names = []
+                        else:
+                            # Check if admin has specific assignments
+                            self.settings_cursor.execute("SELECT COUNT(*) FROM adminserver WHERE admin = ?", (admin_id,))
+                            has_assignments = self.settings_cursor.fetchone()[0] > 0
+
+                            if has_assignments:
+                                role = "Alliance Admin"
+                                access_type = f"Specific Alliances on {guild_name}"
+                            else:
+                                role = "Server Admin"
+                                access_type = f"All Alliances on {guild_name}"
+
+                            alliance_names = [name for _, name in alliances]
 
                         admin_info = (
                             f"👤 **Name:** {admin_name}\n"
                             f"🆔 **ID:** {admin_id}\n"
-                            f"👑 **Role:** {'Global Admin' if is_initial == 1 else 'Server Admin'}\n"
-                            f"🔍 **Access Type:** {'All Alliances' if is_initial == 1 else 'Server + Special Access'}\n"
+                            f"👑 **Role:** {role}\n"
+                            f"🔍 **Access Type:** {access_type}\n"
                         )
 
-                        if alliance_names:
-                            alliance_text = "\n".join([f"• {name}" for name in alliance_names[:5]])
-                            if len(alliance_names) > 5:
-                                alliance_text += f"\n• ... and {len(alliance_names) - 5} more"
-                            admin_info += f"🏰 **Managing Alliances:**\n{alliance_text}\n"
-                        else:
-                            admin_info += "🏰 **Managing Alliances:** No alliances assigned\n"
+                        # Only show alliance list for non-global admins
+                        if not admin_is_global:
+                            if alliance_names:
+                                alliance_text = "\n".join([f"• {name}" for name in alliance_names[:5]])
+                                if len(alliance_names) > 5:
+                                    alliance_text += f"\n• ... and {len(alliance_names) - 5} more"
+                                admin_info += f"🏰 **Managing Alliances:**\n{alliance_text}\n"
+                            else:
+                                admin_info += "🏰 **Managing Alliances:** No alliances on this server\n"
 
                         admin_list_embed.add_field(
-                            name=f"{'👑' if is_initial == 1 else '👤'} {admin_name}",
+                            name=f"{'👑' if admin_is_global else '👤'} {admin_name}",
                             value=f"{admin_info}\n━━━━━━━━━━━━━━━━━━━━━━",
                             inline=False
                         )
@@ -1024,12 +1031,11 @@ class BotOperations(commands.Cog):
 
         elif custom_id == "transfer_old_database":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.", 
+                        "❌ Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -1053,12 +1059,11 @@ class BotOperations(commands.Cog):
 
         elif custom_id == "check_updates":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.", 
+                        "❌ Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -1145,6 +1150,9 @@ class BotOperations(commands.Cog):
 
     async def show_bot_operations_menu(self, interaction: discord.Interaction):
         try:
+            # Check if user is global admin
+            _, is_global = PermissionManager.is_admin(interaction.user.id)
+
             embed = discord.Embed(
                 title="🤖 Bot Operations",
                 description=(
@@ -1163,57 +1171,66 @@ class BotOperations(commands.Cog):
                 ),
                 color=discord.Color.blue()
             )
-            
+
+            # Global admin only buttons are disabled for server admins
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Add Admin",
                 emoji="➕",
                 style=discord.ButtonStyle.success,
                 custom_id="add_admin",
-                row=1
+                row=1,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="Remove Admin",
                 emoji="➖",
                 style=discord.ButtonStyle.danger,
                 custom_id="remove_admin",
-                row=1
+                row=1,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="View Administrators",
                 emoji="👥",
                 style=discord.ButtonStyle.primary,
                 custom_id="view_administrators",
-                row=1
+                row=1,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="Assign Alliance to Admin",
                 emoji="🔗",
                 style=discord.ButtonStyle.success,
                 custom_id="assign_alliance",
-                row=2
+                row=2,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="Delete Admin Permissions",
                 emoji="➖",
                 style=discord.ButtonStyle.danger,
                 custom_id="view_admin_permissions",
-                row=2
+                row=2,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="Transfer Old Database",
                 emoji="🔄",
                 style=discord.ButtonStyle.primary,
                 custom_id="transfer_old_database",
-                row=3
+                row=3,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="Check for Updates",
                 emoji="🔄",
                 style=discord.ButtonStyle.primary,
                 custom_id="check_updates",
-                row=3
+                row=3,
+                disabled=not is_global
             ))
+            # These are available to all admins (scoped to their alliances)
             view.add_item(discord.ui.Button(
                 label="Log System",
                 emoji="📋",
@@ -1226,7 +1243,8 @@ class BotOperations(commands.Cog):
                 emoji="💬",
                 style=discord.ButtonStyle.primary,
                 custom_id="alliance_control_messages",
-                row=3
+                row=3,
+                disabled=not is_global
             ))
             view.add_item(discord.ui.Button(
                 label="Control Settings",
@@ -1301,13 +1319,16 @@ class BotOperations(commands.Cog):
     async def show_control_settings_menu(self, interaction: discord.Interaction):
         """Show the control settings menu with alliance selection"""
         try:
-            # Get all alliances
-            self.c_alliance.execute("SELECT alliance_id, name FROM alliance_list ORDER BY name")
-            alliances = self.c_alliance.fetchall()
-            
+            if interaction.guild is None:
+                await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+                return
+
+            # Get alliances this admin can access
+            alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
+
             if not alliances:
                 await interaction.response.send_message(
-                    "❌ No alliances found. Please create an alliance first.",
+                    "❌ No alliances found.",
                     ephemeral=True
                 )
                 return

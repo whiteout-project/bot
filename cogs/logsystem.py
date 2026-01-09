@@ -47,12 +47,12 @@ class LogSystem(commands.Cog):
         
         if custom_id == "log_system":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                from .permission_handler import PermissionManager
+                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+
+                if not is_admin:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can access the log system.", 
+                        "❌ Only administrators can access the log system.",
                         ephemeral=True
                     )
                     return
@@ -96,13 +96,6 @@ class LogSystem(commands.Cog):
                     custom_id="view_log_channels",
                     row=1
                 ))
-                view.add_item(discord.ui.Button(
-                    label="Back",
-                    emoji="◀️",
-                    style=discord.ButtonStyle.secondary,
-                    custom_id="bot_operations",
-                    row=2
-                ))
 
                 await interaction.response.send_message(
                     embed=log_embed,
@@ -119,22 +112,22 @@ class LogSystem(commands.Cog):
 
         elif custom_id == "set_log_channel":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                from .permission_handler import PermissionManager
+
+                if interaction.guild is None:
+                    await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+                    return
+
+                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+                if not is_admin:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can set log channels.", 
+                        "❌ Only administrators can set log channels.",
                         ephemeral=True
                     )
                     return
 
-                self.alliance_cursor.execute("""
-                    SELECT alliance_id, name 
-                    FROM alliance_list 
-                    ORDER BY name
-                """)
-                alliances = self.alliance_cursor.fetchall()
+                # Get alliances this admin can access
+                alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
 
                 if not alliances:
                     await interaction.response.send_message(
@@ -258,25 +251,43 @@ class LogSystem(commands.Cog):
 
         elif custom_id == "remove_log_channel":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                from .permission_handler import PermissionManager
+
+                if interaction.guild is None:
+                    await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+                    return
+
+                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+                if not is_admin:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can remove log channels.", 
+                        "❌ Only administrators can remove log channels.",
                         ephemeral=True
                     )
                     return
 
-                self.settings_cursor.execute("""
-                    SELECT al.alliance_id, al.channel_id 
+                # Get alliances this admin can access
+                admin_alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
+                admin_alliance_ids = [a[0] for a in admin_alliances] if admin_alliances else []
+
+                if not admin_alliance_ids:
+                    await interaction.response.send_message(
+                        "❌ No alliances found.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Get log entries only for alliances admin can access
+                placeholders = ','.join('?' * len(admin_alliance_ids))
+                self.settings_cursor.execute(f"""
+                    SELECT al.alliance_id, al.channel_id
                     FROM alliance_logs al
-                """)
+                    WHERE al.alliance_id IN ({placeholders})
+                """, admin_alliance_ids)
                 log_entries = self.settings_cursor.fetchall()
 
                 if not log_entries:
                     await interaction.response.send_message(
-                        "❌ No alliance log channels found.", 
+                        "❌ No alliance log channels found.",
                         ephemeral=True
                     )
                     return
@@ -437,21 +448,39 @@ class LogSystem(commands.Cog):
 
         elif custom_id == "view_log_channels":
             try:
-                self.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = self.settings_cursor.fetchone()
-                
-                if not result or result[0] != 1:
+                from .permission_handler import PermissionManager
+
+                if interaction.guild is None:
+                    await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+                    return
+
+                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+                if not is_admin:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can view log channels.", 
+                        "❌ Only administrators can view log channels.",
                         ephemeral=True
                     )
                     return
 
-                self.settings_cursor.execute("""
-                    SELECT alliance_id, channel_id 
-                    FROM alliance_logs 
+                # Get alliances this admin can access
+                admin_alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
+                admin_alliance_ids = [a[0] for a in admin_alliances] if admin_alliances else []
+
+                if not admin_alliance_ids:
+                    await interaction.response.send_message(
+                        "❌ No alliances found.",
+                        ephemeral=True
+                    )
+                    return
+
+                # Get log entries only for alliances admin can access
+                placeholders = ','.join('?' * len(admin_alliance_ids))
+                self.settings_cursor.execute(f"""
+                    SELECT alliance_id, channel_id
+                    FROM alliance_logs
+                    WHERE alliance_id IN ({placeholders})
                     ORDER BY alliance_id
-                """)
+                """, admin_alliance_ids)
                 log_entries = self.settings_cursor.fetchall()
 
                 if not log_entries:

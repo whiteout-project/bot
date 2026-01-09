@@ -9,6 +9,7 @@ import hashlib
 import aiohttp
 import ssl
 from discord.ext import tasks
+from .permission_handler import PermissionManager
 
 SECRET = "tB87#kPtkxqOS2"
 
@@ -359,17 +360,11 @@ class IDChannel(commands.Cog):
 
     async def show_id_channel_menu(self, interaction: discord.Interaction):
         try:
-            is_admin = False
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-                result = cursor.fetchone()
-                if result:
-                    is_admin = True
+            is_admin, _ = PermissionManager.is_admin(interaction.user.id)
 
             if not is_admin:
                 await interaction.response.send_message(
-                    "❌ You don't have permission to use this feature.", 
+                    "❌ You don't have permission to use this feature.",
                     ephemeral=True
                 )
                 return

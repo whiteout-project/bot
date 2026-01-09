@@ -8,6 +8,7 @@ import tempfile
 import pyzipper
 import shutil
 import traceback
+from .permission_handler import PermissionManager
 
 class BackupOperations(commands.Cog):
     def __init__(self, bot):
@@ -144,16 +145,9 @@ class BackupOperations(commands.Cog):
     async def before_automatic_backup(self):
         await self.bot.wait_until_ready()
 
-    async def is_global_admin(self, discord_id):
-        conn = sqlite3.connect("db/settings.sqlite")
-        cursor = conn.cursor()
-        cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (str(discord_id),))
-        result = cursor.fetchone()
-        conn.close()
-        return result is not None and result[0] == 1
-
     async def show_backup_menu(self, interaction: discord.Interaction):
-        if not await self.is_global_admin(interaction.user.id):
+        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin or not is_global:
             await interaction.response.send_message("❌ This menu is only available for Global Admins!", ephemeral=True)
             return
 

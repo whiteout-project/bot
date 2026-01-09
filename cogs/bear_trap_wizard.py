@@ -12,6 +12,7 @@ from bear_event_types import (
     get_event_icon, get_event_config, calculate_next_occurrence, validate_time_slot,
     calculate_crazy_joe_dates
 )
+from .permission_handler import PermissionManager
 
 class BearTrapWizard(commands.Cog):
     def __init__(self, bot):
@@ -42,12 +43,7 @@ class BearTrapWizard(commands.Cog):
 
     async def check_admin(self, interaction: discord.Interaction) -> bool:
         """Check if user is an admin"""
-        conn = sqlite3.connect('db/settings.sqlite')
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM admin WHERE id = ?", (interaction.user.id,))
-        is_admin = cursor.fetchone() is not None
-        conn.close()
-
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
         if not is_admin:
             await interaction.response.send_message(
                 "❌ You don't have permission to use this command!",

@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import sqlite3
+from .permission_handler import PermissionManager
 
 class OtherFeatures(commands.Cog):
     def __init__(self, bot):
@@ -8,6 +9,8 @@ class OtherFeatures(commands.Cog):
         
     async def show_other_features_menu(self, interaction: discord.Interaction):
         try:
+            _, is_global = PermissionManager.is_admin(interaction.user.id)
+
             embed = discord.Embed(
                 title="🔧 Other Features",
                 description=(
@@ -42,14 +45,14 @@ class OtherFeatures(commands.Cog):
                 ),
                 color=discord.Color.blue()
             )
-            
-            view = OtherFeaturesView(self)
-            
+
+            view = OtherFeaturesView(self, is_global)
+
             try:
                 await interaction.response.edit_message(embed=embed, view=view)
             except discord.InteractionResponded:
                 pass
-                
+
         except Exception as e:
             print(f"Error in show_other_features_menu: {e}")
             if not interaction.response.is_done():
@@ -59,9 +62,18 @@ class OtherFeatures(commands.Cog):
                 )
 
 class OtherFeaturesView(discord.ui.View):
-    def __init__(self, cog):
+    def __init__(self, cog, is_global: bool = False):
         super().__init__(timeout=None)
         self.cog = cog
+        self.is_global = is_global
+
+        # Disable global-admin-only buttons for non-global admins
+        if not is_global:
+            for child in self.children:
+                if isinstance(child, discord.ui.Button) and child.label in [
+                    "Backup System", "Registration System"
+                ]:
+                    child.disabled = True
 
     @discord.ui.button(
         label="Notification System",

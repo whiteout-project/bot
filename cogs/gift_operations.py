@@ -19,6 +19,7 @@ import logging
 import logging.handlers
 from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
+from .permission_handler import PermissionManager
 from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
 from collections import deque
@@ -2042,7 +2043,7 @@ class GiftOperations(commands.Cog):
                 admin_info = self.settings_cursor.fetchone()
 
                 if not admin_info or admin_info[0] != 1:
-                    error_msg = "❌ You don't have permission to access OCR settings."
+                    error_msg = "❌ Only global administrators can access OCR settings."
                     if interaction.response.is_done():
                         await interaction.followup.send(error_msg, ephemeral=True)
                     else:
@@ -2262,7 +2263,7 @@ class GiftOperations(commands.Cog):
             admin_info = self.settings_cursor.fetchone()
 
             if not admin_info or admin_info[0] != 1:
-                error_msg = "Only global admins can manage redemption priority."
+                error_msg = "❌ Only global administrators can manage redemption priority."
                 if interaction.response.is_done():
                     await interaction.followup.send(error_msg, ephemeral=True)
                 else:
@@ -2461,10 +2462,11 @@ class GiftOperations(commands.Cog):
             await message.reply("Usage limit has been reached for this code.", mention_author=False)
 
     async def get_admin_info(self, user_id):
-        self.settings_cursor.execute("""
-            SELECT id, is_initial FROM admin WHERE id = ?
-        """, (user_id,))
-        return self.settings_cursor.fetchone()
+        """Get admin info - delegates to centralized PermissionManager"""
+        is_admin, is_global = PermissionManager.is_admin(user_id)
+        if not is_admin:
+            return None
+        return (user_id, 1 if is_global else 0)
 
     async def get_alliance_names(self, user_id, is_global=False):
         if is_global:
@@ -2475,57 +2477,23 @@ class GiftOperations(commands.Cog):
                 SELECT alliances_id FROM adminserver WHERE admin = ?
             """, (user_id,))
             alliance_ids = [row[0] for row in self.settings_cursor.fetchall()]
-            
+
             if alliance_ids:
                 placeholders = ','.join('?' * len(alliance_ids))
                 self.alliance_cursor.execute(f"""
-                    SELECT name FROM alliance_list 
+                    SELECT name FROM alliance_list
                     WHERE alliance_id IN ({placeholders})
                 """, alliance_ids)
                 return [row[0] for row in self.alliance_cursor.fetchall()]
             return []
 
     async def get_available_alliances(self, interaction: discord.Interaction):
+        """Get available alliances - delegates to centralized PermissionManager"""
         user_id = interaction.user.id
         guild_id = interaction.guild_id if interaction.guild else None
 
-        admin_info = await self.get_admin_info(user_id)
-        if not admin_info:
-            return []
-
-        is_global = admin_info[1] == 1
-
-        if is_global:
-            self.alliance_cursor.execute("SELECT alliance_id, name FROM alliance_list")
-            return self.alliance_cursor.fetchall()
-
-        if guild_id:
-            self.alliance_cursor.execute("""
-                SELECT DISTINCT alliance_id, name 
-                FROM alliance_list 
-                WHERE discord_server_id = ?
-            """, (guild_id,))
-            guild_alliances = self.alliance_cursor.fetchall()
-
-            self.settings_cursor.execute("""
-                SELECT alliances_id FROM adminserver WHERE admin = ?
-            """, (user_id,))
-            special_alliance_ids = [row[0] for row in self.settings_cursor.fetchall()]
-
-            if special_alliance_ids:
-                placeholders = ','.join('?' * len(special_alliance_ids))
-                self.alliance_cursor.execute(f"""
-                    SELECT alliance_id, name FROM alliance_list 
-                    WHERE alliance_id IN ({placeholders})
-                """, special_alliance_ids)
-                special_alliances = self.alliance_cursor.fetchall()
-            else:
-                special_alliances = []
-
-            all_alliances = list(set(guild_alliances + special_alliances))
-            return all_alliances
-
-        return []
+        alliances, _ = PermissionManager.get_admin_alliances(user_id, guild_id or 0)
+        return alliances
 
     async def setup_gift_channel(self, interaction: discord.Interaction):
         admin_info = await self.get_admin_info(interaction.user.id)
@@ -3258,7 +3226,9 @@ class GiftOperations(commands.Cog):
                 ephemeral=True
             )
             return
-        
+
+        is_global = admin_info[1] == 1
+
         settings_embed = discord.Embed(
             title="⚙️ Gift Code Settings",
             description=(
@@ -3277,9 +3247,9 @@ class GiftOperations(commands.Cog):
             ),
             color=discord.Color.blue()
         )
-        
-        settings_view = SettingsMenuView(self)
-        
+
+        settings_view = SettingsMenuView(self, is_global)
+
         await interaction.response.edit_message(
             embed=settings_embed,
             view=settings_view
@@ -5156,10 +5126,19 @@ class GiftView(discord.ui.View):
             pass
 
 class SettingsMenuView(discord.ui.View):
-    def __init__(self, cog):
+    def __init__(self, cog, is_global: bool = False):
         super().__init__(timeout=7200)
         self.cog = cog
-    
+        self.is_global = is_global
+
+        # Disable global-admin-only buttons for non-global admins
+        if not is_global:
+            for child in self.children:
+                if isinstance(child, discord.ui.Button) and child.label in [
+                    "Redemption Priority", "CAPTCHA Settings"
+                ]:
+                    child.disabled = True
+
     @discord.ui.button(
         label="Channel Management",
         style=discord.ButtonStyle.green,
@@ -5169,7 +5148,7 @@ class SettingsMenuView(discord.ui.View):
     )
     async def channel_management_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.manage_channel_settings(interaction)
-    
+
     @discord.ui.button(
         label="Automatic Redemption",
         style=discord.ButtonStyle.primary,
@@ -5199,7 +5178,7 @@ class SettingsMenuView(discord.ui.View):
     )
     async def channel_history_scan_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.channel_history_scan(interaction)
-    
+
     @discord.ui.button(
         label="CAPTCHA Settings",
         style=discord.ButtonStyle.secondary,

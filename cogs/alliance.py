@@ -1,9 +1,10 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-import sqlite3  
+import sqlite3
 import asyncio
 from datetime import datetime
+from .permission_handler import PermissionManager
 
 class Alliance(commands.Cog):
     def __init__(self, bot, conn):
@@ -47,18 +48,17 @@ class Alliance(commands.Cog):
             return
 
         user_id = interaction.user.id
-        self.c_settings.execute("SELECT id, is_initial FROM admin WHERE id = ?", (user_id,))
-        admin = self.c_settings.fetchone()
+        guild_id = interaction.guild.id
 
-        if admin is None:
+        # Use centralized permission check
+        is_admin, is_global = PermissionManager.is_admin(user_id)
+        if not is_admin:
             await interaction.response.send_message("You do not have permission to view alliances.", ephemeral=True)
             return
 
-        is_initial = admin[1]
-        guild_id = interaction.guild.id
-
         try:
-            if is_initial == 1:
+            if is_global:
+                # Global admin - show all alliances
                 query = """
                     SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
                     FROM alliance_list a
@@ -67,14 +67,27 @@ class Alliance(commands.Cog):
                 """
                 self.c.execute(query)
             else:
-                query = """
+                # Get alliance IDs using centralized permission manager
+                alliance_ids, _ = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
+
+                if not alliance_ids:
+                    embed = discord.Embed(
+                        title="Existing Alliances",
+                        description="No alliances found for your permissions.",
+                        color=discord.Color.blue()
+                    )
+                    await interaction.response.send_message(embed=embed, ephemeral=True)
+                    return
+
+                placeholders = ','.join('?' * len(alliance_ids))
+                query = f"""
                     SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
                     FROM alliance_list a
                     LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-                    WHERE a.discord_server_id = ?
+                    WHERE a.alliance_id IN ({placeholders})
                     ORDER BY a.alliance_id ASC
                 """
-                self.c.execute(query, (guild_id,))
+                self.c.execute(query, alliance_ids)
 
             alliances = self.c.fetchall()
 
@@ -357,27 +370,26 @@ class Alliance(commands.Cog):
                         color=discord.Color.blue()
                     )
                     
+                    # All admins (global and server) can manage alliances
+                    # Server admins are scoped to their server's alliances in the handlers
                     view = discord.ui.View()
                     view.add_item(discord.ui.Button(
-                        label="Add Alliance", 
+                        label="Add Alliance",
                         emoji="➕",
-                        style=discord.ButtonStyle.success, 
-                        custom_id="add_alliance", 
-                        disabled=admin[1] != 1
+                        style=discord.ButtonStyle.success,
+                        custom_id="add_alliance"
                     ))
                     view.add_item(discord.ui.Button(
-                        label="Edit Alliance", 
+                        label="Edit Alliance",
                         emoji="✏️",
-                        style=discord.ButtonStyle.primary, 
-                        custom_id="edit_alliance", 
-                        disabled=admin[1] != 1
+                        style=discord.ButtonStyle.primary,
+                        custom_id="edit_alliance"
                     ))
                     view.add_item(discord.ui.Button(
-                        label="Delete Alliance", 
+                        label="Delete Alliance",
                         emoji="🗑️",
-                        style=discord.ButtonStyle.danger, 
-                        custom_id="delete_alliance", 
-                        disabled=admin[1] != 1
+                        style=discord.ButtonStyle.danger,
+                        custom_id="delete_alliance"
                     ))
                     view.add_item(discord.ui.Button(
                         label="View Alliances", 
@@ -401,9 +413,6 @@ class Alliance(commands.Cog):
                     await interaction.response.edit_message(embed=embed, view=view)
 
                 elif custom_id == "edit_alliance":
-                    if admin[1] != 1:
-                        await interaction.response.send_message("You do not have permission to perform this action.", ephemeral=True)
-                        return
                     await self.edit_alliance(interaction)
 
                 elif custom_id == "check_alliance":
@@ -627,15 +636,9 @@ class Alliance(commands.Cog):
                             )
 
                 elif custom_id == "add_alliance":
-                    if admin[1] != 1:
-                        await interaction.response.send_message("You do not have permission to perform this action.", ephemeral=True)
-                        return
                     await self.add_alliance(interaction)
 
                 elif custom_id == "delete_alliance":
-                    if admin[1] != 1:
-                        await interaction.response.send_message("You do not have permission to perform this action.", ephemeral=True)
-                        return
                     await self.delete_alliance(interaction)
 
                 elif custom_id == "view_alliances":
@@ -736,6 +739,24 @@ class Alliance(commands.Cog):
         try:
             alliance_name = modal.name.value.strip()
             interval = int(modal.interval.value.strip())
+            start_time_raw = modal.start_time.value.strip() if modal.start_time.value else ""
+
+            # Validate start_time format (HH:MM) if provided
+            start_time = None
+            if start_time_raw:
+                import re
+                if re.match(r'^([01]?\d|2[0-3]):([0-5]\d)$', start_time_raw):
+                    # Normalize to HH:MM format
+                    parts = start_time_raw.split(':')
+                    start_time = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+                else:
+                    error_embed = discord.Embed(
+                        title="Error",
+                        description="Invalid start time format. Please use HH:MM (e.g., 14:00).",
+                        color=discord.Color.red()
+                    )
+                    await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
+                    return
 
             embed = discord.Embed(
                 title="Channel Selection",
@@ -753,7 +774,7 @@ class Alliance(commands.Cog):
                 try:
                     self.c.execute("SELECT alliance_id FROM alliance_list WHERE name = ?", (alliance_name,))
                     existing_alliance = self.c.fetchone()
-                    
+
                     if existing_alliance:
                         error_embed = discord.Embed(
                             title="Error",
@@ -765,15 +786,15 @@ class Alliance(commands.Cog):
 
                     channel_id = int(select_interaction.data["values"][0])
 
-                    self.c.execute("INSERT INTO alliance_list (name, discord_server_id) VALUES (?, ?)", 
+                    self.c.execute("INSERT INTO alliance_list (name, discord_server_id) VALUES (?, ?)",
                                  (alliance_name, interaction.guild.id))
                     alliance_id = self.c.lastrowid
-                    self.c.execute("INSERT INTO alliancesettings (alliance_id, channel_id, interval) VALUES (?, ?, ?)", 
-                                 (alliance_id, channel_id, interval))
+                    self.c.execute("INSERT INTO alliancesettings (alliance_id, channel_id, interval, start_time) VALUES (?, ?, ?, ?)",
+                                 (alliance_id, channel_id, interval, start_time))
                     self.conn.commit()
 
                     self.c_giftcode.execute("""
-                        INSERT INTO giftcodecontrol (alliance_id, status) 
+                        INSERT INTO giftcodecontrol (alliance_id, status)
                         VALUES (?, 1)
                     """, (alliance_id,))
                     self.conn_giftcode.commit()
@@ -783,18 +804,20 @@ class Alliance(commands.Cog):
                         description="The alliance has been created with the following details:",
                         color=discord.Color.green()
                     )
-                    
+
+                    start_time_display = f"{start_time} UTC" if start_time else "Not set (starts on bot startup)"
                     info_section = (
                         f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
                         f"**🔢 Alliance ID**\n{alliance_id}\n\n"
                         f"**📢 Channel**\n<#{channel_id}>\n\n"
-                        f"**⏱️ Control Interval**\n{interval} minutes"
+                        f"**⏱️ Control Interval**\n{interval} minutes\n\n"
+                        f"**🕐 Fixed Start Time**\n{start_time_display}"
                     )
                     result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
-                    
+
                     result_embed.set_footer(text="Alliance settings have been successfully saved")
                     result_embed.timestamp = discord.utils.utcnow()
-                    
+
                     await select_interaction.response.edit_message(embed=result_embed, view=None)
 
                 except Exception as e:
@@ -825,14 +848,36 @@ class Alliance(commands.Cog):
             await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
 
     async def edit_alliance(self, interaction: discord.Interaction):
-        self.c.execute("""
-            SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval, COALESCE(s.channel_id, 0) as channel_id 
-            FROM alliance_list a 
+        if interaction.guild is None:
+            await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        guild_id = interaction.guild.id
+
+        # Get alliances this admin can access
+        admin_alliances, is_global = PermissionManager.get_admin_alliances(user_id, guild_id)
+
+        if not admin_alliances:
+            no_alliance_embed = discord.Embed(
+                title="❌ No Alliances Found",
+                description="You don't have access to any alliances.",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=no_alliance_embed, ephemeral=True)
+
+        # Fetch full alliance details for the ones admin can access
+        alliance_ids = [a[0] for a in admin_alliances]
+        placeholders = ','.join('?' * len(alliance_ids))
+        self.c.execute(f"""
+            SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval, COALESCE(s.channel_id, 0) as channel_id
+            FROM alliance_list a
             LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
+            WHERE a.alliance_id IN ({placeholders})
             ORDER BY a.alliance_id ASC
-        """)
+        """, alliance_ids)
         alliances = self.c.fetchall()
-        
+
         if not alliances:
             no_alliance_embed = discord.Embed(
                 title="❌ No Alliances Found",
@@ -930,18 +975,19 @@ class Alliance(commands.Cog):
             try:
                 alliance_id = int(select_interaction.data["values"][0])
                 alliance_data = next(a for a in alliances if a[0] == alliance_id)
-                
+
                 self.c.execute("""
-                    SELECT interval, channel_id 
-                    FROM alliancesettings 
+                    SELECT interval, channel_id, start_time
+                    FROM alliancesettings
                     WHERE alliance_id = ?
                 """, (alliance_id,))
                 settings_data = self.c.fetchone()
-                
+
                 modal = AllianceModal(
                     title="Edit Alliance",
                     default_name=alliance_data[1],
-                    default_interval=str(settings_data[0] if settings_data else 0)
+                    default_interval=str(settings_data[0] if settings_data else 0),
+                    default_start_time=settings_data[2] if settings_data and settings_data[2] else ""
                 )
                 await select_interaction.response.send_modal(modal)
                 await modal.wait()
@@ -949,6 +995,24 @@ class Alliance(commands.Cog):
                 try:
                     alliance_name = modal.name.value.strip()
                     interval = int(modal.interval.value.strip())
+                    start_time_raw = modal.start_time.value.strip() if modal.start_time.value else ""
+
+                    # Validate start_time format (HH:MM) if provided
+                    start_time = None
+                    if start_time_raw:
+                        import re
+                        if re.match(r'^([01]?\d|2[0-3]):([0-5]\d)$', start_time_raw):
+                            # Normalize to HH:MM format
+                            parts = start_time_raw.split(':')
+                            start_time = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+                        else:
+                            error_embed = discord.Embed(
+                                title="Error",
+                                description="Invalid start time format. Please use HH:MM (e.g., 14:00).",
+                                color=discord.Color.red()
+                            )
+                            await modal.interaction.response.send_message(embed=error_embed, ephemeral=True)
+                            return
 
                     embed = discord.Embed(
                         title="🔄 Channel Selection",
@@ -967,21 +1031,21 @@ class Alliance(commands.Cog):
                         try:
                             channel_id = int(channel_interaction.data["values"][0])
 
-                            self.c.execute("UPDATE alliance_list SET name = ? WHERE alliance_id = ?", 
+                            self.c.execute("UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
                                           (alliance_name, alliance_id))
-                            
+
                             if settings_data:
                                 self.c.execute("""
-                                    UPDATE alliancesettings 
-                                    SET channel_id = ?, interval = ? 
+                                    UPDATE alliancesettings
+                                    SET channel_id = ?, interval = ?, start_time = ?
                                     WHERE alliance_id = ?
-                                """, (channel_id, interval, alliance_id))
+                                """, (channel_id, interval, start_time, alliance_id))
                             else:
                                 self.c.execute("""
-                                    INSERT INTO alliancesettings (alliance_id, channel_id, interval)
-                                    VALUES (?, ?, ?)
-                                """, (alliance_id, channel_id, interval))
-                            
+                                    INSERT INTO alliancesettings (alliance_id, channel_id, interval, start_time)
+                                    VALUES (?, ?, ?, ?)
+                                """, (alliance_id, channel_id, interval, start_time))
+
                             self.conn.commit()
 
                             result_embed = discord.Embed(
@@ -989,18 +1053,20 @@ class Alliance(commands.Cog):
                                 description="The alliance details have been updated as follows:",
                                 color=discord.Color.green()
                             )
-                            
+
+                            start_time_display = f"{start_time} UTC" if start_time else "Not set (starts on bot startup)"
                             info_section = (
                                 f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
                                 f"**🔢 Alliance ID**\n{alliance_id}\n\n"
                                 f"**📢 Channel**\n<#{channel_id}>\n\n"
-                                f"**⏱️ Control Interval**\n{interval} minutes"
+                                f"**⏱️ Control Interval**\n{interval} minutes\n\n"
+                                f"**🕐 Fixed Start Time**\n{start_time_display}"
                             )
                             result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
-                            
+
                             result_embed.set_footer(text="Alliance settings have been successfully saved")
                             result_embed.timestamp = discord.utils.utcnow()
-                            
+
                             await channel_interaction.response.edit_message(embed=result_embed, view=None)
 
                         except Exception as e:
@@ -1062,9 +1128,28 @@ class Alliance(commands.Cog):
 
     async def delete_alliance(self, interaction: discord.Interaction):
         try:
-            self.c.execute("SELECT alliance_id, name FROM alliance_list ORDER BY name")
-            alliances = self.c.fetchall()
-            
+            if interaction.guild is None:
+                await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+                return
+
+            user_id = interaction.user.id
+            guild_id = interaction.guild.id
+
+            # Get alliances this admin can access
+            admin_alliances, is_global = PermissionManager.get_admin_alliances(user_id, guild_id)
+
+            if not admin_alliances:
+                no_alliance_embed = discord.Embed(
+                    title="❌ No Alliances Found",
+                    description="You don't have access to any alliances.",
+                    color=discord.Color.red()
+                )
+                await interaction.response.send_message(embed=no_alliance_embed, ephemeral=True)
+                return
+
+            # Use the alliances from permission manager (already has id, name)
+            alliances = admin_alliances
+
             if not alliances:
                 no_alliance_embed = discord.Embed(
                     title="❌ No Alliances Found",
@@ -1270,9 +1355,9 @@ class Alliance(commands.Cog):
                 await interaction.followup.send(embed=error_embed, ephemeral=True)
 
 class AllianceModal(discord.ui.Modal):
-    def __init__(self, title: str, default_name: str = "", default_interval: str = "0"):
+    def __init__(self, title: str, default_name: str = "", default_interval: str = "0", default_start_time: str = ""):
         super().__init__(title=title)
-        
+
         self.name = discord.ui.TextInput(
             label="Alliance Name",
             placeholder="Enter alliance name",
@@ -1280,7 +1365,7 @@ class AllianceModal(discord.ui.Modal):
             required=True
         )
         self.add_item(self.name)
-        
+
         self.interval = discord.ui.TextInput(
             label="Control Interval (minutes)",
             placeholder="Enter interval (0 to disable)",
@@ -1288,6 +1373,15 @@ class AllianceModal(discord.ui.Modal):
             required=True
         )
         self.add_item(self.interval)
+
+        self.start_time = discord.ui.TextInput(
+            label="Fixed Start Time (UTC, optional)",
+            placeholder="HH:MM (e.g., 14:00) or leave empty",
+            default=default_start_time,
+            required=False,
+            max_length=5
+        )
+        self.add_item(self.start_time)
 
     async def on_submit(self, interaction: discord.Interaction):
         self.interaction = interaction

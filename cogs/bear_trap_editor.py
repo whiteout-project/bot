@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime
 import re
 from .bear_event_types import get_event_icon
+from .permission_handler import PermissionManager
 
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
     """
@@ -906,6 +907,15 @@ class NotificationEditor(commands.Cog):
 
     async def start_edit_process(self, interaction: discord.Interaction, notification_id: int,
                                  original_message: discord.Message = None):
+        # Permission check
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin:
+            await interaction.response.send_message(
+                "❌ You don't have permission to edit notifications!",
+                ephemeral=True
+            )
+            return
+
         conn = sqlite3.connect("db/beartime.sqlite")
         cursor = conn.cursor()
         cursor.execute(

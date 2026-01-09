@@ -3,6 +3,7 @@ from discord.ext import commands
 import sqlite3
 from datetime import datetime
 from .alliance_member_operations import AllianceSelectView
+from .permission_handler import PermissionManager
 
 class Changes(commands.Cog):
     def __init__(self, bot):
@@ -67,85 +68,6 @@ class Changes(commands.Cog):
         except Exception as e:
             if not any(error_code in str(e) for error_code in ["10062", "40060"]):
                 print(f"Show alliance history menu error: {e}")
-
-    async def get_admin_info(self, user_id: int):
-        try:
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("""
-                    SELECT id, is_initial
-                    FROM admin
-                    WHERE id = ?
-                """, (user_id,))
-                return cursor.fetchone()
-        except Exception as e:
-            print(f"Error in get_admin_info: {e}")
-            return None
-
-    async def get_admin_alliances(self, user_id: int, guild_id: int):
-        try:
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (user_id,))
-                admin_result = cursor.fetchone()
-                
-                if not admin_result:
-                    print(f"User {user_id} is not an admin")
-                    return [], [], False
-                    
-                is_initial = admin_result[0]
-                
-            if is_initial == 1:
-                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                    cursor = alliance_db.cursor()
-                    cursor.execute("SELECT alliance_id, name FROM alliance_list ORDER BY name")
-                    alliances = cursor.fetchall()
-                    return alliances, [], True
-            
-            server_alliances = []
-            special_alliances = []
-            
-            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                cursor = alliance_db.cursor()
-                cursor.execute("""
-                    SELECT DISTINCT alliance_id, name 
-                    FROM alliance_list 
-                    WHERE discord_server_id = ?
-                    ORDER BY name
-                """, (guild_id,))
-                server_alliances = cursor.fetchall()
-            
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("""
-                    SELECT alliances_id 
-                    FROM adminserver 
-                    WHERE admin = ?
-                """, (user_id,))
-                special_alliance_ids = cursor.fetchall()
-                
-            if special_alliance_ids:
-                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                    cursor = alliance_db.cursor()
-                    placeholders = ','.join('?' * len(special_alliance_ids))
-                    cursor.execute(f"""
-                        SELECT DISTINCT alliance_id, name
-                        FROM alliance_list
-                        WHERE alliance_id IN ({placeholders})
-                        ORDER BY name
-                    """, [aid[0] for aid in special_alliance_ids])
-                    special_alliances = cursor.fetchall()
-            
-            all_alliances = list({(aid, name) for aid, name in (server_alliances + special_alliances)})
-            
-            if not all_alliances and not special_alliances:
-                return [], [], False
-            
-            return all_alliances, special_alliances, False
-                
-        except Exception as e:
-            print(f"Error in get_admin_alliances: {e}")
-            return [], [], False
 
     async def show_furnace_history(self, interaction: discord.Interaction, fid: int):
         try:
@@ -410,27 +332,17 @@ class HistoryView(discord.ui.View):
     )
     async def furnace_changes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            admin_info = await self.cog.get_admin_info(interaction.user.id)
-            if not admin_info:
+            alliances, is_global = PermissionManager.get_admin_alliances(
+                interaction.user.id,
+                interaction.guild_id
+            )
+
+            if not alliances:
                 await interaction.response.send_message(
-                    "❌ You don't have permission to perform this action.",
+                    "❌ No alliances found for your permissions.",
                     ephemeral=True
                 )
                 return
-
-            available_alliances = await self.cog.get_admin_alliances(interaction.user.id, interaction.guild_id)
-            if not available_alliances[0]:
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="❌ No Available Alliance",
-                        description="No alliance found that you have access to.",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-                return
-
-            alliances, special_alliances, is_global = available_alliances
 
             alliances_with_counts = []
             for alliance_id, name in alliances:
@@ -440,25 +352,16 @@ class HistoryView(discord.ui.View):
                     member_count = cursor.fetchone()[0]
                     alliances_with_counts.append((alliance_id, name, member_count))
 
-            special_alliance_text = ""
-            if special_alliances:
-                special_alliance_text = "\n\n**Special Access Alliances**\n"
-                special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                for _, name in special_alliances:
-                    special_alliance_text += f"🔸 {name}\n"
-                special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
-
             select_embed = discord.Embed(
                 title="🔥 Furnace Changes",
                 description=(
                     "Select an alliance to view furnace changes:\n\n"
                     "**Permission Details**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Access Level:** `{'Global Admin' if admin_info[1] == 1 else 'Server Admin'}`\n"
-                    f"🔍 **Access Type:** `{'All Alliances' if admin_info[1] == 1 else 'Server + Special Access'}`\n"
+                    f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                    f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                     f"📊 **Available Alliances:** `{len(alliances)}`\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
-                    f"{special_alliance_text}"
                 ),
                 color=discord.Color.blue()
             )
@@ -559,27 +462,17 @@ class HistoryView(discord.ui.View):
     )
     async def nickname_changes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            admin_info = await self.cog.get_admin_info(interaction.user.id)
-            if not admin_info:
+            alliances, is_global = PermissionManager.get_admin_alliances(
+                interaction.user.id,
+                interaction.guild_id
+            )
+
+            if not alliances:
                 await interaction.response.send_message(
-                    "❌ You don't have permission to perform this action.",
+                    "❌ No alliances found for your permissions.",
                     ephemeral=True
                 )
                 return
-
-            available_alliances = await self.cog.get_admin_alliances(interaction.user.id, interaction.guild_id)
-            if not available_alliances[0]:
-                await interaction.response.send_message(
-                    embed=discord.Embed(
-                        title="❌ No Available Alliance",
-                        description="No alliance found that you have access to.",
-                        color=discord.Color.red()
-                    ),
-                    ephemeral=True
-                )
-                return
-
-            alliances, special_alliances, is_global = available_alliances
 
             alliances_with_counts = []
             for alliance_id, name in alliances:
@@ -589,25 +482,16 @@ class HistoryView(discord.ui.View):
                     member_count = cursor.fetchone()[0]
                     alliances_with_counts.append((alliance_id, name, member_count))
 
-            special_alliance_text = ""
-            if special_alliances:
-                special_alliance_text = "\n\n**Special Access Alliances**\n"
-                special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
-                for _, name in special_alliances:
-                    special_alliance_text += f"🔸 {name}\n"
-                special_alliance_text += "━━━━━━━━━━━━━━━━━━━━━━"
-
             select_embed = discord.Embed(
                 title="📝 Alliance Selection - Nickname Changes",
                 description=(
                     "Select an alliance to view nickname changes:\n\n"
                     "**Permission Details**\n"
                     "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"👤 **Access Level:** `{'Global Admin' if admin_info[1] == 1 else 'Server Admin'}`\n"
-                    f"🔍 **Access Type:** `{'All Alliances' if admin_info[1] == 1 else 'Server + Special Access'}`\n"
+                    f"👤 **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
+                    f"🔍 **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
                     f"📊 **Available Alliances:** `{len(alliances)}`\n"
                     "━━━━━━━━━━━━━━━━━━━━━━"
-                    f"{special_alliance_text}"
                 ),
                 color=discord.Color.blue()
             )
