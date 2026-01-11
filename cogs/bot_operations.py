@@ -6,6 +6,7 @@ import asyncio
 import requests
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
+from .pimp_my_bot import theme
 
 class BotOperations(commands.Cog):
     def __init__(self, bot, conn):
@@ -74,7 +75,7 @@ class BotOperations(commands.Cog):
 
                 if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.",
+                        f"{theme.deniedIcon} Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -86,14 +87,14 @@ class BotOperations(commands.Cog):
                 embed = discord.Embed(
                     title="💬 Alliance Control Messages Settings",
                     description=f"Alliance Control Information Message is Currently {'On' if current_value == 1 else 'Off'}",
-                    color=discord.Color.green() if current_value == 1 else discord.Color.red()
+                    color=theme.emColor3 if current_value == 1 else discord.Color.red()
                 )
 
                 view = discord.ui.View()
                 
                 open_button = discord.ui.Button(
                     label="Turn On",
-                    emoji="✅",
+                    emoji=f"{theme.verifiedIcon}",
                     style=discord.ButtonStyle.success,
                     custom_id="control_messages_open",
                     disabled=current_value == 1
@@ -101,7 +102,7 @@ class BotOperations(commands.Cog):
                 
                 close_button = discord.ui.Button(
                     label="Turn Off",
-                    emoji="❌",
+                    emoji=f"{theme.deniedIcon}",
                     style=discord.ButtonStyle.danger,
                     custom_id="control_messages_close",
                     disabled=current_value == 0
@@ -143,7 +144,7 @@ class BotOperations(commands.Cog):
                 print(f"Alliance control messages error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ An error occurred while managing alliance control messages.",
+                        f"{theme.deniedIcon} An error occurred while managing alliance control messages.",
                         ephemeral=True
                     )
         
@@ -153,7 +154,7 @@ class BotOperations(commands.Cog):
 
                 if not is_admin:
                     await interaction.response.send_message(
-                        "❌ Only administrators can manage control settings.",
+                        f"{theme.deniedIcon} Only administrators can manage control settings.",
                         ephemeral=True
                     )
                     return
@@ -164,7 +165,7 @@ class BotOperations(commands.Cog):
                 print(f"Control settings error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ An error occurred while opening control settings.",
+                        f"{theme.deniedIcon} An error occurred while opening control settings.",
                         ephemeral=True
                     )
                     
@@ -176,7 +177,7 @@ class BotOperations(commands.Cog):
 
                         if not is_admin or not is_global:
                             await interaction.response.send_message(
-                                "❌ Only global administrators can use this command.",
+                                f"{theme.deniedIcon} Only global administrators can use this command.",
                                 ephemeral=True
                             )
                             return
@@ -192,7 +193,7 @@ class BotOperations(commands.Cog):
 
                             if not admins:
                                 await interaction.response.send_message(
-                                    "❌ No administrators found.", 
+                                    f"{theme.deniedIcon} No administrators found.", 
                                     ephemeral=True
                                 )
                                 return
@@ -210,19 +211,19 @@ class BotOperations(commands.Cog):
                                         label=admin_name[:100],
                                         value=str(admin_id),
                                         description=f"{'Global Admin' if is_initial == 1 else 'Server Admin'}",
-                                        emoji="👑" if is_initial == 1 else "👤"
+                                        emoji=theme.crownIcon if is_initial == 1 else theme.userIcon
                                     )
                                 )
 
                             admin_embed = discord.Embed(
-                                title="👤 Admin Selection",
+                                title=f"{theme.userIcon} Admin Selection",
                                 description=(
-                                    "Please select an administrator to assign alliance:\n\n"
-                                    "**Administrator List**\n"
-                                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    "Select an administrator from the list below:\n"
+                                    f"Please select an administrator to assign alliance:\n\n"
+                                    f"**Administrator List**\n"
+                                    f"{theme.middleDivider}\n"
+                                    f"Select an administrator from the list below:\n"
                                 ),
-                                color=discord.Color.blue()
+                                color=theme.emColor1
                             )
 
                             admin_select = discord.ui.Select(
@@ -256,7 +257,7 @@ class BotOperations(commands.Cog):
 
                                     if not alliances:
                                         await admin_interaction.response.send_message(
-                                            "❌ No alliances found.",
+                                            f"{theme.deniedIcon} No alliances found.",
                                             ephemeral=True
                                         )
                                         return
@@ -272,14 +273,14 @@ class BotOperations(commands.Cog):
                                             alliances_with_counts.append((alliance_id, name, member_count, is_assigned))
 
                                     alliance_embed = discord.Embed(
-                                        title="🏰 Alliance Selection",
+                                        title=f"{theme.castleBattleIcon} Alliance Selection",
                                         description=(
-                                            "Please select an alliance to assign to the administrator:\n\n"
-                                            "**Alliance List**\n"
-                                            "━━━━━━━━━━━━━━━━━━━━━━\n"
-                                            "Select an alliance from the list below:\n"
+                                            f"Please select an alliance to assign to the administrator:\n\n"
+                                            f"**Alliance List**\n"
+                                            f"{theme.middleDivider}\n"
+                                            f"Select an alliance from the list below:\n"
                                         ),
-                                        color=discord.Color.blue()
+                                        color=theme.emColor1
                                     )
 
                                     view = AllianceSelectView(alliances_with_counts, self)
@@ -299,7 +300,7 @@ class BotOperations(commands.Cog):
                                                 if cursor.fetchone()[0] > 0:
                                                     # Already assigned - show friendly message
                                                     await alliance_interaction.response.send_message(
-                                                        "❌ This administrator is already assigned to this alliance.",
+                                                        f"{theme.deniedIcon} This administrator is already assigned to this alliance.",
                                                         ephemeral=True
                                                     )
                                                     return
@@ -315,12 +316,12 @@ class BotOperations(commands.Cog):
                                                     # Catch any remaining UNIQUE constraint errors (race conditions)
                                                     if "UNIQUE constraint failed" in str(e):
                                                         await alliance_interaction.response.send_message(
-                                                            "❌ This administrator is already assigned to this alliance.",
+                                                            f"{theme.deniedIcon} This administrator is already assigned to this alliance.",
                                                             ephemeral=True
                                                         )
                                                     else:
                                                         await alliance_interaction.response.send_message(
-                                                            "❌ An error occurred while assigning the alliance.",
+                                                            f"{theme.deniedIcon} An error occurred while assigning the alliance.",
                                                             ephemeral=True
                                                         )
                                                     return
@@ -336,15 +337,15 @@ class BotOperations(commands.Cog):
                                                 admin_name = f"Unknown User ({selected_admin_id})"
 
                                             success_embed = discord.Embed(
-                                                title="✅ Alliance Assigned",
+                                                title=f"{theme.verifiedIcon} Alliance Assigned",
                                                 description=(
                                                     f"Successfully assigned alliance to administrator:\n\n"
-                                                    f"👤 **Administrator:** {admin_name}\n"
-                                                    f"🆔 **Admin ID:** {selected_admin_id}\n"
-                                                    f"🏰 **Alliance:** {alliance_name}\n"
-                                                    f"🆔 **Alliance ID:** {selected_alliance_id}"
+                                                    f"{theme.userIcon} **Administrator:** {admin_name}\n"
+                                                    f"{theme.fidIcon} **Admin ID:** {selected_admin_id}\n"
+                                                    f"{theme.castleBattleIcon} **Alliance:** {alliance_name}\n"
+                                                    f"{theme.fidIcon} **Alliance ID:** {selected_alliance_id}"
                                                 ),
-                                                color=discord.Color.green()
+                                                color=theme.emColor3
                                             )
                                             
                                             if not alliance_interaction.response.is_done():
@@ -362,12 +363,12 @@ class BotOperations(commands.Cog):
                                             print(f"Alliance callback error: {e}")
                                             if not alliance_interaction.response.is_done():
                                                 await alliance_interaction.response.send_message(
-                                                    "❌ An error occurred while assigning the alliance.",
+                                                    f"{theme.deniedIcon} An error occurred while assigning the alliance.",
                                                     ephemeral=True
                                                 )
                                             else:
                                                 await alliance_interaction.followup.send(
-                                                    "❌ An error occurred while assigning the alliance.",
+                                                    f"{theme.deniedIcon} An error occurred while assigning the alliance.",
                                                     ephemeral=True
                                                 )
 
@@ -425,7 +426,7 @@ class BotOperations(commands.Cog):
 
                         if not is_admin or not is_global:
                             await interaction.response.send_message(
-                                "❌ Only global administrators can use this command",
+                                f"{theme.deniedIcon} Only global administrators can use this command",
                                 ephemeral=True
                             )
                             return
@@ -451,15 +452,15 @@ class BotOperations(commands.Cog):
                             self.settings_db.commit()
 
                             success_embed = discord.Embed(
-                                title="✅ Administrator Successfully Added",
+                                title=f"{theme.verifiedIcon} Administrator Successfully Added",
                                 description=(
                                     f"**New Administrator Information**\n"
-                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                    f"👤 **Name:** {new_admin.name}\n"
-                                    f"🆔 **Discord ID:** {new_admin.id}\n"
-                                    f"📅 **Account Creation Date:** {new_admin.created_at.strftime('%d/%m/%Y')}\n"
+                                    f"{theme.middleDivider}\n"
+                                    f"{theme.userIcon} **Name:** {new_admin.name}\n"
+                                    f"{theme.fidIcon} **Discord ID:** {new_admin.id}\n"
+                                    f"{theme.calendarIcon} **Account Creation Date:** {new_admin.created_at.strftime('%d/%m/%Y')}\n"
                                 ),
-                                color=discord.Color.green()
+                                color=theme.emColor3
                             )
                             success_embed.set_thumbnail(url=new_admin.display_avatar.url)
                             
@@ -470,14 +471,14 @@ class BotOperations(commands.Cog):
 
                         except asyncio.TimeoutError:
                             await interaction.edit_original_response(
-                                content="❌ Timeout No user has been tagged.",
+                                content=f"{theme.deniedIcon} Timeout No user has been tagged.",
                                 embed=None
                             )
 
                     except Exception as e:
                         if not interaction.response.is_done():
                             await interaction.response.send_message(
-                                "❌ An error occurred while adding an administrator.",
+                                f"{theme.deniedIcon} An error occurred while adding an administrator.",
                                 ephemeral=True
                             )
 
@@ -487,7 +488,7 @@ class BotOperations(commands.Cog):
 
                         if not is_admin or not is_global:
                             await interaction.response.send_message(
-                                "❌ Only global administrators can use this command.",
+                                f"{theme.deniedIcon} Only global administrators can use this command.",
                                 ephemeral=True
                             )
                             return
@@ -500,19 +501,19 @@ class BotOperations(commands.Cog):
 
                         if not admins:
                             await interaction.response.send_message(
-                                "❌ No administrator registered in the system.", 
+                                f"{theme.deniedIcon} No administrator registered in the system.", 
                                 ephemeral=True
                             )
                             return
 
                         admin_select_embed = discord.Embed(
-                            title="👤 Administrator Deletion",
+                            title=f"{theme.userIcon} Administrator Deletion",
                             description=(
-                                "Select the administrator you want to delete:\n\n"
-                                "**Administrator List**\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"Select the administrator you want to delete:\n\n"
+                                f"**Administrator List**\n"
+                                f"{theme.middleDivider}\n"
                             ),
-                            color=discord.Color.red()
+                            color=theme.emColor2
                         )
 
                         options = []
@@ -528,7 +529,7 @@ class BotOperations(commands.Cog):
                                     label=f"{admin_name[:50]}",
                                     value=str(admin_id),
                                     description=f"{'Global Admin' if is_initial == 1 else 'Server Admin'} - ID: {admin_id}",
-                                    emoji="👑" if is_initial == 1 else "👤"
+                                    emoji=theme.crownIcon if is_initial == 1 else theme.userIcon
                                 )
                             )
                         
@@ -581,15 +582,15 @@ class BotOperations(commands.Cog):
                                     avatar_url = None
 
                                 info_embed = discord.Embed(
-                                    title="⚠️ Administrator Deletion Confirmation",
+                                    title=f"{theme.warnIcon} Administrator Deletion Confirmation",
                                     description=(
                                         f"**Administrator Information**\n"
-                                        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                        f"👤 **Name:** `{admin_name}`\n"
-                                        f"🆔 **Discord ID:** `{selected_admin_id}`\n"
-                                        f"👑 **Role:** `{role}`\n"
-                                        f"🔍 **Access Type:** `{access_type}`\n"
-                                        "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                        f"{theme.upperDivider}\n"
+                                        f"{theme.userIcon} **Name:** `{admin_name}`\n"
+                                        f"{theme.fidIcon} **Discord ID:** `{selected_admin_id}`\n"
+                                        f"{theme.shieldIcon} **Role:** `{role}`\n"
+                                        f"{theme.searchIcon} **Access Type:** `{access_type}`\n"
+                                        f"{theme.lowerDivider}\n"
                                     ),
                                     color=discord.Color.yellow()
                                 )
@@ -598,14 +599,14 @@ class BotOperations(commands.Cog):
                                 if not is_global:
                                     if alliance_names:
                                         info_embed.add_field(
-                                            name="🏰 Managing Alliances",
+                                            name=f"{theme.castleBattleIcon} Managing Alliances",
                                             value="\n".join([f"• {name}" for name in alliance_names[:10]]) +
                                                   (f"\n• ... and {len(alliance_names) - 10} more" if len(alliance_names) > 10 else ""),
                                             inline=False
                                         )
                                     else:
                                         info_embed.add_field(
-                                            name="🏰 Managing Alliances",
+                                            name=f"{theme.castleBattleIcon} Managing Alliances",
                                             value="No alliances on this server",
                                             inline=False
                                         )
@@ -633,14 +634,14 @@ class BotOperations(commands.Cog):
                                         self.settings_db.commit()
 
                                         success_embed = discord.Embed(
-                                            title="✅ Administrator Deleted Successfully",
+                                            title=f"{theme.verifiedIcon} Administrator Deleted Successfully",
                                             description=(
                                                 f"**Deleted Administrator**\n"
-                                                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                                f"👤 **Name:** `{admin_name}`\n"
-                                                f"🆔 **Discord ID:** `{selected_admin_id}`\n"
+                                                f"{theme.upperDivider}\n"
+                                                f"{theme.userIcon} **Name:** `{admin_name}`\n"
+                                                f"{theme.fidIcon} **Discord ID:** `{selected_admin_id}`\n"
                                             ),
-                                            color=discord.Color.green()
+                                            color=theme.emColor3
                                         )
                                         
                                         await button_interaction.response.edit_message(
@@ -649,15 +650,15 @@ class BotOperations(commands.Cog):
                                         )
                                     except Exception as e:
                                         await button_interaction.response.send_message(
-                                            "❌ An error occurred while deleting the administrator.",
+                                            f"{theme.deniedIcon} An error occurred while deleting the administrator.",
                                             ephemeral=True
                                         )
 
                                 async def cancel_callback(button_interaction: discord.Interaction):
                                     cancel_embed = discord.Embed(
-                                        title="❌ Process Canceled",
+                                        title=f"{theme.deniedIcon} Process Canceled",
                                         description="Administrator deletion canceled.",
-                                        color=discord.Color.red()
+                                        color=theme.emColor2
                                     )
                                     await button_interaction.response.edit_message(
                                         embed=cancel_embed,
@@ -677,7 +678,7 @@ class BotOperations(commands.Cog):
 
                             except Exception as e:
                                 await select_interaction.response.send_message(
-                                    "❌ An error occurred during processing.",
+                                    f"{theme.deniedIcon} An error occurred during processing.",
                                     ephemeral=True
                                 )
 
@@ -693,7 +694,7 @@ class BotOperations(commands.Cog):
                         print(f"Remove admin error: {e}")
                         if not interaction.response.is_done():
                             await interaction.response.send_message(
-                                "❌ An error occurred during the administrator deletion process.",
+                                f"{theme.deniedIcon} An error occurred during the administrator deletion process.",
                                 ephemeral=True
                             )
 
@@ -704,7 +705,7 @@ class BotOperations(commands.Cog):
                             await alliance_cog.show_main_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                "❌ Ana menüye dönüş sırasında bir hata oluştu.",
+                                f"{theme.deniedIcon} Ana menüye dönüş sırasında bir hata oluştu.",
                                 ephemeral=True
                             )
                     except Exception as e:
@@ -734,7 +735,7 @@ class BotOperations(commands.Cog):
 
                 if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.",
+                        f"{theme.deniedIcon} Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -770,13 +771,13 @@ class BotOperations(commands.Cog):
                                 admin_alliance_info.append((admin_id, is_initial, alliance_id, alliance_result[0]))
 
                         embed = discord.Embed(
-                            title="👥 Admin Alliance Permissions",
+                            title=f"{theme.membersIcon} Admin Alliance Permissions",
                             description=(
-                                "Select an admin to view or modify permissions:\n\n"
-                                "**Admin List**\n"
-                                "━━━━━━━━━━━━━━━━━━━━━━\n"
+                                f"Select an admin to view or modify permissions:\n\n"
+                                f"**Admin List**\n"
+                                f"{theme.upperDivider}\n"
                             ),
-                            color=discord.Color.blue()
+                            color=theme.emColor1
                         )
 
                         options = []
@@ -795,7 +796,7 @@ class BotOperations(commands.Cog):
                                     label=option_label,
                                     value=f"{admin_id}:{alliance_id}",
                                     description=option_desc,
-                                    emoji="👑" if is_initial == 1 else "👤"
+                                    emoji=theme.crownIcon if is_initial == 1 else theme.userIcon
                                 )
                             )
 
@@ -817,7 +818,7 @@ class BotOperations(commands.Cog):
                                 admin_id, alliance_id = select.values[0].split(":")
                                 
                                 confirm_embed = discord.Embed(
-                                    title="⚠️ Confirm Permission Removal",
+                                    title=f"{theme.warnIcon} Confirm Permission Removal",
                                     description=(
                                         f"Are you sure you want to remove the alliance permission?\n\n"
                                         f"**Admin:** {admin_name} ({admin_id})\n"
@@ -834,13 +835,13 @@ class BotOperations(commands.Cog):
                                         
                                         if success:
                                             success_embed = discord.Embed(
-                                                title="✅ Permission Removed",
+                                                title=f"{theme.verifiedIcon} Permission Removed",
                                                 description=(
                                                     f"Successfully removed alliance permission:\n\n"
                                                     f"**Admin:** {admin_name} ({admin_id})\n"
                                                     f"**Alliance:** {alliance_name} ({alliance_id})"
                                                 ),
-                                                color=discord.Color.green()
+                                                color=theme.emColor3
                                             )
                                             await confirm_interaction.response.edit_message(
                                                 embed=success_embed,
@@ -860,9 +861,9 @@ class BotOperations(commands.Cog):
 
                                 async def cancel_callback(cancel_interaction: discord.Interaction):
                                     cancel_embed = discord.Embed(
-                                        title="❌ Operation Cancelled",
+                                        title=f"{theme.deniedIcon} Operation Cancelled",
                                         description="Permission removal has been cancelled.",
-                                        color=discord.Color.red()
+                                        color=theme.emColor2
                                     )
                                     await cancel_interaction.response.edit_message(
                                         embed=cancel_embed,
@@ -919,7 +920,7 @@ class BotOperations(commands.Cog):
 
                 if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.",
+                        f"{theme.deniedIcon} Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -933,15 +934,15 @@ class BotOperations(commands.Cog):
 
                 if not admins:
                     await interaction.response.send_message(
-                        "❌ No administrators found in the system.", 
+                        f"{theme.deniedIcon} No administrators found in the system.", 
                         ephemeral=True
                     )
                     return
 
                 admin_list_embed = discord.Embed(
-                    title="👥 Administrator List",
-                    description="List of all administrators and their permissions:\n━━━━━━━━━━━━━━━━━━━━━━",
-                    color=discord.Color.blue()
+                    title=f"{theme.membersIcon} Administrator List",
+                    description=f"List of all administrators and their permissions:\n{theme.middleDivider}",
+                    color=theme.emColor1
                 )
 
                 guild_id = interaction.guild.id
@@ -976,10 +977,10 @@ class BotOperations(commands.Cog):
                             alliance_names = [name for _, name in alliances]
 
                         admin_info = (
-                            f"👤 **Name:** {admin_name}\n"
-                            f"🆔 **ID:** {admin_id}\n"
-                            f"👑 **Role:** {role}\n"
-                            f"🔍 **Access Type:** {access_type}\n"
+                            f"{theme.userIcon} **Name:** {admin_name}\n"
+                            f"{theme.fidIcon} **ID:** {admin_id}\n"
+                            f"{theme.shieldIcon} **Role:** {role}\n"
+                            f"{theme.searchIcon} **Access Type:** {access_type}\n"
                         )
 
                         # Only show alliance list for non-global admins
@@ -988,13 +989,13 @@ class BotOperations(commands.Cog):
                                 alliance_text = "\n".join([f"• {name}" for name in alliance_names[:5]])
                                 if len(alliance_names) > 5:
                                     alliance_text += f"\n• ... and {len(alliance_names) - 5} more"
-                                admin_info += f"🏰 **Managing Alliances:**\n{alliance_text}\n"
+                                admin_info += f"{theme.castleBattleIcon} **Managing Alliances:**\n{alliance_text}\n"
                             else:
-                                admin_info += "🏰 **Managing Alliances:** No alliances on this server\n"
+                                admin_info += f"{theme.allianceIcon} **Managing Alliances:** No alliances on this server\n"
 
                         admin_list_embed.add_field(
-                            name=f"{'👑' if admin_is_global else '👤'} {admin_name}",
-                            value=f"{admin_info}\n━━━━━━━━━━━━━━━━━━━━━━",
+                            name=f"{theme.crownIcon if admin_is_global else theme.userIcon} {admin_name}",
+                            value=f"{admin_info}\n{theme.middleDivider}",
                             inline=False
                         )
 
@@ -1002,14 +1003,14 @@ class BotOperations(commands.Cog):
                         print(f"Error processing admin {admin_id}: {e}")
                         admin_list_embed.add_field(
                             name=f"Unknown User ({admin_id})",
-                            value="Error loading administrator information\n━━━━━━━━━━━━━━━━━━━━━━",
+                            value=f"Error loading administrator information\n{theme.middleDivider}",
                             inline=False
                         )
 
                 view = discord.ui.View()
                 view.add_item(discord.ui.Button(
                     label="Back to Bot Operations",
-                    emoji="◀️",
+                    emoji=f"{theme.prevIcon}",
                     style=discord.ButtonStyle.secondary,
                     custom_id="bot_operations",
                     row=0
@@ -1025,7 +1026,7 @@ class BotOperations(commands.Cog):
                 print(f"View administrators error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ An error occurred while loading administrator list.",
+                        f"{theme.deniedIcon} An error occurred while loading administrator list.",
                         ephemeral=True
                     )
 
@@ -1035,7 +1036,7 @@ class BotOperations(commands.Cog):
 
                 if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.",
+                        f"{theme.deniedIcon} Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -1045,7 +1046,7 @@ class BotOperations(commands.Cog):
                     await database_cog.transfer_old_database(interaction)
                 else:
                     await interaction.response.send_message(
-                        "❌ Database transfer module not loaded.", 
+                        f"{theme.deniedIcon} Database transfer module not loaded.", 
                         ephemeral=True
                     )
 
@@ -1053,7 +1054,7 @@ class BotOperations(commands.Cog):
                 print(f"Transfer old database error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ An error occurred while transferring the database.",
+                        f"{theme.deniedIcon} An error occurred while transferring the database.",
                         ephemeral=True
                     )
 
@@ -1063,7 +1064,7 @@ class BotOperations(commands.Cog):
 
                 if not is_admin or not is_global:
                     await interaction.response.send_message(
-                        "❌ Only global administrators can use this command.",
+                        f"{theme.deniedIcon} Only global administrators can use this command.",
                         ephemeral=True
                     )
                     return
@@ -1072,19 +1073,19 @@ class BotOperations(commands.Cog):
 
                 if not current_version or not new_version:
                     await interaction.response.send_message(
-                        "❌ Failed to check for updates. Please try again later.", 
+                        f"{theme.deniedIcon} Failed to check for updates. Please try again later.", 
                         ephemeral=True
                     )
                     return
 
                 main_embed = discord.Embed(
-                    title="🔄 Bot Update Status",
-                    color=discord.Color.blue() if not updates_needed else discord.Color.yellow()
+                    title=f"{theme.refreshIcon} Bot Update Status",
+                    color=theme.emColor1 if not updates_needed else discord.Color.yellow()
                 )
 
                 main_embed = discord.Embed(
-                    title="🔄 Bot Update Status",
-                    color=discord.Color.blue() if not updates_needed else discord.Color.yellow()
+                    title=f"{theme.refreshIcon} Bot Update Status",
+                    color=theme.emColor1 if not updates_needed else discord.Color.yellow()
                 )
 
                 main_embed.add_field(
@@ -1102,7 +1103,7 @@ class BotOperations(commands.Cog):
                 if updates_needed:
                     main_embed.add_field(
                         name="Status",
-                        value="🔄 **Update Available**",
+                        value=f"{theme.refreshIcon} **Update Available**",
                         inline=True
                     )
 
@@ -1120,17 +1121,17 @@ class BotOperations(commands.Cog):
                     main_embed.add_field(
                         name="How to Update",
                         value=(
-                            "To update to the new version:\n"
-                            "🔄 **Restart the bot** (main.py)\n"
-                            "✅ Accept the update when prompted\n\n"
-                            "The bot will automatically download and install the update."
+                            f"To update to the new version:\n"
+                            f"{theme.refreshIcon} **Restart the bot** (main.py)\n"
+                            f"{theme.verifiedIcon} Accept the update when prompted\n\n"
+                            f"The bot will automatically download and install the update."
                         ),
                         inline=False
                     )
                 else:
                     main_embed.add_field(
                         name="Status",
-                        value="✅ **Up to Date**",
+                        value=f"{theme.verifiedIcon} **Up to Date**",
                         inline=True
                     )
                     main_embed.description = "Your bot is running the latest version!"
@@ -1144,7 +1145,7 @@ class BotOperations(commands.Cog):
                 print(f"Check updates error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "❌ An error occurred while checking for updates.",
+                        f"{theme.deniedIcon} An error occurred while checking for updates.",
                         ephemeral=True
                     )
 
@@ -1156,27 +1157,27 @@ class BotOperations(commands.Cog):
             embed = discord.Embed(
                 title="🤖 Bot Operations",
                 description=(
-                    "Please choose an operation:\n\n"
-                    "**Available Operations**\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━\n"
-                    "👥 **Admin Management**\n"
-                    "└ Manage bot administrators\n\n"
-                    "🔍 **Admin Permissions**\n"
-                    "└ View and manage admin permissions\n\n"
-                    "⚙️ **Control Settings**\n"
-                    "└ Configure alliance control behaviors\n\n"
-                    "🔄 **Bot Updates**\n"
-                    "└ Check and manage updates\n"
-                    "━━━━━━━━━━━━━━━━━━━━━━"
+                    f"Please choose an operation:\n\n"
+                    f"**Available Operations**\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.membersIcon} **Admin Management**\n"
+                    f"└ Manage bot administrators\n\n"
+                    f"{theme.searchIcon} **Admin Permissions**\n"
+                    f"└ View and manage admin permissions\n\n"
+                    f"{theme.settingsIcon} **Control Settings**\n"
+                    f"└ Configure alliance control behaviors\n\n"
+                    f"{theme.refreshIcon} **Bot Updates**\n"
+                    f"└ Check and manage updates\n"
+                    f"{theme.lowerDivider}"
                 ),
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
 
             # Global admin only buttons are disabled for server admins
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Add Admin",
-                emoji="➕",
+                emoji=f"{theme.addIcon}",
                 style=discord.ButtonStyle.success,
                 custom_id="add_admin",
                 row=1,
@@ -1184,7 +1185,7 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Remove Admin",
-                emoji="➖",
+                emoji=f"{theme.minusIcon}",
                 style=discord.ButtonStyle.danger,
                 custom_id="remove_admin",
                 row=1,
@@ -1192,7 +1193,7 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="View Administrators",
-                emoji="👥",
+                emoji=f"{theme.membersIcon}",
                 style=discord.ButtonStyle.primary,
                 custom_id="view_administrators",
                 row=1,
@@ -1200,7 +1201,7 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Assign Alliance to Admin",
-                emoji="🔗",
+                emoji=f"{theme.linkIcon}",
                 style=discord.ButtonStyle.success,
                 custom_id="assign_alliance",
                 row=2,
@@ -1208,7 +1209,7 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Delete Admin Permissions",
-                emoji="➖",
+                emoji=f"{theme.minusIcon}",
                 style=discord.ButtonStyle.danger,
                 custom_id="view_admin_permissions",
                 row=2,
@@ -1216,7 +1217,7 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Transfer Old Database",
-                emoji="🔄",
+                emoji=f"{theme.refreshIcon}",
                 style=discord.ButtonStyle.primary,
                 custom_id="transfer_old_database",
                 row=3,
@@ -1224,7 +1225,7 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Check for Updates",
-                emoji="🔄",
+                emoji=f"{theme.refreshIcon}",
                 style=discord.ButtonStyle.primary,
                 custom_id="check_updates",
                 row=3,
@@ -1233,14 +1234,14 @@ class BotOperations(commands.Cog):
             # These are available to all admins (scoped to their alliances)
             view.add_item(discord.ui.Button(
                 label="Log System",
-                emoji="📋",
+                emoji=f"{theme.listIcon}",
                 style=discord.ButtonStyle.primary,
                 custom_id="log_system",
                 row=3
             ))
             view.add_item(discord.ui.Button(
                 label="Alliance Control Messages",
-                emoji="💬",
+                emoji=f"{theme.chatIcon}",
                 style=discord.ButtonStyle.primary,
                 custom_id="alliance_control_messages",
                 row=3,
@@ -1248,14 +1249,14 @@ class BotOperations(commands.Cog):
             ))
             view.add_item(discord.ui.Button(
                 label="Control Settings",
-                emoji="⚙️",
+                emoji=f"{theme.settingsIcon}",
                 style=discord.ButtonStyle.primary,
                 custom_id="control_settings",
                 row=4
             ))
             view.add_item(discord.ui.Button(
                 label="Main Menu",
-                emoji="🏠",
+                emoji=f"{theme.homeIcon}",
                 style=discord.ButtonStyle.secondary,
                 custom_id="main_menu",
                 row=4
@@ -1268,7 +1269,7 @@ class BotOperations(commands.Cog):
                 print(f"Show bot operations menu error: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ An error occurred while showing the menu.",
+                    f"{theme.deniedIcon} An error occurred while showing the menu.",
                     ephemeral=True
                 )
 
@@ -1320,7 +1321,7 @@ class BotOperations(commands.Cog):
         """Show the control settings menu with alliance selection"""
         try:
             if interaction.guild is None:
-                await interaction.response.send_message("❌ This command must be used in a server.", ephemeral=True)
+                await interaction.response.send_message(f"{theme.deniedIcon} This command must be used in a server.", ephemeral=True)
                 return
 
             # Get alliances this admin can access
@@ -1328,13 +1329,13 @@ class BotOperations(commands.Cog):
 
             if not alliances:
                 await interaction.response.send_message(
-                    "❌ No alliances found.",
+                    f"{theme.deniedIcon} No alliances found.",
                     ephemeral=True
                 )
                 return
             
             embed = discord.Embed(
-                title="⚙️ Control Settings",
+                title=f"{theme.settingsIcon} Control Settings",
                 description=(
                     "Configure automatic control behaviors for each alliance.\n\n"
                     "**State Transfer Auto-Removal**\n"
@@ -1342,7 +1343,7 @@ class BotOperations(commands.Cog):
                     "removed from the alliance.\n\n"
                     "Select an alliance to view or change its settings:"
                 ),
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
             
             # Create view with alliance dropdown
@@ -1355,7 +1356,7 @@ class BotOperations(commands.Cog):
             print(f"Error in show_control_settings_menu: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ An error occurred while showing control settings.",
+                    f"{theme.deniedIcon} An error occurred while showing control settings.",
                     ephemeral=True
                 )
 
@@ -1396,29 +1397,29 @@ class ControlSettingsView(discord.ui.View):
         self.auto_remove_button = discord.ui.Button(
             label=f"{'Disable' if self.auto_remove else 'Enable'} Auto-Removal",
             style=discord.ButtonStyle.danger if self.auto_remove else discord.ButtonStyle.success,
-            emoji="🔄",
+            emoji=f"{theme.refreshIcon}",
             disabled=(self.selected_alliance is None),
             row=1
         )
         self.auto_remove_button.callback = self.toggle_auto_removal
         self.add_item(self.auto_remove_button)
-        
+
         # Notification toggle button - only shown and enabled if auto-removal is enabled
         if self.auto_remove and self.selected_alliance:
             self.notify_button = discord.ui.Button(
                 label=f"{'Disable' if self.notify_on_transfer else 'Enable'} Notifications",
                 style=discord.ButtonStyle.secondary,
-                emoji="🔔" if not self.notify_on_transfer else "🔕",
+                emoji=f"{theme.bellIcon}" if not self.notify_on_transfer else f"{theme.muteIcon}",
                 row=1
             )
             self.notify_button.callback = self.toggle_notifications
             self.add_item(self.notify_button)
-        
+
         # Back button
         self.back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.secondary,
-            emoji="⬅️",
+            emoji=f"{theme.backIcon}",
             row=2
         )
         self.back_button.callback = self.back_to_bot_operations
@@ -1439,13 +1440,13 @@ class ControlSettingsView(discord.ui.View):
             self.auto_remove = bool(result[0]) if result and result[0] is not None else False
             self.notify_on_transfer = bool(result[1]) if result and len(result) > 1 and result[1] is not None else False
             
-            status_emoji = "✅" if self.auto_remove else "❌"
+            status_emoji = f"{theme.verifiedIcon}" if self.auto_remove else f"{theme.deniedIcon}"
             status_text = "Enabled" if self.auto_remove else "Disabled"
-            notify_emoji = "🔔" if self.notify_on_transfer else "🔕"
+            notify_emoji = theme.bellIcon if self.notify_on_transfer else theme.muteIcon
             notify_text = "Enabled" if self.notify_on_transfer else "Disabled"
             
             embed = discord.Embed(
-                title=f"⚙️ Control Settings - {alliance_name}",
+                title=f"{theme.settingsIcon} Control Settings - {alliance_name}",
                 description=(
                     f"**State Transfer Auto-Removal**\n"
                     f"Status: {status_emoji} **{status_text}**\n"
@@ -1456,12 +1457,12 @@ class ControlSettingsView(discord.ui.View):
                     f"{'• Users are removed when they transfer states' if self.auto_remove else '• Users remain in the alliance when they transfer states'}\n"
                     f"{'• Admin receives notifications for removals' if self.notify_on_transfer and self.auto_remove else ''}"
                 ),
-                color=discord.Color.green() if self.auto_remove else discord.Color.red()
+                color=theme.emColor3 if self.auto_remove else discord.Color.red()
             )
         else:
             # No alliance selected yet
             embed = discord.Embed(
-                title="⚙️ Control Settings",
+                title=f"{theme.settingsIcon} Control Settings",
                 description=(
                     "**Please select an alliance from the dropdown menu above.**\n\n"
                     "Once selected, you can configure:\n"
@@ -1469,7 +1470,7 @@ class ControlSettingsView(discord.ui.View):
                     "• Admin Notifications\n\n"
                     "These settings control what happens when a user transfers to another state."
                 ),
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
         
         # Update components based on current state
@@ -1493,7 +1494,7 @@ class ControlSettingsView(discord.ui.View):
         except Exception as e:
             print(f"Error in alliance_selected: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while selecting the alliance.",
+                f"{theme.deniedIcon} An error occurred while selecting the alliance.",
                 ephemeral=True
             )
     
@@ -1524,7 +1525,7 @@ class ControlSettingsView(discord.ui.View):
         except Exception as e:
             print(f"Error toggling auto-removal: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while updating the setting.",
+                f"{theme.deniedIcon} An error occurred while updating the setting.",
                 ephemeral=True
             )
     
@@ -1546,7 +1547,7 @@ class ControlSettingsView(discord.ui.View):
         except Exception as e:
             print(f"Error toggling notifications: {e}")
             await interaction.response.send_message(
-                "❌ An error occurred while updating the setting.",
+                f"{theme.deniedIcon} An error occurred while updating the setting.",
                 ephemeral=True
             )
     
@@ -1558,14 +1559,14 @@ class ControlSettingsView(discord.ui.View):
                 await bot_ops.show_bot_operations_menu(interaction)
             else:
                 await interaction.response.send_message(
-                    "❌ Unable to return to bot operations menu.",
+                    f"{theme.deniedIcon} Unable to return to bot operations menu.",
                     ephemeral=True
                 )
         except Exception as e:
             print(f"Error in back_to_bot_operations: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ An error occurred.",
+                    f"{theme.deniedIcon} An error occurred.",
                     ephemeral=True
                 )
 
