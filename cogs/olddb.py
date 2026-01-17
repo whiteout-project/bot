@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands, ui
 import sqlite3
 import os
+from .pimp_my_bot import theme
 
 class AllianceSelect(ui.Select):
     def __init__(self, alliances):
@@ -223,7 +224,7 @@ class DatabaseTransfer(commands.Cog):
         embed = discord.Embed(
             title="Database Transfer (V2)",
             description="Please select the alliance to transfer users to:",
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
         view = AllianceView(alliances)
         

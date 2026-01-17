@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from .pimp_my_bot import theme
 
 class SupportOperations(commands.Cog):
     def __init__(self, bot):
@@ -7,18 +8,18 @@ class SupportOperations(commands.Cog):
 
     async def show_support_menu(self, interaction: discord.Interaction):
         support_menu_embed = discord.Embed(
-            title="🎯 Support Operations",
+            title=f"{theme.targetIcon} Support Operations",
             description=(
-                "Please select an operation:\n\n"
-                "**Available Operations**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "📝 **Request Support**\n"
-                "└ Get help and support\n\n"
-                "ℹ️ **About Project**\n"
-                "└ Project information\n"
-                "━━━━━━━━━━━━━━━━━━━━━━"
+                f"Please select an operation:\n\n"
+                f"**Available Operations**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.editListIcon} **Request Support**\n"
+                f"└ Get help and support\n\n"
+                f"{theme.infoIcon} **About Project**\n"
+                f"└ Project information\n"
+                f"{theme.lowerDivider}"
             ),
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
 
         view = SupportView(self)
@@ -30,7 +31,7 @@ class SupportOperations(commands.Cog):
 
     async def show_support_info(self, interaction: discord.Interaction):
         support_embed = discord.Embed(
-            title="🤖 Bot Support Information",
+            title=f"{theme.robotIcon} Bot Support Information",
             description=(
                 "If you need help with the bot or are experiencing any issues, "
                 "please feel free to ask on our [Discord](https://discord.gg/apYByj6K2m)\n\n"
@@ -43,7 +44,7 @@ class SupportOperations(commands.Cog):
                 "For technical support, please make sure to provide "
                 "detailed information about your problem."
             ),
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
         
         try:
@@ -52,7 +53,7 @@ class SupportOperations(commands.Cog):
                 await interaction.user.send(embed=support_embed)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Could not send DM because your DMs are closed!",
+                    f"{theme.deniedIcon} Could not send DM because your DMs are closed!",
                     ephemeral=True
                 )
         except Exception as e:
@@ -65,7 +66,7 @@ class SupportView(discord.ui.View):
 
     @discord.ui.button(
         label="Request Support",
-        emoji="📝",
+        emoji=f"{theme.editListIcon}",
         style=discord.ButtonStyle.primary,
         custom_id="request_support"
     )
@@ -74,37 +75,37 @@ class SupportView(discord.ui.View):
 
     @discord.ui.button(
         label="About Project",
-        emoji="ℹ️",
+        emoji=f"{theme.infoIcon}",
         style=discord.ButtonStyle.primary,
         custom_id="about_project"
     )
     async def about_project_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         about_embed = discord.Embed(
-            title="ℹ️ About Whiteout Project",
+            title=f"{theme.infoIcon} About Whiteout Project",
             description=(
-                "**Open Source Bot**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "This is an open source Discord bot for Whiteout Survival.\n"
-                "The project is community-driven and freely available for everyone.\n"
-                "**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
-                "**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"
-                "**Features**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "• Alliance member management\n"
-                "• Gift code operations\n"
-                "• Automated member tracking\n"
-                "• Bear trap notifications\n"
-                "• ID channel verification\n"
-                "• and more...\n\n"
-                "**Contributing**\n"
-                "━━━━━━━━━━━━━━━━━━━━━━\n"
-                "Contributions are welcome! Please check our GitHub repository "
-                "to report issues, suggest features, or submit pull requests."
+                f"**Open Source Bot**\n"
+                f"{theme.upperDivider}\n"
+                f"This is an open source Discord bot for Whiteout Survival.\n"
+                f"The project is community-driven and freely available for everyone.\n"
+                f"**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
+                f"**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"
+                f"**Features**\n"
+                f"{theme.middleDivider}\n"
+                f"• Alliance member management\n"
+                f"• Gift code operations\n"
+                f"• Automated member tracking\n"
+                f"• Bear trap notifications\n"
+                f"• ID channel verification\n"
+                f"• and more...\n\n"
+                f"**Contributing**\n"
+                f"{theme.middleDivider}\n"
+                f"Contributions are welcome! Please check our GitHub repository "
+                f"to report issues, suggest features, or submit pull requests."
             ),
             color=discord.Color.green()
         )
 
-        about_embed.set_footer(text="Made with ❤️ by the WOSLand Bot Team.")
+        about_embed.set_footer(text=f"Made with {theme.heartIcon} by the WOSLand Bot Team.")
         
         try:
             await interaction.response.send_message(embed=about_embed, ephemeral=True)
@@ -112,7 +113,7 @@ class SupportView(discord.ui.View):
                 await interaction.user.send(embed=about_embed)
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Could not send DM because your DMs are closed!",
+                    f"{theme.deniedIcon} Could not send DM because your DMs are closed!",
                     ephemeral=True
                 )
         except Exception as e:
@@ -120,7 +121,7 @@ class SupportView(discord.ui.View):
 
     @discord.ui.button(
         label="Main Menu",
-        emoji="🏠",
+        emoji=f"{theme.homeIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="main_menu"
     )

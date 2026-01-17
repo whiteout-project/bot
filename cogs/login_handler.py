@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 from typing import Optional, List, Dict, Callable
 
+from .pimp_my_bot import theme
+
 class LoginHandler:
     """
     Centralized handler for player login/check operations.
@@ -381,24 +383,31 @@ class LoginHandler:
         
         return results
     
-    def get_mode_text(self) -> str:
-        """Get human-readable description of current API mode"""
+    def get_mode_text(self, for_console: bool = False) -> str:
+        """Get human-readable description of current API mode.
+
+        Args:
+            for_console: If True, omit emoji icons for clean console output
+        """
         if self.dual_api_mode:
-            return "✅ Dual-API mode active (1 member/second)"
+            prefix = "" if for_console else f"{theme.verifiedIcon} "
+            return f"{prefix}Dual-API mode active (1 member/second)"
         elif self.available_apis:
             api_num = self.available_apis[0]
-            return f"⚠️ Single-API mode (1 member/2 seconds) - API {3-api_num} unavailable"
+            prefix = "" if for_console else f"{theme.warnIcon} "
+            return f"{prefix}Single-API mode (1 member/2 seconds) - API {3-api_num} unavailable"
         else:
-            return "❌ No APIs available"
+            prefix = "" if for_console else f"{theme.deniedIcon} "
+            return f"{prefix}No APIs available"
     
     def get_processing_rate(self) -> str:
         """Get user-friendly processing rate"""
         if self.dual_api_mode:
-            return "⚡ Rate: 1 member/second"
+            return f"{theme.boltIcon} Rate: 1 member/second"
         elif self.available_apis:
-            return "⚡ Rate: 1 member/2 seconds"
+            return f"{theme.boltIcon} Rate: 1 member/2 seconds"
         else:
-            return "❌ Service unavailable"
+            return f"{theme.deniedIcon} Service unavailable"
     
     def get_rate_limit_info(self) -> Dict[str, int]:
         """Get current rate limit information"""
@@ -473,7 +482,7 @@ class LoginHandler:
                     if operation.get('interaction'):
                         try:
                             await operation['interaction'].followup.send(
-                                f"❌ Operation failed: {str(e)}", ephemeral=True
+                                f"{theme.deniedIcon} Operation failed: {str(e)}", ephemeral=True
                             )
                         except:
                             pass

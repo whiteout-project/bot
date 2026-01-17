@@ -8,6 +8,7 @@ import io
 from io import BytesIO
 import os
 from .attendance import SessionSelectView
+from .pimp_my_bot import theme
 
 try:
     import matplotlib.pyplot as plt
@@ -64,9 +65,9 @@ class ExportFormatSelectView(discord.ui.View):
     @discord.ui.select(
         placeholder="Select export format...",
         options=[
-            discord.SelectOption(label="CSV", value="csv", description="Comma-separated values", emoji="📄"),
-            discord.SelectOption(label="TSV", value="tsv", description="Tab-separated values", emoji="📋"),
-            discord.SelectOption(label="HTML", value="html", description="Web page format", emoji="🌐")
+            discord.SelectOption(label="CSV", value="csv", description="Comma-separated values", emoji=theme.documentIcon),
+            discord.SelectOption(label="TSV", value="tsv", description="Tab-separated values", emoji=theme.listIcon),
+            discord.SelectOption(label="HTML", value="html", description="Web page format", emoji=theme.globeIcon)
         ]
     )
     async def format_select(self, interaction: discord.Interaction, select: discord.ui.Select):
@@ -93,7 +94,7 @@ class AttendanceReport(commands.Cog):
 
     def _get_status_emoji(self, status):
         """Helper to get status emoji"""
-        return {"present": "✅", "absent": "❌", "not_recorded": "⚪"}.get(status, "❓")
+        return {"present": f"{theme.verifiedIcon}", "absent": f"{theme.deniedIcon}", "not_recorded": "⚪"}.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -101,8 +102,8 @@ class AttendanceReport(commands.Cog):
             return last_attendance
 
         replacements = [
-            ("present", "✅"), ("Present", "✅"),
-            ("absent", "❌"), ("Absent", "❌"),
+            ("present", f"{theme.verifiedIcon}"), ("Present", f"{theme.verifiedIcon}"),
+            ("absent", f"{theme.deniedIcon}"), ("Absent", f"{theme.deniedIcon}"),
             ("not_recorded", "⚪"), ("Not Recorded", "⚪"), ("not recorded", "⚪")
         ]
 
@@ -139,14 +140,14 @@ class AttendanceReport(commands.Cog):
             # Fallback to original if parsing fails
             return date_str.split()[0] if date_str else "N/A"
 
-    def _create_error_embed(self, title, description, color=discord.Color.red()):
+    def _create_error_embed(self, title, description, color=theme.emColor2):
         """Helper to create error embeds"""
         return discord.Embed(title=title, description=description, color=color)
 
     def _create_back_view(self, callback):
         """Helper to create back button view"""
         view = discord.ui.View()
-        back_button = discord.ui.Button(label="⬅️ Back", style=discord.ButtonStyle.secondary)
+        back_button = discord.ui.Button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary)
         back_button.callback = callback
         view.add_item(back_button)
         return view
@@ -485,7 +486,7 @@ class AttendanceReport(commands.Cog):
             actual_channel = interaction.guild.get_channel(channel.id)
             if not actual_channel:
                 await interaction.followup.send(
-                    "❌ Could not access that channel.",
+                    f"{theme.deniedIcon} Could not access that channel.",
                     ephemeral=True
                 )
                 return
@@ -493,14 +494,14 @@ class AttendanceReport(commands.Cog):
             # Check permissions
             if not actual_channel.permissions_for(interaction.guild.me).send_messages:
                 await interaction.followup.send(
-                    "❌ I don't have permission to send messages in that channel.",
+                    f"{theme.deniedIcon} I don't have permission to send messages in that channel.",
                     ephemeral=True
                 )
                 return
 
             if not actual_channel.permissions_for(interaction.user).send_messages:
                 await interaction.followup.send(
-                    "❌ You don't have permission to send messages in that channel.",
+                    f"{theme.deniedIcon} You don't have permission to send messages in that channel.",
                     ephemeral=True
                 )
                 return
@@ -522,19 +523,19 @@ class AttendanceReport(commands.Cog):
                     await actual_channel.send(embed=embed)
 
             await interaction.followup.send(
-                f"✅ Attendance report posted to {actual_channel.mention}!",
+                f"{theme.verifiedIcon} Attendance report posted to {actual_channel.mention}!",
                 ephemeral=True
             )
 
         except discord.Forbidden:
             await interaction.followup.send(
-                "❌ I don't have permission to post in that channel.",
+                f"{theme.deniedIcon} I don't have permission to post in that channel.",
                 ephemeral=True
             )
         except Exception as e:
             print(f"Error posting report to channel: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while posting the report.",
+                f"{theme.deniedIcon} An error occurred while posting the report.",
                 ephemeral=True
             )
 
@@ -556,7 +557,7 @@ class AttendanceReport(commands.Cog):
                 format_name = "HTML"
             else:
                 await interaction.followup.send(
-                    "❌ Invalid export format selected.",
+                    f"{theme.deniedIcon} Invalid export format selected.",
                     ephemeral=True
                 )
                 return
@@ -564,7 +565,7 @@ class AttendanceReport(commands.Cog):
             # Try to DM the file
             try:
                 await interaction.user.send(
-                    f"📊 **Attendance Report Export**\n"
+                    f"{theme.chartIcon} **Attendance Report Export**\n"
                     f"**Format:** {format_name}\n"
                     f"**Alliance:** {session_info['alliance_name']}\n"
                     f"**Session:** {session_info['session_name']}\n"
@@ -573,30 +574,30 @@ class AttendanceReport(commands.Cog):
                     file=file
                 )
                 await interaction.followup.send(
-                    "✅ Attendance report sent to your DMs!",
+                    f"{theme.verifiedIcon} Attendance report sent to your DMs!",
                     ephemeral=True
                 )
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ Could not send DM. Please enable DMs from server members and try again.",
+                    f"{theme.deniedIcon} Could not send DM. Please enable DMs from server members and try again.",
                     ephemeral=True
                 )
             except discord.HTTPException as e:
                 if "Maximum message size" in str(e):
                     await interaction.followup.send(
-                        "❌ Report too large to send via Discord (8MB limit). Please try exporting fewer records.",
+                        f"{theme.deniedIcon} Report too large to send via Discord (8MB limit). Please try exporting fewer records.",
                         ephemeral=True
                     )
                 else:
                     await interaction.followup.send(
-                        f"❌ An error occurred while sending the report: {str(e)}",
+                        f"{theme.deniedIcon} An error occurred while sending the report: {str(e)}",
                         ephemeral=True
                     )
                     
         except Exception as e:
             print(f"Error in process_export: {e}")
             await interaction.followup.send(
-                "❌ An error occurred while generating the export.",
+                f"{theme.deniedIcon} An error occurred while generating the export.",
                 ephemeral=True
             )
 
@@ -626,7 +627,7 @@ class AttendanceReport(commands.Cog):
             import traceback
             traceback.print_exc()
             await interaction.edit_original_response(
-                content="❌ An error occurred while generating attendance report.",
+                content=f"{theme.deniedIcon} An error occurred while generating attendance report.",
                 embed=None,
                 view=None
             )
@@ -665,7 +666,7 @@ class AttendanceReport(commands.Cog):
                 
                 if not records:
                     await interaction.response.edit_message(
-                        content=f"❌ No attendance has been marked yet.",
+                        content=f"{theme.deniedIcon} No attendance has been marked yet.",
                         embed=None,
                         view=None
                     )
@@ -735,7 +736,7 @@ class AttendanceReport(commands.Cog):
 
                 if not records:
                     await interaction.response.edit_message(
-                        content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
+                        content=f"{theme.deniedIcon} No attendance records found for session '{session_name}' in {alliance_name}.",
                         embed=None,
                         view=None
                     )
@@ -863,7 +864,7 @@ class AttendanceReport(commands.Cog):
             file = discord.File(img_buffer, filename="attendance_report.png")
 
             # Format embed title with event type
-            embed_title = f"📊 Attendance Report - {alliance_name}"
+            embed_title = f"{theme.chartIcon} Attendance Report - {alliance_name}"
             description_text = f"**Session:** {session_name}"
             if event_type:
                 description_text += f" [{event_type}]"
@@ -872,7 +873,7 @@ class AttendanceReport(commands.Cog):
             embed = discord.Embed(
                 title=embed_title,
                 description=description_text,
-                color=discord.Color.green() if is_preview else discord.Color.blue()
+                color=theme.emColor3 if is_preview else discord.Color.blue()
             )
             embed.set_image(url="attachment://attendance_report.png")
 
@@ -881,7 +882,7 @@ class AttendanceReport(commands.Cog):
                 # Preview mode - create a simple back button that clears attachments
                 view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="⬅️ Back",
+                    label="Back", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
                 
@@ -901,7 +902,7 @@ class AttendanceReport(commands.Cog):
                 
                 # Back button
                 back_button = discord.ui.Button(
-                    label="⬅️ Back",
+                    label="Back", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
                 
@@ -914,7 +915,7 @@ class AttendanceReport(commands.Cog):
                 # Export button - only for full reports
                 export_button = discord.ui.Button(
                     label="Export",
-                    emoji="📥",
+                    emoji=f"{theme.exportIcon}",
                     style=discord.ButtonStyle.primary
                 )
                 
@@ -942,7 +943,7 @@ class AttendanceReport(commands.Cog):
                 # Post to Channel button - only for full reports
                 post_button = discord.ui.Button(
                     label="Post to Channel",
-                    emoji="📢",
+                    emoji=f"{theme.announceIcon}",
                     style=discord.ButtonStyle.success
                 )
 
@@ -1067,7 +1068,7 @@ class AttendanceReport(commands.Cog):
                 
                 if not records:
                     await interaction.response.edit_message(
-                        content=f"❌ No attendance has been marked yet.",
+                        content=f"{theme.deniedIcon} No attendance has been marked yet.",
                         embed=None,
                         view=None
                     )
@@ -1133,7 +1134,7 @@ class AttendanceReport(commands.Cog):
 
             if not records:
                 await interaction.edit_original_response(
-                    content=f"❌ No attendance records found for session '{session_name}' in {alliance_name}.",
+                    content=f"{theme.deniedIcon} No attendance records found for session '{session_name}' in {alliance_name}.",
                     embed=None,
                     view=None
                 )
@@ -1164,7 +1165,7 @@ class AttendanceReport(commands.Cog):
             report_sections = []
             
             # Summary section
-            report_sections.append("📊 **SUMMARY**")
+            report_sections.append(f"{theme.chartIcon} **SUMMARY**")
             session_line = f"**Session:** {session_name}"
             if event_type:
                 session_line += f" [{event_type}]"
@@ -1190,8 +1191,8 @@ class AttendanceReport(commands.Cog):
             report_sections.append("")
             
             # Player details section
-            report_sections.append("👥 **PLAYER DETAILS**")
-            report_sections.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            report_sections.append(f"{theme.membersIcon} **PLAYER DETAILS**")
+            report_sections.append(theme.middleDivider)
 
             # Get user's sort preference and apply sorting
             sort_preference = await self.get_user_sort_preference(interaction.user.id)
@@ -1259,7 +1260,7 @@ class AttendanceReport(commands.Cog):
 
                     # If we're past the summary, add a continuation header
                     if i > summary_end_index:
-                        continuation_header = "👥 **PLAYER DETAILS** (continued)"
+                        continuation_header = f"{theme.membersIcon} **PLAYER DETAILS** (continued)"
                         current_sections.append(continuation_header)
                         current_length = len(continuation_header) + 1
 
@@ -1276,16 +1277,16 @@ class AttendanceReport(commands.Cog):
                 if idx == 0:
                     # First embed gets the full title
                     embed = discord.Embed(
-                        title=f"📊 Attendance Report - {alliance_name}",
+                        title=f"{theme.chartIcon} Attendance Report - {alliance_name}",
                         description=embed_desc,
-                        color=discord.Color.blue()
+                        color=theme.emColor1
                     )
                 else:
                     # Subsequent embeds get continuation title
                     embed = discord.Embed(
-                        title=f"📊 Attendance Report - {alliance_name} (Page {idx + 1})",
+                        title=f"{theme.chartIcon} Attendance Report - {alliance_name} (Page {idx + 1})",
                         description=embed_desc,
-                        color=discord.Color.blue()
+                        color=theme.emColor1
                     )
 
                 # Add footer only to last embed
@@ -1303,7 +1304,7 @@ class AttendanceReport(commands.Cog):
             # Back button - different behavior for preview vs regular mode
             if is_preview and marking_view:
                 back_button = discord.ui.Button(
-                    label="⬅️ Back to Marking",
+                    label="Back to Marking", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
 
@@ -1314,7 +1315,7 @@ class AttendanceReport(commands.Cog):
                 view.add_item(back_button)
             else:
                 back_button = discord.ui.Button(
-                    label="⬅️ Back to Sessions",
+                    label="Back to Sessions", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
 
@@ -1327,7 +1328,7 @@ class AttendanceReport(commands.Cog):
             # Export button
             export_button = discord.ui.Button(
                 label="Export",
-                emoji="📥",
+                emoji=f"{theme.exportIcon}",
                 style=discord.ButtonStyle.primary
             )
 
@@ -1356,7 +1357,7 @@ class AttendanceReport(commands.Cog):
             if not is_preview:
                 post_button = discord.ui.Button(
                     label="Post to Channel",
-                    emoji="📢",
+                    emoji=f"{theme.announceIcon}",
                     style=discord.ButtonStyle.success
                 )
 
@@ -1386,7 +1387,7 @@ class AttendanceReport(commands.Cog):
         except Exception as e:
             print(f"Error showing text attendance report: {e}")
             # Try to respond appropriately based on interaction state
-            error_content = "❌ An error occurred while generating attendance report."
+            error_content = f"{theme.deniedIcon} An error occurred while generating attendance report."
             if interaction.response.is_done():
                 await interaction.edit_original_response(content=error_content, embed=None, view=None)
             else:
@@ -1448,15 +1449,15 @@ class AttendanceReport(commands.Cog):
             if not sessions:
                 # Create embed for no sessions found
                 embed = discord.Embed(
-                    title=f"📋 Attendance Sessions - {alliance_name}",
-                    description=f"❌ **No attendance sessions found for {alliance_name}.**\n\nTo create attendance records, use the 'Mark Attendance' option from the main menu.",
+                    title=f"{theme.listIcon} Attendance Sessions - {alliance_name}",
+                    description=f"{theme.deniedIcon} **No attendance sessions found for {alliance_name}.**\n\nTo create attendance records, use the 'Mark Attendance' option from the main menu.",
                     color=discord.Color.orange()
                 )
                 
                 # Add back button
                 back_view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="⬅️ Back to Alliance Selection",
+                    label="Back to Alliance Selection", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
                 
@@ -1477,7 +1478,7 @@ class AttendanceReport(commands.Cog):
                             select_embed = discord.Embed(
                                 title="👀 View Attendance - Alliance Selection",
                                 description="Please select an alliance to view attendance records:",
-                                color=discord.Color.green()
+                                color=theme.emColor3
                             )
 
                             await back_interaction.response.edit_message(embed=select_embed, view=view)
@@ -1508,9 +1509,9 @@ class AttendanceReport(commands.Cog):
             view = SessionSelectView(sessions, alliance_id, self, is_viewing=True)
             
             embed = discord.Embed(
-                title=f"📋 Attendance Sessions - {alliance_name}",
+                title=f"{theme.listIcon} Attendance Sessions - {alliance_name}",
                 description="Please select a session to view attendance records:",
-                color=discord.Color.blue()
+                color=theme.emColor1
             )
             
             if interaction.response.is_done():
@@ -1522,13 +1523,13 @@ class AttendanceReport(commands.Cog):
             print(f"Error showing session selection: {e}")
             if interaction.response.is_done():
                 await interaction.edit_original_response(
-                    content="❌ An error occurred while loading sessions.",
+                    content=f"{theme.deniedIcon} An error occurred while loading sessions.",
                     embed=None,
                     view=None
                 )
             else:
                 await interaction.response.send_message(
-                    "❌ An error occurred while loading sessions.",
+                    f"{theme.deniedIcon} An error occurred while loading sessions.",
                     ephemeral=True
                 )
 
@@ -1537,4 +1538,4 @@ async def setup(bot):
         cog = AttendanceReport(bot)
         await bot.add_cog(cog)
     except Exception as e:
-        print(f"❌ Failed to load AttendanceReport cog: {e}")
+        print(f"[ERROR] Failed to load AttendanceReport cog: {e}")
