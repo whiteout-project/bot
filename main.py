@@ -1219,19 +1219,26 @@ if __name__ == "__main__":
     def run_bot():
         import signal
 
-        shutdown_messages = [
-            "🛑 Ctrl+C detected! The bot is powering down... beep boop!",
-            "👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
-            "🔌 Ctrl+C pressed! Unplugging the bot. See you next time!",
-            "🚪 Exit signal received! The bot has left the building...",
-            "💤 Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
-            "🎬 And that's a wrap! Bot shutting down gracefully.",
-            "🌙 Trying to turn the bot off and not on again. Ctrl+C ya later!",
-            "✨ Ctrl+C and poof! The bot vanishes into thin air...",
-        ]
-
         def get_shutdown_message():
             import random
+            try:
+                from cogs.pimp_my_bot import theme
+                shutdown_messages = [
+                    f"{theme.shutdownStopIcon} Ctrl+C detected! The bot is powering down... beep boop!",
+                    f"{theme.shutdownHandIcon} Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
+                    f"{theme.shutdownPlugIcon} Ctrl+C pressed! Unplugging the bot. See you next time!",
+                    f"{theme.shutdownDoorIcon} Exit signal received! The bot has left the building...",
+                    f"{theme.shutdownZzzIcon} Ctrl+C! The bot is going to sleep. Wake me up when you need me!",
+                    f"{theme.shutdownClapperIcon} And that's a wrap! Bot shutting down gracefully.",
+                    f"{theme.shutdownMoonIcon} Trying to turn the bot off and not on again. Ctrl+C ya later!",
+                    f"{theme.shutdownSparkleIcon} Ctrl+C and poof! The bot vanishes into thin air...",
+                ]
+            except Exception:
+                # Fallback if theme not loaded yet
+                shutdown_messages = [
+                    "🛑 Ctrl+C detected! The bot is powering down... beep boop!",
+                    "👋 Caught Ctrl+C! Time for the bot to take a nap. Sweet dreams!",
+                ]
             return random.choice(shutdown_messages)
 
         async def start_bot():

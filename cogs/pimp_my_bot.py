@@ -18,6 +18,10 @@ from .permission_handler import PermissionManager
 # Database path constant
 THEME_DB_PATH = 'db/pimpmybot.sqlite'
 
+# Theme Gallery API configuration
+THEME_GALLERY_URL = "https://theme-gallery.whiteout-bot.com"
+THEME_GALLERY_API_KEY = "JpqVwtEOcL39eTCgoPStFvFQwX7-ZinZXe4koAnwKyqa0L6COqVfXFvyoCvheX5k"
+
 # Default values
 DEFAULT_EMOJI = "👻"
 
@@ -783,7 +787,18 @@ class ThemeMenuView(discord.ui.View):
         delete_btn.callback = self.delete_theme
         self.add_item(delete_btn)
 
-        # Row 3: Main Menu
+        # Row 3: Share Online - Main Menu
+        share_btn = discord.ui.Button(
+            label="Share Online",
+            emoji=theme.globeIcon or None,
+            style=discord.ButtonStyle.secondary,
+            custom_id="share_theme",
+            row=3,
+            disabled=not can_modify or not self.selected_theme
+        )
+        share_btn.callback = self.share_theme
+        self.add_item(share_btn)
+
         back_btn = discord.ui.Button(
             label="Main Menu",
             emoji=theme.homeIcon or None,
@@ -988,6 +1003,56 @@ class ThemeMenuView(discord.ui.View):
             color=discord.Color.red()
         )
         await interaction.response.edit_message(embed=embed, view=confirm_view)
+
+    async def share_theme(self, interaction: discord.Interaction):
+        """Share the selected theme to the online gallery."""
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+
+        if not self.selected_theme:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Please select a theme first.",
+                ephemeral=True
+            )
+            return
+
+        # Check ownership
+        if not self.is_global_admin and not self._theme_owned_by_guild(self.selected_theme, self.guild_id):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} You can only share themes created on your server.",
+                ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            result = await self.cog.share_theme_to_gallery(
+                self.selected_theme,
+                interaction.user.id,
+                interaction.user.display_name
+            )
+
+            if result.get("success"):
+                embed = discord.Embed(
+                    title=f"{theme.verifiedIcon} Theme Shared!",
+                    description=(
+                        f"**{self.selected_theme}** has been shared to the theme gallery.\n\n"
+                        f"{theme.linkIcon} [View on Gallery]({result.get('url', '')})"
+                    ),
+                    color=theme.emColor3
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    f"{theme.deniedIcon} {result.get('error', 'Failed to share theme.')}",
+                    ephemeral=True
+                )
+        except Exception as e:
+            await interaction.followup.send(
+                f"{theme.deniedIcon} Error sharing theme: {e}",
+                ephemeral=True
+            )
 
     async def create_theme(self, interaction: discord.Interaction):
         """Open the create theme modal with the new wizard."""
@@ -1968,6 +2033,83 @@ class Theme(commands.Cog):
             cursor.execute("DELETE FROM server_themes WHERE guild_id = ?", (guild_id,))
             conn.commit()
 
+    async def share_theme_to_gallery(self, theme_name: str, author_discord_id: int, author_username: str) -> dict:
+        """Share a theme to the online gallery. Returns dict with success/error/url."""
+        if not THEME_GALLERY_URL or not THEME_GALLERY_API_KEY:
+            return {"success": False, "error": "Theme gallery not configured."}
+
+        try:
+            # Get theme data
+            with sqlite3.connect(THEME_DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM pimpsettings WHERE themeName=?", (theme_name,))
+                row = cursor.fetchone()
+
+                if not row:
+                    return {"success": False, "error": f"Theme '{theme_name}' not found."}
+
+                theme_dict = dict(row)
+
+            # Build theme data for upload
+            icons = {}
+            for icon_name in ICON_NAMES:
+                icons[icon_name] = theme_dict.get(icon_name)
+
+            dividers = {}
+            for i in [1, 2, 3]:
+                dividers[f"divider{i}"] = {
+                    "start": theme_dict.get(f'dividerStart{i}', ''),
+                    "pattern": theme_dict.get(f'dividerPattern{i}', ''),
+                    "end": theme_dict.get(f'dividerEnd{i}', ''),
+                    "length": theme_dict.get(f'dividerLength{i}', 20)
+                }
+
+            colors = {
+                "emColorString1": theme_dict.get('emColorString1', '#0000FF'),
+                "emColorString2": theme_dict.get('emColorString2', '#FF0000'),
+                "emColorString3": theme_dict.get('emColorString3', '#00FF00'),
+                "emColorString4": theme_dict.get('emColorString4', '#FFFF00'),
+                "headerColor1": theme_dict.get('headerColor1', '#1F77B4'),
+                "headerColor2": theme_dict.get('headerColor2', '#28A745')
+            }
+
+            upload_data = {
+                "themeName": theme_name,
+                "themeDescription": theme_dict.get('themeDescription', ''),
+                "icons": icons,
+                "dividers": dividers,
+                "colors": colors,
+                "author_discord_id": author_discord_id,
+                "author_username": author_username
+            }
+
+            # Upload to gallery
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{THEME_GALLERY_URL.rstrip('/')}/api/bot/themes",
+                    json=upload_data,
+                    headers={
+                        "X-API-Key": THEME_GALLERY_API_KEY,
+                        "Content-Type": "application/json"
+                    }
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        theme_uuid = data.get("uuid", "")
+                        return {
+                            "success": True,
+                            "url": f"{THEME_GALLERY_URL.rstrip('/')}/theme/{theme_uuid}"
+                        }
+                    else:
+                        error_text = await resp.text()
+                        return {"success": False, "error": f"Gallery API error: {error_text}"}
+
+        except aiohttp.ClientError as e:
+            return {"success": False, "error": f"Connection error: {e}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def _process_emoji_update(self, emoji_name, new_url, themename, view_update_callback=None):
         """
         Process emoji update from URL, uploaded image, or unicode emoji.
@@ -2248,6 +2390,65 @@ class Theme(commands.Cog):
             ephemeral=True
         )
 
+    @pimp_group.command(name='share', description='Share a theme to the online gallery')
+    @discord.app_commands.describe(theme='The theme to share')
+    async def pimp_share(self, interaction: discord.Interaction, theme: str):
+        """Share a theme to the community gallery website."""
+        if not await self._check_admin(interaction):
+            return
+
+        guild_id = interaction.guild_id if interaction.guild else None
+        _, is_global = PermissionManager.is_admin(interaction.user.id)
+
+        # Check if user owns this theme (or is global admin)
+        if not is_global:
+            with sqlite3.connect(THEME_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT created_guild_id FROM pimpsettings WHERE themeName=?", (theme,))
+                result = cursor.fetchone()
+
+                if not result:
+                    await interaction.response.send_message(
+                        f"{globals()['theme'].deniedIcon} Theme '{theme}' not found.",
+                        ephemeral=True
+                    )
+                    return
+
+                if result[0] != guild_id:
+                    await interaction.response.send_message(
+                        f"{globals()['theme'].deniedIcon} You can only share themes created on your server.",
+                        ephemeral=True
+                    )
+                    return
+
+        await interaction.response.defer(ephemeral=True)
+
+        result = await self.share_theme_to_gallery(
+            theme,
+            interaction.user.id,
+            interaction.user.display_name
+        )
+
+        if result.get("success"):
+            embed = discord.Embed(
+                title=f"{globals()['theme'].verifiedIcon} Theme Shared!",
+                description=(
+                    f"**{theme}** has been shared to the theme gallery.\n\n"
+                    f"{globals()['theme'].linkIcon} [View on Gallery]({result.get('url', '')})"
+                ),
+                color=globals()['theme'].emColor3
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"{globals()['theme'].deniedIcon} {result.get('error', 'Failed to share theme.')}",
+                ephemeral=True
+            )
+
+    @pimp_share.autocomplete('theme')
+    async def pimp_share_autocomplete(self, interaction: discord.Interaction, current: str):
+        return await self._theme_autocomplete(current)
+
     async def _theme_autocomplete(self, current: str):
         try:
             with sqlite3.connect(THEME_DB_PATH) as conn:
@@ -2318,7 +2519,7 @@ class Theme(commands.Cog):
             'constructionIcon': '2692', 'castleBattleIcon': '1f3f0',
             'giftIcon': '1f381', 'giftsIcon': '1f6cd', 'giftAddIcon': '2795', 'giftAlarmIcon': '2795',
             'gifAlertIcon': '26a0', 'giftCheckIcon': '2705', 'giftTotalIcon': '1f7f0', 'giftDeleteIcon': '1f5d1',
-            'giftHashtagIcon': '1f522', 'giftSettingsIcon': '2699',
+            'giftHashtagIcon': '0023-fe0f-20e3', 'giftSettingsIcon': '2699',
             'processingIcon': '1f504', 'verifiedIcon': '2705', 'questionIcon': '2753', 'transferIcon': '2194',
             'multiplyIcon': '2716', 'divideIcon': '2797', 'deniedIcon': '274c', 'deleteIcon': '2796',
             'exportIcon': '27a1', 'importIcon': '2b05', 'retryIcon': '1f501', 'totalIcon': '1f7f0',
