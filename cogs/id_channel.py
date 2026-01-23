@@ -215,7 +215,7 @@ class IDChannel(commands.Cog):
                             if response.status == 429:
                                 if attempt < max_retries - 1:
                                     warning_embed = discord.Embed(
-                                        title=f"{theme.warningIcon} API Rate Limit Reached",
+                                        title=f"{theme.warnIcon} API Rate Limit Reached",
                                         description=(
                                             f"Operation is on hold due to API rate limit.\n"
                                             f"**Remaining Attempts:** `{max_retries - attempt - 1}`\n"

@@ -8,7 +8,7 @@ import re
 
 from .pimp_my_bot import (
     theme, THEME_DB_PATH, DEFAULT_EMOJI, ICON_CATEGORIES, check_interaction_user, build_divider,
-    ThemeMenuView, ICON_NAMES
+    ThemeMenuView, ICON_NAMES, DEFAULT_ICON_VALUES
 )
 
 
@@ -190,44 +190,52 @@ class ThemeEditorHub(discord.ui.View):
         self._build_buttons()
 
     def _build_buttons(self):
-        """Build the category and action buttons."""
+        """Build the category select and action buttons."""
         self.clear_items()
 
-        # Category button config: (name, emoji, style)
-        category_config = {
-            "Core": (theme.allianceIcon, discord.ButtonStyle.secondary),
-            "Actions": (theme.targetIcon, discord.ButtonStyle.secondary),
-            "UI": (theme.chartIcon, discord.ButtonStyle.secondary),
-            "Gifts": (theme.giftIcon, discord.ButtonStyle.secondary),
-            "Status": (theme.verifiedIcon, discord.ButtonStyle.secondary),
-            "Navigation": (theme.forwardIcon, discord.ButtonStyle.secondary),
-            "Events": (theme.calendarIcon, discord.ButtonStyle.secondary),
-            "Shutdown": (theme.shutdownMoonIcon, discord.ButtonStyle.secondary),
-            "Misc": (theme.settingsIcon, discord.ButtonStyle.secondary),
+        # Category emoji config for select options
+        category_emojis = {
+            "Status": theme.verifiedIcon,
+            "Navigation": theme.forwardIcon,
+            "Actions": theme.targetIcon,
+            "Display": theme.chartIcon,
+            "Operations": theme.giftIcon,
+            "Alliance History": theme.allianceIcon,
+            "Notifications": theme.bellIcon,
+            "Events": theme.calendarIcon,
+            "Minister": theme.ministerIcon,
+            "Bot Management": theme.robotIcon,
         }
 
-        # Row 0-2: Category buttons (3 per row for 9 categories)
+        # Row 0: Category select dropdown
         categories = list(ICON_CATEGORIES.keys())
-        for idx, cat_name in enumerate(categories):
-            row = idx // 3
-            emoji, style = category_config.get(cat_name, (None, discord.ButtonStyle.secondary))
-            btn = discord.ui.Button(
+        options = []
+        for cat_name in categories:
+            emoji = category_emojis.get(cat_name)
+            icon_count = len(ICON_CATEGORIES.get(cat_name, []))
+            options.append(discord.SelectOption(
                 label=cat_name,
-                emoji=emoji,
-                style=style,
-                custom_id=f"cat_{cat_name}",
-                row=row
-            )
-            btn.callback = self._make_category_callback(cat_name)
-            self.add_item(btn)
+                value=cat_name,
+                description=f"{icon_count} icons",
+                emoji=emoji
+            ))
 
-        # Row 3: Dividers, Colors
+        category_select = discord.ui.Select(
+            placeholder="Select icon category to edit...",
+            options=options,
+            custom_id="category_select",
+            row=0
+        )
+        category_select.callback = self._category_select_callback
+        self.add_item(category_select)
+
+        # Row 1: Dividers, Colors
         dividers_btn = discord.ui.Button(
             label="Dividers",
             emoji="➖",
             style=discord.ButtonStyle.secondary,
             custom_id="cat_dividers",
-            row=3
+            row=1
         )
         dividers_btn.callback = self.open_dividers
         self.add_item(dividers_btn)
@@ -237,18 +245,28 @@ class ThemeEditorHub(discord.ui.View):
             emoji="🎨",
             style=discord.ButtonStyle.secondary,
             custom_id="cat_colors",
-            row=3
+            row=1
         )
         colors_btn.callback = self.open_colors
         self.add_item(colors_btn)
 
-        # Row 4: Preview, Save & Exit, Back
+        reset_icons_btn = discord.ui.Button(
+            label="Reset Icons",
+            emoji=theme.retryIcon,
+            style=discord.ButtonStyle.danger,
+            custom_id="reset_icons",
+            row=1
+        )
+        reset_icons_btn.callback = self.reset_all_icons
+        self.add_item(reset_icons_btn)
+
+        # Row 2: Preview, Save & Exit, Back
         preview_btn = discord.ui.Button(
             label="Preview",
-            emoji=theme.eyeIcon,
+            emoji=theme.eyesIcon,
             style=discord.ButtonStyle.primary,
             custom_id="preview",
-            row=4
+            row=2
         )
         preview_btn.callback = self.show_preview
         self.add_item(preview_btn)
@@ -258,7 +276,7 @@ class ThemeEditorHub(discord.ui.View):
             emoji=theme.saveIcon,
             style=discord.ButtonStyle.success,
             custom_id="save_exit",
-            row=4
+            row=2
         )
         save_btn.callback = self.save_and_exit
         self.add_item(save_btn)
@@ -268,10 +286,24 @@ class ThemeEditorHub(discord.ui.View):
             emoji=theme.backIcon,
             style=discord.ButtonStyle.secondary,
             custom_id="back",
-            row=4
+            row=2
         )
         back_btn.callback = self.cancel_editing
         self.add_item(back_btn)
+
+    async def _category_select_callback(self, interaction: discord.Interaction):
+        """Handle category selection from dropdown."""
+        if interaction.user.id != self.session.user_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the theme creator can edit.",
+                ephemeral=True
+            )
+            return
+
+        category_name = interaction.data['values'][0]
+        view = IconCategoryView(self.cog, self.session, category_name, self)
+        embed = view.build_category_embed()
+        await interaction.response.edit_message(embed=embed, view=view)
 
     def _make_category_callback(self, category_name: str):
         """Create a callback for a category button."""
@@ -289,7 +321,7 @@ class ThemeEditorHub(discord.ui.View):
 
         return callback
 
-    def build_hub_embed(self) -> discord.Embed:
+    def build_hub_embed(self, confirmation: str = None) -> discord.Embed:
         """Build the main hub embed showing all icons by category (emoji only)."""
         self.session.load_theme_data()
 
@@ -303,6 +335,8 @@ class ThemeEditorHub(discord.ui.View):
 
         # Add description and created date to embed description
         desc_parts = []
+        if self.session.theme_name != "default":
+            desc_parts.append(f"*New themes inherit icons from the default theme.*")
         if description:
             desc_parts.append(f"📝 {description}")
         if created_at:
@@ -310,11 +344,17 @@ class ThemeEditorHub(discord.ui.View):
         if desc_parts:
             embed.description = "\n".join(desc_parts)
 
+        # Add confirmation footer if provided
+        if confirmation:
+            embed.set_footer(text=f"✓ {confirmation}")
+
         # Add each category as a field - emoji only, no names
         for cat_name, icon_list in ICON_CATEGORIES.items():
             # Filter out any None values just in case
             icons = [self.session.get_icon_value(icon_name) for icon_name in icon_list]
-            field_value = " ".join(str(i) for i in icons if i)
+            icons_str = [str(i) for i in icons if i]
+
+            field_value = " ".join(icons_str)
 
             embed.add_field(
                 name=f"{cat_name} ({len(icon_list)})",
@@ -322,27 +362,75 @@ class ThemeEditorHub(discord.ui.View):
                 inline=True
             )
 
-        # Add dividers field (use 'or' to handle None values from database)
-        div1_start = self.session.theme_data.get('dividerStart1') or '━'
-        div1_pattern = self.session.theme_data.get('dividerPattern1') or '━'
-        div1_end = self.session.theme_data.get('dividerEnd1') or '━'
-        div1_len = self.session.theme_data.get('dividerLength1') or 20
+        # Add dividers field - show preview of each divider with code block status
+        div1 = build_divider(
+            self.session.theme_data.get('dividerStart1') or '━',
+            self.session.theme_data.get('dividerPattern1') or '━',
+            self.session.theme_data.get('dividerEnd1') or '━',
+            int(self.session.theme_data.get('dividerLength1') or 20)
+        )
+        div2 = build_divider(
+            self.session.theme_data.get('dividerStart2') or '━',
+            self.session.theme_data.get('dividerPattern2') or '━',
+            self.session.theme_data.get('dividerEnd2') or '━',
+            int(self.session.theme_data.get('dividerLength2') or 20)
+        )
+        div3 = build_divider(
+            self.session.theme_data.get('dividerStart3') or '━',
+            self.session.theme_data.get('dividerPattern3') or '━',
+            self.session.theme_data.get('dividerEnd3') or '━',
+            int(self.session.theme_data.get('dividerLength3') or 20)
+        )
 
-        div2_start = self.session.theme_data.get('dividerStart2') or '━'
-        div2_pattern = self.session.theme_data.get('dividerPattern2') or '━'
-        div2_end = self.session.theme_data.get('dividerEnd2') or '━'
-        div2_len = self.session.theme_data.get('dividerLength2') or 20
+        # Apply code block wrapping if enabled (show actual rendering)
+        if self.session.theme_data.get('dividerCodeBlock1'):
+            div1 = f"`{div1}`"
+        if self.session.theme_data.get('dividerCodeBlock2'):
+            div2 = f"`{div2}`"
+        if self.session.theme_data.get('dividerCodeBlock3'):
+            div3 = f"`{div3}`"
 
         embed.add_field(
             name="Dividers",
             value=(
-                f"**1:** {div1_start}{div1_pattern*3}{div1_end} (len: {div1_len})\n"
-                f"**2:** {div2_start}{div2_pattern*3}{div2_end} (len: {div2_len})"
+                f"**1:** {div1}\n"
+                f"**2:** {div2}\n"
+                f"**3:** {div3}"
             ),
             inline=False
         )
 
-        # Add colors field (use 'or' to handle None values from database)
+        # Add colors field with color square previews
+        def hex_to_square(hex_color: str) -> str:
+            """Convert hex color to closest colored square emoji."""
+            try:
+                hex_color = hex_color.lstrip('#')
+                r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            except (ValueError, IndexError):
+                return "⬜"
+
+            # Map to closest Discord square emoji based on dominant color
+            if r > 180 and g < 100 and b < 100:
+                return "🟥"  # Red
+            elif r > 180 and g > 100 and g < 180 and b < 100:
+                return "🟧"  # Orange
+            elif r > 180 and g > 180 and b < 100:
+                return "🟨"  # Yellow
+            elif r < 100 and g > 150 and b < 100:
+                return "🟩"  # Green
+            elif r < 100 and g < 150 and b > 150:
+                return "🟦"  # Blue
+            elif r > 100 and g < 100 and b > 150:
+                return "🟪"  # Purple
+            elif r < 80 and g < 80 and b < 80:
+                return "⬛"  # Black
+            elif r > 200 and g > 200 and b > 200:
+                return "⬜"  # White
+            elif r > 100 and g > 50 and g < 100 and b < 80:
+                return "🟫"  # Brown
+            else:
+                return "🟦"  # Default to blue
+
         c1 = self.session.theme_data.get('emColorString1') or '#0000FF'
         c2 = self.session.theme_data.get('emColorString2') or '#FF0000'
         c3 = self.session.theme_data.get('emColorString3') or '#00FF00'
@@ -353,8 +441,8 @@ class ThemeEditorHub(discord.ui.View):
         embed.add_field(
             name="Colors",
             value=(
-                f"**Embed:** {c1} {c2} {c3} {c4}\n"
-                f"**Header:** {h1} {h2}"
+                f"**Embed:** {hex_to_square(c1)}{c1} {hex_to_square(c2)}{c2} {hex_to_square(c3)}{c3} {hex_to_square(c4)}{c4}\n"
+                f"**Header:** {hex_to_square(h1)}{h1} {hex_to_square(h2)}{h2}"
             ),
             inline=False
         )
@@ -378,6 +466,38 @@ class ThemeEditorHub(discord.ui.View):
         view = ColorEditorView(self.cog, self.session, self)
         embed = view.build_embed()
         await interaction.response.edit_message(embed=embed, view=view)
+
+    async def reset_all_icons(self, interaction: discord.Interaction):
+        """Reset all icons to default values."""
+        if not await check_interaction_user(interaction, self.session.user_id):
+            return
+
+        await interaction.response.defer()
+
+        try:
+            with sqlite3.connect(THEME_DB_PATH) as conn:
+                cursor = conn.cursor()
+                # Build SET clause from DEFAULT_ICON_VALUES
+                set_clauses = [f"{col}=?" for col in DEFAULT_ICON_VALUES.keys()]
+                values = list(DEFAULT_ICON_VALUES.values()) + [self.session.theme_name]
+
+                cursor.execute(f"""
+                    UPDATE pimpsettings SET {', '.join(set_clauses)}
+                    WHERE themeName=?
+                """, values)
+                conn.commit()
+
+            self.session.load_theme_data()
+            reload_theme_if_active(self.session.theme_name, self.session.guild_id)
+
+            embed = self.build_hub_embed(confirmation="All icons reset to defaults")
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"{theme.deniedIcon} Error resetting icons: {e}",
+                ephemeral=True
+            )
 
     async def show_preview(self, interaction: discord.Interaction):
         """Show theme preview."""
@@ -653,12 +773,18 @@ class DividerEditorView(discord.ui.View):
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
+        self._build_buttons()
+
+    def _build_buttons(self):
+        """Build all buttons for divider editing."""
+        self.clear_items()
 
         # Edit Upper Divider
         div1_btn = discord.ui.Button(
             label="Edit Upper",
             style=discord.ButtonStyle.primary,
-            custom_id="edit_div1"
+            custom_id="edit_div1",
+            row=0
         )
         div1_btn.callback = self.edit_divider1
         self.add_item(div1_btn)
@@ -667,7 +793,8 @@ class DividerEditorView(discord.ui.View):
         div3_btn = discord.ui.Button(
             label="Edit Middle",
             style=discord.ButtonStyle.primary,
-            custom_id="edit_div3"
+            custom_id="edit_div3",
+            row=0
         )
         div3_btn.callback = self.edit_divider3
         self.add_item(div3_btn)
@@ -676,49 +803,106 @@ class DividerEditorView(discord.ui.View):
         div2_btn = discord.ui.Button(
             label="Edit Lower",
             style=discord.ButtonStyle.primary,
-            custom_id="edit_div2"
+            custom_id="edit_div2",
+            row=0
         )
         div2_btn.callback = self.edit_divider2
         self.add_item(div2_btn)
+
+        # Code block toggles - show current state
+        cb1 = self.session.theme_data.get('dividerCodeBlock1', 0)
+        cb2 = self.session.theme_data.get('dividerCodeBlock2', 0)
+        cb3 = self.session.theme_data.get('dividerCodeBlock3', 0)
+
+        toggle1_btn = discord.ui.Button(
+            label=f"Upper: {'`[ code ]`' if cb1 else '[ plain ]'}",
+            style=discord.ButtonStyle.success if cb1 else discord.ButtonStyle.secondary,
+            custom_id="toggle_cb1",
+            row=1
+        )
+        toggle1_btn.callback = self.toggle_codeblock1
+        self.add_item(toggle1_btn)
+
+        toggle3_btn = discord.ui.Button(
+            label=f"Middle: {'`[ code ]`' if cb3 else '[ plain ]'}",
+            style=discord.ButtonStyle.success if cb3 else discord.ButtonStyle.secondary,
+            custom_id="toggle_cb3",
+            row=1
+        )
+        toggle3_btn.callback = self.toggle_codeblock3
+        self.add_item(toggle3_btn)
+
+        toggle2_btn = discord.ui.Button(
+            label=f"Lower: {'`[ code ]`' if cb2 else '[ plain ]'}",
+            style=discord.ButtonStyle.success if cb2 else discord.ButtonStyle.secondary,
+            custom_id="toggle_cb2",
+            row=1
+        )
+        toggle2_btn.callback = self.toggle_codeblock2
+        self.add_item(toggle2_btn)
+
+        # Reset button
+        reset_btn = discord.ui.Button(
+            label="Reset Dividers",
+            emoji=theme.retryIcon,
+            style=discord.ButtonStyle.danger,
+            custom_id="reset_dividers",
+            row=2
+        )
+        reset_btn.callback = self.reset_dividers
+        self.add_item(reset_btn)
 
         # Back button
         back_btn = discord.ui.Button(
             label="Back to Hub",
             emoji=theme.backIcon,
             style=discord.ButtonStyle.secondary,
-            custom_id="back"
+            custom_id="back",
+            row=2
         )
         back_btn.callback = self.back_to_hub
         self.add_item(back_btn)
 
-    def build_embed(self) -> discord.Embed:
+    def build_embed(self, confirmation: str = None) -> discord.Embed:
         """Build divider editor embed."""
         self.session.load_theme_data()
 
-        # Build divider previews
+        # Build divider previews (showing actual rendering with/without code blocks)
         div1 = self._build_divider_preview(1)
         div2 = self._build_divider_preview(2)
         div3 = self._build_divider_preview(3)
+
+        # Code block status indicators
+        cb1 = "[ code ]" if self.session.theme_data.get('dividerCodeBlock1') else "[ plain ]"
+        cb2 = "[ code ]" if self.session.theme_data.get('dividerCodeBlock2') else "[ plain ]"
+        cb3 = "[ code ]" if self.session.theme_data.get('dividerCodeBlock3') else "[ plain ]"
 
         embed = discord.Embed(
             title=f"{theme.settingsIcon} Edit Dividers",
             description=(
                 "Configure the divider patterns used throughout the bot.\n\n"
-                "**Upper:** First divider in embeds\n"
+                "**Upper:** First divider in embeds with multiple sections\n"
                 "**Middle:** Used for single dividers or middle sections\n"
-                "**Lower:** Last divider in embeds"
+                "**Lower:** Last divider in embeds\n\n"
+                "Use the toggle buttons to wrap dividers in code blocks, "
+                "which prevent Discord markdown (like `~~` strikethrough) from being interpreted."
             ),
             color=theme.emColor1
         )
 
+        # Add confirmation footer if provided
+        if confirmation:
+            embed.set_footer(text=f"✓ {confirmation}")
+
         embed.add_field(
             name="Upper Divider",
             value=(
-                f"**Start:** {self.session.theme_data.get('dividerStart1', '━')}\n"
-                f"**Pattern:** {self.session.theme_data.get('dividerPattern1', '━')}\n"
-                f"**End:** {self.session.theme_data.get('dividerEnd1', '━')}\n"
+                f"**Start:** `{self.session.theme_data.get('dividerStart1', '━')}`\n"
+                f"**Pattern:** `{self.session.theme_data.get('dividerPattern1', '━')}`\n"
+                f"**End:** `{self.session.theme_data.get('dividerEnd1', '━')}`\n"
                 f"**Length:** {self.session.theme_data.get('dividerLength1', 20)}\n"
-                f"**Preview:** {div1}"
+                f"**Mode:** {cb1}\n"
+                f"**Preview:**\n{div1}"
             ),
             inline=True
         )
@@ -726,11 +910,12 @@ class DividerEditorView(discord.ui.View):
         embed.add_field(
             name="Middle Divider",
             value=(
-                f"**Start:** {self.session.theme_data.get('dividerStart3', '━')}\n"
-                f"**Pattern:** {self.session.theme_data.get('dividerPattern3', '━')}\n"
-                f"**End:** {self.session.theme_data.get('dividerEnd3', '━')}\n"
+                f"**Start:** `{self.session.theme_data.get('dividerStart3', '━')}`\n"
+                f"**Pattern:** `{self.session.theme_data.get('dividerPattern3', '━')}`\n"
+                f"**End:** `{self.session.theme_data.get('dividerEnd3', '━')}`\n"
                 f"**Length:** {self.session.theme_data.get('dividerLength3', 20)}\n"
-                f"**Preview:** {div3}"
+                f"**Mode:** {cb3}\n"
+                f"**Preview:**\n{div3}"
             ),
             inline=True
         )
@@ -738,11 +923,12 @@ class DividerEditorView(discord.ui.View):
         embed.add_field(
             name="Lower Divider",
             value=(
-                f"**Start:** {self.session.theme_data.get('dividerStart2', '━')}\n"
-                f"**Pattern:** {self.session.theme_data.get('dividerPattern2', '━')}\n"
-                f"**End:** {self.session.theme_data.get('dividerEnd2', '━')}\n"
+                f"**Start:** `{self.session.theme_data.get('dividerStart2', '━')}`\n"
+                f"**Pattern:** `{self.session.theme_data.get('dividerPattern2', '━')}`\n"
+                f"**End:** `{self.session.theme_data.get('dividerEnd2', '━')}`\n"
                 f"**Length:** {self.session.theme_data.get('dividerLength2', 20)}\n"
-                f"**Preview:** {div2}"
+                f"**Mode:** {cb2}\n"
+                f"**Preview:**\n{div2}"
             ),
             inline=True
         )
@@ -750,17 +936,21 @@ class DividerEditorView(discord.ui.View):
         return embed
 
     def _build_divider_preview(self, num: int) -> str:
-        """Build a preview of a divider using the shared build_divider function."""
+        """Build a preview of a divider showing actual rendering."""
         start = self.session.theme_data.get(f'dividerStart{num}', '━')
         pattern = self.session.theme_data.get(f'dividerPattern{num}', '━')
         end = self.session.theme_data.get(f'dividerEnd{num}', '━')
         length = int(self.session.theme_data.get(f'dividerLength{num}', 20) or 20)
+        use_code_block = self.session.theme_data.get(f'dividerCodeBlock{num}', 0)
 
         # Build preview with max 20 chars for display
         preview_len = min(length, 20)
         divider = build_divider(start, pattern, end, preview_len)
-        # Wrap in code block to prevent markdown interpretation (~ for strikethrough, etc.)
-        return f"`{divider}`"
+
+        # Show exactly how it will render (with or without code block)
+        if use_code_block:
+            return f"`{divider}`"
+        return divider
 
     async def edit_divider1(self, interaction: discord.Interaction):
         """Open modal to edit divider 1 (Upper)."""
@@ -785,6 +975,84 @@ class DividerEditorView(discord.ui.View):
 
         modal = DividerModal(self.cog, self.session, 3, self)
         await interaction.response.send_modal(modal)
+
+    async def _toggle_codeblock(self, interaction: discord.Interaction, divider_num: int):
+        """Toggle code block setting for a divider."""
+        if not await check_interaction_user(interaction, self.session.user_id):
+            return
+
+        await interaction.response.defer()
+
+        # Get current value and toggle it
+        current = self.session.theme_data.get(f'dividerCodeBlock{divider_num}', 0)
+        new_value = 0 if current else 1
+
+        try:
+            with sqlite3.connect(THEME_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"UPDATE pimpsettings SET dividerCodeBlock{divider_num}=? WHERE themeName=?",
+                    (new_value, self.session.theme_name)
+                )
+                conn.commit()
+
+            self.session.load_theme_data()
+            reload_theme_if_active(self.session.theme_name, self.session.guild_id)
+
+            # Rebuild buttons to reflect new state
+            self._build_buttons()
+            embed = self.build_embed()
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"{theme.deniedIcon} Error toggling code block: {e}",
+                ephemeral=True
+            )
+
+    async def toggle_codeblock1(self, interaction: discord.Interaction):
+        """Toggle code block for upper divider."""
+        await self._toggle_codeblock(interaction, 1)
+
+    async def toggle_codeblock2(self, interaction: discord.Interaction):
+        """Toggle code block for lower divider."""
+        await self._toggle_codeblock(interaction, 2)
+
+    async def toggle_codeblock3(self, interaction: discord.Interaction):
+        """Toggle code block for middle divider."""
+        await self._toggle_codeblock(interaction, 3)
+
+    async def reset_dividers(self, interaction: discord.Interaction):
+        """Reset all dividers to default values."""
+        if not await check_interaction_user(interaction, self.session.user_id):
+            return
+
+        await interaction.response.defer()
+
+        try:
+            with sqlite3.connect(THEME_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE pimpsettings SET
+                        dividerStart1='━', dividerPattern1='━', dividerEnd1='━', dividerLength1=20, dividerCodeBlock1=0,
+                        dividerStart2='━', dividerPattern2='━', dividerEnd2='━', dividerLength2=20, dividerCodeBlock2=0,
+                        dividerStart3='━', dividerPattern3='━', dividerEnd3='━', dividerLength3=20, dividerCodeBlock3=0
+                    WHERE themeName=?
+                """, (self.session.theme_name,))
+                conn.commit()
+
+            self.session.load_theme_data()
+            reload_theme_if_active(self.session.theme_name, self.session.guild_id)
+
+            self._build_buttons()
+            embed = self.build_embed(confirmation="All dividers reset to defaults")
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"{theme.deniedIcon} Error resetting dividers: {e}",
+                ephemeral=True
+            )
 
     async def back_to_hub(self, interaction: discord.Interaction):
         """Return to hub."""
@@ -928,6 +1196,8 @@ class ColorEditorView(discord.ui.View):
         self.session = session
         self.hub_view = hub_view
         self.selected_fields = []  # Track which color fields are selected for swatch application (multi-select)
+        self._pending_confirmation = None  # For confirmation messages in footer
+        self._last_edited_field = "emColorString1"  # Track last edited color for preview
         self._build_buttons()
 
     def _build_buttons(self):
@@ -1012,7 +1282,17 @@ class ColorEditorView(discord.ui.View):
         swatch_select.callback = self.swatch_selected
         self.add_item(swatch_select)
 
-        # Row 4: Back button
+        # Row 4: Reset and Back buttons
+        reset_btn = discord.ui.Button(
+            label="Reset Colors",
+            emoji=theme.retryIcon,
+            style=discord.ButtonStyle.danger,
+            custom_id="reset_colors",
+            row=4
+        )
+        reset_btn.callback = self.reset_colors
+        self.add_item(reset_btn)
+
         back_btn = discord.ui.Button(
             label="Back to Hub",
             emoji=theme.backIcon,
@@ -1073,6 +1353,10 @@ class ColorEditorView(discord.ui.View):
             self.session.load_theme_data()
             reload_theme_if_active(self.session.theme_name, self.session.guild_id)
 
+            # Update last edited field for preview (use first selected if multiple)
+            if self.selected_fields:
+                self._last_edited_field = self.selected_fields[0]
+
             embed = self.build_embed()
             await interaction.edit_original_response(embed=embed, view=self)
 
@@ -1108,7 +1392,7 @@ class ColorEditorView(discord.ui.View):
         url = f"https://www.colorhexa.com/{color_code}"
         return f"[{hex_color}]({url})"
 
-    def build_embed(self) -> discord.Embed:
+    def build_embed(self, confirmation: str = None) -> discord.Embed:
         """Build color editor embed with visual previews."""
         self.session.load_theme_data()
 
@@ -1126,11 +1410,16 @@ class ColorEditorView(discord.ui.View):
         except ValueError:
             embed_color = theme.emColor1
 
+        # Store confirmation for footer
+        self._pending_confirmation = confirmation
+
         embed = discord.Embed(
             title=f"{theme.paletteIcon} Edit Colors",
             description=(
-                "Configure the colors used in embeds and headers.\n"
-                "Use the buttons for custom hex input, or use the swatches for quick colors."
+                "Configure the colors in embeds and headers.\n"
+                "- Use the buttons for custom hex input\n"
+                "- Use the drop-downs for quick swatches\n"
+                "- Preview always shows the last color edited\n"
             ),
             color=embed_color
         )
@@ -1157,11 +1446,20 @@ class ColorEditorView(discord.ui.View):
             inline=True
         )
 
-        # Set thumbnail to show Embed Color 1 as visual preview
-        embed.set_thumbnail(url=self._color_preview_url(c1))
+        # Set thumbnail to show the last edited color as visual preview
+        color_map = {
+            "emColorString1": c1, "emColorString2": c2,
+            "emColorString3": c3, "emColorString4": c4,
+            "headerColor1": h1, "headerColor2": h2,
+        }
+        preview_color = color_map.get(self._last_edited_field, c1)
+        embed.set_thumbnail(url=self._color_preview_url(preview_color))
 
-        # Add footer with swatch usage hint
-        if self.selected_fields:
+        # Add footer - confirmation takes priority, then swatch targets
+        if self._pending_confirmation:
+            embed.set_footer(text=f"✓ {self._pending_confirmation}")
+            self._pending_confirmation = None  # Clear after use
+        elif self.selected_fields:
             field_names = {
                 "emColorString1": "Embed 1",
                 "emColorString2": "Embed 2",
@@ -1174,6 +1472,37 @@ class ColorEditorView(discord.ui.View):
             embed.set_footer(text=f"Swatch targets: {', '.join(selected_names)}")
 
         return embed
+
+    async def reset_colors(self, interaction: discord.Interaction):
+        """Reset all colors to default values."""
+        if not await check_interaction_user(interaction, self.session.user_id):
+            return
+
+        await interaction.response.defer()
+
+        try:
+            with sqlite3.connect(THEME_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE pimpsettings SET
+                        emColorString1='#3498DB', emColorString2='#E74C3C',
+                        emColorString3='#2ECC71', emColorString4='#F1C40F',
+                        headerColor1='#1F77B4', headerColor2='#28A745'
+                    WHERE themeName=?
+                """, (self.session.theme_name,))
+                conn.commit()
+
+            self.session.load_theme_data()
+            reload_theme_if_active(self.session.theme_name, self.session.guild_id)
+
+            embed = self.build_embed(confirmation="All colors reset to defaults")
+            await interaction.edit_original_response(embed=embed, view=self)
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"{theme.deniedIcon} Error resetting colors: {e}",
+                ephemeral=True
+            )
 
     async def back_to_hub(self, interaction: discord.Interaction):
         """Return to hub."""
@@ -1250,6 +1579,9 @@ class ColorModal(discord.ui.Modal):
 
             self.session.load_theme_data()
             reload_theme_if_active(self.session.theme_name, self.session.guild_id)
+
+            # Update last edited field for preview
+            self.parent_view._last_edited_field = self.field
 
             embed = self.parent_view.build_embed()
             await interaction.edit_original_response(embed=embed, view=self.parent_view)

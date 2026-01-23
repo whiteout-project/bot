@@ -168,7 +168,7 @@ class FilteredUserSelectView(discord.ui.View):
         self.update_navigation_buttons()
         await self.update_embed(interaction)
     
-    @discord.ui.button(label="Filter", style=discord.ButtonStyle.secondary, emoji=f"{theme.magnifyingIcon}", custom_id="filter", row=1)
+    @discord.ui.button(label="Filter", style=discord.ButtonStyle.secondary, emoji=f"{theme.searchIcon}", custom_id="filter", row=1)
     async def filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = UserFilterModal(self)
         await interaction.response.send_modal(modal)

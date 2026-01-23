@@ -34,12 +34,12 @@ def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str |
         examples = ", ".join(f"@{m}" for m in matches[:3])
         if is_embed:
             return (
-                f"{theme.warningIcon} You typed `{examples}` but mentions don't work inside embeds.\n"
+                f"{theme.warnIcon} You typed `{examples}` but mentions don't work inside embeds.\n"
                 f"Use `{{tag}}` instead - it will add the mention above the embed."
             )
         else:
             return (
-                f"{theme.warningIcon} You typed `{examples}` but this won't ping anyone.\n"
+                f"{theme.warnIcon} You typed `{examples}` but this won't ping anyone.\n"
                 f"Use `{{tag}}` instead - it will be replaced with your configured mention."
             )
     return None
@@ -750,7 +750,7 @@ class PlainEditorView(discord.ui.View):
                 self.mention = "none"
             elif mention_type == "role":
                 role_select = discord.ui.RoleSelect(
-                    placeholder=f"{theme.magnifyingIcon} Search and select who to mention...",
+                    placeholder=f"{theme.searchIcon} Search and select who to mention...",
                     min_values=1,
                     max_values=1
                 )
@@ -771,7 +771,7 @@ class PlainEditorView(discord.ui.View):
 
             elif mention_type == "member":
                 user_select = discord.ui.UserSelect(
-                    placeholder=f"{theme.magnifyingIcon} Search and select who to mention...",
+                    placeholder=f"{theme.searchIcon} Search and select who to mention...",
                     min_values=1,
                     max_values=1
                 )

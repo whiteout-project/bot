@@ -171,7 +171,7 @@ class Alliance(commands.Cog):
                     f"Please select a category:\n\n"
                     f"**Menu Categories**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.castleBattleIcon} **Alliance Operations**\n"
+                    f"{theme.allianceIcon} **Alliance Operations**\n"
                     f"└ Manage alliances and settings\n\n"
                     f"{theme.membersIcon} **Alliance Member Operations**\n"
                     f"└ Add, remove, and view members\n\n"
@@ -193,7 +193,7 @@ class Alliance(commands.Cog):
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji=theme.castleBattleIcon,
+                emoji=theme.allianceIcon,
                 style=discord.ButtonStyle.primary,
                 custom_id="alliance_operations",
                 row=0
@@ -271,7 +271,7 @@ class Alliance(commands.Cog):
                     f"Please select a category:\n\n"
                     f"**Menu Categories**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.castleBattleIcon} **Alliance Operations**\n"
+                    f"{theme.allianceIcon} **Alliance Operations**\n"
                     f"└ Manage alliances and settings\n\n"
                     f"{theme.membersIcon} **Alliance Member Operations**\n"
                     f"└ Add, remove, and view members\n\n"
@@ -293,7 +293,7 @@ class Alliance(commands.Cog):
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
                 label="Alliance Operations",
-                emoji=theme.castleBattleIcon,
+                emoji=theme.allianceIcon,
                 style=discord.ButtonStyle.primary,
                 custom_id="alliance_operations",
                 row=0
@@ -371,7 +371,7 @@ class Alliance(commands.Cog):
             try:
                 if custom_id == "alliance_operations":
                     embed = discord.Embed(
-                        title=f"{theme.castleBattleIcon} Alliance Operations",
+                        title=f"{theme.allianceIcon} Alliance Operations",
                         description=(
                             f"Please select an operation:\n\n"
                             f"**Available Operations**\n"
@@ -382,7 +382,7 @@ class Alliance(commands.Cog):
                             f"└ Modify existing alliance settings\n\n"
                             f"{theme.trashIcon} **Delete Alliance**\n"
                             f"└ Remove an existing alliance\n\n"
-                            f"{theme.eyeIcon} **View Alliances**\n"
+                            f"{theme.eyesIcon} **View Alliances**\n"
                             f"└ List all available alliances\n"
                             f"{theme.lowerDivider}"
                         ),
@@ -406,7 +406,7 @@ class Alliance(commands.Cog):
                     ))
                     view.add_item(discord.ui.Button(
                         label="Delete Alliance",
-                        emoji=theme.deleteIcon,
+                        emoji=theme.trashIcon,
                         style=discord.ButtonStyle.danger,
                         custom_id="delete_alliance"
                     ))
@@ -418,7 +418,7 @@ class Alliance(commands.Cog):
                     ))
                     view.add_item(discord.ui.Button(
                         label="Check Alliance", 
-                        emoji=theme.magnifyingIcon,
+                        emoji=theme.searchIcon,
                         style=discord.ButtonStyle.primary, 
                         custom_id="check_alliance"
                     ))
@@ -492,7 +492,7 @@ class Alliance(commands.Cog):
                                     description=(
                                         f"{theme.upperDivider}\n"
                                         f"{theme.chartIcon} **Type:** All Alliances ({len(alliances)} total)\n"
-                                        f"{theme.castleBattleIcon} **Alliances:** {len(alliances)} alliances\n"
+                                        f"{theme.allianceIcon} **Alliances:** {len(alliances)} alliances\n"
                                         f"{theme.pinIcon} **Status:** Queued\n"
                                         f"{theme.levelIcon} **Queue Position:** {initial_queue_pos}\n"
                                         f"{theme.lowerDivider}"
@@ -559,7 +559,7 @@ class Alliance(commands.Cog):
                                     description=(
                                         f"{theme.upperDivider}\n"
                                         f"{theme.chartIcon} **Type:** Single Alliance\n"
-                                        f"{theme.castleBattleIcon} **Alliance:** {alliance_name}\n"
+                                        f"{theme.allianceIcon} **Alliance:** {alliance_name}\n"
                                         f"{theme.pinIcon} **Status:** Queued\n"
                                         f"{theme.levelIcon} **Queue Position:** {queue_position}\n"
                                         f"{theme.lowerDivider}"
@@ -589,7 +589,7 @@ class Alliance(commands.Cog):
                     view.add_item(select)
 
                     embed = discord.Embed(
-                        title=f"{theme.magnifyingIcon} Alliance Control",
+                        title=f"{theme.searchIcon} Alliance Control",
                         description=(
                             f"Please select an alliance to check:\n\n"
                             f"**Information**\n"
@@ -1216,14 +1216,14 @@ class Alliance(commands.Cog):
                     label=f"{name[:40]} (ID: {alliance_id})",
                     value=f"{alliance_id}",
                     description=f"{theme.membersIcon} Members: {alliance_members[alliance_id]} | Click to delete",
-                    emoji=theme.deleteIcon
+                    emoji=theme.trashIcon
                 ) for alliance_id, name in alliances
             ]
             
             option_pages = [all_options[i:i + items_per_page] for i in range(0, len(all_options), items_per_page)]
             
             embed = discord.Embed(
-                title=f"{theme.deleteIcon} Delete Alliance",
+                title=f"{theme.trashIcon} Delete Alliance",
                 description=(
                     f"**{theme.warnIcon} Warning: This action cannot be undone!**\n"
                     f"{theme.upperDivider}\n"
@@ -1296,7 +1296,7 @@ class Alliance(commands.Cog):
                     f"**Data to be Deleted:**\n"
                     f"{theme.settingsIcon} Alliance Settings: {settings_count}\n"
                     f"{theme.membersIcon} User Records: {users_count}\n"
-                    f"{theme.castleBattleIcon} Admin Server Records: {admin_server_count}\n"
+                    f"{theme.allianceIcon} Admin Server Records: {admin_server_count}\n"
                     f"{theme.announceIcon} Gift Channels: {gift_channels_count}\n"
                     f"{theme.chartIcon} Gift Code Controls: {gift_code_control_count}\n"
                     f"{theme.deniedIcon} Invalid ID Tracker: {invalid_tracker_count}\n"
@@ -1349,7 +1349,7 @@ class Alliance(commands.Cog):
                             f"{theme.allianceIcon} Alliance Records: {alliance_count}\n"
                             f"{theme.membersIcon} Users Removed: {users_count_deleted}\n"
                             f"{theme.settingsIcon} Alliance Settings: {admin_settings_count}\n"
-                            f"{theme.castleBattleIcon} Admin Server Records: {admin_server_count}\n"
+                            f"{theme.allianceIcon} Admin Server Records: {admin_server_count}\n"
                             f"{theme.announceIcon} Gift Channels: {gift_channels_count}\n"
                             f"{theme.chartIcon} Gift Code Controls: {gift_code_control_count}\n"
                             f"{theme.deniedIcon} Invalid ID Tracker: {invalid_tracker_deleted}\n"
@@ -1475,7 +1475,7 @@ class PaginatedDeleteView(discord.ui.View):
         self.update_view()
         
         embed = discord.Embed(
-            title=f"{theme.deleteIcon} Delete Alliance",
+            title=f"{theme.trashIcon} Delete Alliance",
             description=(
                 f"**{theme.warnIcon} Warning: This action cannot be undone!**\n"
                 f"{theme.upperDivider}\n"
@@ -1497,7 +1497,7 @@ class PaginatedDeleteView(discord.ui.View):
         self.update_view()
 
         embed = discord.Embed(
-            title=f"{theme.deleteIcon} Delete Alliance",
+            title=f"{theme.trashIcon} Delete Alliance",
             description=(
                 f"**{theme.warnIcon} Warning: This action cannot be undone!**\n"
                 f"{theme.upperDivider}\n"

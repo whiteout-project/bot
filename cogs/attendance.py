@@ -425,7 +425,7 @@ class AttendanceView(discord.ui.View):
 
     @discord.ui.button(
         label="View Attendance",
-        emoji=theme.magnifyingIcon,
+        emoji=theme.searchIcon,
         style=discord.ButtonStyle.secondary,
         custom_id="view_attendance"
     )
@@ -712,7 +712,7 @@ class AllianceSelectView(discord.ui.View):
                     label=f"{name[:50]}",
                     value=str(alliance_id),
                     description=f"ID: {alliance_id} | Members: {count}",
-                    emoji=theme.castleBattleIcon
+                    emoji=theme.allianceIcon
                 ) for alliance_id, name, count in current_alliances
             ],
             row=0  # Explicitly set row 0 for dropdown
@@ -809,7 +809,7 @@ class EditEventDetailsView(discord.ui.View):
         self.legion_select = discord.ui.Select(
             placeholder=f"Legion: {subtype or 'Not Set'}",
             options=[
-                discord.SelectOption(label="Not Set", value="none", emoji=theme.deleteIcon, default=(not subtype)),
+                discord.SelectOption(label="Not Set", value="none", emoji=theme.trashIcon, default=(not subtype)),
                 discord.SelectOption(label="Legion 1", value="Legion 1", emoji=theme.num1Icon, default=(subtype == "Legion 1")),
                 discord.SelectOption(label="Legion 2", value="Legion 2", emoji=theme.num2Icon, default=(subtype == "Legion 2"))
             ],
@@ -944,7 +944,7 @@ class EditEventDetailsView(discord.ui.View):
             
         # Confirm deletion
         confirm_embed = discord.Embed(
-            title=f"{theme.warningIcon} Confirm Deletion",
+            title=f"{theme.warnIcon} Confirm Deletion",
             description=f"Are you sure you want to delete the session **{self.session_name}**?\n\nThis action cannot be undone.",
             color=discord.Color.orange()
         )
@@ -1378,7 +1378,7 @@ class PlayerSelectView(discord.ui.View):
         self.update_select_menu()
         await self.update_main_embed(interaction)
     
-    @discord.ui.button(label="Filter", emoji=theme.magnifyingIcon, style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Filter", emoji=theme.searchIcon, style=discord.ButtonStyle.secondary, row=1)
     async def filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = PlayerFilterModal(self)
         await interaction.response.send_modal(modal)
@@ -1428,7 +1428,7 @@ class PlayerSelectView(discord.ui.View):
 
         await self.bulk_mark_attendance(interaction, "absent", 0)
 
-    @discord.ui.button(label="Clear", emoji=theme.giftDeleteIcon, style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    @discord.ui.button(label="Clear", emoji=theme.trashIcon, style=discord.ButtonStyle.secondary, row=2, disabled=True)
     async def clear_selection(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Clear all selected players"""
         self.pending_selections.clear()

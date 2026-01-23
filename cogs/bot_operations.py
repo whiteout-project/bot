@@ -273,7 +273,7 @@ class BotOperations(commands.Cog):
                                             alliances_with_counts.append((alliance_id, name, member_count, is_assigned))
 
                                     alliance_embed = discord.Embed(
-                                        title=f"{theme.castleBattleIcon} Alliance Selection",
+                                        title=f"{theme.allianceIcon} Alliance Selection",
                                         description=(
                                             f"Please select an alliance to assign to the administrator:\n\n"
                                             f"**Alliance List**\n"
@@ -342,7 +342,7 @@ class BotOperations(commands.Cog):
                                                     f"Successfully assigned alliance to administrator:\n\n"
                                                     f"{theme.userIcon} **Administrator:** {admin_name}\n"
                                                     f"{theme.fidIcon} **Admin ID:** {selected_admin_id}\n"
-                                                    f"{theme.castleBattleIcon} **Alliance:** {alliance_name}\n"
+                                                    f"{theme.allianceIcon} **Alliance:** {alliance_name}\n"
                                                     f"{theme.fidIcon} **Alliance ID:** {selected_alliance_id}"
                                                 ),
                                                 color=theme.emColor3
@@ -599,14 +599,14 @@ class BotOperations(commands.Cog):
                                 if not is_global:
                                     if alliance_names:
                                         info_embed.add_field(
-                                            name=f"{theme.castleBattleIcon} Managing Alliances",
+                                            name=f"{theme.allianceIcon} Managing Alliances",
                                             value="\n".join([f"• {name}" for name in alliance_names[:10]]) +
                                                   (f"\n• ... and {len(alliance_names) - 10} more" if len(alliance_names) > 10 else ""),
                                             inline=False
                                         )
                                     else:
                                         info_embed.add_field(
-                                            name=f"{theme.castleBattleIcon} Managing Alliances",
+                                            name=f"{theme.allianceIcon} Managing Alliances",
                                             value="No alliances on this server",
                                             inline=False
                                         )
@@ -989,7 +989,7 @@ class BotOperations(commands.Cog):
                                 alliance_text = "\n".join([f"• {name}" for name in alliance_names[:5]])
                                 if len(alliance_names) > 5:
                                     alliance_text += f"\n• ... and {len(alliance_names) - 5} more"
-                                admin_info += f"{theme.castleBattleIcon} **Managing Alliances:**\n{alliance_text}\n"
+                                admin_info += f"{theme.allianceIcon} **Managing Alliances:**\n{alliance_text}\n"
                             else:
                                 admin_info += f"{theme.allianceIcon} **Managing Alliances:** No alliances on this server\n"
 

@@ -1720,7 +1720,7 @@ class CreateBoardSettingsView(discord.ui.View):
             print(f"[ERROR] Error in use user timezone button: {e}")
             traceback.print_exc()
 
-    @discord.ui.button(label="Show Disabled: No", emoji=f"{theme.eyeIcon}", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Show Disabled: No", emoji=f"{theme.eyesIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def show_disabled_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             self.show_disabled = not self.show_disabled
@@ -2257,7 +2257,7 @@ class BoardManagementView(discord.ui.View):
         # This button is only visible for per-channel boards, hiding is done in __init__
         await self.change_target_channel_callback(interaction)
 
-    @discord.ui.button(label="Preview", emoji=f"{theme.eyeIcon}", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Preview", emoji=f"{theme.eyesIcon}", style=discord.ButtonStyle.secondary, row=0)
     async def preview_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
@@ -2377,9 +2377,9 @@ class EditBoardSettingsView(discord.ui.View):
                 f"{theme.levelIcon} **Max Events:** {{max}}\n"
                 "└ Maximum number of events to display per page\n\n"
                 "{tz_line}\n\n"
-                f"{theme.worldIcon} **User Timezone:** {{user_tz}}\n"
+                f"{theme.globeIcon} **User Timezone:** {{user_tz}}\n"
                 "└ Show times in each user's local timezone\n\n"
-                f"{theme.viewIcon} **Show Disabled:** {{disabled}}\n"
+                f"{theme.eyesIcon} **Show Disabled:** {{disabled}}\n"
                 "└ Include disabled events in schedule\n\n"
                 f"{theme.pinIcon} **Pin Message:** {{pin}}\n"
                 "└ Keep this message pinned in channel\n\n"
@@ -2561,7 +2561,7 @@ class EditBoardSettingsView(discord.ui.View):
             print(f"[ERROR] Error toggling user timezone: {e}")
             traceback.print_exc()
 
-    @discord.ui.button(label="Show Disabled: No", emoji=f"{theme.eyeIcon}", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Show Disabled: No", emoji=f"{theme.eyesIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def show_disabled_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Toggle show disabled events"""
         try:

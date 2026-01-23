@@ -108,6 +108,15 @@ class ThemePreviewView(discord.ui.View):
             data.get('dividerEnd3', '━'),
             int(data.get('dividerLength3', 20) or 20)
         )
+
+        # Apply code block wrapping if enabled
+        if data.get('dividerCodeBlock1'):
+            divider1 = f"`{divider1}`"
+        if data.get('dividerCodeBlock2'):
+            divider2 = f"`{divider2}`"
+        if data.get('dividerCodeBlock3'):
+            divider3 = f"`{divider3}`"
+
         return divider1, divider2, divider3
 
     def _get_color(self, data, color_key='emColorString1') -> int:
@@ -256,7 +265,7 @@ class ThemePreviewView(discord.ui.View):
         embed = discord.Embed(
             title=f"{gift_check_icon} Gift Code Redemption Complete",
             description=(
-                f"{alliance_icon} **Alliance:** Example Alliance\n"
+                f"{alliance_icon} **Alliance:** Really Cool Alliance\n"
                 f"{gift_icon} **Code:** `WINTERGIFT2024`\n"
                 f"{divider1}\n"
                 f"{verified_icon} **Success:** 45 members\n"
@@ -298,7 +307,7 @@ class ThemePreviewView(discord.ui.View):
                 f"{divider1}\n"
                 f"{fid_icon} **ID:** `123456789`\n"
                 f"{avatar_icon} **Nickname:** FrostWarrior\n"
-                f"{alliance_icon} **Alliance:** Example Alliance\n"
+                f"{alliance_icon} **Alliance:** Really Cool Alliance\n"
                 f"{stove_icon} **Furnace:** FC 8-3\n"
                 f"{state_icon} **State:** 999\n"
                 f"{crown_icon} **Rank:** R4\n"
@@ -311,7 +320,7 @@ class ThemePreviewView(discord.ui.View):
         )
         # Using a generic placeholder avatar from Discord's CDN
         embed.set_thumbnail(url="https://cdn.discordapp.com/embed/avatars/0.png")
-        embed.set_footer(text=f"Preview: {self.PAGE_TITLES[self.current_page]} • Theme: {self.session.theme_name} • Thumbnail shows divider width with image")
+        embed.set_footer(text=f"Preview: {self.PAGE_TITLES[self.current_page]} • Theme: {self.session.theme_name}")
         return embed
 
     def build_player_lookup_preview(self) -> discord.Embed:

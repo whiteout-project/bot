@@ -66,7 +66,7 @@ class LogSystem(commands.Cog):
                         f"{theme.upperDivider}\n"
                         f"{theme.editListIcon} **Set Log Channel**\n"
                         f"└ Assign a log channel to an alliance\n\n"
-                        f"{theme.deleteIcon} **Remove Log Channel**\n"
+                        f"{theme.trashIcon} **Remove Log Channel**\n"
                         f"└ Remove alliance log channel\n\n"
                         f"{theme.chartIcon} **View Log Channels**\n"
                         f"└ List all alliance log channels\n"
@@ -313,7 +313,7 @@ class LogSystem(commands.Cog):
                     return
 
                 remove_embed = discord.Embed(
-                    title=f"{theme.deleteIcon} Remove Log Channel",
+                    title=f"{theme.trashIcon} Remove Log Channel",
                     description=(
                         f"Select an alliance to remove its log channel:\n\n"
                         f"**Current Log Channels**\n"

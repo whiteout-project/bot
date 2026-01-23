@@ -41,12 +41,12 @@ def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str |
         examples = ", ".join(f"@{m}" for m in matches[:3])
         if is_embed:
             return (
-                f"{theme.warningIcon} You typed `{examples}` but mentions don't work inside embeds.\n"
+                f"{theme.warnIcon} You typed `{examples}` but mentions don't work inside embeds.\n"
                 f"Use `{{tag}}` instead - it will add the mention above the embed."
             )
         else:
             return (
-                f"{theme.warningIcon} You typed `{examples}` but this won't ping anyone.\n"
+                f"{theme.warnIcon} You typed `{examples}` but this won't ping anyone.\n"
                 f"Use `{{tag}}` instead - it will be replaced with your configured mention."
             )
     return None
@@ -1427,7 +1427,7 @@ class RepeatOptionView(discord.ui.View):
                     f"**{theme.targetIcon} Event Type:** {event_display}\n"
                     f"**{theme.editListIcon} Description:** {self.description.split('|')[-1] if '|' in self.description else self.description}\n\n"
                     f"**{theme.settingsIcon} Notification Type**\n{notification_types[self.notification_type]}\n\n"
-                    f"**{theme.memberIcon} Mentions:** {mention_display}\n"
+                    f"**{theme.userIcon} Mentions:** {mention_display}\n"
                     f"**{theme.refreshIcon} Repeat:** {repeat_text}"
                 ),
                 color=theme.emColor3
@@ -2669,7 +2669,7 @@ class MentionSelectMenu(discord.ui.Select):
             )
 
         super().__init__(
-            placeholder=f"{theme.magnifyingIcon} Search and select who to mention...",
+            placeholder=f"{theme.searchIcon} Search and select who to mention...",
             min_values=1,
             max_values=1,
             options=options,
@@ -3088,7 +3088,7 @@ class BearTrapView(discord.ui.View):
                     button_self = self
                     await interaction.response.send_modal(SearchModal())
 
-            search_button = SearchButton(label=f"{theme.magnifyingIcon} Search", cog=self.cog)
+            search_button = SearchButton(label=f"{theme.searchIcon} Search", cog=self.cog)
 
             class ResetButton(discord.ui.Button):
                 def __init__(self, label):
@@ -3188,7 +3188,7 @@ class BearTrapView(discord.ui.View):
                     if channel:
                         channel_display = f"<#{selected_notif[2]}>"
                     else:
-                        channel_display = f"{theme.warningIcon} #unknown-channel (Deleted or Inaccessible)"
+                        channel_display = f"{theme.warnIcon} #unknown-channel (Deleted or Inaccessible)"
 
                     # Format delete delay display
                     custom_delay = selected_notif[17] if len(selected_notif) > 17 else None
@@ -3205,9 +3205,9 @@ class BearTrapView(discord.ui.View):
                             f"**{theme.announceIcon} Channel:** {channel_display}\n"
                             f"**{theme.editListIcon} Description:** {selected_notif[6]}\n\n"
                             f"**{theme.settingsIcon} Notification Type:** \n{notification_type_desc}\n\n"
-                            f"**{theme.memberIcon} Mention:** {mention_display}\n"
+                            f"**{theme.userIcon} Mention:** {mention_display}\n"
                             f"**{theme.refreshIcon} Repeat:** {formatted_repeat}\n"
-                            f"**{theme.deleteIcon} Message Cleanup:** {delete_delay_display}\n"),
+                            f"**{theme.trashIcon} Message Cleanup:** {delete_delay_display}\n"),
                         color=theme.emColor1
                     )
 
@@ -3503,11 +3503,11 @@ class BearTrapView(discord.ui.View):
                                             content=(
                                                 f"- **{theme.searchIcon} Search:** Filter the menu options based on specific keywords\n"
                                                 f"- **{theme.editListIcon} Edit:** Modify notification details.\n"
-                                                f"- **{theme.warningIcon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
+                                                f"- **{theme.warnIcon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
                                                 f"  - -# Click to toggle between enabling or disabling.\n"
                                                 f"  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
-                                                f"- **{theme.eyeIcon} Preview:** See how the notification will look when it's sent.\n"
-                                                f"- **{theme.deleteIcon} Delete:** Remove the selected notification.\n\n"
+                                                f"- **{theme.eyesIcon} Preview:** See how the notification will look when it's sent.\n"
+                                                f"- **{theme.trashIcon} Delete:** Remove the selected notification.\n\n"
                                             ),
                                             view=view
                                         )
@@ -3704,16 +3704,16 @@ class BearTrapView(discord.ui.View):
                         f"- **{theme.settingsIcon} Notification is active/inactive:** Toggles between enabling or disabling the notification.\n"
                         f"  - -# Click to toggle between enabling or disabling.\n"
                         f"  - -# Enabling a non-repeating notification will keep its time but change its date to today's date or tomorrow if the time had passed.\n"
-                        f"- **{theme.eyeIcon} Preview:** See how the notification will look when it's sent.\n"
-                        f"- **{theme.deleteIcon} Message Cleanup:** Configure custom message deletion delay for this notification.\n"
+                        f"- **{theme.eyesIcon} Preview:** See how the notification will look when it's sent.\n"
+                        f"- **{theme.trashIcon} Message Cleanup:** Configure custom message deletion delay for this notification.\n"
                     )
 
                     if not channel:
-                        help_text += f"- **{theme.editListIcon} Change Channel:** {theme.warningIcon} Update the channel for this notification (current channel is unavailable).\n"
+                        help_text += f"- **{theme.editListIcon} Change Channel:** {theme.warnIcon} Update the channel for this notification (current channel is unavailable).\n"
                     else:
                         help_text += f"- **{theme.editListIcon} Change Channel:** Update the channel for this notification.\n"
 
-                    help_text += f"- **{theme.deleteIcon} Delete:** Remove the selected notification.\n\n"
+                    help_text += f"- **{theme.trashIcon} Delete:** Remove the selected notification.\n\n"
 
                     await select_interaction.response.edit_message(
                         content=help_text,

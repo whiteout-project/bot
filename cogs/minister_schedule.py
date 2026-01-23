@@ -1105,9 +1105,9 @@ class MinisterSchedule(commands.Cog):
         try:
             # Send a confirmation prompt
             embed = discord.Embed(
-                title=f"{theme.warningIcon} Confirm clearing {appointment_type} list.",
+                title=f"{theme.warnIcon} Confirm clearing {appointment_type} list.",
                 description=f"Are you sure you want to remove all minister appointment slots for: {appointment_type}?\n"
-                            f"**{theme.warningIcon} This action cannot be undone and all names will be removed {theme.warningIcon}**.\n"
+                            f"**{theme.warnIcon} This action cannot be undone and all names will be removed {theme.warnIcon}**.\n"
                             f"You have 10 seconds to reply with 'Yes' to confirm or 'No' to cancel.",
                 color=discord.Color.orange()
             )

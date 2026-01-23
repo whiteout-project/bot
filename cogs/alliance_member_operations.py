@@ -209,7 +209,7 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Remove Members",
-                emoji=theme.deleteIcon,
+                emoji=theme.trashIcon,
                 style=discord.ButtonStyle.danger,
                 custom_id="remove_member",
                 row=0
@@ -311,7 +311,7 @@ class AllianceMemberOperations(commands.Cog):
                                 # Delete all members
                                 selected_value = "all"
                                 confirm_embed = discord.Embed(
-                                    title=f"{theme.warningIcon} Confirmation Required",
+                                    title=f"{theme.warnIcon} Confirmation Required",
                                     description=f"A total of **{len(members)}** members will be deleted.\nDo you confirm?",
                                     color=theme.emColor2
                                 )
@@ -880,7 +880,7 @@ class AllianceMemberOperations(commands.Cog):
                                         label=f"{name[:50]}",
                                         value=str(alliance_id),
                                         description=f"ID: {alliance_id} | Members: {count}",
-                                        emoji=theme.castleBattleIcon
+                                        emoji=theme.allianceIcon
                                     ) for alliance_id, name, count in alliances_with_counts
                                     if alliance_id != source_alliance_id
                                 ]
@@ -916,8 +916,8 @@ class AllianceMemberOperations(commands.Cog):
                                             title=f"{theme.verifiedIcon} Transfer Successful",
                                             description=(
                                                 f"**Members Transferred:** {len(selected_fids)}\n"
-                                                f"{theme.announceIcon} **Source:** {source_alliance_name}\n"
-                                                f"{theme.infoIcon} **Target:** {target_alliance_name}\n\n"
+                                                f"{theme.allianceOldIcon} **Source:** {source_alliance_name}\n"
+                                                f"{theme.allianceIcon} **Target:** {target_alliance_name}\n\n"
                                                 f"**Transferred Members:**\n{member_list}"
                                             ),
                                             color=theme.emColor3
@@ -1048,7 +1048,7 @@ class AllianceMemberOperations(commands.Cog):
                 inline=False
             )
             embed.add_field(
-                name=f"{theme.warningIcon} Already Exists (0/{total_count})", 
+                name=f"{theme.warnIcon} Already Exists (0/{total_count})", 
                 value="-", 
                 inline=False
             )
@@ -1144,7 +1144,7 @@ class AllianceMemberOperations(commands.Cog):
                 inline=False
             )
             embed.add_field(
-                name=f"{theme.warningIcon} Already Exists (0/{total_users})", 
+                name=f"{theme.warnIcon} Already Exists (0/{total_users})", 
                 value="-", 
                 inline=False
             )
@@ -1221,7 +1221,7 @@ class AllianceMemberOperations(commands.Cog):
             if already_exists_count > 0:
                 embed.set_field_at(
                     2,
-                    name=f"{theme.warningIcon} Already Exists ({already_exists_count}/{total_users})",
+                    name=f"{theme.warnIcon} Already Exists ({already_exists_count}/{total_users})",
                     value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70 
                     else ", ".join([n for _, n in already_exists_users]) or "-",
                     inline=False
@@ -1259,7 +1259,7 @@ class AllianceMemberOperations(commands.Cog):
                         # Update display with countdown
                         while remaining_time > 0:
                             queue_info = f"\n{theme.listIcon} **Operations in queue:** {self.login_handler.get_queue_info()['queue_size']}" if self.login_handler.get_queue_info()['queue_size'] > 0 else ""
-                            embed.description = f"{theme.warningIcon} Rate limit reached. Waiting {remaining_time:.0f} seconds...{queue_info}"
+                            embed.description = f"{theme.warnIcon} Rate limit reached. Waiting {remaining_time:.0f} seconds...{queue_info}"
                             embed.color = discord.Color.orange()
                             await message.edit(embed=embed)
                             
@@ -1313,7 +1313,7 @@ class AllianceMemberOperations(commands.Cog):
                                 
                                 embed.set_field_at(
                                     2,
-                                    name=f"{theme.warningIcon} Already Exists ({already_exists_count}/{total_users})",
+                                    name=f"{theme.warnIcon} Already Exists ({already_exists_count}/{total_users})",
                                     value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70 
                                     else ", ".join([n for _, n in already_exists_users]) or "-",
                                     inline=False
@@ -1377,7 +1377,7 @@ class AllianceMemberOperations(commands.Cog):
                 inline=False
             )
             
-            embed.set_field_at(2, name=f"{theme.warningIcon} Already Exists ({already_exists_count}/{total_users})",
+            embed.set_field_at(2, name=f"{theme.warnIcon} Already Exists ({already_exists_count}/{total_users})",
                 value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70 
                 else ", ".join([nickname for _, nickname in already_exists_users]) or "-",
                 inline=False
@@ -1405,7 +1405,7 @@ class AllianceMemberOperations(commands.Cog):
                                 f"**Results:**\n"
                                 f"{theme.verifiedIcon} Successfully Added: {added_count}\n"
                                 f"{theme.deniedIcon} Failed: {error_count}\n"
-                                f"{theme.warningIcon} Already Exists: {already_exists_count}\n\n"
+                                f"{theme.warnIcon} Already Exists: {already_exists_count}\n\n"
                                 "**Added IDs:**\n"
                                 f"```\n{', '.join(ids_list)}\n```"
                             ),
@@ -1792,7 +1792,7 @@ class AllianceSelectView(discord.ui.View):
         self.update_select_menu()
         await interaction.response.edit_message(view=self)
 
-    @discord.ui.button(label="Filter by ID", emoji=theme.magnifyingIcon, style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Filter by ID", emoji=theme.searchIcon, style=discord.ButtonStyle.secondary)
     async def fid_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             if self.current_select and self.current_select.values:
@@ -1893,7 +1893,7 @@ class IDSearchModal(discord.ui.Modal):
                             f"{theme.fidIcon} **ID:** {fid}\n"
                             f"{theme.levelIcon} **Level:** {self.cog.level_mapping.get(furnace_lv, str(furnace_lv))}\n"
                             f"{theme.allianceIcon} **Current Alliance:** {current_alliance_name}\n\n"
-                            f"{theme.warningIcon} **Are you sure you want to delete this member?**"
+                            f"{theme.warnIcon} **Are you sure you want to delete this member?**"
                         ),
                         color=theme.emColor2
                     )
@@ -2006,7 +2006,7 @@ class IDSearchModal(discord.ui.Modal):
                             label=f"{name[:50]}",
                             value=str(alliance_id),
                             description=f"ID: {alliance_id}",
-                            emoji=theme.castleBattleIcon
+                            emoji=theme.allianceIcon
                         ) for alliance_id, name, _ in self.alliances
                         if alliance_id != current_alliance_id
                     ]
@@ -2039,8 +2039,8 @@ class IDSearchModal(discord.ui.Modal):
                             description=(
                                 f"{theme.userIcon} **Member:** {nickname}\n"
                                 f"{theme.fidIcon} **ID:** {fid}\n"
-                                f"{theme.announceIcon} **Source:** {current_alliance_name}\n"
-                                f"{theme.infoIcon} **Target:** {target_alliance_name}"
+                                f"{theme.allianceOldIcon} **Source:** {current_alliance_name}\n"
+                                f"{theme.allianceIcon} **Target:** {target_alliance_name}"
                             ),
                             color=theme.emColor3
                         )
@@ -2105,7 +2105,7 @@ class AllianceSelectViewWithAll(discord.ui.View):
                     label=f"{name[:50]}",
                     value=str(alliance_id),
                     description=f"ID: {alliance_id} | Members: {count}",
-                    emoji=theme.castleBattleIcon
+                    emoji=theme.allianceIcon
                 )
             )
         
@@ -2531,7 +2531,7 @@ class MemberSelectView(discord.ui.View):
         self.update_select_menu()
         await self.update_main_embed(interaction)
 
-    @discord.ui.button(label="Select by ID", emoji=theme.magnifyingIcon, style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Select by ID", emoji=theme.searchIcon, style=discord.ButtonStyle.secondary, row=1)
     async def fid_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             
@@ -2563,7 +2563,7 @@ class MemberSelectView(discord.ui.View):
         if self.callback:
             await self.callback(interaction, list(self.pending_selections))
 
-    @discord.ui.button(label="Clear Selection", emoji=theme.giftDeleteIcon, style=discord.ButtonStyle.secondary, row=2, disabled=True)
+    @discord.ui.button(label="Clear Selection", emoji=theme.trashIcon, style=discord.ButtonStyle.secondary, row=2, disabled=True)
     async def _clear_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Clear all selected members"""
         self.pending_selections.clear()
@@ -2578,7 +2578,7 @@ class MemberSelectView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            f"{theme.warningIcon} This will delete ALL {len(self.members)} members from **{self.source_alliance_name}**. Are you sure?",
+            f"{theme.warnIcon} This will delete ALL {len(self.members)} members from **{self.source_alliance_name}**. Are you sure?",
             view=DeleteAllConfirmView(self),
             ephemeral=True
         )

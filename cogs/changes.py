@@ -326,7 +326,7 @@ class HistoryView(discord.ui.View):
 
     @discord.ui.button(
         label="Furnace Changes",
-        emoji=f"{theme.fireIcon}",
+        emoji=f"{theme.stoveIcon}",
         style=discord.ButtonStyle.primary,
         custom_id="furnace_changes",
         row=0

@@ -426,7 +426,7 @@ class CommonSettingsHubView(discord.ui.View):
         # Required settings buttons
         channel_button = discord.ui.Button(
             label="Set Channel",
-            emoji=f"{theme.locationIcon}",
+            emoji=f"{theme.pinIcon}",
             style=discord.ButtonStyle.success if self.session.channel_id else discord.ButtonStyle.danger,
             row=0
         )
@@ -524,7 +524,7 @@ class WizardChannelSelectView(discord.ui.View):
     async def show(self, interaction: discord.Interaction):
         """Display channel selection"""
         embed = discord.Embed(
-            title=f"{theme.locationIcon} Select Notification Channel",
+            title=f"{theme.pinIcon} Select Notification Channel",
             description="Choose the channel where notifications will be posted.",
             color=theme.emColor1
         )

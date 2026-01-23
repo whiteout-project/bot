@@ -12,89 +12,129 @@ import json
 import base64
 import unicodedata
 import aiohttp
+import logging
 from typing import Tuple
+
+logger = logging.getLogger(__name__)
 from .permission_handler import PermissionManager
 
 # Database path constant
 THEME_DB_PATH = 'db/pimpmybot.sqlite'
 
 # Theme Gallery API configuration
-THEME_GALLERY_URL = "https://theme-gallery.whiteout-bot.com"
+THEME_GALLERY_URL = "https://themes.whiteout-bot.com"
 THEME_GALLERY_API_KEY = "JpqVwtEOcL39eTCgoPStFvFQwX7-ZinZXe4koAnwKyqa0L6COqVfXFvyoCvheX5k"
 
 # Default values
 DEFAULT_EMOJI = "👻"
 
-# Default emojis for new themes - must match database column order
-DEFAULT_THEME_EMOJIS = [
-    '⚔️', '👤', '🔥', '🌏',  # Old icons for change tracking
-    '⚔️', '👤', '🔥', '🌏', '📜', '🆔', '🕰️', '🏠',
-    '1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '🔟',
-    '🆕', '📍', '💾', '🤖', '⚔️', '💗', '🛡️', '🎯', '🔄', '👥', '📈', '🔊', '🆘', '🏭',
-    '📢', '🏛️', '🔬', '⚔️', '🤪', '🐻', '📅', '📝', '⚙️', '⏳', '🔇', '⚪', '⏰', '🔍', '🐉', '🏞️', '⚒️', '🏰',
-    '🎁', '🛍️', '➕', '⏰', '⚠️', '✅', '🟰', '🗑️', '🔢', '⚙️',
-    '🔄', '✅', '❓', '↔️', '✖️', '➗', '❌', '➖', '➡️', '⬅️', '🔄', '🟰', 'ℹ️', '⚠️', '➕',
-    '◀️', '▶️', '⬅️', '➡️', '➖', '📊', '📄', '👁️', '🌍', '🧙', '🔕',
-    '💤', '🚪', '👋', '🌙', '🔌', '🛑', '🎬', '✨',
-    '🏅', '✅', '⭕', '👤', '🗑️', '🔄', '📊', '🔒', '🧹', '📦', '⬆️', '⬇️',
-    '👑', '🔗', '💬', '🔔', '⚡', '📍', '🧪', '📦', '🎫', '🔥', '🔍', '🎨'
-]
-
-# Default divider and color values for new themes
-# Format: [start1, pattern1, end1, length1, start2, pattern2, end2, length2, start3, pattern3, end3, length3]
-DEFAULT_DIVIDER_VALUES = ['━', '━', '━', 20, '━', '━', '━', 20, '━', '━', '━', 20]
-DEFAULT_COLOR_VALUES = ['#0000FF', '#FF0000', '#00FF00', '#FFFF00', '#1F77B4', '#28A745']
-
-# Icon categories for theme editor - groups icons logically for easier navigation
+# Icon categories for theme editor - organized to easily find the right ones
+# General: Universal elements used across the bot
+# Feature categories: Match main menu structure for intuitive navigation (with some consolidation)
 ICON_CATEGORIES = {
-    "Core": [
-        "allianceOldIcon", "avatarOldIcon", "stoveOldIcon", "stateOldIcon",
-        "allianceIcon", "avatarIcon", "stoveIcon", "stateIcon", "listIcon",
-        "fidIcon", "timeIcon", "homeIcon", "userIcon", "crownIcon", "locationIcon"
-    ],
-    "Actions": [
-        "newIcon", "pinIcon", "saveIcon", "robotIcon", "crossIcon", "heartIcon",
-        "shieldIcon", "targetIcon", "redeemIcon", "membersIcon", "averageIcon",
-        "messageIcon", "supportIcon", "testIcon", "packageIcon", "ticketIcon", "fireIcon"
-    ],
-    "UI": [
-        "chartIcon", "documentIcon", "eyeIcon", "eyesIcon", "globeIcon", "wizardIcon", "muteIcon",
-        "paletteIcon", "searchIcon", "blankListIcon", "magnifyingIcon", "hourglassIcon",
-        "messageNoIcon", "copyIcon", "helpIcon", "starIcon"
-    ],
-    "Gifts": [
-        "giftIcon", "giftsIcon", "giftAddIcon", "giftAlarmIcon", "gifAlertIcon",
-        "giftCheckIcon", "giftTotalIcon", "giftDeleteIcon", "giftHashtagIcon",
-        "giftSettingsIcon"
-    ],
+    # === GENERAL (Universal elements) ===
     "Status": [
-        "processingIcon", "verifiedIcon", "questionIcon", "transferIcon",
-        "multiplyIcon", "divideIcon", "deniedIcon", "deleteIcon", "exportIcon",
-        "importIcon", "retryIcon", "totalIcon", "infoIcon", "warnIcon", "addIcon"
+        "verifiedIcon", "deniedIcon", "warnIcon", "infoIcon", "questionIcon", "checkIcon",
+        "processingIcon", "blankListIcon", "circleIcon"
     ],
     "Navigation": [
-        "prevIcon", "nextIcon", "backIcon", "forwardIcon", "minusIcon",
-        "upIcon", "downIcon", "num1Icon", "num2Icon", "num3Icon", "num4Icon",
-        "num5Icon", "num10Icon"
+        "homeIcon", "backIcon", "prevIcon", "nextIcon", "forwardIcon",
+        "upIcon", "downIcon", "num1Icon", "num2Icon", "num3Icon",
+        "num4Icon", "num5Icon", "num10Icon"
+    ],
+    "Actions": [
+        "addIcon", "minusIcon", "trashIcon", "editListIcon", "settingsIcon",
+        "saveIcon", "refreshIcon", "eyeIcon", "eyesIcon", "searchIcon", "listIcon",
+        "lockIcon", "linkIcon", "copyIcon", "retryIcon", "deleteIcon", "redeemIcon",
+        "multiplyIcon", "divideIcon", "magnifyingIcon"
+    ],
+    "Display": [
+        "userIcon", "fidIcon", "timeIcon", "calendarIcon", "levelIcon",
+        "globeIcon", "membersIcon", "crownIcon", "totalIcon", "pinIcon",
+        "averageIcon", "chartIcon", "documentIcon", "newIcon", "locationIcon",
+        "fireIcon", "messageNoIcon"
+    ],
+    # === FEATURE CATEGORIES ===
+    "Operations": [
+        "shieldIcon", "crossIcon",
+        "importIcon", "exportIcon", "transferIcon",
+        "giftIcon", "giftsIcon", "ticketIcon", "packageIcon", "targetIcon",
+        "giftAddIcon", "giftAlarmIcon", "gifAlertIcon", "giftCheckIcon",
+        "giftTotalIcon", "giftDeleteIcon", "giftHashtagIcon", "giftSettingsIcon"
+    ],
+    "Alliance History": [
+        "allianceOldIcon", "allianceIcon", "avatarOldIcon", "avatarIcon",
+        "stoveOldIcon", "stoveIcon", "stateOldIcon", "stateIcon"
+    ],
+    "Notifications": [
+        "announceIcon", "wizardIcon", "alarmClockIcon", "hourglassIcon", "bellIcon", "muteIcon"
     ],
     "Events": [
-        "foundryIcon", "announceIcon", "ministerIcon", "researchIcon", "trainingIcon",
-        "crazyJoeIcon", "bearTrapIcon", "calendarIcon", "frostdragonIcon",
-        "canyonClashIcon", "constructionIcon", "castleBattleIcon"
+        "bearTrapIcon", "crazyJoeIcon", "foundryIcon", "canyonClashIcon",
+        "fortressBattleIcon", "frostfireMineIcon", "castleBattleIcon",
+        "svsIcon", "mercenaryIcon", "dailyResetIcon", "frostdragonIcon"
     ],
-    "Shutdown": [
+    "Minister": [
+        "ministerIcon", "constructionIcon", "researchIcon", "trainingIcon",
+        "archiveIcon", "medalIcon"
+    ],
+    "Bot Management": [
+        "robotIcon", "supportIcon", "chatIcon", "boltIcon", "testIcon",
+        "cleanIcon", "paletteIcon", "starIcon", "heartIcon", "messageIcon",
         "shutdownZzzIcon", "shutdownDoorIcon", "shutdownHandIcon", "shutdownMoonIcon",
         "shutdownPlugIcon", "shutdownStopIcon", "shutdownClapperIcon", "shutdownSparkleIcon"
-    ],
-    "Misc": [
-        "editListIcon", "settingsIcon", "alarmClockIcon", "medalIcon", "checkIcon",
-        "circleIcon", "trashIcon", "refreshIcon", "levelIcon", "lockIcon", "cleanIcon",
-        "archiveIcon", "linkIcon", "chatIcon", "bellIcon", "boltIcon"
     ]
 }
 
 # Flat list of all icon names derived from categories
 ICON_NAMES = [icon for icons in ICON_CATEGORIES.values() for icon in icons]
+
+# Default icon values for reset functionality (matches INSERT statement defaults)
+DEFAULT_ICON_VALUES = {
+    # Old icons for change tracking
+    'allianceOldIcon': '⚔️', 'avatarOldIcon': '👤', 'stoveOldIcon': '🔥', 'stateOldIcon': '🌏',
+    # Current icons
+    'allianceIcon': '⚔️', 'avatarIcon': '👤', 'stoveIcon': '🔥', 'stateIcon': '🌏',
+    'listIcon': '📜', 'fidIcon': '🆔', 'timeIcon': '🕰️', 'homeIcon': '🏠',
+    'num1Icon': '1️⃣', 'num2Icon': '2️⃣', 'num3Icon': '3️⃣', 'num4Icon': '4️⃣',
+    'num5Icon': '5️⃣', 'num10Icon': '🔟', 'newIcon': '🆕', 'pinIcon': '📍',
+    'saveIcon': '💾', 'robotIcon': '🤖', 'crossIcon': '⚔️', 'heartIcon': '💗',
+    'shieldIcon': '🛡️', 'targetIcon': '🎯', 'redeemIcon': '🔄', 'membersIcon': '👥',
+    'averageIcon': '📈', 'messageIcon': '🔊', 'supportIcon': '🆘', 'foundryIcon': '🏭',
+    'announceIcon': '📢', 'ministerIcon': '🏛️', 'researchIcon': '🔬', 'trainingIcon': '⚔️',
+    'crazyJoeIcon': '🤪', 'bearTrapIcon': '🐻', 'calendarIcon': '📅', 'editListIcon': '📝',
+    'settingsIcon': '⚙️', 'hourglassIcon': '⏳', 'messageNoIcon': '🔇', 'blankListIcon': '⚪',
+    'alarmClockIcon': '⏰', 'magnifyingIcon': '🔍', 'frostdragonIcon': '🐉', 'canyonClashIcon': '⚔️',
+    'constructionIcon': '🏗️', 'castleBattleIcon': '☀️',
+    # Gift icons
+    'giftIcon': '🎁', 'giftsIcon': '🛍️', 'giftAddIcon': '➕', 'giftAlarmIcon': '⏰',
+    'gifAlertIcon': '⚠️', 'giftCheckIcon': '✅', 'giftTotalIcon': '🟰', 'giftDeleteIcon': '🗑️',
+    'giftHashtagIcon': '🔢', 'giftSettingsIcon': '⚙️',
+    # Status icons
+    'processingIcon': '🔄', 'verifiedIcon': '✅', 'questionIcon': '❓', 'transferIcon': '↔️',
+    'multiplyIcon': '✖️', 'divideIcon': '➗', 'deniedIcon': '❌', 'deleteIcon': '➖',
+    'exportIcon': '📤', 'importIcon': '📥', 'retryIcon': '🔁', 'totalIcon': '🟰',
+    'infoIcon': 'ℹ️', 'warnIcon': '⚠️', 'addIcon': '➕',
+    # Navigation icons
+    'prevIcon': '◀️', 'nextIcon': '▶️', 'backIcon': '⬅️', 'forwardIcon': '➡️',
+    'minusIcon': '➖', 'chartIcon': '📊', 'documentIcon': '📄', 'eyeIcon': '👁️',
+    'globeIcon': '🌍', 'wizardIcon': '🧙', 'muteIcon': '🔕',
+    # Shutdown icons
+    'shutdownZzzIcon': '💤', 'shutdownDoorIcon': '🚪', 'shutdownHandIcon': '👋',
+    'shutdownMoonIcon': '🌙', 'shutdownPlugIcon': '🔌', 'shutdownStopIcon': '🛑',
+    'shutdownClapperIcon': '🎬', 'shutdownSparkleIcon': '✨',
+    # Misc icons
+    'medalIcon': '🎖️', 'checkIcon': '☑️', 'circleIcon': '⚪',
+    'userIcon': '👤', 'trashIcon': '🗑️', 'refreshIcon': '🔄', 'levelIcon': '🔢',
+    'lockIcon': '🔐', 'cleanIcon': '🧹', 'archiveIcon': '🗃️', 'upIcon': '⬆️', 'downIcon': '⬇️',
+    'crownIcon': '👑', 'linkIcon': '🔗', 'chatIcon': '💬', 'bellIcon': '🔔', 'boltIcon': '⚡',
+    'locationIcon': '📍', 'testIcon': '🧪', 'packageIcon': '📦', 'ticketIcon': '🎫',
+    'fireIcon': '🔥', 'searchIcon': '🔍', 'paletteIcon': '🎨',
+    'eyesIcon': '👀', 'copyIcon': '📋', 'starIcon': '⭐',
+    # Event icons
+    'fortressBattleIcon': '🏰', 'frostfireMineIcon': '⛏️', 'svsIcon': '⚡',
+    'mercenaryIcon': '🗡️', 'dailyResetIcon': '🔄',
+}
 
 async def check_interaction_user(interaction: discord.Interaction, expected_user_id: int) -> bool:
     """
@@ -183,12 +223,12 @@ class ThemeManager:
             app_emojis = await self._bot.fetch_application_emojis()
             return {e.id for e in app_emojis}
         except Exception as e:
+            logger.warning(f"Could not fetch application emojis: {e}")
             print(f"Could not fetch application emojis: {e}")
             return set()
 
     def _validate_emojis(self, accessible_emoji_ids: set = None):
         """Check all icon attributes and hide inaccessible custom emojis."""
-        import re
         if not self._bot:
             return
 
@@ -283,10 +323,11 @@ class ThemeManager:
                     lockIcon TEXT, cleanIcon TEXT, archiveIcon TEXT, upIcon TEXT, downIcon TEXT,
                     crownIcon TEXT, linkIcon TEXT, chatIcon TEXT, bellIcon TEXT, boltIcon TEXT,
                     locationIcon TEXT, testIcon TEXT, packageIcon TEXT, ticketIcon TEXT, fireIcon TEXT, searchIcon TEXT, paletteIcon TEXT,
-                    eyesIcon TEXT, copyIcon TEXT, helpIcon TEXT, starIcon TEXT,
-                    dividerStart1 TEXT, dividerPattern1 TEXT, dividerEnd1 TEXT, dividerLength1 INTEGER,
-                    dividerStart2 TEXT, dividerPattern2 TEXT, dividerEnd2 TEXT, dividerLength2 INTEGER,
-                    dividerStart3 TEXT, dividerPattern3 TEXT, dividerEnd3 TEXT, dividerLength3 INTEGER,
+                    eyesIcon TEXT, copyIcon TEXT, starIcon TEXT,
+                    fortressBattleIcon TEXT, frostfireMineIcon TEXT, svsIcon TEXT, mercenaryIcon TEXT, dailyResetIcon TEXT,
+                    dividerStart1 TEXT, dividerPattern1 TEXT, dividerEnd1 TEXT, dividerLength1 INTEGER, dividerCodeBlock1 INTEGER DEFAULT 0,
+                    dividerStart2 TEXT, dividerPattern2 TEXT, dividerEnd2 TEXT, dividerLength2 INTEGER, dividerCodeBlock2 INTEGER DEFAULT 0,
+                    dividerStart3 TEXT, dividerPattern3 TEXT, dividerEnd3 TEXT, dividerLength3 INTEGER, dividerCodeBlock3 INTEGER DEFAULT 0,
                     emColorString1 TEXT, emColorString2 TEXT, emColorString3 TEXT, emColorString4 TEXT,
                     headerColor1 TEXT, headerColor2 TEXT,
                     furnaceLevel0 TEXT, furnaceLevel1 TEXT, furnaceLevel2 TEXT, furnaceLevel3 TEXT,
@@ -311,6 +352,13 @@ class ThemeManager:
                     theme_name TEXT NOT NULL
                 )
             """)
+
+            # Migration: Add dividerCodeBlock columns if they don't exist
+            cursor.execute("PRAGMA table_info(pimpsettings)")
+            existing_columns = {col[1] for col in cursor.fetchall()}
+            for col_name in ['dividerCodeBlock1', 'dividerCodeBlock2', 'dividerCodeBlock3']:
+                if col_name not in existing_columns:
+                    cursor.execute(f"ALTER TABLE pimpsettings ADD COLUMN {col_name} INTEGER DEFAULT 0")
 
             # Check if default theme exists
             cursor.execute("SELECT COUNT(*) FROM pimpsettings WHERE themeName='default'")
@@ -350,7 +398,8 @@ class ThemeManager:
                         lockIcon, cleanIcon, archiveIcon, upIcon, downIcon,
                         crownIcon, linkIcon, chatIcon, bellIcon, boltIcon,
                         locationIcon, testIcon, packageIcon, ticketIcon, fireIcon, searchIcon, paletteIcon,
-                        eyesIcon, copyIcon, helpIcon, starIcon,
+                        eyesIcon, copyIcon, starIcon,
+                        fortressBattleIcon, frostfireMineIcon, svsIcon, mercenaryIcon, dailyResetIcon,
                         dividerStart1, dividerPattern1, dividerEnd1, dividerLength1,
                         dividerStart2, dividerPattern2, dividerEnd2, dividerLength2,
                         dividerStart3, dividerPattern3, dividerEnd3, dividerLength3,
@@ -369,14 +418,14 @@ class ThemeManager:
                         '📢', '🏛️', '🔬', '⚔️',
                         '🤪', '🐻', '📅', '📝',
                         '⚙️', '⏳', '🔇', '⚪',
-                        '⏰', '🔍', '🐉', '🏞️',
-                        '⚒️', '🏰',
+                        '⏰', '🔍', '🐉', '⚔️',
+                        '🏗️', '☀️',
                         '🎁', '🛍️', '➕', '⏰',
                         '⚠️', '✅', '🟰', '🗑️',
                         '🔢', '⚙️',
                         '🔄', '✅', '❓', '↔️',
                         '✖️', '➗', '❌', '➖',
-                        '📤', '📥', '🔄', '🟰',
+                        '📤', '📥', '🔁', '🟰',
                         'ℹ️', '⚠️', '➕',
                         '◀️', '▶️', '⬅️', '➡️',
                         '➖', '📊', '📄', '👁️',
@@ -385,11 +434,12 @@ class ThemeManager:
                         '🌙', '🔌', '🛑',
                         '🎬', '✨',
                         '🎖️', '☑️', '⚪',
-                        '👤', '🗑️', '🔄', '📊',
+                        '👤', '🗑️', '🔄', '🔢',
                         '🔐', '🧹', '🗃️', '⬆️', '⬇️',
                         '👑', '🔗', '💬', '🔔', '⚡',
                         '📍', '🧪', '📦', '🎫', '🔥', '🔍', '🎨',
-                        '👀', '📋', '❔', '⭐',
+                        '👀', '📋', '⭐',
+                        '🏰', '⛏️', '⚡', '🗡️', '🔄',
                         '━', '━', '━', 20,
                         '━', '━', '━', 20,
                         '━', '━', '━', 20,
@@ -398,6 +448,7 @@ class ThemeManager:
                     )
                 """)
                 conn.commit()
+                logger.info("Theme database created with default theme.")
                 print("Theme database created with default theme.")
 
     def load(self):
@@ -434,6 +485,7 @@ class ThemeManager:
                     self._validate_emojis()
 
         except Exception as e:
+            logger.warning(f"Could not load theme settings: {e}")
             print(f"Warning: Could not load theme settings: {e}")
 
     def _apply_theme(self, theme_dict):
@@ -444,24 +496,30 @@ class ThemeManager:
             setattr(self, icon_name, value)
 
         # Apply divider settings using the shared build_divider function
-        self.upperDivider = build_divider(
+        # Code block wrapping is configurable per divider (default: no code block)
+        divider1 = build_divider(
             theme_dict.get('dividerStart1') or "━",
             theme_dict.get('dividerPattern1') or "━",
             theme_dict.get('dividerEnd1') or "━",
             int(theme_dict.get('dividerLength1') or 20)
         )
-        self.lowerDivider = build_divider(
+        divider2 = build_divider(
             theme_dict.get('dividerStart2') or "━",
             theme_dict.get('dividerPattern2') or "━",
             theme_dict.get('dividerEnd2') or "━",
             int(theme_dict.get('dividerLength2') or 20)
         )
-        self.middleDivider = build_divider(
+        divider3 = build_divider(
             theme_dict.get('dividerStart3') or "━",
             theme_dict.get('dividerPattern3') or "━",
             theme_dict.get('dividerEnd3') or "━",
             int(theme_dict.get('dividerLength3') or 20)
         )
+
+        # Apply code block wrapping if enabled
+        self.upperDivider = f"`{divider1}`" if theme_dict.get('dividerCodeBlock1') else divider1
+        self.lowerDivider = f"`{divider2}`" if theme_dict.get('dividerCodeBlock2') else divider2
+        self.middleDivider = f"`{divider3}`" if theme_dict.get('dividerCodeBlock3') else divider3
 
         # Apply colors by name
         self.emColorString1 = theme_dict.get('emColorString1') or "#0000FF"
@@ -519,6 +577,7 @@ class ThemeManager:
                     self._validate_emojis()
 
         except Exception as e:
+            logger.warning(f"Could not load theme for guild {guild_id}: {e}")
             print(f"Warning: Could not load theme for guild {guild_id}: {e}")
 
     def get_server_theme_name(self, guild_id: int) -> str:
@@ -624,8 +683,12 @@ class ThemeMenuView(discord.ui.View):
             title=f"{theme.paletteIcon} Theme Settings",
             description=(
                 f"{theme.upperDivider}\n"
-                f"Customize the bot's appearance with themes.\n"
-                f"Each server can use a different theme.\n"
+                f"Customize your bot's appearance with themes!\n"
+                f"- Custom themes can be created, edited, and shared.\n"
+                f"- Each theme consists of icons, dividers, and colors.\n"
+                f"- Each server can use a different theme, or the global default.\n"
+                f"- Any theme can be set as the global default.\n"
+                f"- The original default theme can be edited but not deleted.\n"
                 f"{theme.lowerDivider}"
             ),
             color=theme.emColor1
@@ -644,10 +707,13 @@ class ThemeMenuView(discord.ui.View):
         # Help info
         help_text = (
             f"{theme.addIcon} **Create** - Make a new theme\n"
-            f"{theme.editListIcon} **Edit** - Customize icons, colors, dividers\n"
+            f"{theme.editListIcon} **Edit** - Customize the currently selected theme\n"
             f"{theme.importIcon} **Import** / {theme.exportIcon} **Export** - JSON import/export\n"
             f"{theme.starIcon} **Set Default** - Global default (global admin only)\n"
-            f"{theme.checkIcon} **Apply to Server** - Override for this server"
+            f"{theme.checkIcon} **Apply to Server** - Apply selected theme to this server\n"
+            f"{theme.globeIcon} **Revert to Global** - Revert to using the global default theme\n"
+            f"{theme.trashIcon} **Delete** - Remove the selected theme (cannot be undone)\n"
+            f"{theme.heartIcon} **Share Online** - Share your theme with others online (custom themes only)\n"
         )
         embed.add_field(name="Quick Guide", value=help_text, inline=False)
         embed.set_footer(text="Seeing ghosts? The bot must have access to your theme's custom emojis. Try re-importing or check server emoji access.")
@@ -790,11 +856,11 @@ class ThemeMenuView(discord.ui.View):
         # Row 3: Share Online - Main Menu
         share_btn = discord.ui.Button(
             label="Share Online",
-            emoji=theme.globeIcon or None,
+            emoji=theme.heartIcon or None,
             style=discord.ButtonStyle.secondary,
             custom_id="share_theme",
             row=3,
-            disabled=not can_modify or not self.selected_theme
+            disabled=is_default or not can_modify or not self.selected_theme
         )
         share_btn.callback = self.share_theme
         self.add_item(share_btn)
@@ -850,6 +916,7 @@ class ThemeMenuView(discord.ui.View):
 
             await interaction.response.edit_message(embed=embed, view=hub_view)
         except Exception as e:
+            logger.error(f"Edit theme error: {e}")
             print(f"Edit theme error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error opening theme editor: {e}",
@@ -1142,6 +1209,7 @@ class ThemeMenuView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Export theme error: {e}")
             print(f"Export theme error: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error exporting theme: {e}",
@@ -1352,7 +1420,7 @@ class DeleteThemeView(discord.ui.View):
             delete_button = discord.ui.Button(
                 label="Delete Theme",
                 style=discord.ButtonStyle.secondary,
-                emoji=theme.deleteIcon
+                emoji=theme.trashIcon
             )
             delete_button.callback = self.delete_callback
             self.add_item(delete_button)
@@ -1407,6 +1475,7 @@ class DeleteThemeView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Delete theme error: {e}")
             print(f"Delete theme error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error deleting theme: {e}",
@@ -1510,6 +1579,7 @@ class MultiFieldEditModal(discord.ui.Modal):
             await interaction.followup.send(f"{theme.verifiedIcon} Field **{self.field_name}** updated successfully!", ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Multi-field edit error: {e}")
             print(f"Multi-field edit error: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error: {e}", ephemeral=True)
 
@@ -1597,6 +1667,7 @@ class EditEmojiModal(discord.ui.Modal):
                 await interaction.followup.send(f"{theme.deniedIcon} Failed to update emoji. Check if the URL is accessible.", ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Edit emoji modal error: {e}")
             print(f"Edit emoji modal error: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error: {e}", ephemeral=True)
 
@@ -1721,7 +1792,7 @@ class PaginationView(discord.ui.View):
             can_delete = self.themename != "default" and not is_active
             delete_btn = discord.ui.Button(
                 label="Delete",
-                emoji=theme.deleteIcon,
+                emoji=theme.trashIcon,
                 style=discord.ButtonStyle.danger if can_delete else discord.ButtonStyle.secondary,
                 custom_id="delete_theme",
                 disabled=not can_delete,
@@ -1802,7 +1873,7 @@ class PaginationView(discord.ui.View):
         }
 
         embed = discord.Embed(
-            title=f"{theme.giftSettingsIcon} Edit {selected_emoji}",
+            title=f"{theme.settingsIcon} Edit {selected_emoji}",
             description=(
                 f"**Current Value:** {current_value}\n\n"
                 f"**Choose how to update this emoji:**\n"
@@ -1843,6 +1914,7 @@ class PaginationView(discord.ui.View):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Activate theme error: {e}")
             print(f"Activate theme error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error activating theme: {e}",
@@ -1877,6 +1949,7 @@ class PaginationView(discord.ui.View):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Export theme error: {e}")
             print(f"Export theme error: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error exporting theme: {e}",
@@ -1899,7 +1972,7 @@ class PaginationView(discord.ui.View):
 
         confirm_btn = discord.ui.Button(
             label="Delete",
-            emoji=theme.deleteIcon,
+            emoji=theme.trashIcon,
             style=discord.ButtonStyle.danger
         )
 
@@ -1926,6 +1999,7 @@ class PaginationView(discord.ui.View):
                     ephemeral=True
                 )
             except Exception as e:
+                logger.error(f"Delete theme error: {e}")
                 print(f"Delete theme error: {e}")
                 await btn_interaction.response.send_message(
                     f"{theme.deniedIcon} Error deleting theme: {e}",
@@ -2208,6 +2282,7 @@ class Theme(commands.Cog):
                             new_emoji_str = f"<{emoji_prefix}:{new_emoji_name}:{new_emoji_id}>"
                         else:
                             error_text = await resp.text()
+                            logger.error(f"Emoji upload failed ({resp.status}): {error_text}")
                             print(f"Emoji upload failed ({resp.status}): {error_text}")
                             return False
 
@@ -2233,6 +2308,7 @@ class Theme(commands.Cog):
             return True
 
         except Exception as e:
+            logger.error(f"Edit emoji error: {e}")
             print(f"Edit emoji error: {e}")
             return False
 
@@ -2241,7 +2317,7 @@ class Theme(commands.Cog):
         is_admin, _ = PermissionManager.is_admin(interaction.user.id)
         if not is_admin:
             await interaction.response.send_message(
-                f"{globals()['theme'].deniedIcon} Only administrators can use this command.",
+                f"{theme.deniedIcon} Only administrators can use this command.",
                 ephemeral=True
             )
             return False
@@ -2290,52 +2366,52 @@ class Theme(commands.Cog):
         return await self._theme_autocomplete(current)
 
     @pimp_group.command(name='set', description='Set a theme for this server only')
-    @discord.app_commands.describe(theme='The theme to use for this server')
-    async def pimp_set(self, interaction: discord.Interaction, theme: str):
+    @discord.app_commands.describe(theme_name='The theme to use for this server')
+    async def pimp_set(self, interaction: discord.Interaction, theme_name: str):
         """Set a theme override for this server."""
         if not await self._check_admin(interaction):
             return
         guild_id = interaction.guild_id if interaction.guild else None
         if not guild_id:
             await interaction.response.send_message(
-                f"{globals()['theme'].deniedIcon} This command can only be used in a server.",
+                f"{theme.deniedIcon} This command can only be used in a server.",
                 ephemeral=True
             )
             return
 
         # Verify theme exists
-        icons = self._get_theme_data(theme)
+        icons = self._get_theme_data(theme_name)
         if not icons:
             await interaction.response.send_message(
-                f"{globals()['theme'].deniedIcon} Theme '{theme}' not found.",
+                f"{theme.deniedIcon} Theme '{theme_name}' not found.",
                 ephemeral=True
             )
             return
 
-        self.activate_theme_for_server(guild_id, theme)
+        self.activate_theme_for_server(guild_id, theme_name)
         await interaction.response.send_message(
-            f"{globals()['theme'].verifiedIcon} Theme **{theme}** is now active for this server.",
+            f"{theme.verifiedIcon} Theme **{theme_name}** is now active for this server.",
             ephemeral=True
         )
 
-    @pimp_set.autocomplete('theme')
+    @pimp_set.autocomplete('theme_name')
     async def pimp_set_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._theme_autocomplete(current)
 
     @pimp_group.command(name='global', description='Set the global active theme (Global Admin only)')
-    @discord.app_commands.describe(theme='The theme to activate globally')
-    async def pimp_global(self, interaction: discord.Interaction, theme: str):
+    @discord.app_commands.describe(theme_name='The theme to activate globally')
+    async def pimp_global(self, interaction: discord.Interaction, theme_name: str):
         """Set the global active theme. Requires Global Admin."""
         is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
         if not is_admin or not is_global:
             await interaction.response.send_message(
-                f"{globals()['theme'].deniedIcon} Only global administrators can set the global theme.",
+                f"{theme.deniedIcon} Only global administrators can set the global theme.",
                 ephemeral=True
             )
             return
-        await self.activate_theme(interaction, theme)
+        await self.activate_theme(interaction, theme_name)
 
-    @pimp_global.autocomplete('theme')
+    @pimp_global.autocomplete('theme_name')
     async def pimp_global_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._theme_autocomplete(current)
 
@@ -2379,20 +2455,20 @@ class Theme(commands.Cog):
         guild_id = interaction.guild_id if interaction.guild else None
         if not guild_id:
             await interaction.response.send_message(
-                f"{globals()['theme'].deniedIcon} This command can only be used in a server.",
+                f"{theme.deniedIcon} This command can only be used in a server.",
                 ephemeral=True
             )
             return
 
         self.clear_server_theme(guild_id)
         await interaction.response.send_message(
-            f"{globals()['theme'].verifiedIcon} Server theme cleared. Now using global theme.",
+            f"{theme.verifiedIcon} Server theme cleared. Now using global theme.",
             ephemeral=True
         )
 
     @pimp_group.command(name='share', description='Share a theme to the online gallery')
-    @discord.app_commands.describe(theme='The theme to share')
-    async def pimp_share(self, interaction: discord.Interaction, theme: str):
+    @discord.app_commands.describe(theme_name='The theme to share')
+    async def pimp_share(self, interaction: discord.Interaction, theme_name: str):
         """Share a theme to the community gallery website."""
         if not await self._check_admin(interaction):
             return
@@ -2404,19 +2480,19 @@ class Theme(commands.Cog):
         if not is_global:
             with sqlite3.connect(THEME_DB_PATH) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT created_guild_id FROM pimpsettings WHERE themeName=?", (theme,))
+                cursor.execute("SELECT created_guild_id FROM pimpsettings WHERE themeName=?", (theme_name,))
                 result = cursor.fetchone()
 
                 if not result:
                     await interaction.response.send_message(
-                        f"{globals()['theme'].deniedIcon} Theme '{theme}' not found.",
+                        f"{theme.deniedIcon} Theme '{theme_name}' not found.",
                         ephemeral=True
                     )
                     return
 
                 if result[0] != guild_id:
                     await interaction.response.send_message(
-                        f"{globals()['theme'].deniedIcon} You can only share themes created on your server.",
+                        f"{theme.deniedIcon} You can only share themes created on your server.",
                         ephemeral=True
                     )
                     return
@@ -2424,28 +2500,28 @@ class Theme(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         result = await self.share_theme_to_gallery(
-            theme,
+            theme_name,
             interaction.user.id,
             interaction.user.display_name
         )
 
         if result.get("success"):
             embed = discord.Embed(
-                title=f"{globals()['theme'].verifiedIcon} Theme Shared!",
+                title=f"{theme.verifiedIcon} Theme Shared!",
                 description=(
-                    f"**{theme}** has been shared to the theme gallery.\n\n"
-                    f"{globals()['theme'].linkIcon} [View on Gallery]({result.get('url', '')})"
+                    f"**{theme_name}** has been shared to the theme gallery.\n\n"
+                    f"{theme.linkIcon} [View on Gallery]({result.get('url', '')})"
                 ),
-                color=globals()['theme'].emColor3
+                color=theme.emColor3
             )
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send(
-                f"{globals()['theme'].deniedIcon} {result.get('error', 'Failed to share theme.')}",
+                f"{theme.deniedIcon} {result.get('error', 'Failed to share theme.')}",
                 ephemeral=True
             )
 
-    @pimp_share.autocomplete('theme')
+    @pimp_share.autocomplete('theme_name')
     async def pimp_share_autocomplete(self, interaction: discord.Interaction, current: str):
         return await self._theme_autocomplete(current)
 
@@ -2648,6 +2724,7 @@ class Theme(commands.Cog):
 
             return {"success": True}
         except Exception as e:
+            logger.error(f"Create theme error: {e}")
             print(f"Create theme error: {e}")
             return {"success": False, "error": f"{theme.deniedIcon} Error creating theme: {e}"}
 
@@ -2697,6 +2774,7 @@ class Theme(commands.Cog):
 
             return {"success": True}
         except Exception as e:
+            logger.error(f"Create theme with metadata error: {e}")
             print(f"Create theme with metadata error: {e}")
             return {"success": False, "error": f"{theme.deniedIcon} Error creating theme: {e}"}
 
@@ -2730,7 +2808,7 @@ class Theme(commands.Cog):
     async def show_delete_theme(self, interaction: discord.Interaction, themename: str = None):
         view = DeleteThemeView(self, interaction.user.id, themename)
         embed = discord.Embed(
-            title=f"{theme.deleteIcon} Delete Theme",
+            title=f"{theme.trashIcon} Delete Theme",
             description=(
                 f"{theme.upperDivider}\n"
                 f"### {theme.warnIcon} Warning: {theme.warnIcon}\n"
@@ -2896,7 +2974,7 @@ class Theme(commands.Cog):
                 # Add dividers (handle both nested and flat formats)
                 for div_key, div_data in dividers.items():
                     if isinstance(div_data, dict):
-                        # Nested format: {"start": "━", "pattern": "━", "end": "━", "length": 20}
+                        # Nested format: {"start": "━", "pattern": "━", "end": "━", "length": 20, "codeBlock": false}
                         # or old format: {"raw": "━"}
                         num = div_key[-1]  # divider1 -> 1
                         if f'dividerStart{num}' in column_names:
@@ -2906,12 +2984,15 @@ class Theme(commands.Cog):
                                 values_dict[f'dividerPattern{num}'] = div_data.get('raw', '━')
                                 values_dict[f'dividerEnd{num}'] = div_data.get('raw', '━')
                                 values_dict[f'dividerLength{num}'] = 20
+                                values_dict[f'dividerCodeBlock{num}'] = 0
                             else:
-                                # New export format
+                                # New export format (from gallery)
                                 values_dict[f'dividerStart{num}'] = div_data.get('start', '━')
                                 values_dict[f'dividerPattern{num}'] = div_data.get('pattern', '━')
                                 values_dict[f'dividerEnd{num}'] = div_data.get('end', '━')
                                 values_dict[f'dividerLength{num}'] = div_data.get('length', 20)
+                                # Handle codeBlock (bool from gallery -> int for db)
+                                values_dict[f'dividerCodeBlock{num}'] = 1 if div_data.get('codeBlock') else 0
                     elif div_key.startswith('divider') and div_key in column_names:
                         # Flat format from old export: dividerLength1, dividerStart1, etc.
                         values_dict[div_key] = div_data
@@ -2942,6 +3023,7 @@ class Theme(commands.Cog):
         except json.JSONDecodeError:
             await interaction.followup.send(f"{theme.deniedIcon} Invalid JSON file format.")
         except Exception as e:
+            logger.error(f"Theme import error: {e}")
             print(f"Theme import error: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error importing theme: {e}")
 
@@ -2976,7 +3058,8 @@ class Theme(commands.Cog):
                 await interaction.followup.send(embeds=pages[0], view=view)
 
         except Exception as e:
-            print(f"Error: {e}")
+            logger.error(f"Fetch theme info error: {e}")
+            print(f"Fetch theme info error: {e}")
             await interaction.followup.send("An error occurred while fetching theme info.")
 
     async def show_theme_menu(self, interaction: discord.Interaction):
@@ -3056,7 +3139,7 @@ class Theme(commands.Cog):
                 # Add dividers (handle both nested and flat formats)
                 for div_key, div_data in dividers.items():
                     if isinstance(div_data, dict):
-                        # Nested format: {"start": "━", "pattern": "━", "end": "━", "length": 20}
+                        # Nested format: {"start": "━", "pattern": "━", "end": "━", "length": 20, "codeBlock": false}
                         # or old format: {"raw": "━"}
                         num = div_key[-1]  # divider1 -> 1
                         if f'dividerStart{num}' in column_names:
@@ -3066,12 +3149,15 @@ class Theme(commands.Cog):
                                 values_dict[f'dividerPattern{num}'] = div_data.get('raw', '━')
                                 values_dict[f'dividerEnd{num}'] = div_data.get('raw', '━')
                                 values_dict[f'dividerLength{num}'] = 20
+                                values_dict[f'dividerCodeBlock{num}'] = 0
                             else:
-                                # New export format
+                                # New export format (from gallery)
                                 values_dict[f'dividerStart{num}'] = div_data.get('start', '━')
                                 values_dict[f'dividerPattern{num}'] = div_data.get('pattern', '━')
                                 values_dict[f'dividerEnd{num}'] = div_data.get('end', '━')
                                 values_dict[f'dividerLength{num}'] = div_data.get('length', 20)
+                                # Handle codeBlock (bool from gallery -> int for db)
+                                values_dict[f'dividerCodeBlock{num}'] = 1 if div_data.get('codeBlock') else 0
                     elif div_key.startswith('divider') and div_key in column_names:
                         # Flat format from old export: dividerLength1, dividerStart1, etc.
                         values_dict[div_key] = div_data
@@ -3125,6 +3211,7 @@ class Theme(commands.Cog):
                 delete_after=10
             )
         except Exception as e:
+            logger.error(f"Theme import error: {e}")
             print(f"Theme import error: {e}")
             await message.add_reaction(theme.deniedIcon)
             await message.channel.send(
@@ -3251,6 +3338,7 @@ class Theme(commands.Cog):
                 await message.add_reaction(theme.deniedIcon)
 
         except Exception as e:
+            logger.error(f"Error processing emoji from message: {e}")
             print(f"Error processing emoji from message: {e}")
             try:
                 await message.add_reaction(theme.deniedIcon)

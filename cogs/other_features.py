@@ -41,6 +41,10 @@ class OtherFeatures(commands.Cog):
                     f"{theme.saveIcon} **Backup System**\n"
                     f"└ Automatic database backup\n"
                     f"└ Send backups to your DMs\n"
+                    f"└ Only for Global Admin\n\n"
+                    f"{theme.cleanIcon} **Database Maintenance**\n"
+                    f"└ WAL checkpoint and VACUUM operations\n"
+                    f"└ Scheduled maintenance window\n"
                     f"└ Only for Global Admin\n"
                     f"{theme.lowerDivider}"
                 ),
@@ -72,7 +76,7 @@ class OtherFeaturesView(discord.ui.View):
         if not is_global:
             for child in self.children:
                 if isinstance(child, discord.ui.Button) and child.label in [
-                    "Backup System", "Registration System"
+                    "Backup System", "Registration System", "Database Maintenance"
                 ]:
                     child.disabled = True
 
@@ -169,6 +173,30 @@ class OtherFeaturesView(discord.ui.View):
             print(f"Error loading Backup System menu: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while loading Backup System menu.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Database Maintenance",
+        emoji=f"{theme.cleanIcon}",
+        style=discord.ButtonStyle.primary,
+        custom_id="db_maintenance",
+        row=2
+    )
+    async def db_maintenance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            maintenance_cog = self.cog.bot.get_cog("DatabaseMaintenance")
+            if maintenance_cog:
+                await maintenance_cog.show_maintenance_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Database Maintenance module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            print(f"Error loading Database Maintenance menu: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} An error occurred while loading Database Maintenance menu.",
                 ephemeral=True
             )
             

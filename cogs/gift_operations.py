@@ -493,12 +493,12 @@ class GiftOperations(commands.Cog):
             )
             reaction = f"{theme.deniedIcon}"
         else:
-            reply_embed = discord.Embed(title=f"{theme.warningIcon} Gift Code Added (Pending)", color=discord.Color.yellow())
+            reply_embed = discord.Embed(title=f"{theme.warnIcon} Gift Code Added (Pending)", color=discord.Color.yellow())
             reply_embed.description = (
                 f"**Gift Code Details**\n{theme.upperDivider}\n"
                 f"{theme.userIcon} **Sender:** {message.author.mention}\n"
                 f"{theme.giftIcon} **Gift Code:** `{giftcode}`\n"
-                f"{theme.warningIcon} **Status:** {validation_msg}\n"
+                f"{theme.warnIcon} **Status:** {validation_msg}\n"
                 f"{theme.editListIcon} **Action:** Added for later validation\n"
                 f"{theme.lowerDivider}\n"
             )
@@ -1769,7 +1769,7 @@ class GiftOperations(commands.Cog):
             if results['existing_invalid']:
                 existing_summary += f"{theme.deniedIcon} Previously Invalid: {len(results['existing_invalid'])}\n"
             if results['existing_pending']:
-                existing_summary += f"{theme.warningIcon} Pending Validation: {len(results['existing_pending'])}\n"
+                existing_summary += f"{theme.warnIcon} Pending Validation: {len(results['existing_pending'])}\n"
             
             if existing_summary:
                 embed.add_field(
@@ -2089,7 +2089,7 @@ class GiftOperations(commands.Cog):
                         solver_status_msg = "onnxruntime library missing"
 
                 save_options_text = {
-                    0: f"{theme.deniedIcon} None", 1: f"{theme.warningIcon} Failed Only", 2: f"{theme.verifiedIcon} Success Only", 3: f"{theme.saveIcon} All"
+                    0: f"{theme.deniedIcon} None", 1: f"{theme.warnIcon} Failed Only", 2: f"{theme.verifiedIcon} Success Only", 3: f"{theme.saveIcon} All"
                 }
                 save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
 
@@ -2111,7 +2111,7 @@ class GiftOperations(commands.Cog):
 
                 if not onnx_available:
                     embed.add_field(
-                        name=f"{theme.warningIcon} Missing Library",
+                        name=f"{theme.warnIcon} Missing Library",
                         value=(
                             "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
                             "The model files must be in the bot/models/ directory.\n"
@@ -2151,7 +2151,7 @@ class GiftOperations(commands.Cog):
                 )
 
                 embed.add_field(
-                    name=f"{theme.warningIcon} Important Note",
+                    name=f"{theme.warnIcon} Important Note",
                     value="Saving images (especially 'All') can consume significant disk space over time.",
                     inline=False
                 )
@@ -2784,7 +2784,7 @@ class GiftOperations(commands.Cog):
                 elif validation_status == 'invalid':
                     status_display = f"{theme.deniedIcon} Invalid"
                 elif validation_status == 'pending':
-                    status_display = f"{theme.warningIcon} Pending"
+                    status_display = f"{theme.warnIcon} Pending"
                 else:
                     status_display = f"{theme.infoIcon} Unknown"
                 
@@ -2891,12 +2891,12 @@ class GiftOperations(commands.Cog):
                 confirm_view.add_item(cancel)
 
                 confirmation_embed = discord.Embed(
-                    title=f"{theme.warningIcon} Confirm Deletion",
+                    title=f"{theme.warnIcon} Confirm Deletion",
                     description=(
                         f"**Gift Code Details**\n"
                         f"{theme.upperDivider}\n"
                         f"{theme.giftIcon} **Selected Code:** `{selected_code}`\n"
-                        f"{theme.warningIcon} **Warning:** This action cannot be undone!\n"
+                        f"{theme.warnIcon} **Warning:** This action cannot be undone!\n"
                         f"{theme.lowerDivider}\n"
                     ),
                     color=discord.Color.yellow()
@@ -2923,7 +2923,7 @@ class GiftOperations(commands.Cog):
             
             if total_codes > 25:
                 description_text += (
-                    f"\n{theme.warningIcon} **Note:** Showing 25 of {total_codes} codes.\n"
+                    f"\n{theme.warnIcon} **Note:** Showing 25 of {total_codes} codes.\n"
                     f"Oldest codes are shown first.\n"
                     f"To delete newer codes, you'll need to delete the older ones first."
                 )
@@ -3015,7 +3015,7 @@ class GiftOperations(commands.Cog):
                 alliance_name = next((name for aid, name in available_alliances if aid == alliance_id), "Unknown Alliance")
                 
                 confirm_embed = discord.Embed(
-                    title=f"{theme.warningIcon} Confirm Removal",
+                    title=f"{theme.warnIcon} Confirm Removal",
                     description=(
                         f"Are you sure you want to remove the gift code channel for:\n\n"
                         f"{theme.allianceIcon} **Alliance:** {alliance_name}\n"
@@ -3138,7 +3138,7 @@ class GiftOperations(commands.Cog):
             
             # Create confirmation embed
             confirm_embed = discord.Embed(
-                title=f"{theme.warningIcon} Confirm Channel Removal",
+                title=f"{theme.warnIcon} Confirm Channel Removal",
                 description=(
                     f"Are you sure you want to remove the gift code channel setting?\n\n"
                     f"{theme.allianceIcon} **Alliance:** {alliance_name}\n"
@@ -3362,7 +3362,7 @@ class GiftOperations(commands.Cog):
                     label=name,
                     value=str(alliance_id),
                     description=description,
-                    emoji=theme.castleBattleIcon
+                    emoji=theme.allianceIcon
                 ))
             
             alliance_select = discord.ui.Select(
@@ -3492,12 +3492,12 @@ class GiftOperations(commands.Cog):
                     
                     # Confirmation embed
                     confirm_embed = discord.Embed(
-                        title=f"{theme.warningIcon} Confirm Removal",
+                        title=f"{theme.warnIcon} Confirm Removal",
                         description=(
                             f"Are you sure you want to remove the gift code channel configuration?\n\n"
                             f"{theme.allianceIcon} **Alliance:** {alliance_name}\n"
                             f"{theme.announceIcon} **Channel:** <#{channel_id}>\n\n"
-                            f"{theme.warningIcon} **Warning:** This will stop the bot from monitoring this channel for gift codes."
+                            f"{theme.warnIcon} **Warning:** This will stop the bot from monitoring this channel for gift codes."
                         ),
                         color=theme.emColor2
                     )
@@ -3710,7 +3710,7 @@ class GiftOperations(commands.Cog):
                     f"{theme.allianceIcon} **Alliance:** {alliance_name}\n"
                     f"{theme.announceIcon} **Channel:** #{channel.name}\n"
                     f"{theme.chartIcon} **Scan Limit:** Up to 75 historical messages\n\n"
-                    f"{theme.warningIcon} **Note:** This will scan historical messages in the channel to find "
+                    f"{theme.warnIcon} **Note:** This will scan historical messages in the channel to find "
                     f"potential gift codes. Use this carefully in channels with lots of non-gift-code messages.\n\n"
                     f"Do you want to proceed with the historical scan?"
                 ),
@@ -3766,7 +3766,7 @@ class GiftOperations(commands.Cog):
                     if existing_invalid > 0:
                         results_text += f"{theme.deniedIcon} Previously Invalid: {existing_invalid}\n"
                     if existing_pending > 0:
-                        results_text += f"{theme.warningIcon} Pending Validation: {existing_pending}\n"
+                        results_text += f"{theme.warnIcon} Pending Validation: {existing_pending}\n"
                     
                     results_text += f"\n📝 **Note:** A detailed summary has been posted in #{channel.name}"
                 else:
@@ -4102,7 +4102,7 @@ class GiftOperations(commands.Cog):
                     description=(
                         f"**Gift Code:** `{giftcode}`\n"
                         f"**Alliance:** `{alliance_name}`\n\n"
-                        f"{theme.warningIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
+                        f"{theme.warnIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
                         f"Please enable it first using the settings command."
                     ),
                     color=theme.emColor2
@@ -4222,8 +4222,8 @@ class GiftOperations(commands.Cog):
                     if non_success_errors:
                         # Define user-friendly messages for each error type
                         error_descriptions = {
-                            "TOO_POOR_SPEND_MORE": f"{theme.warningIcon} **" + "{count}" + "** members failed to spend enough to reach VIP12.",
-                            "TOO_SMALL_SPEND_MORE": f"{theme.warningIcon} **" + "{count}" + "** members failed due to insufficient furnace level.",
+                            "TOO_POOR_SPEND_MORE": f"{theme.warnIcon} **" + "{count}" + "** members failed to spend enough to reach VIP12.",
+                            "TOO_SMALL_SPEND_MORE": f"{theme.warnIcon} **" + "{count}" + "** members failed due to insufficient furnace level.",
                             "TIMEOUT_RETRY": f"{theme.timeIcon} **" + "{count}" + "** members were staring into the void, until the void finally timed out on them.",
                             "LOGIN_EXPIRED_MID_PROCESS": f"{theme.deniedIcon} **" + "{count}" + "** members login failed mid-process. How'd that even happen?",
                             "LOGIN_FAILED": f"{theme.deniedIcon} **" + "{count}" + "** members failed due to login issues. Try logging it off and on again!",
@@ -4552,7 +4552,7 @@ class GiftOperations(commands.Cog):
             self.logger.exception(f"GiftOps: UNEXPECTED ERROR in use_giftcode_for_alliance for {alliance_id}/{giftcode}: {str(e)}")
             self.logger.exception(f"Traceback: {traceback.format_exc()}")
             try:
-                if 'channel' in locals() and channel: await channel.send(f"{theme.warningIcon} An unexpected error occurred processing `{giftcode}` for {alliance_name}.")
+                if 'channel' in locals() and channel: await channel.send(f"{theme.warnIcon} An unexpected error occurred processing `{giftcode}` for {alliance_name}.")
             except Exception: pass
             return False
 
@@ -4642,11 +4642,11 @@ class CreateGiftCodeModal(discord.ui.Modal):
                     )
                     self.cog.conn.commit()
                     
-                    final_embed.title = f"{theme.warningIcon} Gift Code Added (Pending)"
+                    final_embed.title = f"{theme.warnIcon} Gift Code Added (Pending)"
                     final_embed.description = (
                         f"**Gift Code Details**\n{theme.upperDivider}\n"
                         f"{theme.giftIcon} **Gift Code:** `{code}`\n"
-                        f"{theme.warningIcon} **Status:** {validation_msg}\n"
+                        f"{theme.warnIcon} **Status:** {validation_msg}\n"
                         f"{theme.editListIcon} **Action:** Added for later validation\n"
                         f"{theme.lowerDivider}\n"
                     )
@@ -4942,7 +4942,7 @@ class GiftView(discord.ui.View):
                             total_redemptions = len(selected_codes) * len(all_alliances)
 
                             confirm_embed = discord.Embed(
-                                title=f"{theme.warningIcon} Confirm Gift Code Usage",
+                                title=f"{theme.warnIcon} Confirm Gift Code Usage",
                                 description=(
                                     f"Are you sure you want to use {'these gift codes' if len(selected_codes) > 1 else 'this gift code'}?\n\n"
                                     f"**Details**\n"
@@ -5003,7 +5003,7 @@ class GiftView(discord.ui.View):
                                             f"**Full Queue Details**\n"
                                             f"{queue_info}\n\n"
                                             f"{theme.chartIcon} **Total items in queue:** {queue_status['queue_length']}\n"
-                                            f"{theme.locationIcon} **Your position:** #{your_position if your_position else 'Processing'}\n\n"
+                                            f"{theme.pinIcon} **Your position:** #{your_position if your_position else 'Processing'}\n\n"
                                             f"{theme.infoIcon} You'll receive notifications as each alliance is processed."
                                         ),
                                         color=theme.emColor3
@@ -5654,7 +5654,7 @@ class OCRSettingsView(discord.ui.View):
             if save_path_str:
                 embed.add_field(name="📸 Captcha Image Saved", value=f"`{save_path_str}` in `{os.path.relpath(self.cog.captcha_solver.captcha_dir)}`", inline=False)
             elif save_error_str:
-                embed.add_field(name=f"{theme.warningIcon} Image Save Error", value=save_error_str, inline=False)
+                embed.add_field(name=f"{theme.warnIcon} Image Save Error", value=save_error_str, inline=False)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
             logger.info(f"[Test Button] Test completed for user {user_id}.")
@@ -5692,7 +5692,7 @@ class OCRSettingsView(discord.ui.View):
 
         # Create confirmation embed
         embed = discord.Embed(
-            title=f"{theme.warningIcon} Clear Redemption Cache",
+            title=f"{theme.warnIcon} Clear Redemption Cache",
             description=(
                 "This will **permanently delete** all gift code redemption records from the database.\n\n"
                 "**What this does:**\n"

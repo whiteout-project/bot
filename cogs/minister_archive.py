@@ -569,7 +569,7 @@ class MinisterArchive(commands.Cog):
                     f"**Created By:** {created_by_name}\n\n"
                     f"{theme.middleDivider}\n\n"
                     f"**Would you like to clear all minister appointments to prepare for the next SvS?**\n\n"
-                    f"{theme.warningIcon} This will remove all current appointments across Construction, Research, and Training days."
+                    f"{theme.warnIcon} This will remove all current appointments across Construction, Research, and Training days."
                 ),
                 color=theme.emColor3
             )
@@ -983,7 +983,7 @@ class MinisterArchive(commands.Cog):
         appointment_count = self.svs_cursor.fetchone()[0]
 
         embed = discord.Embed(
-            title=f"{theme.warningIcon} Delete Archive Confirmation",
+            title=f"{theme.warnIcon} Delete Archive Confirmation",
             description=(
                 f"**Are you sure you want to delete this archive?**\n\n"
                 f"**Archive Name:** {archive_name}\n"
@@ -992,7 +992,7 @@ class MinisterArchive(commands.Cog):
                 f"**Created By:** {created_by_name}\n"
                 f"**Appointments:** {appointment_count}\n\n"
                 f"{theme.middleDivider}\n\n"
-                f"{theme.warningIcon} **This action cannot be undone!**\n\n"
+                f"{theme.warnIcon} **This action cannot be undone!**\n\n"
                 f"This will permanently delete:\n"
                 f"• All {appointment_count} archived appointments\n"
                 f"• Associated change history for this archive\n"
@@ -1154,7 +1154,7 @@ class MinisterArchive(commands.Cog):
         history_lines = []
         action_emojis = {
             "add": f"{theme.addIcon}",
-            "remove": f"{theme.deleteIcon}",
+            "remove": f"{theme.trashIcon}",
             "reschedule": f"{theme.refreshIcon}",
             "clear_all": f"{theme.trashIcon}",
             "time_slot_mode_change": f"{theme.timeIcon}",

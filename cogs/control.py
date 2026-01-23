@@ -311,8 +311,8 @@ class Control(commands.Cog):
                 auto_value = result[0] if result else 1
         
         embed = discord.Embed(
-            title=f"{theme.castleBattleIcon} {alliance_name} Alliance Control",
-            description=f"{theme.magnifyingIcon} Checking for changes in member status...",
+            title=f"{theme.allianceIcon} {alliance_name} Alliance Control",
+            description=f"{theme.searchIcon} Checking for changes in member status...",
             color=theme.emColor1
         )
         embed.add_field(
@@ -350,14 +350,14 @@ class Control(commands.Cog):
                     # Get wait time from login handler
                     wait_time = self.login_handler._get_wait_time()
                     
-                    embed.description = f"{theme.warningIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n📊 Progress: {checked_users}/{total_users} members"
+                    embed.description = f"{theme.warnIcon} API Rate Limit! Waiting {wait_time:.1f} seconds...\n📊 Progress: {checked_users}/{total_users} members"
                     embed.color = discord.Color.orange()
                     if message:
                         await message.edit(embed=embed)
                     
                     await asyncio.sleep(wait_time)
                     
-                    embed.description = f"{theme.magnifyingIcon} Checking for changes in member status..."
+                    embed.description = f"{theme.searchIcon} Checking for changes in member status..."
                     embed.color = discord.Color.blue()
                     if message:
                         await message.edit(embed=embed)
@@ -468,7 +468,7 @@ class Control(commands.Cog):
 
             # Send alert to channel
             alert_embed = discord.Embed(
-                title=f"{theme.warningIcon} BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
+                title=f"{theme.warnIcon} BULK REMOVAL BLOCKED - SAFETY TRIGGERED",
                 description=(
                     f"**Alliance Check Safety System Activated**\n"
                     f"{theme.upperDivider}\n"
@@ -481,7 +481,7 @@ class Control(commands.Cog):
                     f"**Members that would have been removed:**\n"
                     + "\n".join([f"• `{fid}` ({nickname})" for fid, nickname, _ in members_to_remove[:10]])
                     + (f"\n• ... and {removal_count - 10} more" if removal_count > 10 else "")
-                    + f"\n\n{theme.warningIcon} **Action Required:** Please verify these members manually or wait for API issues to resolve."
+                    + f"\n\n{theme.warnIcon} **Action Required:** Please verify these members manually or wait for API issues to resolve."
                 ),
                 color=theme.emColor2
             )
@@ -560,7 +560,7 @@ class Control(commands.Cog):
                 # Connection issues are informational - members NOT removed
                 if len(connection_errors) <= 5:
                     # Show specific IDs for small numbers
-                    description = "\n".join([f"{theme.warningIcon} `{fid}` - Connection issue" for fid in connection_errors])
+                    description = "\n".join([f"{theme.warnIcon} `{fid}` - Connection issue" for fid in connection_errors])
                 else:
                     # Show summary for large numbers (API likely down)
                     description = (
@@ -570,7 +570,7 @@ class Control(commands.Cog):
                     )
                 await self.send_embed(
                     channel=channel,
-                    title=f"{theme.warningIcon} **{alliance_name}** Connection Issues",
+                    title=f"{theme.warnIcon} **{alliance_name}** Connection Issues",
                     description=description,
                     color=discord.Color.orange(),
                     footer=f"{theme.chartIcon} {len(connection_errors)} connection issue(s) - Members NOT affected"
@@ -644,7 +644,7 @@ class Control(commands.Cog):
                             description=(
                                 f"{theme.upperDivider}\n"
                                 f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
-                                f"{theme.castleBattleIcon} **Alliances:** {batch_info['total']} processed\n"
+                                f"{theme.allianceIcon} **Alliances:** {batch_info['total']} processed\n"
                                 f"{theme.verifiedIcon} **Status:** Completed\n"
                                 f"{theme.chartIcon} **Latest Alliance:** {alliance_name}\n"
                                 f"{theme.timeIcon} **Duration:** {duration.total_seconds():.1f} seconds\n"
@@ -659,7 +659,7 @@ class Control(commands.Cog):
                             description=(
                                 f"{theme.upperDivider}\n"
                                 f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
-                                f"{theme.castleBattleIcon} **Completed:** {alliance_name}\n"
+                                f"{theme.allianceIcon} **Completed:** {alliance_name}\n"
                                 f"{theme.pinIcon} **Progress:** {batch_info['current']}/{batch_info['total']} alliances\n"
                                 f"{theme.chartIcon} **Changes in {alliance_name}:** {'Yes' if changes_detected else 'No'}\n"
                                 f"{theme.lowerDivider}"
