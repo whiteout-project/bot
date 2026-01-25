@@ -889,9 +889,12 @@ class BearTrap(commands.Cog):
                                 if embed.to_dict():
                                     if mention_text:
                                         mention_message = embed_data.get("mention_message", "")
-                                        if mention_message and ("@tag" in mention_message or "{tag}" in mention_message):
-                                            mention_message = mention_message.replace("@tag", mention_text)
-                                            mention_message = mention_message.replace("{tag}", mention_text)
+                                        if mention_message:
+                                            if "@tag" in mention_message or "{tag}" in mention_message:
+                                                mention_message = mention_message.replace("@tag", mention_text)
+                                                mention_message = mention_message.replace("{tag}", mention_text)
+                                            else:
+                                                mention_message = f"{mention_text} {mention_message}"
                                             mention_message = mention_message.replace("%t", time_text)
                                             mention_message = mention_message.replace("{time}", time_text)
                                             mention_message = mention_message.replace("%n", event_name)
