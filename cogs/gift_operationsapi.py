@@ -8,6 +8,7 @@ from datetime import datetime
 import discord
 import ssl
 import logging
+from .pimp_my_bot import theme
 
 logger = logging.getLogger("gift_operationsapi")
 
@@ -336,15 +337,15 @@ class GiftCodeAPI:
                                                 elif is_valid is False:
                                                     invalid_codes_count += 1
                                                     self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
-                                                    validation_status = f"❌ Invalid: {validation_msg}"
+                                                    validation_status = f"{theme.deniedIcon} Invalid: {validation_msg}"
                                                     auto_alliances = []
                                                 else:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
-                                                    validation_status = f"⚠️ Pending"
+                                                    validation_status = f"{theme.warnIcon} Pending"
                                                     auto_alliances = []
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
-                                                validation_status = "❌ Error"
+                                                validation_status = f"{theme.deniedIcon} Error"
                                                 auto_alliances = []
 
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
@@ -352,22 +353,22 @@ class GiftCodeAPI:
                                             if admin_ids:
                                                 embed_description = (
                                                     f"**Gift Code Details**\n"
-                                                    f"━━━━━━━━━━━━━━━━━━━━━━\n"
-                                                    f"🎁 **Code:** `{code}`\n"
-                                                    f"📅 **Date:** `{formatted_date}`\n"
-                                                    f"📝 **Validation Status:** `{validation_status}`\n"
-                                                    f"🌐 **Source:** `Retrieved from Bot API`\n"
-                                                    f"⏰ **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                                                    f"🔄 **Auto Alliance Count:** `{len(auto_alliances)}`\n"
+                                                    f"{theme.upperDivider}\n"
+                                                    f"{theme.giftIcon} **Code:** `{code}`\n"
+                                                    f"{theme.calendarIcon} **Date:** `{formatted_date}`\n"
+                                                    f"{theme.listIcon} **Validation Status:** `{validation_status}`\n"
+                                                    f"{theme.linkIcon} **Source:** `Retrieved from Bot API`\n"
+                                                    f"{theme.alarmClockIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
+                                                    f"{theme.refreshIcon} **Auto Alliance Count:** `{len(auto_alliances)}`\n"
                                                 )
 
                                                 if is_valid is None:
                                                     embed_description += (
-                                                        f"\n⚠️ **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
+                                                        f"\n{theme.warnIcon} **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
                                                         f"Please wait for periodic validation to complete, after which auto-redemption will begin.\n"
                                                     )
 
-                                                embed_description += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                                                embed_description += f"{theme.lowerDivider}\n"
 
                                                 embed_color = discord.Color.green() if is_valid else (discord.Color.red() if is_valid is False else discord.Color.orange())
 
