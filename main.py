@@ -33,7 +33,28 @@ if sys.version_info < MIN_PYTHON:
     sys.exit(1)
 
 def is_container() -> bool:
-    return os.path.exists("/.dockerenv") or os.path.exists("/var/run/secrets/kubernetes.io")
+    # Docker, Kubernetes, Podman - simple marker file checks
+    marker_files = ["/.dockerenv", "/var/run/secrets/kubernetes.io", "/run/.containerenv"]
+    if any(os.path.exists(path) for path in marker_files):
+        return True
+
+    # LXC - check init process environment
+    try:
+        with open("/proc/1/environ", "r") as f:
+            if "container=lxc" in f.read():
+                return True
+    except (IOError, OSError):
+        pass
+
+    # Systemd-nspawn - check container type file
+    try:
+        with open("/run/systemd/container", "r") as f:
+            if f.read() == "systemd-nspawn\n":
+                return True
+    except (IOError, OSError):
+        pass
+
+    return False
 
 def is_ci_environment() -> bool:
     """Check if running in a CI environment"""
