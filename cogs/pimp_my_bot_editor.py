@@ -5,11 +5,14 @@ Provides categorized icon editing with a central hub for navigation.
 import discord
 import sqlite3
 import re
+import logging
 
 from .pimp_my_bot import (
     theme, THEME_DB_PATH, DEFAULT_EMOJI, ICON_CATEGORIES, check_interaction_user, build_divider,
     ThemeMenuView, ICON_NAMES, DEFAULT_ICON_VALUES
 )
+
+logger = logging.getLogger(__name__)
 
 
 def format_emoji_for_display(value: str) -> str:
@@ -761,8 +764,18 @@ class IconUrlModal(discord.ui.Modal):
             await interaction.edit_original_response(embed=embed, view=self.parent_view)
 
         except Exception as e:
+            logger.error(f"Icon update error: {e}")
+            print(f"Icon update error: {e}")
+
+            error_embed = discord.Embed(
+                title=f"{theme.deniedIcon} Update Failed",
+                description=f"Error updating icon: {e}",
+                color=0xFF0000
+            )
             await interaction.edit_original_response(
-                content=f"{theme.deniedIcon} Error updating icon: {e}"
+                embed=error_embed,
+                view=self.parent_view,
+                content=None
             )
 
 class DividerEditorView(discord.ui.View):
@@ -1005,6 +1018,8 @@ class DividerEditorView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error toggling code block: {e}")
+            print(f"Error toggling code block: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error toggling code block: {e}",
                 ephemeral=True
@@ -1049,6 +1064,8 @@ class DividerEditorView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error resetting dividers: {e}")
+            print(f"Error resetting dividers: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error resetting dividers: {e}",
                 ephemeral=True
@@ -1168,6 +1185,8 @@ class DividerModal(discord.ui.Modal):
             await interaction.edit_original_response(embed=embed, view=self.parent_view)
 
         except Exception as e:
+            logger.error(f"Error updating divider: {e}")
+            print(f"Error updating divider: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error updating divider: {e}",
                 ephemeral=True

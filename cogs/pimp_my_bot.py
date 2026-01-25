@@ -248,9 +248,12 @@ class ThemeManager:
             # Check if it's a custom Discord emoji
             match = re.match(r'<a?:(\w+):(\d+)>', str(value))
             if match:
+                emoji_name = match.group(1)
                 emoji_id = int(match.group(2))
                 # If bot can't access this emoji, set to empty string (hidden)
                 if emoji_id not in accessible_emoji_ids:
+                    logger.warning(f"Theme emoji '{icon_name}' (:{emoji_name}:{emoji_id}) is inaccessible - hiding it")
+                    print(f"[WARNING] Theme emoji '{icon_name}' (:{emoji_name}:{emoji_id}) is inaccessible - hiding it")
                     setattr(self, icon_name, "")
 
     def _set_defaults(self):
@@ -2218,6 +2221,8 @@ class Theme(commands.Cog):
                         max_size = 2048 * 1024
                         if len(image_data) > max_size:
                             if not PIL_AVAILABLE:
+                                logger.error(f"Image too large ({len(image_data)} bytes) and PIL not available for resizing")
+                                print(f"[ERROR] Image too large ({len(image_data)} bytes) and PIL not available for resizing")
                                 return False
 
                             try:
@@ -2231,7 +2236,9 @@ class Theme(commands.Cog):
                                 img_format = 'PNG' if not new_url.lower().endswith('.gif') else 'GIF'
                                 img.save(img_byte_arr, format=img_format, optimize=True)
                                 image_data = img_byte_arr.getvalue()
-                            except Exception:
+                            except Exception as e:
+                                logger.error(f"Image resizing failed: {e}")
+                                print(f"[ERROR] Image resizing failed: {e}")
                                 return False
 
                     icons = self._get_theme_data(themename)

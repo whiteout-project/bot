@@ -82,7 +82,8 @@ class ThemePreviewView(discord.ui.View):
     def _get_theme_data(self):
         """Load and return theme data."""
         self.session.load_theme_data()
-        return self.session.theme_data
+        # Return empty dict if theme data is None
+        return self.session.theme_data if self.session.theme_data is not None else {}
 
     def _get_dividers(self, data):
         """Build dividers from theme data.
@@ -129,9 +130,13 @@ class ThemePreviewView(discord.ui.View):
 
     def _get_icon(self, data, icon_key: str) -> str:
         """Get icon value with fallback for empty/missing values."""
+        # Handle None data gracefully
+        if data is None:
+            return DEFAULT_EMOJI
+
         value = data.get(icon_key)
         # Return default if None, empty string, or whitespace-only
-        if not value or not str(value).strip():
+        if value is None or not str(value).strip():
             return DEFAULT_EMOJI
         return value
 
