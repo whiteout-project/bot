@@ -4782,7 +4782,7 @@ class GiftView(discord.ui.View):
         label="Add Gift Code",
         style=discord.ButtonStyle.green,
         custom_id="create_gift",
-        emoji=f"{theme.ticketIcon}",
+        emoji=f"{theme.giftIcon}",
         row=0
     )
     async def create_gift(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -105,7 +105,7 @@ DEFAULT_ICON_VALUES = {
     'crazyJoeIcon': '🤪', 'bearTrapIcon': '🐻', 'calendarIcon': '📅', 'editListIcon': '📝',
     'settingsIcon': '⚙️', 'hourglassIcon': '⏳', 'messageNoIcon': '🔇', 'blankListIcon': '⚪',
     'alarmClockIcon': '⏰', 'magnifyingIcon': '🔍', 'frostdragonIcon': '🐉', 'canyonClashIcon': '⚔️',
-    'constructionIcon': '🏗️', 'castleBattleIcon': '☀️',
+    'constructionIcon': '🔨', 'castleBattleIcon': '☀️',
     # Gift icons
     'giftIcon': '🎁', 'giftsIcon': '🛍️', 'giftAddIcon': '➕', 'giftAlarmIcon': '⏰',
     'gifAlertIcon': '⚠️', 'giftCheckIcon': '✅', 'giftTotalIcon': '🟰', 'giftDeleteIcon': '🗑️',
@@ -2592,7 +2592,7 @@ class Theme(commands.Cog):
             'crazyJoeIcon': '1f92a', 'bearTrapIcon': '1f43b', 'calendarIcon': '1f4c5', 'editListIcon': '1f4dd',
             'settingsIcon': '2699', 'hourglassIcon': '23f3', 'messageNoIcon': '1f507', 'blankListIcon': '26AA',
             'alarmClockIcon': '23f0', 'magnifyingIcon': '1f50d', 'frostdragonIcon': '1f409', 'canyonClashIcon': '1f3de',
-            'constructionIcon': '2692', 'castleBattleIcon': '1f3f0',
+            'constructionIcon': '1f528', 'castleBattleIcon': '1f3f0',
             'giftIcon': '1f381', 'giftsIcon': '1f6cd', 'giftAddIcon': '2795', 'giftAlarmIcon': '2795',
             'gifAlertIcon': '26a0', 'giftCheckIcon': '2705', 'giftTotalIcon': '1f7f0', 'giftDeleteIcon': '1f5d1',
             'giftHashtagIcon': '0023-fe0f-20e3', 'giftSettingsIcon': '2699',

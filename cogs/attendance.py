@@ -416,7 +416,7 @@ class AttendanceView(discord.ui.View):
 
     @discord.ui.button(
         label="Mark Attendance",
-        emoji=theme.listIcon,
+        emoji=theme.editListIcon,
         style=discord.ButtonStyle.primary,
         custom_id="mark_attendance"
     )
@@ -425,7 +425,7 @@ class AttendanceView(discord.ui.View):
 
     @discord.ui.button(
         label="View Attendance",
-        emoji=theme.searchIcon,
+        emoji=theme.eyesIcon,
         style=discord.ButtonStyle.secondary,
         custom_id="view_attendance"
     )
@@ -442,7 +442,7 @@ class AttendanceView(discord.ui.View):
             view = AllianceSelectView(alliances_with_counts, self.cog, is_marking=False)
             
             select_embed = discord.Embed(
-                title=f"{theme.searchIcon} View Attendance - Alliance Selection",
+                title=f"{theme.eyesIcon} View Attendance - Alliance Selection",
                 description="Please select an alliance to view attendance records:",
                 color=theme.emColor3
             )
@@ -2261,9 +2261,9 @@ class Attendance(commands.Cog):
                 f"Please select an operation:\n\n"
                 f"**Available Operations**\n"
                 f"{theme.upperDivider}\n"
-                f"{theme.listIcon} **Mark Attendance**\n"
+                f"{theme.editListIcon} **Mark Attendance**\n"
                 f"└ Create or modify attendance records\n\n"
-                f"{theme.searchIcon} **View Attendance**\n"
+                f"{theme.eyesIcon} **View Attendance**\n"
                 f"└ View attendance records and export reports\n\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Configure attendance preferences\n"
@@ -2420,7 +2420,7 @@ class Attendance(commands.Cog):
                 )
             
             embed = discord.Embed(
-                title=f"{theme.listIcon} Mark Attendance - {alliance_name}",
+                title=f"{theme.editListIcon} Mark Attendance - {alliance_name}",
                 description=description,
                 color=theme.emColor1
             )
@@ -2508,7 +2508,7 @@ class Attendance(commands.Cog):
             event_icon = EVENT_TYPE_ICONS.get(event_type, "📋")
             legion_display = f" [{event_subtype[:1]}{event_subtype[-1]}]" if event_subtype else ""
             embed = discord.Embed(
-                title=f"{theme.listIcon} Mark Attendance - {alliance_name}",
+                title=f"{theme.editListIcon} Mark Attendance - {alliance_name}",
                 description=(
                     f"**Session:** {session_name}\n"
                     f"**Event Type:** {event_icon} {event_type}{legion_display}\n"

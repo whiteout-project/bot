@@ -54,7 +54,7 @@ class Changes(commands.Cog):
                 description=(
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.levelIcon} **Furnace Changes**\n"
+                    f"{theme.stoveIcon} **Furnace Changes**\n"
                     f"└ View furnace level changes\n\n"
                     f"{theme.editListIcon} **Nickname Changes**\n"
                     f"└ View nickname history\n"
@@ -354,7 +354,7 @@ class HistoryView(discord.ui.View):
                     alliances_with_counts.append((alliance_id, name, member_count))
 
             select_embed = discord.Embed(
-                title="🔥 Furnace Changes",
+                title=f"{theme.stoveIcon} Furnace Changes",
                 description=(
                     f"Select an alliance to view furnace changes:\n\n"
                     f"**Permission Details**\n"

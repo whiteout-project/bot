@@ -376,9 +376,9 @@ class IDChannel(commands.Cog):
                     f"Manage your alliance ID channels here:\n\n"
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.newIcon} Create new ID channel\n"
-                    f"{theme.trashIcon} Delete existing ID channel\n"
+                    f"{theme.addIcon} Create new ID channel\n"
                     f"{theme.listIcon} View active ID channels\n"
+                    f"{theme.trashIcon} Delete existing ID channel\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
@@ -408,7 +408,7 @@ class IDChannelView(discord.ui.View):
         emoji=f"{theme.listIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="view_id_channels",
-        row=1
+        row=0
     )
     async def view_channels_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -477,7 +477,7 @@ class IDChannelView(discord.ui.View):
         emoji=f"{theme.trashIcon}",
         style=discord.ButtonStyle.danger,
         custom_id="delete_id_channel",
-        row=0
+        row=1
     )
     async def delete_channel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -726,7 +726,7 @@ class IDChannelView(discord.ui.View):
         emoji=f"{theme.prevIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_other_features",
-        row=2
+        row=1
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:

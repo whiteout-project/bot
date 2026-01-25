@@ -128,10 +128,10 @@ class AllianceMemberOperations(commands.Cog):
                 "**Available Operations:**\n"
                 f"{theme.newIcon} `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
                 f"{theme.refreshIcon} `Transfer Members` - Transfer members to another alliance\n"
-                f"{theme.trashIcon} `Remove Members` - Remove members from alliance\n"
+                f"{theme.minusIcon} `Remove Members` - Remove members from alliance\n"
                 f"{theme.userIcon} `View Members` - View alliance member list\n"
                 f"{theme.chartIcon} `Export Members` - Export member data to CSV/TSV\n"
-                f"{theme.allianceIcon} `Main Menu` - Return to main menu"
+                f"{theme.homeIcon} `Main Menu` - Return to main menu"
             ),
             color=theme.emColor1
         )
@@ -209,7 +209,7 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Remove Members",
-                emoji=theme.trashIcon,
+                emoji=theme.minusIcon,
                 style=discord.ButtonStyle.danger,
                 custom_id="remove_member",
                 row=0
@@ -632,7 +632,7 @@ class AllianceMemberOperations(commands.Cog):
 
             @discord.ui.button(
                 label="Export Members",
-                emoji=theme.averageIcon,
+                emoji=theme.chartIcon,
                 style=discord.ButtonStyle.primary,
                 custom_id="export_members",
                 row=1

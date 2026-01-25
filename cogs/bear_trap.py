@@ -2843,7 +2843,7 @@ class BearTrapView(discord.ui.View):
 
     @discord.ui.button(
         label="Custom Notification",
-        emoji=f"{theme.timeIcon}",
+        emoji=f"{theme.alarmClockIcon}",
         style=discord.ButtonStyle.success,
         custom_id="set_time",
         row=0
