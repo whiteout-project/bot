@@ -21,9 +21,9 @@ from .permission_handler import PermissionManager
 # Database path constant
 THEME_DB_PATH = 'db/pimpmybot.sqlite'
 
-# Theme Gallery API configuration
-THEME_GALLERY_URL = "https://themes.whiteout-bot.com"
-THEME_GALLERY_API_KEY = "JpqVwtEOcL39eTCgoPStFvFQwX7-ZinZXe4koAnwKyqa0L6COqVfXFvyoCvheX5k"
+# Theme Gallery API configuration (temporarily disabled)
+THEME_GALLERY_URL = ""
+THEME_GALLERY_API_KEY = ""
 
 # Default values
 DEFAULT_EMOJI = "👻"
@@ -853,14 +853,14 @@ class ThemeMenuView(discord.ui.View):
         delete_btn.callback = self.delete_theme
         self.add_item(delete_btn)
 
-        # Row 3: Share Online - Main Menu
+        # Row 3: Share Online (Coming Soon) - Main Menu
         share_btn = discord.ui.Button(
-            label="Share Online",
+            label="Share Online (soon)",
             emoji=theme.heartIcon or None,
             style=discord.ButtonStyle.secondary,
             custom_id="share_theme",
             row=3,
-            disabled=is_default or not can_modify or not self.selected_theme
+            disabled=True  # Always disabled until website ready
         )
         share_btn.callback = self.share_theme
         self.add_item(share_btn)
