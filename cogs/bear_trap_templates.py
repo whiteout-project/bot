@@ -9,6 +9,7 @@ from typing import Optional, Dict, List
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from bear_event_types import EVENT_CONFIG, get_event_types, get_event_icon, get_event_config
+from .pimp_my_bot import theme
 
 class BearTrapTemplates(commands.Cog):
     def __init__(self, bot):
@@ -172,7 +173,7 @@ class BearTrapTemplates(commands.Cog):
 
         if not is_admin:
             await interaction.response.send_message(
-                "❌ You don't have permission to use this command!",
+                f"{theme.deniedIcon} You don't have permission to use this command!",
                 ephemeral=True
             )
         return is_admin
@@ -287,7 +288,7 @@ class BearTrapTemplates(commands.Cog):
         templates = self.get_templates_by_event_type()
         if not templates:
             await interaction.response.send_message(
-                "❌ No templates found.",
+                f"{theme.deniedIcon} No templates found.",
                 ephemeral=True
             )
             return
@@ -310,14 +311,14 @@ class TemplateBrowseView(discord.ui.View):
         start = page * self.page_size
         end = min(start + self.page_size, len(self.templates))
         page_templates = self.templates[start:end]
-        title = "📚 Available Templates"
+        title = f"{theme.documentIcon} Available Templates"
         if self.event_filter:
             icon = get_event_icon(self.event_filter)
             title = f"{icon} {self.event_filter} Templates"
         embed = discord.Embed(
             title=title,
             description=f"Templates define the default notification settings used by the Setup Wizard. Edit them to customize how the event notifications appear when you create them using the wizard.\n\nShowing {start + 1}-{end} of {len(self.templates)} templates",
-            color=discord.Color.blue()
+            color=theme.emColor1
         )
         for template in page_templates:
             icon = get_event_icon(template["event_type"])
@@ -339,7 +340,7 @@ class TemplateBrowseView(discord.ui.View):
         if self.total_pages > 1:
             prev_button = discord.ui.Button(
                 label="Previous",
-                emoji="⬅️",
+                emoji=f"{theme.backIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=(page == 0),
                 row=1
@@ -355,7 +356,7 @@ class TemplateBrowseView(discord.ui.View):
             self.add_item(page_indicator)
             next_button = discord.ui.Button(
                 label="Next",
-                emoji="➡️",
+                emoji=f"{theme.forwardIcon}",
                 style=discord.ButtonStyle.secondary,
                 disabled=(page >= self.total_pages - 1),
                 row=1
@@ -395,7 +396,7 @@ class TemplateSelectDropdown(discord.ui.Select):
 
         if not template:
             await interaction.response.send_message(
-                "❌ Template not found.",
+                f"{theme.deniedIcon} Template not found.",
                 ephemeral=True
             )
             return
@@ -467,13 +468,13 @@ class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
                 await view.show_preview(interaction)
             else:
                 await interaction.response.send_message(
-                    "❌ Failed to refresh template preview",
+                    f"{theme.deniedIcon} Failed to refresh template preview",
                     ephemeral=True
                 )
         except Exception as e:
             print(f"Error updating template: {e}")
             await interaction.response.send_message(
-                f"❌ Failed to update template: {str(e)}",
+                f"{theme.deniedIcon} Failed to update template: {str(e)}",
                 ephemeral=True
             )
 
@@ -494,7 +495,7 @@ class TemplatePreviewView(discord.ui.View):
         info_embed = discord.Embed(
             title=f"{icon} Template Preview: {template['template_name']}",
             description=template["description"],
-            color=discord.Color.green()
+            color=theme.emColor3
         )
 
         info_embed.add_field(
@@ -589,7 +590,7 @@ class TemplatePreviewView(discord.ui.View):
         # Add edit button
         edit_button = discord.ui.Button(
             label="Edit Template",
-            emoji="✏️",
+            emoji=f"{theme.editListIcon}",
             style=discord.ButtonStyle.primary
         )
         edit_button.callback = self.edit_template
@@ -599,7 +600,7 @@ class TemplatePreviewView(discord.ui.View):
         if template.get("is_global") == 0:
             reset_button = discord.ui.Button(
                 label="Reset to Default",
-                emoji="🔄",
+                emoji=f"{theme.refreshIcon}",
                 style=discord.ButtonStyle.danger
             )
             reset_button.callback = self.reset_to_default
@@ -608,7 +609,7 @@ class TemplatePreviewView(discord.ui.View):
         # Add back button
         back_button = discord.ui.Button(
             label="Back",
-            emoji="◀️",
+            emoji=f"{theme.prevIcon}",
             style=discord.ButtonStyle.secondary
         )
         back_button.callback = self.back_to_browse
@@ -625,7 +626,7 @@ class TemplatePreviewView(discord.ui.View):
         """Show reset confirmation"""
         confirm_view = ResetConfirmView(self.cog, self.template, self.all_templates)
         await interaction.response.send_message(
-            "⚠️ **Reset Template to Default?**\n\n"
+            f"{theme.warnIcon} **Reset Template to Default?**\n\n"
             "This will restore the original image, thumbnail, title, and description from the system defaults.\n\n"
             "Any customizations you made will be lost.",
             view=confirm_view,
@@ -656,12 +657,12 @@ class ResetConfirmView(discord.ui.View):
         )
         if success:
             await interaction.response.edit_message(
-                content="✅ Template has been reset to default values.",
+                content=f"{theme.verifiedIcon} Template has been reset to default values.",
                 view=None
             )
         else:
             await interaction.response.edit_message(
-                content="❌ Could not find default values for this event type.",
+                content=f"{theme.deniedIcon} Could not find default values for this event type.",
                 view=None
             )
         self.stop()
