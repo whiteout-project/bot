@@ -1,6 +1,9 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 import pytz
+
+logger = logging.getLogger('notification')
 
 # Event type configuration metadata
 EVENT_CONFIG = {

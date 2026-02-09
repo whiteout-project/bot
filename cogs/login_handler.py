@@ -3,11 +3,12 @@ import asyncio
 import hashlib
 import time
 import ssl
-import os
-from datetime import datetime
+import logging
 from typing import Optional, List, Dict, Callable
 
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 class LoginHandler:
     """
@@ -57,13 +58,7 @@ class LoginHandler:
         
         # SSL context (reusable)
         self.ssl_context = self._create_ssl_context()
-        
-        # Logging
-        self.log_directory = 'log'
-        if not os.path.exists(self.log_directory):
-            os.makedirs(self.log_directory)
-        self.log_file = os.path.join(self.log_directory, 'login_handler.txt')
-        
+
         # Mark as initialized
         self._initialized = True
     
@@ -73,15 +68,7 @@ class LoginHandler:
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         return ssl_context
-    
-    def log_message(self, message: str):
-        """Log a message with timestamp"""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        log_entry = f"[{timestamp}] {message}\n"
-        
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
-    
+
     def get_alliance_lock(self, alliance_id: str) -> asyncio.Lock:
         """Get or create alliance-specific lock"""
         if alliance_id not in self.alliance_locks:
@@ -114,9 +101,9 @@ class LoginHandler:
                 async with session.post(self.api1_url, headers=headers, data=form, timeout=5) as response:
                     # API is available if we get 200 (success) or 429 (rate limit)
                     api_status["api1_available"] = response.status in [200, 429]
-                    self.log_message(f"API1 availability check: Status {response.status}")
             except Exception as e:
-                self.log_message(f"API1 availability check failed: {str(e)}")
+                logger.error(f"API1 availability check failed: {e}")
+                print(f"API1 availability check failed: {e}")
                 api_status["api1_available"] = False
             
             # Test API 2
@@ -129,9 +116,9 @@ class LoginHandler:
                 
                 async with session.post(self.api2_url, headers=headers, data=form, timeout=5) as response:
                     api_status["api2_available"] = response.status in [200, 429]
-                    self.log_message(f"API2 availability check: Status {response.status}")
             except Exception as e:
-                self.log_message(f"API2 availability check failed: {str(e)}")
+                logger.error(f"API2 availability check failed: {e}")
+                print(f"API2 availability check failed: {e}")
                 api_status["api2_available"] = False
         
         # Update configuration based on availability
@@ -321,7 +308,8 @@ class LoginHandler:
                         }
                         
         except Exception as e:
-            self.log_message(f"Error fetching player data for ID {fid}: {str(e)}")
+            logger.error(f"Error fetching player data for ID {fid}: {e}")
+            print(f"Error fetching player data for ID {fid}: {e}")
             return {
                 'status': 'error',
                 'data': None,
@@ -429,7 +417,6 @@ class LoginHandler:
         """Start the queue processor if not already running"""
         if not self.queue_processor_task or self.queue_processor_task.done():
             self.queue_processor_task = asyncio.create_task(self._process_operation_queue())
-            self.log_message("Queue processor started")
     
     async def queue_operation(self, operation_info: Dict) -> int:
         """
@@ -447,7 +434,6 @@ class LoginHandler:
         
         await self.operation_queue.put(operation_info)
         queue_size = self.operation_queue.qsize()
-        self.log_message(f"Operation queued: {operation_info['description']} (Position: {queue_size})")
         
         # Start processor if not running
         await self.start_queue_processor()
@@ -456,15 +442,11 @@ class LoginHandler:
     
     async def _process_operation_queue(self):
         """Process queued operations one at a time"""
-        self.log_message("Queue processor starting...")
-        
         while True:
             try:
                 # Wait for an operation
                 operation = await self.operation_queue.get()
                 self.current_operation = operation
-                
-                self.log_message(f"Processing operation: {operation['description']}")
                 
                 try:
                     # Use alliance lock if specified
@@ -473,18 +455,17 @@ class LoginHandler:
                             await operation['callback']()
                     else:
                         await operation['callback']()
-                    
-                    self.log_message(f"Operation completed: {operation['description']}")
-                    
+
                 except Exception as e:
-                    self.log_message(f"Operation failed: {operation['description']} - Error: {str(e)}")
+                    logger.error(f"Operation failed: {operation['description']} - Error: {e}")
+                    print(f"Operation failed: {operation['description']} - Error: {e}")
                     # Send error message if interaction is available
                     if operation.get('interaction'):
                         try:
                             await operation['interaction'].followup.send(
                                 f"{theme.deniedIcon} Operation failed: {str(e)}", ephemeral=True
                             )
-                        except:
+                        except Exception:
                             pass
                 
                 finally:
@@ -492,10 +473,11 @@ class LoginHandler:
                     self.operation_queue.task_done()
                 
             except asyncio.CancelledError:
-                self.log_message("Queue processor cancelled")
+                # Normal shutdown - no need to log as error
                 break
             except Exception as e:
-                self.log_message(f"Queue processor error: {str(e)}")
+                logger.error(f"Queue processor error: {e}")
+                print(f"Queue processor error: {e}")
                 await asyncio.sleep(1)  # Prevent tight loop on error
     
     def get_queue_info(self) -> Dict:

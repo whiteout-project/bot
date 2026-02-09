@@ -1,11 +1,14 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 import os
 import uuid
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 try:
     import matplotlib.pyplot as plt
@@ -204,7 +207,7 @@ class ReportTypeSelectView(discord.ui.View):
     @discord.ui.button(
         label="Back", emoji=f"{theme.backIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="back_to_settings"
+        custom_id="attendance_back_to_settings"
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         settings_view = AttendanceSettingsView(self.cog)
@@ -294,7 +297,7 @@ class ReportSortSelectView(discord.ui.View):
     @discord.ui.button(
         label="Back", emoji=f"{theme.backIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="back_to_settings"
+        custom_id="attendance_sort_back"
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         settings_view = AttendanceSettingsView(self.cog)
@@ -418,7 +421,8 @@ class AttendanceView(discord.ui.View):
         label="Mark Attendance",
         emoji=theme.editListIcon,
         style=discord.ButtonStyle.primary,
-        custom_id="mark_attendance"
+        custom_id="mark_attendance",
+        row=0
     )
     async def mark_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_alliance_selection_for_marking(interaction)
@@ -427,7 +431,8 @@ class AttendanceView(discord.ui.View):
         label="View Attendance",
         emoji=theme.eyesIcon,
         style=discord.ButtonStyle.secondary,
-        custom_id="view_attendance"
+        custom_id="view_attendance",
+        row=0
     )
     async def view_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -460,7 +465,8 @@ class AttendanceView(discord.ui.View):
         label="Settings",
         emoji=theme.settingsIcon,
         style=discord.ButtonStyle.secondary,
-        custom_id="attendance_settings"
+        custom_id="attendance_settings",
+        row=1
     )
     async def settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -502,19 +508,20 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=None)
 
     @discord.ui.button(
-        label="Back", emoji=f"{theme.backIcon}",
+        label="Main Menu", emoji=f"{theme.homeIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="back_to_other_features"
+        custom_id="back_to_main_menu",
+        row=1
     )
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-            if other_features_cog:
-                await other_features_cog.show_other_features_menu(interaction)
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_main_menu(interaction)
         except Exception as e:
             error_embed = self.cog._create_error_embed(
                 f"{theme.deniedIcon} Error",
-                "An error occurred while returning to other features."
+                "An error occurred while returning to Main Menu."
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
 
@@ -903,7 +910,7 @@ class EditEventDetailsView(discord.ui.View):
             if isinstance(event_date, str):
                 try:
                     event_date = datetime.fromisoformat(event_date.replace('Z', '+00:00'))
-                except:
+                except Exception:
                     event_date = datetime.utcnow()
             elif event_date is None:
                 # If no date is set, use current datetime
@@ -968,7 +975,7 @@ class EventDateModal(discord.ui.Modal, title="Edit Event Date"):
                 try:
                     dt = datetime.fromisoformat(current_event_date.replace('Z', '+00:00'))
                     current_date_str = dt.strftime("%Y-%m-%d %H:%M")
-                except:
+                except Exception:
                     current_date_str = current_event_date
             elif isinstance(current_event_date, datetime):
                 current_date_str = current_event_date.strftime("%Y-%m-%d %H:%M")
@@ -1349,7 +1356,7 @@ class PlayerSelectView(discord.ui.View):
                 )
                 try:
                     await interaction.response.edit_message(embed=error_embed, view=self)
-                except:
+                except Exception:
                     # If response already sent, try followup
                     await interaction.followup.send(embed=error_embed, ephemeral=True)
         
@@ -1579,6 +1586,7 @@ class PlayerSelectView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"ERROR in show_summary: {e}")
             print(f"ERROR in show_summary: {e}")
             import traceback
             traceback.print_exc()
@@ -1921,7 +1929,7 @@ class PlayerAttendanceView(discord.ui.View):
                             formatted_date = date_obj.strftime("%m/%d")
                         else:
                             formatted_date = date_str[:10]
-                    except:
+                    except Exception:
                         formatted_date = date_str[:10] if len(date_str) >= 10 else date_str
 
                     status_display = status.replace('_', ' ').title() if status else status
@@ -1930,7 +1938,7 @@ class PlayerAttendanceView(discord.ui.View):
                     return "N/A"
         try:
             return await self.parent_view.cog.bot.loop.run_in_executor(None, query)
-        except:
+        except Exception:
             return "Error"
 
     @discord.ui.button(label="Present", style=discord.ButtonStyle.success, custom_id="present")
@@ -2473,7 +2481,7 @@ class Attendance(commands.Cog):
                         if not event_date and record[4]:
                             try:
                                 event_date = datetime.fromisoformat(record[4])
-                            except:
+                            except Exception:
                                 pass
             
             # Combine member data with attendance status
@@ -2654,7 +2662,7 @@ class Attendance(commands.Cog):
                     else:
                         event_date_obj = event_date
                     event_date_str = event_date_obj.strftime('%Y-%m-%d %H:%M')
-                except:
+                except Exception:
                     event_date_str = str(event_date)
             
             # Show simple success message
@@ -2685,6 +2693,7 @@ class Attendance(commands.Cog):
                 await interaction.response.edit_message(embed=success_embed, view=back_view)
 
         except Exception as e:
+            logger.error(f"ERROR in process_attendance_results: {e}")
             print(f"ERROR in process_attendance_results: {e}")
             import traceback
             traceback.print_exc()
@@ -2844,4 +2853,5 @@ async def setup(bot):
         cog = Attendance(bot)
         await bot.add_cog(cog)
     except Exception as e:
+        logger.error(f"Failed to load Attendance cog: {e}")
         print(f"[ERROR] Failed to load Attendance cog: {e}")

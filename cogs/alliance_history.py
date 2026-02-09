@@ -1,18 +1,28 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
 
-class Changes(commands.Cog):
+logger = logging.getLogger('alliance')
+
+class AllianceHistory(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn_settings = sqlite3.connect('db/settings.sqlite')
+        self.conn_settings = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.c_settings = self.conn_settings.cursor()
-        self.conn = sqlite3.connect('db/changes.sqlite')
+        self.conn = sqlite3.connect('db/changes.sqlite', timeout=30.0, check_same_thread=False)
         self.cursor = self.conn.cursor()
+
+        # Enable WAL mode for better concurrent access
+        self.conn_settings.execute("PRAGMA journal_mode=WAL")
+        self.conn_settings.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+
         self._create_tables()
         
         self.level_mapping = {
@@ -68,6 +78,7 @@ class Changes(commands.Cog):
             
         except Exception as e:
             if not any(error_code in str(e) for error_code in ["10062", "40060"]):
+                logger.error(f"Show alliance history menu error: {e}")
                 print(f"Show alliance history menu error: {e}")
 
     async def show_furnace_history(self, interaction: discord.Interaction, fid: int):
@@ -118,6 +129,7 @@ class Changes(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
+            logger.error(f"Error in show_furnace_history: {e}")
             print(f"Error in show_furnace_history: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while displaying the furnace history.",
@@ -170,6 +182,7 @@ class Changes(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
+            logger.error(f"Error in show_nickname_history: {e}")
             print(f"Error in show_nickname_history: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while displaying the nickname history.",
@@ -220,6 +233,7 @@ class Changes(commands.Cog):
             )
 
         except Exception as e:
+            logger.error(f"Error in show_member_list_nickname: {e}")
             print(f"Error in show_member_list_nickname: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while displaying the member list.",
@@ -265,6 +279,7 @@ class Changes(commands.Cog):
             await interaction.followup.send(embed=view.get_embed(), view=view)
 
         except Exception as e:
+            logger.error(f"Error in show_recent_changes: {e}")
             print(f"Error in show_recent_changes: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -310,6 +325,7 @@ class Changes(commands.Cog):
             await interaction.followup.send(embed=view.get_embed(), view=view)
 
         except Exception as e:
+            logger.error(f"Error in show_recent_nickname_changes: {e}")
             print(f"Error in show_recent_nickname_changes: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -318,7 +334,7 @@ class Changes(commands.Cog):
 
 class HistoryView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__()
+        super().__init__(timeout=7200)
         self.cog = cog
         self.current_page = 0
         self.members_per_page = 25
@@ -374,6 +390,7 @@ class HistoryView(discord.ui.View):
                     alliance_id = int(view.current_select.values[0])
                     await self.member_callback(select_interaction, alliance_id)
                 except Exception as e:
+                    logger.error(f"Error in alliance selection: {e}")
                     print(f"Error in alliance selection: {e}")
                     if not select_interaction.response.is_done():
                         await select_interaction.response.send_message(
@@ -387,7 +404,7 @@ class HistoryView(discord.ui.View):
                         )
 
             view.callback = alliance_callback
-            
+
             await interaction.response.send_message(
                 embed=select_embed,
                 view=view,
@@ -395,6 +412,7 @@ class HistoryView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in furnace_changes_button: {e}")
             print(f"Error in furnace_changes_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while processing the request.",
@@ -442,6 +460,7 @@ class HistoryView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
+            logger.error(f"Error in member_callback: {e}")
             print(f"Error in member_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -504,6 +523,7 @@ class HistoryView(discord.ui.View):
                     alliance_id = int(view.current_select.values[0])
                     await self.cog.show_member_list_nickname(select_interaction, alliance_id)
                 except Exception as e:
+                    logger.error(f"Error in alliance selection: {e}")
                     print(f"Error in alliance selection: {e}")
                     if not select_interaction.response.is_done():
                         await select_interaction.response.send_message(
@@ -517,7 +537,7 @@ class HistoryView(discord.ui.View):
                         )
 
             view.callback = alliance_callback
-            
+
             await interaction.response.send_message(
                 embed=select_embed,
                 view=view,
@@ -525,6 +545,7 @@ class HistoryView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in nickname_changes_button: {e}")
             print(f"Error in nickname_changes_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while processing the request.",
@@ -532,35 +553,37 @@ class HistoryView(discord.ui.View):
             )
 
     @discord.ui.button(
-        label="Main Menu",
-        emoji=f"{theme.homeIcon}",
+        label="Back",
+        emoji=f"{theme.backIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
+        custom_id="back_from_history",
         row=1
     )
-    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.show_main_menu(interaction)
 
     async def show_main_menu(self, interaction: discord.Interaction):
+        """Navigate back to Alliance Management sub-menu."""
         try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                await alliance_cog.show_main_menu(interaction)
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_alliance_management(interaction)
             else:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while returning to the main menu.",
+                    f"{theme.deniedIcon} An error occurred while returning to menu.",
                     ephemeral=True
                 )
         except Exception as e:
-            print(f"[ERROR] Main Menu error in changes: {e}")
+            logger.error(f"Menu navigation error in changes: {e}")
+            print(f"[ERROR] Menu navigation error in changes: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "An error occurred while returning to the main menu.",
+                    "An error occurred while returning to menu.",
                     ephemeral=True
                 )
             else:
                 await interaction.followup.send(
-                    "An error occurred while returning to the main menu.",
+                    "An error occurred while returning to menu.",
                     ephemeral=True
                 )
 
@@ -570,6 +593,7 @@ class HistoryView(discord.ui.View):
                 await interaction.response.defer()
             await self.cog.show_recent_changes(interaction, self.alliance_name, hours=1)
         except Exception as e:
+            logger.error(f"Error in last_hour_callback: {e}")
             print(f"Error in last_hour_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -588,6 +612,7 @@ class HistoryView(discord.ui.View):
                 await interaction.response.defer()
             await self.cog.show_recent_changes(interaction, self.alliance_name, hours=24)
         except Exception as e:
+            logger.error(f"Error in last_day_callback: {e}")
             print(f"Error in last_day_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -605,6 +630,7 @@ class HistoryView(discord.ui.View):
             modal = CustomTimeModal(self.cog, self.alliance_name)
             await interaction.response.send_modal(modal)
         except Exception as e:
+            logger.error(f"Error in custom_time_callback: {e}")
             print(f"Error in custom_time_callback: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing the time input.",
@@ -613,7 +639,7 @@ class HistoryView(discord.ui.View):
 
 class MemberListView(discord.ui.View):
     def __init__(self, cog, members, alliance_name):
-        super().__init__()
+        super().__init__(timeout=7200)
         self.cog = cog
         self.members = members
         self.alliance_name = alliance_name
@@ -646,6 +672,7 @@ class MemberListView(discord.ui.View):
                 await interaction.response.defer()
                 await self.cog.show_furnace_history(interaction, fid)
             except Exception as e:
+                logger.error(f"Error in member_callback: {e}")
                 print(f"Error in member_callback: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
@@ -730,6 +757,7 @@ class MemberListView(discord.ui.View):
                 await interaction.response.defer()
             await self.cog.show_recent_changes(interaction, self.alliance_name, hours=1)
         except Exception as e:
+            logger.error(f"Error in last_hour_callback: {e}")
             print(f"Error in last_hour_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -748,6 +776,7 @@ class MemberListView(discord.ui.View):
                 await interaction.response.defer()
             await self.cog.show_recent_changes(interaction, self.alliance_name, hours=24)
         except Exception as e:
+            logger.error(f"Error in last_day_callback: {e}")
             print(f"Error in last_day_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -765,6 +794,7 @@ class MemberListView(discord.ui.View):
             modal = CustomTimeModal(self.cog, self.alliance_name)
             await interaction.response.send_modal(modal)
         except Exception as e:
+            logger.error(f"Error in custom_time_callback: {e}")
             print(f"Error in custom_time_callback: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing the time input.",
@@ -825,6 +855,7 @@ class FurnaceHistoryIDSearchModal(discord.ui.Modal, title="Search by ID"):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error in FurnaceHistoryIDSearchModal on_submit: {e}")
             print(f"Error in FurnaceHistoryIDSearchModal on_submit: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -839,7 +870,7 @@ class FurnaceHistoryIDSearchModal(discord.ui.Modal, title="Search by ID"):
 
 class MemberListViewNickname(discord.ui.View):
     def __init__(self, cog, members, alliance_name):
-        super().__init__()
+        super().__init__(timeout=7200)
         self.cog = cog
         self.members = members
         self.alliance_name = alliance_name
@@ -872,6 +903,7 @@ class MemberListViewNickname(discord.ui.View):
                 await interaction.response.defer()
                 await self.cog.show_nickname_history(interaction, fid)
             except Exception as e:
+                logger.error(f"Error in member_callback: {e}")
                 print(f"Error in member_callback: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
@@ -956,6 +988,7 @@ class MemberListViewNickname(discord.ui.View):
                 await interaction.response.defer()
             await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, hours=1)
         except Exception as e:
+            logger.error(f"Error in last_hour_callback: {e}")
             print(f"Error in last_hour_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -974,6 +1007,7 @@ class MemberListViewNickname(discord.ui.View):
                 await interaction.response.defer()
             await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, hours=24)
         except Exception as e:
+            logger.error(f"Error in last_day_callback: {e}")
             print(f"Error in last_day_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -991,6 +1025,7 @@ class MemberListViewNickname(discord.ui.View):
             modal = CustomTimeModalNickname(self.cog, self.alliance_name)
             await interaction.response.send_modal(modal)
         except Exception as e:
+            logger.error(f"Error in custom_time_callback: {e}")
             print(f"Error in custom_time_callback: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing the time input.",
@@ -1051,6 +1086,7 @@ class NicknameHistoryIDSearchModal(discord.ui.Modal, title="Search by ID"):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error in NicknameHistoryIDSearchModal on_submit: {e}")
             print(f"Error in NicknameHistoryIDSearchModal on_submit: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -1096,6 +1132,7 @@ class CustomTimeModal(discord.ui.Modal, title="Custom Time Range"):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error in CustomTimeModal on_submit: {e}")
             print(f"Error in CustomTimeModal on_submit: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while processing your request.",
@@ -1104,7 +1141,7 @@ class CustomTimeModal(discord.ui.Modal, title="Custom Time Range"):
 
 class RecentChangesView(discord.ui.View):
     def __init__(self, chunks, members, level_mapping, alliance_name, hours):
-        super().__init__()
+        super().__init__(timeout=7200)
         self.chunks = chunks
         self.members = members
         self.level_mapping = level_mapping
@@ -1160,7 +1197,7 @@ class RecentChangesView(discord.ui.View):
 
 class RecentNicknameChangesView(discord.ui.View):
     def __init__(self, chunks, members, alliance_name, hours):
-        super().__init__()
+        super().__init__(timeout=7200)
         self.chunks = chunks
         self.members = members
         self.alliance_name = alliance_name
@@ -1244,6 +1281,7 @@ class CustomTimeModalNickname(discord.ui.Modal, title="Custom Time Range"):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error in CustomTimeModalNickname on_submit: {e}")
             print(f"Error in CustomTimeModalNickname on_submit: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while processing your request.",
@@ -1251,4 +1289,4 @@ class CustomTimeModalNickname(discord.ui.Modal, title="Custom Time Range"):
             )
 
 async def setup(bot):
-    await bot.add_cog(Changes(bot)) 
+    await bot.add_cog(AllianceHistory(bot)) 

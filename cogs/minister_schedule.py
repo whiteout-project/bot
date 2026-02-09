@@ -5,12 +5,15 @@ import asyncio
 import sqlite3
 import aiohttp
 import hashlib
+import logging
 from aiohttp_socks import ProxyConnector
 import time
 import re
 from datetime import datetime
 import json
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 try:
     import arabic_reshaper
@@ -82,7 +85,7 @@ class ChannelSelect(discord.ui.ChannelSelect):
                                     try:
                                         old_message = await old_channel.fetch_message(message_id)
                                         await old_message.delete()
-                                    except:
+                                    except Exception:
                                         pass  # Message might already be deleted
                             
                             # Remove the message reference so it will be recreated in the new channel
@@ -161,14 +164,24 @@ class ChannelSelect(discord.ui.ChannelSelect):
 class MinisterSchedule(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.users_conn = sqlite3.connect('db/users.sqlite')
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
-        self.settings_conn = sqlite3.connect('db/settings.sqlite')
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
-        self.alliance_conn = sqlite3.connect('db/alliance.sqlite')
+        self.alliance_conn = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.alliance_cursor = self.alliance_conn.cursor()
-        self.svs_conn = sqlite3.connect("db/svs.sqlite")
+        self.svs_conn = sqlite3.connect("db/svs.sqlite", timeout=30.0, check_same_thread=False)
         self.svs_cursor = self.svs_conn.cursor()
+
+        # Enable WAL mode for better concurrent access
+        self.users_conn.execute("PRAGMA journal_mode=WAL")
+        self.users_conn.execute("PRAGMA synchronous=NORMAL")
+        self.settings_conn.execute("PRAGMA journal_mode=WAL")
+        self.settings_conn.execute("PRAGMA synchronous=NORMAL")
+        self.alliance_conn.execute("PRAGMA journal_mode=WAL")
+        self.alliance_conn.execute("PRAGMA synchronous=NORMAL")
+        self.svs_conn.execute("PRAGMA journal_mode=WAL")
+        self.svs_conn.execute("PRAGMA synchronous=NORMAL")
 
         self.svs_cursor.execute("""
                     CREATE TABLE IF NOT EXISTS appointments (
@@ -195,6 +208,16 @@ class MinisterSchedule(commands.Cog):
         """)
 
         self.svs_conn.commit()
+
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
+        try:
+            self.users_conn.close()
+            self.settings_conn.close()
+            self.alliance_conn.close()
+            self.svs_conn.close()
+        except Exception:
+            pass
 
     async def fetch_user_data(self, fid, proxy=None):
         url = 'https://wos-giftcode-api.centurygame.com/api/player'

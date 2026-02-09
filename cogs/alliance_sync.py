@@ -7,7 +7,6 @@ from colorama import Fore, Style
 import os
 import traceback
 import logging
-from logging.handlers import RotatingFileHandler
 from .login_handler import LoginHandler
 from .pimp_my_bot import theme
 
@@ -25,46 +24,32 @@ level_mapping = {
     80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
 }
 
-class Control(commands.Cog):
+class AllianceSync(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn_alliance = sqlite3.connect('db/alliance.sqlite')
-        self.conn_users = sqlite3.connect('db/users.sqlite')
-        self.conn_changes = sqlite3.connect('db/changes.sqlite')
-        
-        # Setup logger for alliance control
-        self.logger = logging.getLogger('alliance_control')
-        self.logger.setLevel(logging.INFO)
-        self.logger.propagate = False
-        
-        # Clear existing handlers
-        if self.logger.hasHandlers():
-            self.logger.handlers.clear()
-        
-        # Create log directory if it doesn't exist
-        os.makedirs('log', exist_ok=True)
-        
-        # Rotating file handler for alliance control logs
-        # maxBytes = 1MB (1024 * 1024), backupCount = 1
-        file_handler = RotatingFileHandler(
-            'log/alliance_control.txt',
-            maxBytes=1024*1024,  # 1MB
-            backupCount=1,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.INFO)
-        
-        # Formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        
-        self.logger.addHandler(file_handler)
+        self.conn_alliance = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
+        self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
+        self.conn_changes = sqlite3.connect('db/changes.sqlite', timeout=30.0, check_same_thread=False)
+
+        # Use centralized alliance logger
+        self.logger = logging.getLogger('alliance')
+
         self.cursor_alliance = self.conn_alliance.cursor()
         self.cursor_users = self.conn_users.cursor()
         self.cursor_changes = self.conn_changes.cursor()
-        
-        self.conn_settings = sqlite3.connect('db/settings.sqlite')
+
+        # Enable WAL mode for better concurrent access
+        self.conn_alliance.execute("PRAGMA journal_mode=WAL")
+        self.conn_alliance.execute("PRAGMA synchronous=NORMAL")
+        self.conn_users.execute("PRAGMA journal_mode=WAL")
+        self.conn_users.execute("PRAGMA synchronous=NORMAL")
+        self.conn_changes.execute("PRAGMA journal_mode=WAL")
+        self.conn_changes.execute("PRAGMA synchronous=NORMAL")
+
+        self.conn_settings = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.cursor_settings = self.conn_settings.cursor()
+        self.conn_settings.execute("PRAGMA journal_mode=WAL")
+        self.conn_settings.execute("PRAGMA synchronous=NORMAL")
         self.cursor_settings.execute("""
             CREATE TABLE IF NOT EXISTS auto (
                 id INTEGER PRIMARY KEY,
@@ -77,7 +62,7 @@ class Control(commands.Cog):
             self.cursor_settings.execute("INSERT INTO auto (value) VALUES (1)")
         self.conn_settings.commit()
         
-        # Add control settings columns to alliancesettings if they don't exist
+        # Add update settings columns to alliancesettings if they don't exist
         self.cursor_alliance.execute("PRAGMA table_info(alliancesettings)")
         columns = [col[1] for col in self.cursor_alliance.fetchall()]
         
@@ -265,7 +250,7 @@ class Control(commands.Cog):
             alliance_name = alliance_name_from_db
 
         start_time = datetime.now()
-        self.logger.info(f"{alliance_name} Alliance Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"{alliance_name} Alliance Sync started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Update ephemeral message at start if provided
         if interaction_message:
@@ -273,7 +258,7 @@ class Control(commands.Cog):
                 if is_batch and batch_info:
                     # For batch processing (all alliances)
                     status_embed = discord.Embed(
-                        title=f"{theme.refreshIcon} Alliance Control Operation",
+                        title=f"{theme.refreshIcon} Alliance Sync Operation",
                         description=(
                             f"{theme.upperDivider}\n"
                             f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
@@ -287,7 +272,7 @@ class Control(commands.Cog):
                 else:
                     # For single alliance processing
                     status_embed = discord.Embed(
-                        title=f"{theme.refreshIcon} Alliance Control Operation",
+                        title=f"{theme.refreshIcon} Alliance Sync Operation",
                         description=(
                             f"{theme.upperDivider}\n"
                             f"{theme.chartIcon} **Type:** Single Alliance\n"
@@ -311,13 +296,13 @@ class Control(commands.Cog):
                 auto_value = result[0] if result else 1
         
         embed = discord.Embed(
-            title=f"{theme.allianceIcon} {alliance_name} Alliance Control",
+            title=f"{theme.allianceIcon} {alliance_name} Alliance Sync",
             description=f"{theme.searchIcon} Checking for changes in member status...",
             color=theme.emColor1
         )
         embed.add_field(
             name=f"{theme.chartIcon} Status",
-            value=f"{theme.hourglassIcon} Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
+            value=f"{theme.hourglassIcon} Sync started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
             inline=False
         )
         embed.add_field(
@@ -325,7 +310,7 @@ class Control(commands.Cog):
             value=f"{theme.verifiedIcon} Members checked: {checked_users}/{total_users}",
             inline=False
         )
-        embed.set_footer(text=f"{theme.boltIcon} Automatic Alliance Control System")
+        embed.set_footer(text=f"{theme.boltIcon} Automatic Alliance Sync System")
         
         message = None
         if auto_value == 1:
@@ -580,7 +565,7 @@ class Control(commands.Cog):
             embed.set_field_at(
                 0,
                 name=f"{theme.chartIcon} Final Status",
-                value=f"{theme.verifiedIcon} Control completed with changes\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                value=f"{theme.verifiedIcon} Sync completed with changes\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
                 inline=False
             )
             embed.add_field(
@@ -616,7 +601,7 @@ class Control(commands.Cog):
             embed.set_field_at(
                 0,
                 name=f"{theme.chartIcon} Final Status",
-                value=f"{theme.verifiedIcon} Control completed successfully\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{theme.listIcon} No changes detected",
+                value=f"{theme.verifiedIcon} Sync completed successfully\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{theme.listIcon} No changes detected",
                 inline=False
             )
             embed.add_field(
@@ -627,7 +612,7 @@ class Control(commands.Cog):
 
         if message:
             await message.edit(embed=embed)
-        self.logger.info(f"{alliance_name} Alliance Control completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"{alliance_name} Alliance Sync completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info(f"{alliance_name} Alliance Total Duration: {duration}")
         
         # Update ephemeral message at completion if provided
@@ -640,7 +625,7 @@ class Control(commands.Cog):
                     if batch_info['current'] == batch_info['total']:
                         # Final completion message for all alliances
                         status_embed = discord.Embed(
-                            title=f"{theme.verifiedIcon} Alliance Control Complete",
+                            title=f"{theme.verifiedIcon} Alliance Sync Complete",
                             description=(
                                 f"{theme.upperDivider}\n"
                                 f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
@@ -655,7 +640,7 @@ class Control(commands.Cog):
                     else:
                         # Still processing other alliances - just update progress
                         status_embed = discord.Embed(
-                            title=f"{theme.refreshIcon} Alliance Control Operation",
+                            title=f"{theme.refreshIcon} Alliance Sync Operation",
                             description=(
                                 f"{theme.upperDivider}\n"
                                 f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
@@ -669,7 +654,7 @@ class Control(commands.Cog):
                 else:
                     # Single alliance completion
                     status_embed = discord.Embed(
-                        title=f"{theme.verifiedIcon} Alliance Control Complete",
+                        title=f"{theme.verifiedIcon} Alliance Sync Complete",
                         description=(
                             f"{theme.upperDivider}\n"
                             f"{theme.chartIcon} **Type:** Single Alliance\n"
@@ -702,7 +687,7 @@ class Control(commands.Cog):
                     description="\n\n".join(current_chunk),
                     color=color
                 )
-                embed.set_footer(text="Alliance Control System")
+                embed.set_footer(text="Alliance Sync System")
                 await channel.send(embed=embed)
                 current_chunk = [desc]
                 current_length = desc_length
@@ -748,7 +733,8 @@ class Control(commands.Cog):
             delay_seconds = (target - now).total_seconds()
             return max(0, int(delay_seconds))
         except (ValueError, AttributeError) as e:
-            print(f"[CONTROL] Invalid start_time format '{start_time}': {e}")
+            self.logger.error(f"Invalid start_time format '{start_time}': {e}")
+            print(f"[SYNC] Invalid start_time format '{start_time}': {e}")
             return interval * 60  # Fall back to interval delay
 
     async def schedule_alliance_check(self, alliance_id):
@@ -757,7 +743,7 @@ class Control(commands.Cog):
             # Get initial settings
             cached = self.current_task_settings.get(alliance_id)
             if not cached:
-                print(f"[CONTROL] No cached settings for alliance {alliance_id}, stopping")
+                print(f"[SYNC] No cached settings for alliance {alliance_id}, stopping")
                 return
 
             channel_id, interval, start_time = cached
@@ -772,7 +758,7 @@ class Control(commands.Cog):
                     # Fetch fresh settings from cache (updated by monitor loop)
                     cached = self.current_task_settings.get(alliance_id)
                     if not cached:
-                        print(f"[CONTROL] Alliance {alliance_id} removed from settings, stopping")
+                        print(f"[SYNC] Alliance {alliance_id} removed from settings, stopping")
                         break
 
                     channel_id, interval, start_time = cached
@@ -780,13 +766,13 @@ class Control(commands.Cog):
                     # Get the channel fresh each time
                     channel = self.bot.get_channel(channel_id)
                     if channel is None:
-                        print(f"[CONTROL] Channel {channel_id} not found for alliance {alliance_id}")
+                        print(f"[SYNC] Channel {channel_id} not found for alliance {alliance_id}")
                         await asyncio.sleep(60)
                         continue
 
                     # Queue the control check
                     await self.login_handler.queue_operation({
-                        'type': 'alliance_control',
+                        'type': 'alliance_sync',
                         'callback': lambda ch=channel, aid=alliance_id: self.check_agslist(ch, aid, interaction_message=None),
                         'description': f'Scheduled control check for alliance {alliance_id}',
                         'alliance_id': alliance_id
@@ -799,23 +785,25 @@ class Control(commands.Cog):
                     self.logger.info(f"Task cancelled for alliance {alliance_id}")
                     raise
                 except Exception as e:
+                    self.logger.error(f"Error in schedule_alliance_check for alliance {alliance_id}: {e}")
                     print(f"[ERROR] Error in schedule_alliance_check for alliance {alliance_id}: {e}")
                     await asyncio.sleep(60)
 
         except asyncio.CancelledError:
             self.logger.info(f"Schedule task cancelled for alliance {alliance_id}")
         except Exception as e:
+            self.logger.error(f"Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             print(f"[ERROR] Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             traceback.print_exc()
 
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.monitor_started:
-            print("[CONTROL] Starting monitor...")
+            print("[SYNC] Starting monitor...")
 
             # Check API availability
             await self.login_handler.check_apis_availability()
-            print(f"[CONTROL] {self.login_handler.get_mode_text(for_console=True)}")
+            print(f"[SYNC] {self.login_handler.get_mode_text(for_console=True)}")
             
             # Start the centralized queue processor
             await self.login_handler.start_queue_processor()
@@ -864,10 +852,11 @@ class Control(commands.Cog):
 
                 if scheduled_alliances:
                     msg = f"Scheduled controls for {len(scheduled_alliances)} alliance(s): {', '.join(scheduled_alliances)}"
-                    print(f"[CONTROL] {msg}")
+                    print(f"[SYNC] {msg}")
                     self.logger.info(msg)
 
         except Exception as e:
+            self.logger.error(f"Error in start_alliance_checks: {e}")
             print(f"[ERROR] Error in start_alliance_checks: {e}")
             traceback.print_exc()
 
@@ -875,6 +864,7 @@ class Control(commands.Cog):
         try:
             print("[MONITOR] Cog loaded successfully")
         except Exception as e:
+            self.logger.error(f"Error in cog_load: {e}")
             print(f"[ERROR] Error in cog_load: {e}")
             import traceback
             print(traceback.format_exc())
@@ -895,7 +885,7 @@ class Control(commands.Cog):
 
                     # If interval is 0, stop the task
                     if interval == 0 and task_exists:
-                        print(f"[CONTROL] Stopping alliance {alliance_id} - interval set to 0")
+                        print(f"[SYNC] Stopping alliance {alliance_id} - interval set to 0")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
@@ -908,7 +898,7 @@ class Control(commands.Cog):
                     settings_changed = cached_settings and cached_settings != (channel_id, interval, start_time)
                     if settings_changed and task_exists:
                         old_channel, old_interval, old_start = cached_settings
-                        print(f"[CONTROL] Settings changed for alliance {alliance_id}:")
+                        print(f"[SYNC] Settings changed for alliance {alliance_id}:")
                         if old_channel != channel_id:
                             print(f"  Channel: {old_channel} -> {channel_id}")
                         if old_interval != interval:
@@ -936,7 +926,7 @@ class Control(commands.Cog):
                 # Clean up tasks for removed alliances
                 for alliance_id in list(self.alliance_tasks.keys()):
                     if alliance_id not in current_settings:
-                        print(f"[CONTROL] Removing task for deleted alliance {alliance_id}")
+                        print(f"[SYNC] Removing task for deleted alliance {alliance_id}")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
@@ -945,6 +935,7 @@ class Control(commands.Cog):
                             del self.current_task_settings[alliance_id]
 
         except Exception as e:
+            self.logger.error(f"Error in monitor_alliance_changes: {e}")
             print(f"[ERROR] Error in monitor_alliance_changes: {e}")
             import traceback
             print(traceback.format_exc())
@@ -960,5 +951,4 @@ class Control(commands.Cog):
             self.monitor_alliance_changes.restart()
 
 async def setup(bot):
-    control_cog = Control(bot)
-    await bot.add_cog(control_cog)
+    await bot.add_cog(AllianceSync(bot))

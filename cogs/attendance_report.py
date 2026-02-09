@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 import re
 import csv
@@ -9,6 +10,8 @@ from io import BytesIO
 import os
 from .attendance import SessionSelectView
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 try:
     import matplotlib.pyplot as plt
@@ -123,7 +126,7 @@ class AttendanceReport(commands.Cog):
                 display_text = get_display(reshaped)
                 # Use LEFT-TO-RIGHT MARK to force LTR context
                 return f'\u200E{display_text}\u200E'
-            except:
+            except Exception:
                 return text
         return text
     
@@ -136,7 +139,7 @@ class AttendanceReport(commands.Cog):
                 return date_obj.strftime("%Y-%m-%d %H:%M UTC")
             else: # Already formatted or partial date
                 return date_str
-        except:
+        except Exception:
             # Fallback to original if parsing fails
             return date_str.split()[0] if date_str else "N/A"
 
@@ -211,6 +214,7 @@ class AttendanceReport(commands.Cog):
                 db.commit()
                 return True
         except Exception as e:
+            logger.error(f"Error setting sort preference: {e}")
             print(f"Error setting sort preference: {e}")
             return False
 
@@ -533,6 +537,7 @@ class AttendanceReport(commands.Cog):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error posting report to channel: {e}")
             print(f"Error posting report to channel: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while posting the report.",
@@ -595,6 +600,7 @@ class AttendanceReport(commands.Cog):
                     )
                     
         except Exception as e:
+            logger.error(f"Error in process_export: {e}")
             print(f"Error in process_export: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while generating the export.",
@@ -623,6 +629,7 @@ class AttendanceReport(commands.Cog):
                 await self.show_text_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
                 
         except Exception as e:
+            logger.error(f"Error showing attendance report: {e}")
             print(f"Error showing attendance report: {e}")
             import traceback
             traceback.print_exc()
@@ -826,7 +833,7 @@ class AttendanceReport(commands.Cog):
                 else:
                     try:
                         date_str = event_date.strftime("%Y-%m-%d")
-                    except:
+                    except Exception:
                         date_str = str(event_date)
                 title_text += f' | Date: {date_str}'
             
@@ -972,6 +979,7 @@ class AttendanceReport(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
 
         except Exception as e:
+            logger.error(f"Matplotlib error: {e}")
             print(f"Matplotlib error: {e}")
             # Fallback to text report
             await self.show_text_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
@@ -1003,7 +1011,7 @@ class AttendanceReport(commands.Cog):
                         else:
                             last_date_obj = last_date
                         date_str = last_date_obj.strftime("%m/%d")
-                    except:
+                    except Exception:
                         # Fallback for unparseable dates
                         if isinstance(last_date, str):
                             date_str = last_date.split('T')[0] if 'T' in last_date else last_date.split()[0] if ' ' in last_date else last_date
@@ -1031,6 +1039,7 @@ class AttendanceReport(commands.Cog):
                         # This is the first event of this type
                         return "First Event"
         except Exception as e:
+            logger.error(f"Error fetching last attendance: {e}")
             print(f"Error fetching last attendance: {e}")
             return "N/A"
 
@@ -1158,7 +1167,7 @@ class AttendanceReport(commands.Cog):
                         result = cursor.fetchone()
                         if result:
                             session_id = result[0]
-                except:
+                except Exception:
                     pass
 
             # Build the report sections
@@ -1181,7 +1190,7 @@ class AttendanceReport(commands.Cog):
                     # Datetime object - format it
                     try:
                         date_str = event_date_value.strftime("%Y-%m-%d")
-                    except:
+                    except Exception:
                         date_str = str(event_date_value)
             report_sections.append(f"**Date:** {date_str}")
             report_sections.append(f"**Total Marked:** {len(records)} players")
@@ -1385,6 +1394,7 @@ class AttendanceReport(commands.Cog):
                     await interaction.followup.send(embed=embed, ephemeral=False)
 
         except Exception as e:
+            logger.error(f"Error showing text attendance report: {e}")
             print(f"Error showing text attendance report: {e}")
             # Try to respond appropriately based on interaction state
             error_content = f"{theme.deniedIcon} An error occurred while generating attendance report."
@@ -1432,7 +1442,7 @@ class AttendanceReport(commands.Cog):
                         else:
                             try:
                                 date_display = date_value.strftime("%Y-%m-%d")
-                            except:
+                            except Exception:
                                 date_display = str(date_value)
                     else:
                         date_display = "Unknown"
@@ -1483,6 +1493,7 @@ class AttendanceReport(commands.Cog):
 
                             await back_interaction.response.edit_message(embed=select_embed, view=view)
                         except Exception as e:
+                            logger.error(f"Error going back to alliance selection: {e}")
                             print(f"Error going back to alliance selection: {e}")
                             await attendance_cog.show_attendance_menu(back_interaction)
                 
@@ -1520,6 +1531,7 @@ class AttendanceReport(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view, attachments=[])
     
         except Exception as e:
+            logger.error(f"Error showing session selection: {e}")
             print(f"Error showing session selection: {e}")
             if interaction.response.is_done():
                 await interaction.edit_original_response(

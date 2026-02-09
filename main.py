@@ -298,12 +298,10 @@ def cleanup_removed_packages():
 # Potential leftovers from older bot versions
 LEGACY_PACKAGES_TO_REMOVE = [
     "ddddocr",
-    "easyocr", 
+    "easyocr",
     "torch",
     "torchvision",
     "torchaudio",
-    "opencv-python",
-    "opencv-python-headless",
 ]
 
 def has_obsolete_requirements():
@@ -1028,6 +1026,57 @@ if __name__ == "__main__":
     import discord
     from discord.ext import commands
     import sqlite3
+    import logging
+    import logging.handlers
+
+    def setup_logging():
+        """Configure centralized logging with category-based file handlers."""
+        log_dir = 'log'
+        os.makedirs(log_dir, exist_ok=True)
+
+        # Common formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        simple_formatter = logging.Formatter('%(asctime)s - %(message)s')
+
+        # Category mappings: logger name prefix -> log file
+        categories = {
+            'alliance': 'alliance.txt',
+            'gift': 'gift.txt',
+            'redemption': 'redemption.txt',
+            'notification': 'notification.txt',
+            'bot': 'bot.txt',
+        }
+
+        # Create rotating file handlers for each category
+        handlers = {}
+        for category, filename in categories.items():
+            handler = logging.handlers.RotatingFileHandler(
+                os.path.join(log_dir, filename),
+                maxBytes=2 * 1024 * 1024,  # 2MB
+                backupCount=1,
+                encoding='utf-8'
+            )
+            # Use simple formatter for redemption log
+            if category == 'redemption':
+                handler.setFormatter(simple_formatter)
+            else:
+                handler.setFormatter(formatter)
+            handler.setLevel(logging.INFO)
+            handlers[category] = handler
+
+        # Configure loggers for each category
+        for category, handler in handlers.items():
+            logger = logging.getLogger(category)
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+            if not logger.hasHandlers():
+                logger.addHandler(handler)
+
+        # Configure root logger with console output only
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.ERROR)  # Only show errors on console
+
+    setup_logging()
 
     class CustomBot(commands.Bot):
         async def on_error(self, event_name, *args, **kwargs):
@@ -1147,7 +1196,7 @@ if __name__ == "__main__":
     create_tables()
 
     async def load_cogs():
-        cogs = ["pimp_my_bot", "olddb", "control", "alliance", "alliance_member_operations", "bot_operations", "logsystem", "support_operations", "gift_operations", "changes", "w", "wel", "other_features", "bear_trap", "bear_trap_schedule", "id_channel", "backup_operations", "bear_trap_editor", "bear_trap_templates", "bear_trap_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "registration"]
+        cogs = ["pimp_my_bot", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track", "attendance_ocr"]
 
         failed_cogs = []
         

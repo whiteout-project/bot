@@ -1,9 +1,12 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 import json
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
+
+logger = logging.getLogger('bot')
 
 class ArchiveDetailsView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, archive_info, type_counts):
@@ -382,9 +385,9 @@ class ChangeHistoryView(discord.ui.View):
 class MinisterArchive(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.svs_conn = sqlite3.connect("db/svs.sqlite")
+        self.svs_conn = sqlite3.connect("db/svs.sqlite", timeout=30.0, check_same_thread=False)
         self.svs_cursor = self.svs_conn.cursor()
-        self.users_conn = sqlite3.connect('db/users.sqlite')
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
 
         # Create archive tables
@@ -431,6 +434,14 @@ class MinisterArchive(commands.Cog):
 
         self.svs_conn.commit()
 
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
+        try:
+            self.svs_conn.close()
+            self.users_conn.close()
+        except Exception:
+            pass
+
     async def is_global_admin(self, user_id: int) -> bool:
         """Check if user is a global admin"""
         minister_menu_cog = self.bot.get_cog("MinisterMenu")
@@ -464,11 +475,7 @@ class MinisterArchive(commands.Cog):
         )
 
         view = ArchiveMenuView(self.bot, self)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def save_current_schedule(self, interaction: discord.Interaction, archive_name: str):
         """Save the current minister schedule to an archive"""
@@ -579,6 +586,8 @@ class MinisterArchive(commands.Cog):
             await interaction.followup.send(embed=embed, view=view)
 
         except Exception as e:
+            logger.error(f"Error creating archive: {e}")
+            print(f"Error creating archive: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error creating archive: {e}", ephemeral=True)
 
     async def clear_all_after_archive(self, interaction: discord.Interaction, archive_id: int):
@@ -653,6 +662,8 @@ class MinisterArchive(commands.Cog):
                 await minister_menu_cog.show_minister_channel_menu(interaction)
 
         except Exception as e:
+            logger.error(f"Error clearing appointments: {e}")
+            print(f"Error clearing appointments: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error clearing appointments: {e}", ephemeral=True)
 
     async def show_archive_list(self, interaction: discord.Interaction):
@@ -708,6 +719,8 @@ class MinisterArchive(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
+            logger.error(f"Error loading archives: {e}")
+            print(f"Error loading archives: {e}")
             await interaction.response.send_message(f"{theme.deniedIcon} Error loading archives: {e}", ephemeral=True)
 
     async def show_archive_details(self, interaction: discord.Interaction, archive_id: int):
@@ -756,13 +769,11 @@ class MinisterArchive(commands.Cog):
             )
 
             view = ArchiveDetailsView(self.bot, self, archive_id, archive_info, type_counts)
-
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                await interaction.edit_original_response(embed=embed, view=view)
+            await safe_edit_message(interaction, embed=embed, view=view)
 
         except Exception as e:
+            logger.error(f"Error loading archive details: {e}")
+            print(f"Error loading archive details: {e}")
             await interaction.response.send_message(f"{theme.deniedIcon} Error loading archive details: {e}", ephemeral=True)
 
     async def show_archive_appointments(self, interaction: discord.Interaction, archive_id: int, appointment_type: str):
@@ -807,6 +818,8 @@ class MinisterArchive(commands.Cog):
             alliance_conn.close()
 
         except Exception as e:
+            logger.error(f"Error loading appointments: {e}")
+            print(f"Error loading appointments: {e}")
             await interaction.response.send_message(f"{theme.deniedIcon} Error loading appointments: {e}", ephemeral=True)
 
     async def update_appointments_embed(self, interaction: discord.Interaction, view: ArchiveAppointmentsView):
@@ -840,15 +853,11 @@ class MinisterArchive(commands.Cog):
                 color=theme.emColor1
             )
             embed.set_footer(text=f"Page {view.page + 1}/{view.max_page + 1} • Total: {len(view.appointments)} appointments")
-
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                await interaction.edit_original_response(embed=embed, view=view)
-
+            await safe_edit_message(interaction, embed=embed, view=view)
             alliance_conn.close()
 
         except Exception as e:
+            logger.error(f"Error updating appointments embed: {e}")
             print(f"Error updating appointments embed: {e}")
 
     async def show_channel_selector_for_post(self, interaction: discord.Interaction, archive_id: int, appointment_type: str, appointments):
@@ -864,11 +873,7 @@ class MinisterArchive(commands.Cog):
         )
 
         view = PostArchiveChannelView(self.bot, self, archive_id, appointment_type, appointments)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def post_archive_to_channel(self, interaction: discord.Interaction, channel: discord.TextChannel, archive_id: int, appointment_type: str, appointments):
         """Post archive appointments to selected channel"""
@@ -969,6 +974,8 @@ class MinisterArchive(commands.Cog):
             await self.show_archive_appointments(interaction, archive_id, appointment_type)
 
         except Exception as e:
+            logger.error(f"Error posting to channel: {e}")
+            print(f"Error posting to channel: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error posting to channel: {e}", ephemeral=True)
 
     async def show_delete_archive_confirmation(self, interaction: discord.Interaction, archive_id: int, archive_info):
@@ -1002,11 +1009,7 @@ class MinisterArchive(commands.Cog):
         )
 
         view = DeleteArchiveConfirmView(self.bot, self, archive_id, archive_info)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def delete_archive(self, interaction: discord.Interaction, archive_id: int):
         """Delete an archive and all associated data"""
@@ -1086,6 +1089,8 @@ class MinisterArchive(commands.Cog):
             await self.show_archive_list(interaction)
 
         except Exception as e:
+            logger.error(f"Error deleting archive: {e}")
+            print(f"Error deleting archive: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error deleting archive: {e}", ephemeral=True)
 
     async def show_change_history(self, interaction: discord.Interaction, archive_id: int = None):
@@ -1139,6 +1144,8 @@ class MinisterArchive(commands.Cog):
             await self.update_history_embed(interaction, history_records, 0, archive_id, view)
 
         except Exception as e:
+            logger.error(f"Error loading change history: {e}")
+            print(f"Error loading change history: {e}")
             await interaction.response.send_message(f"{theme.deniedIcon} Error loading change history: {e}", ephemeral=True)
 
     async def show_archive_change_history(self, interaction: discord.Interaction, archive_id: int):
@@ -1181,7 +1188,7 @@ class MinisterArchive(commands.Cog):
                         data = json.loads(additional_data)
                         archive_name = data.get("archive_name", "Unknown")
                         history_lines.append(f"{emoji} `{dt}` **{username}** created archive: **{archive_name}**")
-                    except:
+                    except Exception:
                         history_lines.append(f"{emoji} `{dt}` **{username}** created an archive")
                 else:
                     history_lines.append(f"{emoji} `{dt}` **{username}** created an archive")

@@ -39,17 +39,8 @@ class GiftCaptchaSolver:
         self.model_metadata = None
         self.is_initialized = False
 
-        # Logger setup
-        self.logger = logging.getLogger("gift_solver")
-        if not self.logger.hasHandlers():
-            self.logger.setLevel(logging.INFO)
-            self.logger.propagate = False
-            log_dir = 'log'
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, 'gift_solver.txt')
-            handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=3 * 1024 * 1024, backupCount=3, encoding='utf-8')
-            handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-            self.logger.addHandler(handler)
+        # Use centralized gift logger
+        self.logger = logging.getLogger('gift')
 
         self.captcha_dir = 'captcha_images'
         os.makedirs(self.captcha_dir, exist_ok=True)

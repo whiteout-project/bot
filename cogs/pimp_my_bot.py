@@ -15,7 +15,7 @@ import aiohttp
 import logging
 from typing import Tuple
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('bot')
 from .permission_handler import PermissionManager
 
 # Database path constant
@@ -149,6 +149,28 @@ async def check_interaction_user(interaction: discord.Interaction, expected_user
         )
         return False
     return True
+
+
+async def safe_edit_message(interaction: discord.Interaction, embed: discord.Embed = None,
+                            view: discord.ui.View = None, content: str = None):
+    """
+    Safely edit an interaction message, handling all response states.
+    Use this instead of manually checking interaction.response.is_done().
+
+    Args:
+        interaction: The Discord interaction
+        embed: Optional embed to display
+        view: Optional view with components
+        content: Optional text content (use None to clear existing content)
+    """
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view, content=content)
+        else:
+            await interaction.edit_original_response(embed=embed, view=view, content=content)
+    except discord.InteractionResponded:
+        await interaction.edit_original_response(embed=embed, view=view, content=content)
+
 
 def build_divider(start, pattern, end, length, max_length=99):
     """Build a divider string with exact character length.
@@ -872,7 +894,7 @@ class ThemeMenuView(discord.ui.View):
             label="Main Menu",
             emoji=theme.homeIcon or None,
             style=discord.ButtonStyle.secondary,
-            custom_id="back_to_settings",
+            custom_id="back_from_themes",
             row=3
         )
         back_btn.callback = self.back_to_settings
@@ -963,6 +985,8 @@ class ThemeMenuView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error activating theme: {e}")
+            print(f"Error activating theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error activating theme: {e}",
                 ephemeral=True
@@ -999,6 +1023,8 @@ class ThemeMenuView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error setting server theme: {e}")
+            print(f"Error setting server theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error setting server theme: {e}",
                 ephemeral=True
@@ -1028,6 +1054,8 @@ class ThemeMenuView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error clearing server theme: {e}")
+            print(f"Error clearing server theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error clearing server theme: {e}",
                 ephemeral=True
@@ -1119,6 +1147,8 @@ class ThemeMenuView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error sharing theme: {e}")
+            print(f"Error sharing theme: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error sharing theme: {e}",
                 ephemeral=True
@@ -1251,9 +1281,9 @@ class ThemeMenuView(discord.ui.View):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
 
-        alliance_cog = interaction.client.get_cog("Alliance")
-        if alliance_cog:
-            await alliance_cog.show_main_menu(interaction)
+        main_menu_cog = interaction.client.get_cog("MainMenu")
+        if main_menu_cog:
+            await main_menu_cog.show_main_menu(interaction)
         else:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Could not return to settings menu.",
@@ -1328,6 +1358,8 @@ class DeleteThemeConfirmView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self.menu_view)
 
         except Exception as e:
+            logger.error(f"Error deleting theme: {e}")
+            print(f"Error deleting theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error deleting theme: {e}",
                 ephemeral=True
@@ -2185,6 +2217,8 @@ class Theme(commands.Cog):
         except aiohttp.ClientError as e:
             return {"success": False, "error": f"Connection error: {e}"}
         except Exception as e:
+            logger.error(f"Error fetching emoji from URL: {e}")
+            print(f"Error fetching emoji from URL: {e}")
             return {"success": False, "error": str(e)}
 
     async def _process_emoji_update(self, emoji_name, new_url, themename, view_update_callback=None):
@@ -2854,6 +2888,8 @@ class Theme(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
+            logger.error(f"Error activating theme (slash command): {e}")
+            print(f"Error activating theme (slash command): {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error activating theme: {e}")
 
     async def export_theme(self, interaction: discord.Interaction, themename: str):
@@ -2915,6 +2951,8 @@ class Theme(commands.Cog):
             await interaction.followup.send(embed=embed, file=file)
 
         except Exception as e:
+            logger.error(f"Error exporting theme (slash command): {e}")
+            print(f"Error exporting theme (slash command): {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error exporting theme: {e}")
 
     async def import_theme(self, interaction: discord.Interaction, import_file: discord.Attachment):

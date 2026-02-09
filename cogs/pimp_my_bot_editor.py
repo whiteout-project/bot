@@ -12,7 +12,7 @@ from .pimp_my_bot import (
     ThemeMenuView, ICON_NAMES, DEFAULT_ICON_VALUES
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('bot')
 
 
 def format_emoji_for_display(value: str) -> str:
@@ -174,6 +174,7 @@ class ThemeBasicsModal(discord.ui.Modal):
             else:
                 await interaction.followup.send(result["error"], ephemeral=True)
         except Exception as e:
+            logger.error(f"ThemeBasicsModal on_submit error: {e}")
             print(f"ThemeBasicsModal on_submit error: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error creating theme: {e}",
@@ -497,6 +498,8 @@ class ThemeEditorHub(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error resetting icons: {e}")
+            print(f"Error resetting icons: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error resetting icons: {e}",
                 ephemeral=True
@@ -1380,6 +1383,8 @@ class ColorEditorView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error applying color: {e}")
+            print(f"Error applying color: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error applying color: {e}",
                 ephemeral=True
@@ -1518,6 +1523,8 @@ class ColorEditorView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error resetting colors: {e}")
+            print(f"Error resetting colors: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error resetting colors: {e}",
                 ephemeral=True
@@ -1606,6 +1613,8 @@ class ColorModal(discord.ui.Modal):
             await interaction.edit_original_response(embed=embed, view=self.parent_view)
 
         except Exception as e:
+            logger.error(f"Error updating color: {e}")
+            print(f"Error updating color: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error updating color: {e}",
                 ephemeral=True

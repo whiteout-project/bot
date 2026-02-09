@@ -23,43 +23,15 @@ from .permission_handler import PermissionManager
 from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
 from collections import deque
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
 
 class GiftOperations(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
-        # Logger Setup for gift_ops.txt
-        self.logger = logging.getLogger('gift_ops')
-        self.logger.setLevel(logging.INFO)
-        self.logger.propagate = False  # Prevent propagation to root logger
-        log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-        log_dir = 'log'
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        log_file_path = os.path.join(log_dir, 'gift_ops.txt')
-        self.log_directory = log_dir
-
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file_path, maxBytes=3 * 1024 * 1024, backupCount=1, encoding='utf-8'
-        )
-        file_handler.setFormatter(log_formatter)
-        if not self.logger.hasHandlers():
-            self.logger.addHandler(file_handler)
-
-        # Logger Setup for giftlog.txt
-        self.giftlog = logging.getLogger("giftlog")
-        self.giftlog.setLevel(logging.INFO)
-        self.giftlog.propagate = False
-
-        giftlog_file = os.path.join(log_dir, 'giftlog.txt')
-        giftlog_handler = logging.handlers.RotatingFileHandler(
-            giftlog_file, maxBytes=3 * 1024 * 1024, backupCount=1, encoding='utf-8'
-        )
-        giftlog_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-        if not self.giftlog.hasHandlers():
-            self.giftlog.addHandler(giftlog_handler)
+        # Use centralized loggers
+        self.logger = logging.getLogger('gift')  # Operations log -> gift.log
+        self.giftlog = logging.getLogger('redemption')  # Redemption summaries -> redemption.log
 
         self.logger.info("GiftOperations Cog initializing...")
 
@@ -92,12 +64,12 @@ class GiftOperations(commands.Cog):
 
         # Settings DB Connection
         if not os.path.exists('db'): os.makedirs('db')
-        self.settings_conn = sqlite3.connect('db/settings.sqlite')
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
 
         # Alliance DB Connection
         if not os.path.exists('db'): os.makedirs('db')
-        self.alliance_conn = sqlite3.connect('db/alliance.sqlite')
+        self.alliance_conn = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.alliance_cursor = self.alliance_conn.cursor()
 
         # Gift Code Channel Table
@@ -258,6 +230,20 @@ class GiftOperations(commands.Cog):
                 else:
                     raise
 
+    def cog_unload(self):
+        """Cancel tasks and close database connections when cog is unloaded."""
+        # Cancel background tasks
+        if hasattr(self, 'periodic_validation_loop') and self.periodic_validation_loop.is_running():
+            self.periodic_validation_loop.cancel()
+
+        # Close database connections
+        for conn_name in ['settings_conn', 'alliance_conn']:
+            if hasattr(self, conn_name):
+                try:
+                    getattr(self, conn_name).close()
+                except Exception:
+                    pass
+
     def clean_gift_code(self, giftcode):
         """Remove invisible Unicode characters (like RLM) that can contaminate gift codes"""
         import unicodedata
@@ -383,7 +369,7 @@ class GiftOperations(commands.Cog):
                         )
                         try:
                             await progress_message.edit(embed=complete_embed)
-                        except:
+                        except Exception:
                             pass
                 except Exception as e:
                     self.logger.exception(f"Error in manual redemption for alliance {alliance_id}: {e}")
@@ -417,7 +403,7 @@ class GiftOperations(commands.Cog):
                         if progress_message:
                             try:
                                 await progress_message.edit(embed=error_embed)
-                            except:
+                            except Exception:
                                 await interaction.followup.send(embed=error_embed, ephemeral=True)
                         else:
                             await interaction.followup.send(embed=error_embed, ephemeral=True)
@@ -807,7 +793,6 @@ class GiftOperations(commands.Cog):
 
     @discord.ext.commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        log_file_path = os.path.join(self.log_directory, 'giftlog.txt')
         try:
             if message.author.bot or not message.guild:
                 return
@@ -2420,9 +2405,9 @@ class GiftOperations(commands.Cog):
                 
                 try:
                     asyncio.create_task(self.api.add_giftcode(giftcode))
-                except:
+                except Exception:
                     pass
-                
+
                 await message.add_reaction(f"{theme.verifiedIcon}")
                 await message.reply("Gift code successfully added.", mention_author=False)
         elif status == "TIME_ERROR":
@@ -2438,16 +2423,16 @@ class GiftOperations(commands.Cog):
     async def handle_already_received(self, message, giftcode):
         test_fid = self.get_test_fid()
         status = await self.claim_giftcode_rewards_wos(test_fid, giftcode)
-        
+
         if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
             self.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
             if not self.cursor.fetchone():
                 self.cursor.execute("INSERT INTO gift_codes (giftcode, date) VALUES (?, ?)", (giftcode, datetime.now()))
                 self.conn.commit()
-                
+
                 try:
                     asyncio.create_task(self.api.add_giftcode(giftcode))
-                except:
+                except Exception:
                     pass
                 
                 await message.add_reaction(f"{theme.verifiedIcon}")
@@ -2659,12 +2644,7 @@ class GiftOperations(commands.Cog):
         )
 
         view = GiftView(self)
-        try:
-            await interaction.response.edit_message(embed=gift_menu_embed, view=view)
-        except discord.InteractionResponded:
-            pass
-        except Exception:
-            pass
+        await safe_edit_message(interaction, embed=gift_menu_embed, view=view)
 
     async def create_gift_code(self, interaction: discord.Interaction):
         self.settings_cursor.execute("SELECT 1 FROM admin WHERE id = ?", (interaction.user.id,))
@@ -2877,7 +2857,7 @@ class GiftOperations(commands.Cog):
                                 f"{theme.deniedIcon} An error occurred while processing the request.",
                                 ephemeral=True
                             )
-                        except:
+                        except Exception:
                             await button_interaction.followup.send(
                                 f"{theme.deniedIcon} An error occurred while processing the request.",
                                 ephemeral=True
@@ -5120,19 +5100,15 @@ class GiftView(discord.ui.View):
         label="Main Menu",
         emoji=f"{theme.homeIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
+        custom_id="main_menu_from_gifts",
         row=2
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                try:
-                    await interaction.message.edit(content=None, embed=None, view=None)
-                except:
-                    pass
-                await alliance_cog.show_main_menu(interaction)
-        except:
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_main_menu(interaction)
+        except Exception:
             pass
 
 class SettingsMenuView(discord.ui.View):
@@ -5394,10 +5370,7 @@ class ClearCacheConfirmView(discord.ui.View):
                 description=f"Failed to clear redemption cache: {str(e)}",
                 color=theme.emColor2
             )
-            try:
-                await interaction.response.edit_message(embed=error_embed, view=None)
-            except discord.InteractionResponded:
-                await interaction.followup.edit_message(interaction.message.id, embed=error_embed, view=None)
+            await safe_edit_message(interaction, embed=error_embed, view=None)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji=f"{theme.deniedIcon}")
     async def cancel_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -5418,7 +5391,7 @@ class ClearCacheConfirmView(discord.ui.View):
                 description="Confirmation timed out. Redemption cache was not cleared.",
                 color=discord.Color.orange()
             )
-        except:
+        except Exception:
             pass
 
 class OCRSettingsView(discord.ui.View):

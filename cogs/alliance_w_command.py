@@ -6,12 +6,15 @@ import ssl
 import time
 import asyncio
 import sqlite3
+import logging
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('alliance')
 
 class WCommand(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn = sqlite3.connect('db/changes.sqlite')
+        self.conn = sqlite3.connect('db/changes.sqlite', timeout=30.0, check_same_thread=False)
         self.c = self.conn.cursor()
         self.SECRET = "tB87#kPtkxqOS2"
         
@@ -58,6 +61,7 @@ class WCommand(commands.Cog):
             return filtered_choices
         
         except Exception as e:
+            logger.error(f"Autocomplete could not be loaded: {e}")
             print(f"Autocomplete could not be loaded: {e}")
             return []
 
@@ -144,6 +148,7 @@ class WCommand(commands.Cog):
             await interaction.followup.send(f"User with ID {fid} not found or an error occurred after multiple attempts.")
             
         except Exception as e:
+            logger.error(f"Error fetching user info for FID {fid}: {e}")
             print(f"An error occurred: {e}")
             await interaction.followup.send("An error occurred while fetching user info.")
 
