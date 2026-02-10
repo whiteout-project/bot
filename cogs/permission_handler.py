@@ -8,7 +8,10 @@ Permission Tiers:
 """
 
 import sqlite3
+import logging
 from typing import Tuple, List
+
+logger = logging.getLogger('bot')
 
 class PermissionManager:
     """Centralized permission handler"""

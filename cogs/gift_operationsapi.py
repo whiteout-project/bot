@@ -10,7 +10,7 @@ import ssl
 import logging
 from .pimp_my_bot import theme
 
-logger = logging.getLogger("gift_operationsapi")
+logger = logging.getLogger('gift')
 
 class GiftCodeAPI:
     def __init__(self, bot):
@@ -35,13 +35,13 @@ class GiftCodeAPI:
             self.conn = bot.conn
             self.cursor = self.conn.cursor()
         else:
-            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0)
+            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0, check_same_thread=False)
             self.cursor = self.conn.cursor()
-            
-        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0)
+
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
-        
-        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0)
+
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
         
         # Configure SQLite for better concurrent access, avoid DB locks
@@ -55,7 +55,7 @@ class GiftCodeAPI:
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
         
-        self.logger = logging.getLogger("gift_operationsapi")
+        self.logger = logging.getLogger('gift')
         
         asyncio.create_task(self.start_api_check())
 
@@ -109,13 +109,13 @@ class GiftCodeAPI:
         except Exception as e:
             self.logger.exception(f"Fatal error in API check loop: {e}")
 
-    def __del__(self):
-        """Clean up database connections."""
+    def cog_unload(self):
+        """Clean up database connections when cog is unloaded."""
         try:
             self.conn.close()
             self.settings_conn.close()
             self.users_conn.close()
-        except:
+        except Exception:
             pass
     
     async def _wait_for_rate_limit(self):

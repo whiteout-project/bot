@@ -4,17 +4,20 @@ import os
 import sqlite3
 import asyncio
 import requests
+import logging
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 class BotOperations(commands.Cog):
     def __init__(self, bot, conn):
         self.bot = bot
         self.conn = conn
-        self.settings_db = sqlite3.connect('db/settings.sqlite', check_same_thread=False)
+        self.settings_db = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_db.cursor()
-        self.alliance_db = sqlite3.connect('db/alliance.sqlite', check_same_thread=False)
+        self.alliance_db = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.c_alliance = self.alliance_db.cursor()
         self.setup_database()
 
@@ -48,15 +51,17 @@ class BotOperations(commands.Cog):
             """)
             
             self.settings_db.commit()
-                
-        except Exception as e:
-            pass
 
-    def __del__(self):
+        except Exception as e:
+            logger.error(f"Error setting up database: {e}")
+            print(f"Error setting up database: {e}")
+
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
         try:
             self.settings_db.close()
             self.alliance_db.close()
-        except:
+        except Exception:
             pass
 
     @commands.Cog.listener()
@@ -333,7 +338,7 @@ class BotOperations(commands.Cog):
                                             try:
                                                 admin_user = await self.bot.fetch_user(selected_admin_id)
                                                 admin_name = admin_user.name
-                                            except:
+                                            except Exception:
                                                 admin_name = f"Unknown User ({selected_admin_id})"
 
                                             success_embed = discord.Embed(
@@ -406,19 +411,19 @@ class BotOperations(commands.Cog):
                                     view=admin_view,
                                     ephemeral=True
                                 )
-                            except Exception as e:
+                            except Exception:
                                 await interaction.followup.send(
                                     "An error occurred while sending the initial message.",
                                     ephemeral=True
                                 )
 
-                    except Exception as e:
+                    except Exception:
                         try:
                             await interaction.response.send_message(
                                 "An error occurred while processing your request.",
                                 ephemeral=True
                             )
-                        except:
+                        except Exception:
                             pass
                 elif custom_id == "add_admin":
                     try:
@@ -521,7 +526,7 @@ class BotOperations(commands.Cog):
                             try:
                                 user = await self.bot.fetch_user(admin_id)
                                 admin_name = f"{user.name}"
-                            except:
+                            except Exception:
                                 admin_name = "Unknown User"
 
                             options.append(
@@ -700,19 +705,19 @@ class BotOperations(commands.Cog):
 
                 elif custom_id == "main_menu":
                     try:
-                        alliance_cog = self.bot.get_cog("Alliance")
-                        if alliance_cog:
-                            await alliance_cog.show_main_menu(interaction)
+                        main_menu_cog = self.bot.get_cog("MainMenu")
+                        if main_menu_cog:
+                            await main_menu_cog.show_main_menu(interaction)
                         else:
                             await interaction.response.send_message(
-                                f"{theme.deniedIcon} Ana menüye dönüş sırasında bir hata oluştu.",
+                                f"{theme.deniedIcon} An error occurred while returning to main menu.",
                                 ephemeral=True
                             )
                     except Exception as e:
                         print(f"[ERROR] Main Menu error in bot operations: {e}")
                         if not interaction.response.is_done():
                             await interaction.response.send_message(
-                                "An error occurred while returning to main menu.", 
+                                "An error occurred while returning to main menu.",
                                 ephemeral=True
                             )
                         else:
@@ -785,7 +790,7 @@ class BotOperations(commands.Cog):
                             try:
                                 user = await interaction.client.fetch_user(admin_id)
                                 admin_name = user.name
-                            except:
+                            except Exception:
                                 admin_name = f"Unknown User ({admin_id})"
 
                             option_label = f"{admin_name[:50]}"
@@ -1007,25 +1012,28 @@ class BotOperations(commands.Cog):
                             inline=False
                         )
 
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(
-                    label="Back to Bot Operations",
-                    emoji=f"{theme.prevIcon}",
-                    style=discord.ButtonStyle.secondary,
-                    custom_id="bot_operations",
-                    row=0
-                ))
-
-                await interaction.response.send_message(
-                    embed=admin_list_embed,
-                    view=view,
-                    ephemeral=True
-                )
+                # Send as ephemeral (no back button needed - user can dismiss)
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        embed=admin_list_embed,
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        embed=admin_list_embed,
+                        ephemeral=True
+                    )
 
             except Exception as e:
                 print(f"View administrators error: {e}")
+                logger.error(f"View administrators error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
+                        f"{theme.deniedIcon} An error occurred while loading administrator list.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
                         f"{theme.deniedIcon} An error occurred while loading administrator list.",
                         ephemeral=True
                     )

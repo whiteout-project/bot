@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 import pytz
 import os
@@ -9,9 +10,11 @@ import json
 import traceback
 import time
 import re
-from .bear_event_types import get_event_types, get_event_icon
+from .notification_event_types import get_event_types, get_event_icon
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
+
+logger = logging.getLogger('notification')
 
 
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
@@ -51,7 +54,7 @@ def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str |
             )
     return None
 
-class BearTrap(commands.Cog):
+class NotificationSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
@@ -281,12 +284,13 @@ class BearTrap(commands.Cog):
 
             # Notify schedule boards of new notification (skip if bulk creating)
             if not skip_board_update:
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                schedule_cog = self.bot.get_cog("NotificationSchedule")
                 if schedule_cog:
                     await schedule_cog.on_notification_created(guild_id, channel_id)
 
             return notification_id
         except Exception as e:
+            logger.error(f"Error saving notification: {e}")
             print(f"Error saving notification: {e}")
             raise
 
@@ -335,7 +339,7 @@ class BearTrap(commands.Cog):
                 await self.save_notification_fixed(notification_id, selected_weekdays)
             self.conn.commit()
             if not skip_board_update:
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                schedule_cog = self.bot.get_cog("NotificationSchedule")
                 if schedule_cog:
                     self.cursor.execute("SELECT guild_id, channel_id FROM bear_notifications WHERE id = ?", (notification_id,))
                     row = self.cursor.fetchone()
@@ -343,6 +347,7 @@ class BearTrap(commands.Cog):
                         await schedule_cog.on_notification_created(row[0], row[1])
             return True
         except Exception as e:
+            logger.error(f"Error updating notification: {e}")
             print(f"Error updating notification: {e}")
             return False
 
@@ -366,6 +371,7 @@ class BearTrap(commands.Cog):
             self.conn.commit()
             return True
         except Exception as e:
+            logger.error(f"Error saving embed: {e}")
             print(f"Error saving embed: {e}")
             return False
 
@@ -384,6 +390,7 @@ class BearTrap(commands.Cog):
 
             self.conn.commit()
         except Exception as e:
+            logger.error(f"Error saving fixed weekdays: {e}")
             print(f"Error saving fixed weekdays: {e}")
             raise
 
@@ -409,6 +416,7 @@ class BearTrap(commands.Cog):
                 }
             return None
         except Exception as e:
+            logger.error(f"Error getting embed: {e}")
             print(f"Error getting embed: {e}")
             return None
 
@@ -442,6 +450,7 @@ class BearTrap(commands.Cog):
                                 # Message already deleted, no permission, or other error
                                 pass
                     except Exception as e:
+                        logger.error(f"Error deleting message {message_id}: {e}")
                         print(f"Error deleting message {message_id}: {e}")
                     finally:
                         # Mark as deleted regardless
@@ -454,6 +463,7 @@ class BearTrap(commands.Cog):
                 self.conn.commit()
 
             except Exception as e:
+                logger.error(f"Error in message deletion checker: {e}")
                 print(f"Error in message deletion checker: {e}")
 
             await asyncio.sleep(10)  # Check every 10 seconds
@@ -478,10 +488,12 @@ class BearTrap(commands.Cog):
                     try:
                         await self.process_notification(notification)
                     except Exception as e:
+                        logger.error(f"Error processing notification {notification[0]}: {e}")
                         print(f"Error processing notification {notification[0]}: {e}")
                         continue
 
             except Exception as e:
+                logger.error(f"Error in notification checker: {e}")
                 print(f"Error in notification checker: {e}")
 
             await asyncio.sleep(0.1)
@@ -523,7 +535,7 @@ class BearTrap(commands.Cog):
             delay_minutes = custom_delete_delay
         # 2. Check for event type duration
         elif event_type:
-            from .bear_event_types import get_event_config
+            from .notification_event_types import get_event_config
             event_config = get_event_config(event_type)
             if event_config:
                 event_duration = event_config.get("duration_minutes", default_delay)
@@ -613,6 +625,7 @@ class BearTrap(commands.Cog):
 
             self.conn.commit()
         except Exception as e:
+            logger.error(f"Error deleting previous notifications: {e}")
             print(f"Error deleting previous notifications: {e}")
 
     async def process_notification(self, notification):
@@ -778,7 +791,7 @@ class BearTrap(commands.Cog):
                 # Get event emoji from event_types config
                 event_emoji = ""
                 if event_type:
-                    from .bear_event_types import get_event_icon
+                    from .notification_event_types import get_event_icon
                     event_emoji = get_event_icon(event_type)
 
                 # Format event time in user's timezone
@@ -791,7 +804,7 @@ class BearTrap(commands.Cog):
                 # Check if event has instance-specific descriptions
                 actual_description = description
                 if event_type and instance_identifier and "EMBED_MESSAGE:" not in description:
-                    from .bear_event_types import get_event_config
+                    from .notification_event_types import get_event_config
                     event_config = get_event_config(event_type)
                     if event_config and "descriptions" in event_config:
                         descriptions_dict = event_config["descriptions"]
@@ -833,7 +846,7 @@ class BearTrap(commands.Cog):
 
                                 # Override with instance-specific description if available
                                 if event_type and instance_identifier:
-                                    from .bear_event_types import get_event_config
+                                    from .notification_event_types import get_event_config
                                     event_config = get_event_config(event_type)
                                     if event_config and "descriptions" in event_config:
                                         descriptions_dict = event_config["descriptions"]
@@ -924,6 +937,7 @@ class BearTrap(commands.Cog):
                                         msg = await channel.send(f"{mention_text} ⏰ **Notification**")
                                     sent_message_ids.append(msg.id)
                             except Exception as e:
+                                logger.error(f"Error creating embed: {e}")
                                 print(f"Error creating embed: {e}")
                                 if rounded_time > 0:
                                     msg = await channel.send(
@@ -932,6 +946,7 @@ class BearTrap(commands.Cog):
                                     msg = await channel.send(f"{mention_text} ⏰ **Error sending embed notification**")
                                 sent_message_ids.append(msg.id)
                     except Exception as e:
+                        logger.error(f"Error creating embed: {e}")
                         print(f"Error creating embed: {e}")
                         if rounded_time > 0:
                             msg = await channel.send(
@@ -1053,7 +1068,7 @@ class BearTrap(commands.Cog):
                 self.conn.commit()
 
                 # Notify schedule boards after sending notification
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                schedule_cog = self.bot.get_cog("NotificationSchedule")
                 if schedule_cog:
                     await schedule_cog.on_notification_sent(guild_id, channel_id)
 
@@ -1079,6 +1094,7 @@ class BearTrap(commands.Cog):
             """, (guild_id,))
             return self.cursor.fetchall()
         except Exception as e:
+            logger.error(f"Error getting notifications: {e}")
             print(f"Error getting notifications: {e}")
             return []
 
@@ -1097,7 +1113,7 @@ class BearTrap(commands.Cog):
             self.conn.commit()  # Commit the changes using the same connection as toggle_notification
 
             # Notify schedule boards of deletion
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            schedule_cog = self.bot.get_cog("NotificationSchedule")
             if schedule_cog:
                 await schedule_cog.on_notification_deleted(guild_id, channel_id)
 
@@ -1132,6 +1148,7 @@ class BearTrap(commands.Cog):
                     }
             return notifications
         except Exception as e:
+            logger.error(f"Error getting wizard notifications: {e}")
             print(f"Error getting wizard notifications: {e}")
             return {}
 
@@ -1162,6 +1179,7 @@ class BearTrap(commands.Cog):
                 })
             return notifications
         except Exception as e:
+            logger.error(f"Error getting all wizard notifications: {e}")
             print(f"Error getting all wizard notifications: {e}")
             return []
 
@@ -1185,6 +1203,7 @@ class BearTrap(commands.Cog):
             self.conn.commit()
             return deleted_count
         except Exception as e:
+            logger.error(f"Error deleting wizard notifications: {e}")
             print(f"Error deleting wizard notifications: {e}")
             return 0
 
@@ -1209,16 +1228,17 @@ class BearTrap(commands.Cog):
 
             # Notify schedule boards of toggle
             if not skip_board_update:
-                schedule_cog = self.bot.get_cog("BearTrapSchedule")
+                schedule_cog = self.bot.get_cog("NotificationSchedule")
                 if schedule_cog:
                     await schedule_cog.on_notification_toggled(guild_id, channel_id)
 
             return True
         except Exception as e:
+            logger.error(f"Error toggling notification: {e}")
             print(f"Error toggling notification: {e}")
             return False
 
-    async def show_bear_trap_menu(self, interaction: discord.Interaction):
+    async def show_notification_menu(self, interaction: discord.Interaction):
         try:
             embed = discord.Embed(
                 title=f"{theme.announceIcon} Notification System",
@@ -1258,13 +1278,11 @@ class BearTrap(commands.Cog):
 
             view = BearTrapView(self)
 
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                pass
+            await safe_edit_message(interaction, embed=embed, view=view)
 
         except Exception as e:
-            print(f"Error in show_bear_trap_menu: {e}")
+            logger.error(f"Error in show_notification_menu: {e}")
+            print(f"Error in show_notification_menu: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred. Please try again.",
@@ -1312,6 +1330,7 @@ class BearTrap(commands.Cog):
             )
 
         except Exception as e:
+            logger.error(f"Error in show_channel_selection: {e}")
             print(f"Error in show_channel_selection: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing channel selection!",
@@ -1321,7 +1340,7 @@ class BearTrap(commands.Cog):
 class RepeatOptionView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, description, channel_id, notification_type,
                  mention_type, original_message, event_type=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -1452,6 +1471,7 @@ class RepeatOptionView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error saving notification: {e}")
             print(f"Error saving notification: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while saving the notification.",
@@ -1560,6 +1580,7 @@ class RepeatIntervalModal(discord.ui.Modal):
             await self.repeat_view.save_notification(interaction, True, total_minutes, interval_text)
 
         except Exception as e:
+            logger.error(f"Error in repeat interval modal: {e}")
             print(f"Error in repeat interval modal: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while setting the repeat interval.",
@@ -1568,7 +1589,7 @@ class RepeatIntervalModal(discord.ui.Modal):
 
 class DaysMenu(discord.ui.View):
     def __init__(self, repeat_view):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.repeat_view = repeat_view
         self.selected_days = []
 
@@ -1713,10 +1734,11 @@ class EmbedEditorView(discord.ui.View):
                                                         view=self)
 
         except Exception as e:
+            logger.error(f"Error updating embed: {e}")
             print(f"Error updating embed: {e}")
             try:
                 await interaction.followup.send(f"{theme.deniedIcon} An error occurred while updating the embed!", ephemeral=True)
-            except:
+            except Exception:
                 pass
 
     @discord.ui.button(label="Mention Message", style=discord.ButtonStyle.secondary, row=1)
@@ -1737,6 +1759,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in edit_mention_message: {e}")
             print(f"Error in edit_mention_message: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while editing the mention message!", ephemeral=True)
 
@@ -1758,6 +1781,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in edit_title: {e}")
             print(f"Error in edit_title: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while editing the title!", ephemeral=True)
 
@@ -1780,6 +1804,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in edit_description: {e}")
             print(f"Error in edit_description: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while editing the description!", ephemeral=True)
 
@@ -1809,6 +1834,7 @@ class EmbedEditorView(discord.ui.View):
                     await interaction.followup.send(f"{theme.deniedIcon} Invalid color code! Example: #FF0000", ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Error in edit_color: {e}")
             print(f"Error in edit_color: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while editing the color!", ephemeral=True)
 
@@ -1830,6 +1856,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in edit_footer: {e}")
             print(f"Error in edit_footer: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while editing the footer!", ephemeral=True)
 
@@ -1851,6 +1878,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in edit_author: {e}")
             print(f"Error in edit_author: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while editing the author!", ephemeral=True)
 
@@ -1877,6 +1905,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in add_image: {e}")
             print(f"Error in add_image: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while adding the image!", ephemeral=True)
 
@@ -1903,6 +1932,7 @@ class EmbedEditorView(discord.ui.View):
                 await self.update_embed(interaction)
 
         except Exception as e:
+            logger.error(f"Error in add_thumbnail: {e}")
             print(f"Error in add_thumbnail: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred while adding the thumbnail!", ephemeral=True)
 
@@ -1925,18 +1955,19 @@ class EmbedEditorView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in confirm button: {e}")
             print(f"Error in confirm button: {e}")
             try:
                 await interaction.followup.send(
                     f"{theme.deniedIcon} An error occurred while confirming the embed! Please try again.",
                     ephemeral=True
                 )
-            except:
+            except Exception:
                 pass
 
 class MessageTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -1975,6 +2006,7 @@ class MessageTypeView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in embed_message: {e}")
             print(f"Error in embed_message: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while starting the event type selection!",
@@ -2021,7 +2053,7 @@ class EventTypeSelectView(discord.ui.View):
     """View for selecting event type when creating embed notifications"""
 
     def __init__(self, cog, start_date, hour, minute, timezone, original_message):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2040,7 +2072,7 @@ class EventTypeSelectView(discord.ui.View):
             template_data = None
             if self.selected_event_type:
                 # Get templates cog to fetch template defaults
-                templates_cog = self.cog.bot.get_cog("BearTrapTemplates")
+                templates_cog = self.cog.bot.get_cog("NotificationTemplates")
                 if templates_cog:
                     # Get templates for this event type
                     templates = templates_cog.get_templates_by_event_type(self.selected_event_type)
@@ -2126,6 +2158,7 @@ class EventTypeSelectView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in EventTypeSelectView continue: {e}")
             print(f"Error in EventTypeSelectView continue: {e}")
             import traceback
             traceback.print_exc()
@@ -2306,6 +2339,7 @@ class TimeSelectModal(discord.ui.Modal):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error in time modal: {e}")
             print(f"Error in time modal: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while setting the time.",
@@ -2314,7 +2348,7 @@ class TimeSelectModal(discord.ui.Modal):
 
 class NotificationTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message, event_type=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2384,6 +2418,7 @@ class NotificationTypeView(discord.ui.View):
                 view=view
             )
         except Exception as e:
+            logger.error(f"Error in show_mention_type_menu: {e}")
             print(f"Error in show_mention_type_menu: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing mention options!",
@@ -2464,6 +2499,7 @@ class CustomTimesModal(discord.ui.Modal):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error in custom times modal: {e}")
             print(f"Error in custom times modal: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while processing custom times.",
@@ -2473,7 +2509,7 @@ class CustomTimesModal(discord.ui.Modal):
 class MentionTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, notification_type,
                  original_message, event_type=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2519,6 +2555,7 @@ class MentionTypeView(discord.ui.View):
                 view=view
             )
         except Exception as e:
+            logger.error(f"Error in show_mention_type_menu: {e}")
             print(f"Error in show_mention_type_menu: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing mention options!",
@@ -2530,6 +2567,7 @@ class MentionTypeView(discord.ui.View):
         try:
             await self.show_mention_type_menu(interaction, "everyone")
         except Exception as e:
+            logger.error(f"Error in everyone button: {e}")
             print(f"Error in everyone button: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while setting @everyone mention!",
@@ -2550,6 +2588,7 @@ class MentionTypeView(discord.ui.View):
                     selected_user_id = select_interaction.data["values"][0]
                     await self.show_mention_type_menu(select_interaction, f"member_{selected_user_id}")
                 except Exception as e:
+                    logger.error(f"Error in user selection: {e}")
                     print(f"Error in user selection: {e}")
                     await select_interaction.followup.send(
                         f"{theme.deniedIcon} An error occurred while selecting the member!",
@@ -2557,7 +2596,7 @@ class MentionTypeView(discord.ui.View):
                     )
 
             select.callback = user_select_callback
-            view = discord.ui.View(timeout=300)
+            view = discord.ui.View(timeout=7200)
             view.add_item(select)
 
             await interaction.response.edit_message(
@@ -2569,6 +2608,7 @@ class MentionTypeView(discord.ui.View):
                 view=view
             )
         except Exception as e:
+            logger.error(f"Error in member button: {e}")
             print(f"Error in member button: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing member selection!",
@@ -2589,6 +2629,7 @@ class MentionTypeView(discord.ui.View):
                     selected_role_id = select_interaction.data["values"][0]
                     await self.show_mention_type_menu(select_interaction, f"role_{selected_role_id}")
                 except Exception as e:
+                    logger.error(f"Error in role selection: {e}")
                     print(f"Error in role selection: {e}")
                     await select_interaction.followup.send(
                         f"{theme.deniedIcon} An error occurred while selecting the role!",
@@ -2596,7 +2637,7 @@ class MentionTypeView(discord.ui.View):
                     )
 
             select.callback = role_select_callback
-            view = discord.ui.View(timeout=300)
+            view = discord.ui.View(timeout=7200)
             view.add_item(select)
 
             await interaction.response.edit_message(
@@ -2608,6 +2649,7 @@ class MentionTypeView(discord.ui.View):
                 view=view
             )
         except Exception as e:
+            logger.error(f"Error in role button: {e}")
             print(f"Error in role button: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing role selection!",
@@ -2619,6 +2661,7 @@ class MentionTypeView(discord.ui.View):
         try:
             await self.show_mention_type_menu(interaction, "none")
         except Exception as e:
+            logger.error(f"Error in no mention button: {e}")
             print(f"Error in no mention button: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while setting no mention!",
@@ -2696,6 +2739,7 @@ class MentionSelectMenu(discord.ui.Select):
             await self.parent_view.show_mention_type_menu(interaction, selected_value)
 
         except Exception as e:
+            logger.error(f"Error in mention selection: {e}")
             print(f"Error in mention selection: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while processing your selection!",
@@ -2704,7 +2748,7 @@ class MentionSelectMenu(discord.ui.Select):
 
 class SettingsView(discord.ui.View):
     def __init__(self, cog, delete_enabled: bool, default_delay: int):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.delete_enabled = delete_enabled
         self.default_delay = default_delay
@@ -2752,6 +2796,7 @@ class SettingsView(discord.ui.View):
             await interaction.response.edit_message(embed=self.build_settings_embed(), view=self)
 
         except Exception as e:
+            logger.error(f"Error toggling deletion: {e}")
             print(f"Error toggling deletion: {e}")
             traceback.print_exc()
             await interaction.response.send_message(
@@ -2804,6 +2849,7 @@ class SettingsView(discord.ui.View):
                         ephemeral=True
                     )
                 except Exception as e:
+                    logger.error(f"Error in modal callback: {e}")
                     print(f"Error in modal callback: {e}")
                     traceback.print_exc()
                     await modal_interaction.response.send_message(
@@ -2815,6 +2861,7 @@ class SettingsView(discord.ui.View):
             await interaction.response.send_modal(modal)
 
         except Exception as e:
+            logger.error(f"Error opening delay modal: {e}")
             print(f"Error opening delay modal: {e}")
             traceback.print_exc()
             await interaction.response.send_message(
@@ -2841,7 +2888,7 @@ class BearTrapView(discord.ui.View):
         if not await self.cog.check_admin(interaction):
             return
         try:
-            wizard_cog = self.cog.bot.get_cog("BearTrapWizard")
+            wizard_cog = self.cog.bot.get_cog("NotificationWizard")
             if wizard_cog:
                 await wizard_cog.show_wizard(interaction)
             else:
@@ -2850,11 +2897,12 @@ class BearTrapView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error loading Setup Wizard: {e}")
             print(f"Error loading Setup Wizard: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} We couldn't summon the Setup Wizard. Try summoning him off and on again?",
                 ephemeral=True
-            ) 
+            )
 
     @discord.ui.button(
         label="Custom Notification",
@@ -2934,7 +2982,7 @@ class BearTrapView(discord.ui.View):
 
                     # Get event emoji and display name
                     if event_type:
-                        from bear_event_types import get_event_icon
+                        from notification_event_types import get_event_icon
                         event_emoji = get_event_icon(event_type)
                         display_name = event_type
                     else:
@@ -2954,7 +3002,7 @@ class BearTrapView(discord.ui.View):
                                     display_name = f"{embed_row[0]} (Custom)"
                                 else:
                                     display_name = "Custom Notification"
-                            except:
+                            except Exception:
                                 display_name = "Custom Notification"
                         elif notification_desc.startswith("CUSTOM_TIMES:"):
                             # Extract description after CUSTOM_TIMES:
@@ -2978,7 +3026,7 @@ class BearTrapView(discord.ui.View):
                             tz = pytz.timezone(notif[5])
                             next_time_local = next_time.astimezone(tz)
                             time_display = next_time_local.strftime("%m/%d %H:%M")
-                        except:
+                        except Exception:
                             time_display = f"{notif[3]:02d}:{notif[4]:02d}"
                     else:
                         time_display = f"{notif[3]:02d}:{notif[4]:02d}"
@@ -3010,8 +3058,8 @@ class BearTrapView(discord.ui.View):
             )
 
             class PaginationButton(discord.ui.Button):
-                def __init__(self, label, page_change):
-                    super().__init__(label=label, style=discord.ButtonStyle.primary)
+                def __init__(self, label, page_change, emoji=None):
+                    super().__init__(label=label, style=discord.ButtonStyle.primary, emoji=emoji)
                     self.page_change = page_change
 
                 async def callback(self, interaction: discord.Interaction):
@@ -3257,7 +3305,7 @@ class BearTrapView(discord.ui.View):
                                 try:
                                     next_dt = datetime.fromisoformat(next_notification.replace("+00:00", ""))
                                     example_date = next_dt.strftime("%b %d")
-                                except:
+                                except Exception:
                                     example_date = "Dec 06"
 
                                 def replace_vars(text):
@@ -3452,6 +3500,7 @@ class BearTrapView(discord.ui.View):
                                             ephemeral=True
                                         )
                                     except Exception as e:
+                                        logger.error(f"Error updating custom delay: {e}")
                                         print(f"Error updating custom delay: {e}")
                                         traceback.print_exc()
                                         await modal_interaction.response.send_message(
@@ -3463,6 +3512,7 @@ class BearTrapView(discord.ui.View):
                                 await interaction.response.send_modal(modal)
 
                             except Exception as e:
+                                logger.error(f"Error opening advanced settings: {e}")
                                 print(f"Error opening advanced settings: {e}")
                                 traceback.print_exc()
                                 await interaction.response.send_message(
@@ -3556,6 +3606,7 @@ class BearTrapView(discord.ui.View):
                                 try:
                                     await editor_cog.start_edit_process(button_interaction, notification_id)
                                 except Exception as e:
+                                    logger.error(f"Error in starting edit process: {e}")
                                     print(f"Error in starting edit process: {e}")
                             else:
                                 await button_interaction.response.send_message(
@@ -3777,7 +3828,7 @@ class BearTrapView(discord.ui.View):
         if not await self.cog.check_admin(interaction):
             return
         try:
-            schedule_cog = self.cog.bot.get_cog("BearTrapSchedule")
+            schedule_cog = self.cog.bot.get_cog("NotificationSchedule")
             if schedule_cog:
                 await schedule_cog.show_main_menu(interaction, force_new=True)
             else:
@@ -3804,7 +3855,7 @@ class BearTrapView(discord.ui.View):
         if not await self.cog.check_admin(interaction):
             return
         try:
-            templates_cog = self.cog.bot.get_cog("BearTrapTemplates")
+            templates_cog = self.cog.bot.get_cog("NotificationTemplates")
             if templates_cog:
                 await templates_cog.show_templates(interaction)
             else:
@@ -3813,6 +3864,7 @@ class BearTrapView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error loading templates: {e}")
             print(f"Error loading templates: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while loading templates.",
@@ -3858,6 +3910,7 @@ class BearTrapView(discord.ui.View):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error loading settings: {e}")
             print(f"Error loading settings: {e}")
             traceback.print_exc()
             await interaction.response.send_message(
@@ -3869,17 +3922,18 @@ class BearTrapView(discord.ui.View):
         label="Main Menu",
         emoji=f"{theme.homeIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu",
+        custom_id="main_menu_from_notifications",
         row=2
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self.cog.check_admin(interaction):
             return
         try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                await alliance_cog.show_main_menu(interaction)
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_main_menu(interaction)
         except Exception as e:
+            logger.error(f"Error returning to main menu: {e}")
             print(f"Error returning to main menu: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while returning to main menu.",
@@ -3888,7 +3942,7 @@ class BearTrapView(discord.ui.View):
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message, event_type=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=7200)
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -3975,17 +4029,12 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
             )
 
         except Exception as e:
+            logger.error(f"Error in channel select callback: {e}")
             print(f"Error in channel select callback: {e}")
-            try:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while processing your selection!",
-                    ephemeral=True
-                )
-            except discord.InteractionResponded:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} An error occurred while processing your selection!",
-                    ephemeral=True
-                )
+            await safe_edit_message(
+                interaction,
+                content=f"{theme.deniedIcon} An error occurred while processing your selection!"
+            )
 
 async def setup(bot):
-    await bot.add_cog(BearTrap(bot))
+    await bot.add_cog(NotificationSystem(bot))

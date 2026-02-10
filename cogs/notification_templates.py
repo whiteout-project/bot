@@ -3,15 +3,19 @@ from discord.ext import commands
 import sqlite3
 import json
 import os
+import logging
 from typing import Optional, Dict, List
 
 # Import event type configuration
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
-from bear_event_types import EVENT_CONFIG, get_event_types, get_event_icon, get_event_config
+from notification_event_types import EVENT_CONFIG, get_event_types, get_event_icon, get_event_config
 from .pimp_my_bot import theme
+from .permission_handler import PermissionManager
 
-class BearTrapTemplates(commands.Cog):
+logger = logging.getLogger('notification')
+
+class NotificationTemplates(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db_path = 'db/beartime.sqlite'
@@ -55,8 +59,15 @@ class BearTrapTemplates(commands.Cog):
         if self.cursor.fetchone()[0] == 0:
             self._populate_default_templates()
 
-        # Always sync non-customized templates with latest defaults from bear_event_types.py
+        # Always sync non-customized templates with latest defaults from notification_event_types.py
         self._sync_default_templates()
+
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
     def _migrate_add_embed_text_fields(self):
         """Add mention_message, footer, and author columns if they don't exist"""
@@ -70,7 +81,7 @@ class BearTrapTemplates(commands.Cog):
             self.conn.commit()
 
     def _sync_default_templates(self):
-        """Sync non-customized templates with latest values from bear_event_types.py"""
+        """Sync non-customized templates with latest values from notification_event_types.py"""
         # First, handle any renamed events (old_name -> new_name)
         renamed_events = {
             "Mercenary Bosses": "Mercenary Prestige",
@@ -184,12 +195,7 @@ class BearTrapTemplates(commands.Cog):
 
     async def check_admin(self, interaction: discord.Interaction) -> bool:
         """Check if user is an admin"""
-        conn = sqlite3.connect('db/settings.sqlite')
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM admin WHERE id = ?", (interaction.user.id,))
-        is_admin = cursor.fetchone() is not None
-        conn.close()
-
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
         if not is_admin:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} You don't have permission to use this command!",
@@ -247,7 +253,7 @@ class BearTrapTemplates(commands.Cog):
         self.conn.commit()
 
     def reset_template_to_default(self, template_id: int, event_type: str) -> bool:
-        """Reset a template to its default values from bear_event_types.py"""
+        """Reset a template to its default values from notification_event_types.py"""
         config = EVENT_CONFIG.get(event_type)
 
         # If not found, try to find a matching event by partial name match
@@ -331,8 +337,8 @@ class BearTrapTemplates(commands.Cog):
         await view.show_page(interaction, 0, ephemeral=True)
 
 class TemplateBrowseView(discord.ui.View):
-    def __init__(self, cog: BearTrapTemplates, templates: List[Dict], event_filter: Optional[str] = None):
-        super().__init__(timeout=300)
+    def __init__(self, cog: NotificationTemplates, templates: List[Dict], event_filter: Optional[str] = None):
+        super().__init__(timeout=7200)
         self.cog = cog
         self.templates = templates
         self.event_filter = event_filter
@@ -406,7 +412,7 @@ class TemplateBrowseView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
 class TemplateSelectDropdown(discord.ui.Select):
-    def __init__(self, cog: BearTrapTemplates, templates: List[Dict]):
+    def __init__(self, cog: NotificationTemplates, templates: List[Dict]):
         self.cog = cog
         self.templates = templates
 
@@ -440,7 +446,7 @@ class TemplateSelectDropdown(discord.ui.Select):
         await view.show_preview(interaction)
 
 class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
-    def __init__(self, cog: BearTrapTemplates, template: Dict):
+    def __init__(self, cog: NotificationTemplates, template: Dict):
         super().__init__()
         self.cog = cog
         self.template = template
@@ -520,6 +526,7 @@ class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error updating template: {e}")
             print(f"Error updating template: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Failed to update template: {str(e)}",
@@ -527,8 +534,8 @@ class TemplateEditModal(discord.ui.Modal, title="Edit Template"):
             )
 
 class TemplatePreviewView(discord.ui.View):
-    def __init__(self, cog: BearTrapTemplates, template: Dict, all_templates: List[Dict] = None):
-        super().__init__(timeout=300)
+    def __init__(self, cog: NotificationTemplates, template: Dict, all_templates: List[Dict] = None):
+        super().__init__(timeout=7200)
         self.cog = cog
         self.template = template
         self.all_templates = all_templates or []
@@ -592,7 +599,7 @@ class TemplatePreviewView(discord.ui.View):
                         value="Custom",
                         inline=True
                     )
-            except:
+            except Exception:
                 pass
 
         info_embed.add_field(
@@ -703,7 +710,7 @@ class TemplatePreviewView(discord.ui.View):
 class ResetConfirmView(discord.ui.View):
     """Confirmation view for resetting a template to default"""
 
-    def __init__(self, cog: BearTrapTemplates, template: Dict, all_templates: List[Dict] = None):
+    def __init__(self, cog: NotificationTemplates, template: Dict, all_templates: List[Dict] = None):
         super().__init__(timeout=60)
         self.cog = cog
         self.template = template
@@ -736,4 +743,4 @@ class ResetConfirmView(discord.ui.View):
         self.stop()
 
 async def setup(bot):
-    await bot.add_cog(BearTrapTemplates(bot))
+    await bot.add_cog(NotificationTemplates(bot))

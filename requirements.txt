@@ -9,6 +9,7 @@ pytz>=2025.2
 aiohttp-socks>=0.10.1
 python-dotenv>=1.1.0
 onnxruntime>=1.18.1
+rapidocr>=3.6.0
 matplotlib>=3.10.5
 arabic-reshaper>=3.0.0
 python-bidi>=0.6.7

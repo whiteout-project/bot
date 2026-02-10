@@ -5,8 +5,11 @@ import sqlite3
 import aiohttp
 import time
 import ssl
+import logging
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('alliance')
 
 class RegisterSettingsView(discord.ui.View):
     def __init__(self, cog):
@@ -30,6 +33,7 @@ class RegisterSettingsView(discord.ui.View):
             conn.commit()
             conn.close()
         except Exception as e:
+            logger.error(f"Error updating register settings: {e}")
             print(f"Error updating register settings: {e}")
 
     @discord.ui.button(
@@ -60,14 +64,14 @@ class RegisterSettingsView(discord.ui.View):
         except Exception as _:
             await interaction.response.send_message(f"{theme.deniedIcon} An error occurred while disabling registration.", ephemeral=True)
 
-class Register(commands.Cog):
+class AllianceRegistration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         
-        self.conn_alliance = sqlite3.connect("db/alliance.sqlite")
+        self.conn_alliance = sqlite3.connect("db/alliance.sqlite", timeout=30.0, check_same_thread=False)
         self.c_alliance = self.conn_alliance.cursor()
-        
-        self.conn_users = sqlite3.connect("db/users.sqlite")
+
+        self.conn_users = sqlite3.connect("db/users.sqlite", timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
     
     def cog_unload(self):
@@ -117,6 +121,7 @@ class Register(commands.Cog):
             return bool(result[0]) if result else False
             
         except Exception as e:
+            logger.error(f"Error checking registration status: {e}")
             print(f"Error checking registration status: {e}")
             return False
         
@@ -213,6 +218,7 @@ class Register(commands.Cog):
                     ephemeral=True
                 )
             else:
+                logger.error(f"Error fetching user data for FID {fid}: {e}")
                 print(f"Error fetching user data for FID {fid}: {e}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Failed to fetch user data. Please try again later.",
@@ -235,4 +241,4 @@ class Register(commands.Cog):
         await interaction.response.send_message("Registration successful! You are now in the bot's database.", ephemeral=True)
         
 async def setup(bot):
-    await bot.add_cog(Register(bot))
+    await bot.add_cog(AllianceRegistration(bot))

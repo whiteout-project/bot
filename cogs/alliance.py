@@ -3,9 +3,11 @@ from discord import app_commands
 from discord.ext import commands
 import sqlite3
 import asyncio
-from datetime import datetime
+import logging
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
+
+logger = logging.getLogger('alliance')
 
 class Alliance(commands.Cog):
     def __init__(self, bot, conn):
@@ -13,13 +15,13 @@ class Alliance(commands.Cog):
         self.conn = conn
         self.c = self.conn.cursor()
         
-        self.conn_users = sqlite3.connect('db/users.sqlite')
+        self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
-        
-        self.conn_settings = sqlite3.connect('db/settings.sqlite')
+
+        self.conn_settings = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.c_settings = self.conn_settings.cursor()
-        
-        self.conn_giftcode = sqlite3.connect('db/giftcode.sqlite')
+
+        self.conn_giftcode = sqlite3.connect('db/giftcode.sqlite', timeout=30.0, check_same_thread=False)
         self.c_giftcode = self.conn_giftcode.cursor()
 
         self._create_table()
@@ -41,6 +43,15 @@ class Alliance(commands.Cog):
         if "discord_server_id" not in columns:
             self.c.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
             self.conn.commit()
+
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
+        for conn_name in ['conn_users', 'conn_settings', 'conn_giftcode']:
+            if hasattr(self, conn_name):
+                try:
+                    getattr(self, conn_name).close()
+                except Exception:
+                    pass
 
     async def view_alliances(self, interaction: discord.Interaction):
         
@@ -98,8 +109,8 @@ class Alliance(commands.Cog):
                 self.c_users.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
                 member_count = self.c_users.fetchone()[0]
                 
-                interval_text = f"{interval} minutes" if interval > 0 else "No automatic control"
-                alliance_list += f"{theme.allianceIcon} **{alliance_id}: {name}**\n{theme.userIcon} Members: {member_count}\n{theme.timeIcon} Control Interval: {interval_text}\n\n"
+                interval_text = f"{interval} minutes" if interval > 0 else "No automatic sync"
+                alliance_list += f"{theme.allianceIcon} **{alliance_id}: {name}**\n{theme.userIcon} Members: {member_count}\n{theme.timeIcon} Sync Interval: {interval_text}\n\n"
 
             if not alliance_list:
                 alliance_list = "No alliances found."
@@ -160,101 +171,29 @@ class Alliance(commands.Cog):
 
             if admin is None:
                 await interaction.response.send_message(
-                    "You do not have permission to access this menu.", 
+                    "You do not have permission to access this menu.",
                     ephemeral=True
                 )
                 return
 
-            embed = discord.Embed(
-                title=f"{theme.settingsIcon} Settings Menu",
-                description=(
-                    f"Please select a category:\n\n"
-                    f"**Menu Categories**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.allianceIcon} **Alliance Operations**\n"
-                    f"└ Manage alliances and settings\n\n"
-                    f"{theme.membersIcon} **Alliance Member Operations**\n"
-                    f"└ Add, remove, and view members\n\n"
-                    f"{theme.robotIcon} **Bot Operations**\n"
-                    f"└ Configure bot settings\n\n"
-                    f"{theme.giftIcon} **Gift Code Operations**\n"
-                    f"└ Manage gift codes and rewards\n\n"
-                    f"{theme.listIcon} **Alliance History**\n"
-                    f"└ View alliance changes and history\n\n"
-                    f"{theme.supportIcon} **Support Operations**\n"
-                    f"└ Access support features\n\n"
-                    f"{theme.paletteIcon} **Theme Settings**\n"
-                    f"└ Customize bot icons and colors\n"
-                    f"{theme.lowerDivider}"
-                ),
-                color=theme.emColor1
-            )
-
-            view = discord.ui.View()
-            view.add_item(discord.ui.Button(
-                label="Alliance Operations",
-                emoji=theme.allianceIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="alliance_operations",
-                row=0
-            ))
-            view.add_item(discord.ui.Button(
-                label="Member Operations",
-                emoji=theme.membersIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="member_operations",
-                row=0
-            ))
-            view.add_item(discord.ui.Button(
-                label="Bot Operations",
-                emoji=theme.robotIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="bot_operations",
-                row=1
-            ))
-            view.add_item(discord.ui.Button(
-                label="Gift Operations",
-                emoji=theme.giftIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="gift_code_operations",
-                row=1
-            ))
-            view.add_item(discord.ui.Button(
-                label="Alliance History",
-                emoji=theme.listIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="alliance_history",
-                row=2
-            ))
-            view.add_item(discord.ui.Button(
-                label="Support Operations",
-                emoji=theme.supportIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="support_operations",
-                row=2
-            ))
-            view.add_item(discord.ui.Button(
-                label="Other Features",
-                emoji=theme.settingsIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="other_features",
-                row=3
-            ))
-            view.add_item(discord.ui.Button(
-                label="Theme Settings",
-                emoji=f"{theme.paletteIcon}",
-                style=discord.ButtonStyle.primary,
-                custom_id="theme_settings",
-                row=3
-            ))
-
-            if admin_count == 0:
-                await interaction.edit_original_response(embed=embed, view=view)
+            # Delegate to MainMenu cog for the actual menu display
+            main_menu_cog = self.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                if admin_count == 0:
+                    # First time setup - need to send initial response then show menu
+                    await main_menu_cog.show_main_menu(interaction)
+                else:
+                    # Normal flow - send menu as initial response
+                    await self._send_initial_main_menu(interaction, main_menu_cog)
             else:
-                await interaction.response.send_message(embed=embed, view=view)
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Main Menu module not found.",
+                    ephemeral=True
+                )
 
         except Exception as e:
             if not any(error_code in str(e) for error_code in ["10062", "40060"]):
+                logger.error(f"Settings command error: {e}")
                 print(f"Settings command error: {e}")
             error_message = "An error occurred while processing your request."
             if not interaction.response.is_done():
@@ -262,29 +201,57 @@ class Alliance(commands.Cog):
             else:
                 await interaction.followup.send(error_message, ephemeral=True)
 
-    async def show_main_menu(self, interaction: discord.Interaction):
-        """Display the main settings menu - can be called by other cogs"""
+    async def _send_initial_main_menu(self, interaction: discord.Interaction, main_menu_cog):
+        """Send the main menu as the initial response (for /settings command)."""
+        from .bot_main_menu import MainMenuView
+
+        embed = discord.Embed(
+            title=f"{theme.settingsIcon} Settings Menu",
+            description=(
+                f"Welcome to the bot settings. Select a category to get started:\n\n"
+                f"**Menu Categories**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.castleBattleIcon} **Alliance Management**\n"
+                f"└ Manage alliances, members, and registration\n\n"
+                f"{theme.giftIcon} **Gift Codes**\n"
+                f"└ Manage gift codes and rewards\n\n"
+                f"{theme.bellIcon} **Notifications**\n"
+                f"└ Event notification system for Bear, KE, and more\n\n"
+                f"{theme.listIcon} **Attendance Tracking**\n"
+                f"└ Track and export event attendance\n\n"
+                f"{theme.ministerIcon} **Minister Scheduling**\n"
+                f"└ Manage state minister appointments\n\n"
+                f"{theme.paletteIcon} **Themes**\n"
+                f"└ Customize bot icons and colors\n\n"
+                f"{theme.settingsIcon} **Settings**\n"
+                f"└ Bot configuration and permissions\n\n"
+                f"{theme.robotIcon} **Maintenance**\n"
+                f"└ Updates, backups, and support\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1
+        )
+
+        view = MainMenuView(main_menu_cog)
+        await interaction.response.send_message(embed=embed, view=view)
+
+    async def show_alliance_operations(self, interaction: discord.Interaction):
+        """Display the Alliance Operations menu (Add/Edit/Delete/View alliances)."""
         try:
             embed = discord.Embed(
-                title=f"{theme.settingsIcon} Settings Menu",
+                title=f"{theme.allianceIcon} Alliance Operations",
                 description=(
-                    f"Please select a category:\n\n"
-                    f"**Menu Categories**\n"
+                    f"Please select an operation:\n\n"
+                    f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.allianceIcon} **Alliance Operations**\n"
-                    f"└ Manage alliances and settings\n\n"
-                    f"{theme.membersIcon} **Alliance Member Operations**\n"
-                    f"└ Add, remove, and view members\n\n"
-                    f"{theme.robotIcon} **Bot Operations**\n"
-                    f"└ Configure bot settings\n\n"
-                    f"{theme.giftIcon} **Gift Code Operations**\n"
-                    f"└ Manage gift codes and rewards\n\n"
-                    f"{theme.listIcon} **Alliance History**\n"
-                    f"└ View alliance changes and history\n\n"
-                    f"{theme.supportIcon} **Support Operations**\n"
-                    f"└ Access support features\n\n"
-                    f"{theme.paletteIcon} **Theme Settings**\n"
-                    f"└ Customize bot icons and colors\n"
+                    f"{theme.addIcon} **Add Alliance**\n"
+                    f"└ Create a new alliance\n\n"
+                    f"{theme.editListIcon} **Edit Alliance**\n"
+                    f"└ Modify existing alliance settings\n\n"
+                    f"{theme.trashIcon} **Delete Alliance**\n"
+                    f"└ Remove an existing alliance\n\n"
+                    f"{theme.eyesIcon} **View Alliances**\n"
+                    f"└ List all available alliances\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
@@ -292,74 +259,62 @@ class Alliance(commands.Cog):
 
             view = discord.ui.View()
             view.add_item(discord.ui.Button(
-                label="Alliance Operations",
-                emoji=theme.allianceIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="alliance_operations",
-                row=0
+                label="Add Alliance",
+                emoji=theme.addIcon,
+                style=discord.ButtonStyle.success,
+                custom_id="add_alliance"
             ))
             view.add_item(discord.ui.Button(
-                label="Member Operations",
-                emoji=theme.membersIcon,
+                label="Edit Alliance",
+                emoji=theme.editListIcon,
                 style=discord.ButtonStyle.primary,
-                custom_id="member_operations",
-                row=0
+                custom_id="edit_alliance"
             ))
             view.add_item(discord.ui.Button(
-                label="Bot Operations",
-                emoji=theme.robotIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="bot_operations",
-                row=1
+                label="Delete Alliance",
+                emoji=theme.trashIcon,
+                style=discord.ButtonStyle.danger,
+                custom_id="delete_alliance"
             ))
             view.add_item(discord.ui.Button(
-                label="Gift Operations",
-                emoji=theme.giftIcon,
+                label="View Alliances",
+                emoji=theme.eyesIcon,
                 style=discord.ButtonStyle.primary,
-                custom_id="gift_code_operations",
-                row=1
+                custom_id="view_alliances"
             ))
             view.add_item(discord.ui.Button(
-                label="Alliance History",
-                emoji=theme.listIcon,
+                label="Check Alliance",
+                emoji=theme.searchIcon,
                 style=discord.ButtonStyle.primary,
-                custom_id="alliance_history",
-                row=2
+                custom_id="check_alliance"
             ))
             view.add_item(discord.ui.Button(
-                label="Support Operations",
-                emoji=theme.supportIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="support_operations",
-                row=2
-            ))
-            view.add_item(discord.ui.Button(
-                label="Other Features",
-                emoji=theme.settingsIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="other_features",
-                row=3
-            ))
-            view.add_item(discord.ui.Button(
-                label="Theme Settings",
-                emoji=f"{theme.paletteIcon}",
-                style=discord.ButtonStyle.primary,
-                custom_id="theme_settings",
-                row=3
+                label="Back",
+                emoji=theme.backIcon,
+                style=discord.ButtonStyle.secondary,
+                custom_id="back_to_alliance_management"
             ))
 
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                pass
+            await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
-        except Exception as _:
-            pass
+        except Exception as e:
+            logger.error(f"Error in show_alliance_operations: {e}")
+            print(f"Error in show_alliance_operations: {e}")
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
         if interaction.type == discord.InteractionType.component:
             custom_id = interaction.data.get("custom_id")
+
+            # Only handle custom_ids that belong to this cog
+            handled_ids = {
+                "alliance_operations", "back_to_alliance_management", "edit_alliance",
+                "check_alliance", "add_alliance", "delete_alliance", "view_alliances",
+                "alliance_check_select"
+            }
+            if custom_id not in handled_ids:
+                return
+
             user_id = interaction.user.id
             self.c_settings.execute("SELECT id, is_initial FROM admin WHERE id = ?", (user_id,))
             admin = self.c_settings.fetchone()
@@ -370,66 +325,13 @@ class Alliance(commands.Cog):
 
             try:
                 if custom_id == "alliance_operations":
-                    embed = discord.Embed(
-                        title=f"{theme.allianceIcon} Alliance Operations",
-                        description=(
-                            f"Please select an operation:\n\n"
-                            f"**Available Operations**\n"
-                            f"{theme.upperDivider}\n"
-                            f"{theme.addIcon} **Add Alliance**\n"
-                            f"└ Create a new alliance\n\n"
-                            f"{theme.editListIcon} **Edit Alliance**\n"
-                            f"└ Modify existing alliance settings\n\n"
-                            f"{theme.trashIcon} **Delete Alliance**\n"
-                            f"└ Remove an existing alliance\n\n"
-                            f"{theme.eyesIcon} **View Alliances**\n"
-                            f"└ List all available alliances\n"
-                            f"{theme.lowerDivider}"
-                        ),
-                        color=theme.emColor1
-                    )
-                    
-                    # All admins (global and server) can manage alliances
-                    # Server admins are scoped to their server's alliances in the handlers
-                    view = discord.ui.View()
-                    view.add_item(discord.ui.Button(
-                        label="Add Alliance",
-                        emoji=theme.addIcon,
-                        style=discord.ButtonStyle.success,
-                        custom_id="add_alliance"
-                    ))
-                    view.add_item(discord.ui.Button(
-                        label="Edit Alliance",
-                        emoji=theme.editListIcon,
-                        style=discord.ButtonStyle.primary,
-                        custom_id="edit_alliance"
-                    ))
-                    view.add_item(discord.ui.Button(
-                        label="Delete Alliance",
-                        emoji=theme.trashIcon,
-                        style=discord.ButtonStyle.danger,
-                        custom_id="delete_alliance"
-                    ))
-                    view.add_item(discord.ui.Button(
-                        label="View Alliances",
-                        emoji=theme.eyesIcon,
-                        style=discord.ButtonStyle.primary,
-                        custom_id="view_alliances"
-                    ))
-                    view.add_item(discord.ui.Button(
-                        label="Check Alliance", 
-                        emoji=theme.searchIcon,
-                        style=discord.ButtonStyle.primary, 
-                        custom_id="check_alliance"
-                    ))
-                    view.add_item(discord.ui.Button(
-                        label="Main Menu", 
-                        emoji=theme.homeIcon,
-                        style=discord.ButtonStyle.secondary, 
-                        custom_id="main_menu"
-                    ))
+                    await self.show_alliance_operations(interaction)
 
-                    await interaction.response.edit_message(embed=embed, view=view)
+                elif custom_id == "back_to_alliance_management":
+                    # Return to Alliance Management sub-menu
+                    main_menu_cog = self.bot.get_cog("MainMenu")
+                    if main_menu_cog:
+                        await main_menu_cog.show_alliance_management(interaction)
 
                 elif custom_id == "edit_alliance":
                     await self.edit_alliance(interaction)
@@ -460,7 +362,7 @@ class Alliance(commands.Cog):
                         discord.SelectOption(
                             label=f"{name[:40]}",
                             value=str(alliance_id),
-                            description=f"Control Interval: {interval} minutes"
+                            description=f"Sync Interval: {interval} minutes"
                         ) for alliance_id, name, interval in alliances
                     ])
 
@@ -473,10 +375,10 @@ class Alliance(commands.Cog):
                     async def alliance_check_callback(select_interaction: discord.Interaction):
                         try:
                             selected_value = select_interaction.data["values"][0]
-                            control_cog = self.bot.get_cog('Control')
-                            
+                            control_cog = self.bot.get_cog('AllianceSync')
+
                             if not control_cog:
-                                await select_interaction.response.send_message("Control module not found.", ephemeral=True)
+                                await select_interaction.response.send_message("Alliance Sync module not found.", ephemeral=True)
                                 return
                             
                             # Ensure the centralized queue processor is running
@@ -530,6 +432,7 @@ class Alliance(commands.Cog):
                                         queued_alliances.append((alliance_id, name))
                                     
                                     except Exception as e:
+                                        logger.error(f"Error queuing alliance {name}: {e}")
                                         print(f"Error queuing alliance {name}: {e}")
                                         continue
                                 
@@ -578,9 +481,10 @@ class Alliance(commands.Cog):
                                 })
 
                         except Exception as e:
+                            logger.error(f"Alliance check error: {e}")
                             print(f"Alliance check error: {e}")
                             await select_interaction.response.send_message(
-                                "An error occurred during the control process.", 
+                                "An error occurred during the control process.",
                                 ephemeral=True
                             )
 
@@ -604,56 +508,6 @@ class Alliance(commands.Cog):
                     )
                     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-                elif custom_id == "member_operations":
-                    await self.bot.get_cog("AllianceMemberOperations").handle_member_operations(interaction)
-
-                elif custom_id == "bot_operations":
-                    try:
-                        bot_ops_cog = interaction.client.get_cog("BotOperations")
-                        if bot_ops_cog:
-                            await bot_ops_cog.show_bot_operations_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon}Bot Operations module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        if not any(error_code in str(e) for error_code in ["10062", "40060"]):
-                            print(f"Bot operations error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Bot Operations.",
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Bot Operations.",
-                                ephemeral=True
-                            )
-
-                elif custom_id == "gift_code_operations":
-                    try:
-                        gift_ops_cog = interaction.client.get_cog("GiftOperations")
-                        if gift_ops_cog:
-                            await gift_ops_cog.show_gift_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon}Gift Operations module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        print(f"Gift operations error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Gift Operations.",
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Gift Operations.",
-                                ephemeral=True
-                            )
-
                 elif custom_id == "add_alliance":
                     await self.add_alliance(interaction)
 
@@ -664,105 +518,14 @@ class Alliance(commands.Cog):
                     await self.view_alliances(interaction)
 
                 elif custom_id == "main_menu":
-                    await self.show_main_menu(interaction)
-
-                elif custom_id == "support_operations":
-                    try:
-                        support_ops_cog = interaction.client.get_cog("SupportOperations")
-                        if support_ops_cog:
-                            await support_ops_cog.show_support_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon}Support Operations module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        if not any(error_code in str(e) for error_code in ["10062", "40060"]):
-                            print(f"Support operations error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Support Operations.", 
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Support Operations.",
-                                ephemeral=True
-                            )
-
-                elif custom_id == "alliance_history":
-                    try:
-                        changes_cog = interaction.client.get_cog("Changes")
-                        if changes_cog:
-                            await changes_cog.show_alliance_history_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon}Alliance History module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        print(f"Alliance history error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Alliance History.",
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Alliance History.",
-                                ephemeral=True
-                            )
-
-                elif custom_id == "other_features":
-                    try:
-                        other_features_cog = interaction.client.get_cog("OtherFeatures")
-                        if other_features_cog:
-                            await other_features_cog.show_other_features_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon}Other Features module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        if not any(error_code in str(e) for error_code in ["10062", "40060"]):
-                            print(f"Other features error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Other Features menu.",
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Other Features menu.",
-                                ephemeral=True
-                            )
-
-                elif custom_id == "theme_settings":
-                    try:
-                        theme_cog = interaction.client.get_cog("Theme")
-                        if theme_cog:
-                            await theme_cog.show_theme_menu(interaction)
-                        else:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon} Theme module not found.",
-                                ephemeral=True
-                            )
-                    except Exception as e:
-                        if not any(error_code in str(e) for error_code in ["10062", "40060"]):
-                            print(f"Theme settings error: {e}")
-                        if not interaction.response.is_done():
-                            await interaction.response.send_message(
-                                "An error occurred while loading Theme settings.",
-                                ephemeral=True
-                            )
-                        else:
-                            await interaction.followup.send(
-                                "An error occurred while loading Theme settings.",
-                                ephemeral=True
-                            )
+                    # Delegate to MainMenu cog
+                    main_menu_cog = self.bot.get_cog("MainMenu")
+                    if main_menu_cog:
+                        await main_menu_cog.show_main_menu(interaction)
 
             except Exception as e:
                 if not any(error_code in str(e) for error_code in ["10062", "40060"]):
+                    logger.error(f"Error processing interaction with custom_id '{custom_id}': {e}")
                     print(f"Error processing interaction with custom_id '{custom_id}': {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
@@ -853,7 +616,7 @@ class Alliance(commands.Cog):
                         f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
                         f"**🔢 Alliance ID**\n{alliance_id}\n\n"
                         f"**📢 Channel**\n<#{channel_id}>\n\n"
-                        f"**⏱️ Control Interval**\n{interval} minutes\n\n"
+                        f"**⏱️ Sync Interval**\n{interval} minutes\n\n"
                         f"**🕐 Fixed Start Time**\n{start_time_display}"
                     )
                     result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
@@ -1104,7 +867,7 @@ class Alliance(commands.Cog):
                                 f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
                                 f"**🔢 Alliance ID**\n{alliance_id}\n\n"
                                 f"**📢 Channel**\n<#{channel_id}>\n\n"
-                                f"**⏱️ Control Interval**\n{interval} minutes\n\n"
+                                f"**⏱️ Sync Interval**\n{interval} minutes\n\n"
                                 f"**🕐 Fixed Start Time**\n{start_time_display}"
                             )
                             result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
@@ -1243,6 +1006,7 @@ class Alliance(commands.Cog):
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Error in delete_alliance: {e}")
             print(f"Error in delete_alliance: {e}")
             error_embed = discord.Embed(
                 title=f"{theme.deniedIcon}Error",
@@ -1388,6 +1152,7 @@ class Alliance(commands.Cog):
             await interaction.response.edit_message(embed=confirm_embed, view=confirm_view)
 
         except Exception as e:
+            logger.error(f"Error in alliance_delete_callback: {e}")
             print(f"Error in alliance_delete_callback: {e}")
             error_embed = discord.Embed(
                 title=f"{theme.deniedIcon}Error",
@@ -1412,7 +1177,7 @@ class AllianceModal(discord.ui.Modal):
         self.add_item(self.name)
 
         self.interval = discord.ui.TextInput(
-            label="Control Interval (minutes)",
+            label="Sync Interval (minutes)",
             placeholder="Enter interval (0 to disable)",
             default=default_interval,
             required=True

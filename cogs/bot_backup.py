@@ -8,8 +8,11 @@ import tempfile
 import pyzipper
 import shutil
 import traceback
+import logging
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 class BackupOperations(commands.Cog):
     def __init__(self, bot):
@@ -52,6 +55,7 @@ class BackupOperations(commands.Cog):
                 'free_mb': free / (1024 * 1024)
             }
         except Exception as e:
+            logger.error(f"Error getting disk space: {e}")
             print(f"Error getting disk space: {e}")
             return None
 
@@ -67,6 +71,7 @@ class BackupOperations(commands.Cog):
             estimated_compressed = total_size * 1.2 # 20% overhead for compression and packaging
             return estimated_compressed / (1024 * 1024)
         except Exception as e:
+            logger.error(f"Error estimating backup size: {e}")
             print(f"Error estimating backup size: {e}")
             return 50  # Conservative default of 50MB
 
@@ -108,6 +113,7 @@ class BackupOperations(commands.Cog):
             with open(self.log_path, 'a', encoding='utf-8') as log_file:
                 log_file.write(log_message)
         except Exception as e:
+            logger.error(f"Logging error: {e}")
             print(f"Logging error: {e}")
 
     @tasks.loop(hours=3)
@@ -140,6 +146,7 @@ class BackupOperations(commands.Cog):
                     self.log_backup(str(admin_id), False, "Automatic Backup", "Local", None, str(e))
 
         except Exception as e:
+            logger.error(f"Automatic backup error: {e}")
             print(f"Automatic backup error: {e}")
 
     @automatic_backup_loop.before_loop
@@ -193,7 +200,7 @@ class BackupOperations(commands.Cog):
             for file in os.listdir(self.backup_dir):
                 if file.endswith('.zip'):
                     backup_files.append(os.path.join(self.backup_dir, file))
-        except:
+        except Exception:
             pass
         return sorted(backup_files, key=os.path.getmtime, reverse=True)
 
@@ -368,10 +375,12 @@ To restore:
                         return filename
 
                     except Exception as e:
+                        logger.error(f"Error sending backup via DM: {e}")
                         print(f"Error sending backup via DM: {e}")
                         return None
 
         except Exception as e:
+            logger.error(f"Backup creation error: {e}")
             print(f"Backup creation error: {e}")
             traceback.print_exc()
             return None
@@ -395,10 +404,12 @@ To restore:
                     os.remove(filepath)
                     removed_count += 1
                 except Exception as e:
+                    logger.error(f"Error removing {filepath}: {e}")
                     print(f"Error removing {filepath}: {e}")
             
             return removed_count
         except Exception as e:
+            logger.error(f"Cleanup error: {e}")
             print(f"Cleanup error: {e}")
             return 0
 
@@ -470,11 +481,12 @@ class BackupView(discord.ui.View):
         view = BackupManageView(self.cog)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @discord.ui.button(label="Main Menu", emoji=f"{theme.homeIcon}", style=discord.ButtonStyle.secondary, row=1)
-    async def main_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-        if other_features_cog:
-            await other_features_cog.show_other_features_menu(interaction)
+    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary, row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Navigate back to Maintenance sub-menu."""
+        main_menu_cog = self.cog.bot.get_cog("MainMenu")
+        if main_menu_cog:
+            await main_menu_cog.show_maintenance(interaction)
 
 class BackupChoiceView(discord.ui.View):
     def __init__(self, cog, user_id):

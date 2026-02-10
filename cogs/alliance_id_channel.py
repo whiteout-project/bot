@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime, timedelta
 import os
 import asyncio
@@ -10,11 +11,13 @@ import aiohttp
 import ssl
 from discord.ext import tasks
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
+
+logger = logging.getLogger('alliance')
 
 SECRET = "tB87#kPtkxqOS2"
 
-class IDChannel(commands.Cog):
+class AllianceIDChannel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.setup_database()
@@ -70,7 +73,7 @@ class IDChannel(commands.Cog):
                 user = await self.bot.fetch_user(user_id)
                 if user:
                     user_name = f"{user.name}#{user.discriminator}" if user.discriminator != '0' else user.name
-            except:
+            except Exception:
                 pass
         
         with open(log_file_path, 'a', encoding='utf-8') as log_file:
@@ -134,7 +137,8 @@ class IDChannel(commands.Cog):
                 self.check_channels_loop.start()
 
         except Exception as e:
-            pass
+            logger.error(f"Error in on_ready: {e}")
+            print(f"Error in on_ready: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -166,7 +170,8 @@ class IDChannel(commands.Cog):
             await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            pass  # Don't react on exceptions to avoid reaction spam
+            logger.error(f"Error in on_message: {e}")
+            print(f"Error in on_message: {e}")
 
     async def process_fid(self, message, fid, alliance_id):
         try:
@@ -306,6 +311,8 @@ class IDChannel(commands.Cog):
                                     return
 
                 except Exception as e:
+                    logger.error(f"Error in process_fid API call (attempt {attempt + 1}): {e}")
+                    print(f"Error in process_fid API call (attempt {attempt + 1}): {e}")
                     if attempt < max_retries - 1:
                         continue
                     else:
@@ -314,6 +321,8 @@ class IDChannel(commands.Cog):
                         return
 
         except Exception as e:
+            logger.error(f"Error in process_fid: {e}")
+            print(f"Error in process_fid: {e}")
             await message.add_reaction(theme.deniedIcon)
             await message.reply("An error occurred during the process!", delete_after=10)
 
@@ -357,7 +366,8 @@ class IDChannel(commands.Cog):
                     await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            pass
+            logger.error(f"Error in check_channels_loop: {e}")
+            print(f"Error in check_channels_loop: {e}")
 
     async def show_id_channel_menu(self, interaction: discord.Interaction):
         try:
@@ -385,13 +395,12 @@ class IDChannel(commands.Cog):
             )
             
             view = IDChannelView(self)
-            
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                pass
+
+            await safe_edit_message(interaction, embed=embed, view=view)
                 
         except Exception as e:
+            logger.error(f"Error in show_id_channel_menu: {e}")
+            print(f"Error in show_id_channel_menu: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred. Please try again.",
@@ -448,10 +457,10 @@ class IDChannelView(discord.ui.View):
                     creator = None
                     try:
                         creator = await interaction.guild.fetch_member(created_by)
-                    except:
+                    except Exception:
                         try:
                             creator = await interaction.client.fetch_user(created_by)
-                        except:
+                        except Exception:
                             pass
 
                     creator_text = creator.mention if creator else f"Unknown (ID: {created_by})"
@@ -467,6 +476,8 @@ class IDChannelView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Error in view_channels_button: {e}")
+            print(f"Error in view_channels_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
@@ -556,6 +567,8 @@ class IDChannelView(discord.ui.View):
                             await select_interaction.message.edit(embed=success_embed, view=None)
                             
                     except Exception as e:
+                        logger.error(f"Error in delete channel select callback: {e}")
+                        print(f"Error in delete channel select callback: {e}")
                         error_embed = discord.Embed(
                             title=f"{theme.deniedIcon} Error",
                             description="An error occurred while deleting the channel.",
@@ -583,6 +596,8 @@ class IDChannelView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in delete_channel_button: {e}")
+            print(f"Error in delete_channel_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
@@ -682,6 +697,8 @@ class IDChannelView(discord.ui.View):
                                 )
                                 await channel_interaction.response.edit_message(embed=error_embed, view=None)
                             except Exception as e:
+                                logger.error(f"Error in channel select callback: {e}")
+                                print(f"Error in channel select callback: {e}")
                                 error_embed = discord.Embed(
                                     title=f"{theme.deniedIcon} Error",
                                     description="An error occurred while creating the channel.",
@@ -716,6 +733,8 @@ class IDChannelView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in create_channel_button: {e}")
+            print(f"Error in create_channel_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
@@ -723,26 +742,29 @@ class IDChannelView(discord.ui.View):
 
     @discord.ui.button(
         label="Back",
-        emoji=f"{theme.prevIcon}",
+        emoji=f"{theme.backIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="back_to_other_features",
+        custom_id="back_to_self_registration",
         row=1
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Navigate back to Self-Registration sub-menu."""
         try:
-            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-            if other_features_cog:
-                await other_features_cog.show_other_features_menu(interaction)
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_self_registration(interaction)
             else:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Other Features module not found.",
+                    f"{theme.deniedIcon} Menu module not found.",
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error in back_button: {e}")
+            print(f"Error in back_button: {e}")
             await interaction.response.send_message(
-                f"{theme.deniedIcon} An error occurred while returning to Other Features menu.",
+                f"{theme.deniedIcon} An error occurred while navigating back.",
                 ephemeral=True
             )
 
 async def setup(bot):
-    await bot.add_cog(IDChannel(bot)) 
+    await bot.add_cog(AllianceIDChannel(bot)) 
