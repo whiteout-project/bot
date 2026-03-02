@@ -11,6 +11,7 @@ import ssl
 from discord.ext import tasks
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 SECRET = "tB87#kPtkxqOS2"
 
@@ -204,7 +205,7 @@ class IDChannel(commands.Cog):
                     form = f"fid={fid}&time={current_time}"
                     sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
                     form = f"sign={sign}&{form}"
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+                    headers = get_headers('https://wos-giftcode-api.centurygame.com')
 
                     ssl_context = ssl.create_default_context()
                     ssl_context.check_hostname = False

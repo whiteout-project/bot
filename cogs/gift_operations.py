@@ -24,6 +24,7 @@ from .gift_operationsapi import GiftCodeAPI
 from .gift_captchasolver import GiftCaptchaSolver
 from collections import deque
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 class GiftOperations(commands.Cog):
     def __init__(self, bot):
@@ -1206,12 +1207,7 @@ class GiftOperations(commands.Cog):
     def get_stove_info_wos(self, player_id):
         session = requests.Session()
         session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
-
-        headers = {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": self.wos_giftcode_redemption_url,
-        }
+        session.headers.update(get_headers(self.wos_giftcode_redemption_url))
 
         data_to_encode = {
             "fid": f"{player_id}",
@@ -1222,7 +1218,6 @@ class GiftOperations(commands.Cog):
         try:
             response_stove_info = session.post(
                 self.wos_player_info_url,
-                headers=headers,
                 data=data,
             )
             return session, response_stove_info
@@ -2003,24 +1998,18 @@ class GiftOperations(commands.Cog):
         if session is None:
             session = requests.Session()
             session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
-            
-        headers = {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": self.wos_giftcode_redemption_url,
-        }
-        
+            session.headers.update(get_headers(self.wos_giftcode_redemption_url))
+
         data_to_encode = {
             "fid": player_id,
             "time": f"{int(datetime.now().timestamp() * 1000)}",
             "init": "0"
         }
         data = self.encode_data(data_to_encode)
-        
+
         try:
             response = session.post(
                 self.wos_captcha_url,
-                headers=headers,
                 data=data,
             )
             
