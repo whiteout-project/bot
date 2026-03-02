@@ -25,6 +25,72 @@ from .gift_captchasolver import GiftCaptchaSolver
 from collections import deque
 from .pimp_my_bot import theme
 
+BROWSER_PROFILES = [
+    {
+        "browser": "Chrome",
+        "versions": [124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135],
+        "platforms": [
+            { "os": "Windows NT 10.0; Win64; x64", "secPlatform": '"Windows"' },
+            { "os": "Windows NT 11.0; Win64; x64", "secPlatform": '"Windows"' },
+            { "os": "Macintosh; Intel Mac OS X 10_15_7", "secPlatform": '"macOS"' },
+            { "os": "X11; Linux x86_64", "secPlatform": '"Linux"' }
+        ],
+        "buildSecUa": lambda ver: f"\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"{ver}\", \"Chromium\";v=\"{ver}\""
+    },
+    {
+        "browser": "Brave",
+        "versions": [132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145],
+        "platforms": [
+            { "os": "Windows NT 10.0; Win64; x64", "secPlatform": '"Windows"' },
+            { "os": "Windows NT 11.0; Win64; x64", "secPlatform": '"Windows"' },
+            { "os": "Macintosh; Intel Mac OS X 10_15_7", "secPlatform": '"macOS"' }
+        ],
+        "buildSecUa": lambda ver: f"\"Not:A-Brand\";v=\"99\", \"Brave\";v=\"{ver}\", \"Chromium\";v=\"{ver}\""
+    },
+    {
+        "browser": "Edge",
+        "versions": [124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135],
+        "platforms": [
+            { "os": "Windows NT 10.0; Win64; x64", "secPlatform": '"Windows"' },
+            { "os": "Windows NT 11.0; Win64; x64", "secPlatform": '"Windows"' },
+            { "os": "Macintosh; Intel Mac OS X 10_15_7", "secPlatform": '"macOS"' }
+        ],
+        "buildSecUa": lambda ver: f"\"Not A(B)rand\";v=\"8\", \"Chromium\";v=\"{ver}\", \"Microsoft Edge\";v=\"{ver}\""
+    }
+]
+
+def get_headers() -> dict:
+    """Get random headers for API requests"""
+    
+    user_agent = get_random_user_agent_header()
+    
+    return {
+        "Content-Type": "application/x-www-form-urlencoded"
+    } | user_agent
+
+def get_random_user_agent_header() -> dict:
+    """
+    Returns a random User-Agent profile to avoid detection when making API requests.
+    """
+    
+    profile = random.choice(BROWSER_PROFILES)
+    version = random.choice(profile["versions"])
+    platform = random.choice(profile["platforms"])
+    
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.7",
+        "Origin": "https://wos-giftcode.centurygame.com",
+        "Referer": "https://wos-giftcode.centurygame.com/",
+        "User-Agent": f"Mozilla/5.0 ({platform['os']}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version}.0.0.0 Safari/537.36",
+        "sec-ch-ua": profile["buildSecUa"](version),
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": platform["secPlatform"],
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+    }
+
 class GiftOperations(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1207,11 +1273,7 @@ class GiftOperations(commands.Cog):
         session = requests.Session()
         session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
 
-        headers = {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": self.wos_giftcode_redemption_url,
-        }
+        headers = get_headers()
 
         data_to_encode = {
             "fid": f"{player_id}",
@@ -1293,8 +1355,10 @@ class GiftOperations(commands.Cog):
             data = self.encode_data(data_to_encode)
             self.processing_stats["captcha_submissions"] += 1
             
+            headers = get_headers()
+            
             # Submit to gift code API
-            response_giftcode = session.post(self.wos_giftcode_url, data=data)
+            response_giftcode = session.post(self.wos_giftcode_url, data=data, headers=headers)
             
             # Log the redemption attempt
             log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
@@ -2004,11 +2068,7 @@ class GiftOperations(commands.Cog):
             session = requests.Session()
             session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
             
-        headers = {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/x-www-form-urlencoded",
-            "origin": self.wos_giftcode_redemption_url,
-        }
+        headers = get_headers()
         
         data_to_encode = {
             "fid": player_id,
