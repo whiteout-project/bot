@@ -1,7 +1,6 @@
 import aiohttp
 import asyncio
 import hashlib
-import random
 import time
 import ssl
 import os
@@ -9,73 +8,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Callable
 
 from .pimp_my_bot import theme
-
-BROWSER_PROFILES = [
-    {
-        "browser": "Chrome",
-        "versions": [124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135],
-        "platforms": [
-            { "os": "Windows NT 10.0; Win64; x64", "secPlatform": '"Windows"' },
-            { "os": "Windows NT 11.0; Win64; x64", "secPlatform": '"Windows"' },
-            { "os": "Macintosh; Intel Mac OS X 10_15_7", "secPlatform": '"macOS"' },
-            { "os": "X11; Linux x86_64", "secPlatform": '"Linux"' }
-        ],
-        "buildSecUa": lambda ver: f"\"Not:A-Brand\";v=\"99\", \"Google Chrome\";v=\"{ver}\", \"Chromium\";v=\"{ver}\""
-    },
-    {
-        "browser": "Brave",
-        "versions": [132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145],
-        "platforms": [
-            { "os": "Windows NT 10.0; Win64; x64", "secPlatform": '"Windows"' },
-            { "os": "Windows NT 11.0; Win64; x64", "secPlatform": '"Windows"' },
-            { "os": "Macintosh; Intel Mac OS X 10_15_7", "secPlatform": '"macOS"' }
-        ],
-        "buildSecUa": lambda ver: f"\"Not:A-Brand\";v=\"99\", \"Brave\";v=\"{ver}\", \"Chromium\";v=\"{ver}\""
-    },
-    {
-        "browser": "Edge",
-        "versions": [124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135],
-        "platforms": [
-            { "os": "Windows NT 10.0; Win64; x64", "secPlatform": '"Windows"' },
-            { "os": "Windows NT 11.0; Win64; x64", "secPlatform": '"Windows"' },
-            { "os": "Macintosh; Intel Mac OS X 10_15_7", "secPlatform": '"macOS"' }
-        ],
-        "buildSecUa": lambda ver: f"\"Not A(B)rand\";v=\"8\", \"Chromium\";v=\"{ver}\", \"Microsoft Edge\";v=\"{ver}\""
-    }
-]
-
-def get_headers(origin: str) -> dict:
-    """Get random headers for API requests"""
-    
-    user_agent = get_random_user_agent_header(origin)
-    
-    return {
-        "Content-Type": "application/x-www-form-urlencoded"
-    } | user_agent
-
-def get_random_user_agent_header(origin: str) -> dict:
-    """
-    Returns a random User-Agent profile to avoid detection when making API requests.
-    """
-    
-    profile = random.choice(BROWSER_PROFILES)
-    version = random.choice(profile["versions"])
-    platform = random.choice(profile["platforms"])
-    
-    return {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.7",
-        "Origin": origin,
-        "Referer": f"{origin}/",
-        "User-Agent": f"Mozilla/5.0 ({platform['os']}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version}.0.0.0 Safari/537.36",
-        "sec-ch-ua": profile["buildSecUa"](version),
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": platform["secPlatform"],
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
-        "sec-gpc": "1",
-    }
+from .browser_headers import get_headers
 
 class LoginHandler:
     """
@@ -177,8 +110,8 @@ class LoginHandler:
                 form = f"fid={test_fid}&time={current_time}"
                 sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
                 form = f"sign={sign}&{form}"
-                headers = get_headers("https://wos-giftcode-api.centurygame.com")
-                
+                headers = get_headers('https://wos-giftcode-api.centurygame.com')
+
                 async with session.post(self.api1_url, headers=headers, data=form, timeout=5) as response:
                     # API is available if we get 200 (success) or 429 (rate limit)
                     api_status["api1_available"] = response.status in [200, 429]
@@ -193,8 +126,8 @@ class LoginHandler:
                 form = f"fid={test_fid}&time={current_time}"
                 sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
                 form = f"sign={sign}&{form}"
-                headers = get_headers("https://wos-giftcode-api.centurygame.com")
-                
+                headers = get_headers('https://gof-report-api-formal.centurygame.com')
+
                 async with session.post(self.api2_url, headers=headers, data=form, timeout=5) as response:
                     api_status["api2_available"] = response.status in [200, 429]
                     self.log_message(f"API2 availability check: Status {response.status}")
@@ -324,7 +257,7 @@ class LoginHandler:
         form = f"fid={fid}&time={current_time}"
         sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
         form = f"sign={sign}&{form}"
-        headers = get_headers(api_url.replace("/api/player", ""))
+        headers = get_headers(api_url.rsplit('/api/', 1)[0])
         
         try:
             # Use proxy if provided and main request fails

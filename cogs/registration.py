@@ -7,6 +7,7 @@ import time
 import ssl
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 class RegisterSettingsView(discord.ui.View):
     def __init__(self, cog):
@@ -131,7 +132,7 @@ class Register(commands.Cog):
         
     async def fetch_user(self, fid: int):
         URL = "https://wos-giftcode-api.centurygame.com/api/player"
-        HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
+        HEADERS = get_headers('https://wos-giftcode-api.centurygame.com')
         
         ssl_context = ssl.create_default_context()
         session = aiohttp.ClientSession()
