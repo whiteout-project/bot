@@ -739,6 +739,17 @@ class MinisterSchedule(commands.Cog):
             else:
                 return None
 
+    # handler to update google sheet
+    async def sync_google_sheet(self, appointment_type: str, mode: str, time: str = None):
+        try:
+            form_cog = self.bot.get_cog("GoogleFormCog")
+            if form_cog:
+                await form_cog.update_time_sheet(appointment_type, mode, time)
+            else:
+                print(f"Error: GoogleFormCog not found during mode: {mode}")
+        except Exception as e:
+            print(f"Error: Google Sheet sync failed ({mode}): {e}")
+
     @discord.app_commands.command(name='minister_add', description='Book an appointment slot for a user.')
     @app_commands.autocomplete(appointment_type=appointment_autocomplete, fid=fid_autocomplete, time=time_autocomplete)
     async def minister_add(self, interaction: discord.Interaction, appointment_type: str, fid: str, time: str):
@@ -932,6 +943,9 @@ class MinisterSchedule(commands.Cog):
             # Update existing message or send a new one in the selected channel
             await self.get_or_create_message(context, message_content, channel)
 
+            #update Google sheet
+            await self.sync_google_sheet(appointment_type, "add", normalized_time)
+
         except Exception as e:
             print(f"An unexpected error occurred: {e}")
             await interaction.followup.send(f"An unexpected error occurred while processing the request: {e}")
@@ -1076,6 +1090,9 @@ class MinisterSchedule(commands.Cog):
             # Update existing message or send a new one in the selected channel
             await self.get_or_create_message(context, message_content, channel)
 
+            #update Google sheet
+            await self.sync_google_sheet(appointment_type, "remove", time)
+
         except Exception as e:
             print(f"An error occurred: {e}")
             await interaction.followup.send(f"An error occurred while canceling the slot: {e}")
@@ -1183,6 +1200,9 @@ class MinisterSchedule(commands.Cog):
 
                     await self.send_embed_to_channel(embed)
                     await interaction.followup.send(f"{theme.verifiedIcon} Deleted all {appointment_type} appointments.")
+
+                    # Update Google sheet
+                    await self.sync_google_sheet(appointment_type, "clear")
                 else:
                     await confirmation_message.reply(f"Cancelled the action. Nothing was removed from {appointment_type}.")
 
