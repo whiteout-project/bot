@@ -3010,8 +3010,8 @@ class BearTrapView(discord.ui.View):
             )
 
             class PaginationButton(discord.ui.Button):
-                def __init__(self, label, page_change):
-                    super().__init__(label=label, style=discord.ButtonStyle.primary)
+                def __init__(self, label, page_change, emoji=None):
+                    super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.primary)
                     self.page_change = page_change
 
                 async def callback(self, interaction: discord.Interaction):
