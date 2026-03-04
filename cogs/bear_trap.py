@@ -2287,7 +2287,7 @@ class TimeSelectModal(discord.ui.Modal):
                     f"• Rich text format\n"
                     f"• Custom color selection\n"
                     f"• Footer and author\n\n"
-                    f"**{theme.editIcon} Plain Message**\n"
+                    f"**{theme.editListIcon} Plain Message**\n"
                     f"• Simple text format\n"
                     f"• Quick creation"
                 ),
