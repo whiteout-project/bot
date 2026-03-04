@@ -414,7 +414,8 @@ class BearTrapSchedule(commands.Cog):
             # Fetch board info
             self.cursor.execute("""
                 SELECT guild_id, channel_id, message_id, board_type, target_channel_id,
-                       max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events
+                       max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range,
+                       show_repeating_events, use_user_timezone, hide_daily_reset
                 FROM notification_schedule_boards
                 WHERE id = ?
             """, (board_id,))
@@ -424,7 +425,8 @@ class BearTrapSchedule(commands.Cog):
                 return (False, "Board not found!")
 
             (guild_id, old_channel_id, old_message_id, board_type, target_channel_id,
-             max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range, show_repeating_events) = result
+             max_events, show_disabled, auto_pin, timezone, filter_name, filter_time_range,
+             show_repeating_events, use_user_timezone, hide_daily_reset) = result
 
             # Get new channel
             new_channel = self.bot.get_channel(new_channel_id)
@@ -443,7 +445,9 @@ class BearTrapSchedule(commands.Cog):
                 'timezone': timezone,
                 'filter_name': filter_name,
                 'filter_time_range': filter_time_range,
-                'show_repeating_events': bool(show_repeating_events) if show_repeating_events is not None else True
+                'show_repeating_events': bool(show_repeating_events) if show_repeating_events is not None else True,
+                'use_user_timezone': use_user_timezone if use_user_timezone is not None else 0,
+                'hide_daily_reset': bool(hide_daily_reset) if hide_daily_reset is not None else True
             }
 
             embed = await self.generate_schedule_embed_for_new_board(

@@ -163,7 +163,7 @@ class EmbedFieldModal(discord.ui.Modal):
                 try:
                     int_color = int(value, 16)
                 except ValueError:
-                    await interaction.response.send_message("Invalid hex color code!", ephemeral=True)
+                    await interaction.followup.send("Invalid hex color code!", ephemeral=True)
                     return
 
                 self.parent_view.color = int_color
