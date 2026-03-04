@@ -253,13 +253,14 @@ class BearTrap(commands.Cog):
                     notification_description = f"EMBED_MESSAGE:{title}"
 
             tz = pytz.timezone(timezone)
-            next_notification = start_date.replace(
+            naive_dt = start_date.replace(
                 hour=hour,
                 minute=minute,
                 second=0,
                 microsecond=0,
-                tzinfo=tz
+                tzinfo=None
             )
+            next_notification = tz.localize(naive_dt)
 
             self.cursor.execute("""
                 INSERT INTO bear_notifications
@@ -3037,6 +3038,7 @@ class BearTrapView(discord.ui.View):
             prev_button = PaginationButton(label="Previous", emoji=f"{theme.prevIcon}", page_change=-1)
             prev_button.disabled = current_page == 0
             next_button = PaginationButton(label="Next", emoji=f"{theme.nextIcon}", page_change=1)
+            next_button.disabled = current_page == total_pages - 1
 
             class SearchButton(discord.ui.Button):
                 def __init__(self, label, cog):
@@ -3926,6 +3928,12 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
         try:
             channel = self.values[0]
             actual_channel = interaction.guild.get_channel(channel.id)
+            if not actual_channel:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Channel not found or inaccessible!",
+                    ephemeral=True
+                )
+                return
             if not actual_channel.permissions_for(interaction.guild.me).send_messages:
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} I don't have permission to send messages in this channel!",

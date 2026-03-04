@@ -856,9 +856,9 @@ class PlainEditorView(discord.ui.View):
                                 self.parent_view.description = f"CUSTOM_TIMES:{new_times}|{self.parent_view.description}"
 
                             # ✅ Update notification and embed
+                            await modal_interaction.response.defer()
                             await self.parent_view.cog.update_notification(self.parent_view)
                             await self.parent_view.update_embed(modal_interaction)
-                            await modal_interaction.response.defer()
 
                     return await interaction.response.send_modal(CustomTimeModal(self))
 
