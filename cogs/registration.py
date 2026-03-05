@@ -135,13 +135,12 @@ class Register(commands.Cog):
         HEADERS = get_headers('https://wos-giftcode-api.centurygame.com')
         
         ssl_context = ssl.create_default_context()
-        session = aiohttp.ClientSession()
-        
+
         data_nosign = f"fid={fid}&time={time.time_ns()}"
         sign = hashlib.md5((data_nosign + "tB87#kPtkxqOS2").encode()).hexdigest()
         data = f"sign={sign}&{data_nosign}"
 
-        try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
             async with session.post(
                 url=URL,
                 data=data,
@@ -154,8 +153,6 @@ class Register(commands.Cog):
                     raise Exception("RATE_LIMITED")
                 else:
                     raise Exception(f"Failed to fetch user data: {response.status}")
-        finally:
-            await session.close()
          
     @discord.app_commands.command(
         name="register",

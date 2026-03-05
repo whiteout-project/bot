@@ -1289,7 +1289,7 @@ class BotOperations(commands.Cog):
         try:
             latest_release_url = "https://api.github.com/repos/whiteout-project/bot/releases/latest"
             
-            response = requests.get(latest_release_url, timeout=10)
+            response = await asyncio.to_thread(requests.get, latest_release_url, timeout=10)
             if response.status_code != 200:
                 return None, None, [], False
 

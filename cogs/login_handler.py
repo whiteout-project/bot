@@ -268,7 +268,7 @@ class LoginHandler:
                 connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             
             async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.post(api_url, headers=headers, data=form) as response:
+                async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     # Record the API request
                     self._record_api_request(api_num)
                     
