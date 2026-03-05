@@ -144,9 +144,9 @@ class GiftOperations(commands.Cog):
 
         # Retry Configuration for Requests
         self.retry_config = Retry(
-            total=10,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504],
+            total=3,
+            backoff_factor=0.3,
+            status_forcelist=[500, 502, 503, 504],
             allowed_methods=["POST", "GET"]
         )
 
@@ -873,19 +873,20 @@ class GiftOperations(commands.Cog):
         Returns:
             tuple: (is_valid, message) where is_valid is a boolean and message is a string
         """
+        session = None
         try:
             self.logger.info(f"Verifying test ID: {fid}")
-            
-            session, response_stove_info = self.get_stove_info_wos(player_id=fid)
-            
+
+            session, response_stove_info = await self.get_stove_info_wos(player_id=fid)
+
             try:
                 player_info_json = response_stove_info.json()
             except json.JSONDecodeError:
                 self.logger.error(f"Invalid JSON response when verifying ID {fid}")
                 return False, "Invalid response from server"
-            
+
             login_successful = player_info_json.get("msg") == "success"
-            
+
             if login_successful:
                 try:
                     nickname = player_info_json.get("data", {}).get("nickname", "Unknown")
@@ -899,7 +900,7 @@ class GiftOperations(commands.Cog):
                 error_msg = player_info_json.get("msg", "Unknown error")
                 self.logger.info(f"Test ID {fid} is invalid. Error: {error_msg}")
                 return False, f"Login failed: {error_msg}"
-        
+
         except requests.exceptions.ConnectionError:
             self.logger.warning(f"Connection error verifying test ID {fid}. Check bot connectivity to the WOS Gift Code API.")
             return False, "Connection error: WOS API unavailable"
@@ -912,6 +913,9 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Error verifying test ID {fid}: {e}")
             return False, f"Verification error: {str(e)}"
+        finally:
+            if session:
+                session.close()
 
     async def update_test_fid(self, new_fid):
         """
@@ -1204,7 +1208,7 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"GiftOps: Error in batch_process_alliance_results: {e}")
 
-    def get_stove_info_wos(self, player_id):
+    async def get_stove_info_wos(self, player_id):
         session = requests.Session()
         session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
         session.headers.update(get_headers(self.wos_giftcode_redemption_url))
@@ -1216,18 +1220,23 @@ class GiftOperations(commands.Cog):
         data = self.encode_data(data_to_encode)
 
         try:
-            response_stove_info = session.post(
+            response_stove_info = await asyncio.to_thread(
+                session.post,
                 self.wos_player_info_url,
                 data=data,
+                timeout=(10, 30),
             )
             return session, response_stove_info
         except requests.exceptions.ConnectionError as e:
+            session.close()
             self.logger.warning(f"Connection error reaching WOS API for player {player_id}: {type(e).__name__}")
             raise
         except requests.exceptions.Timeout as e:
+            session.close()
             self.logger.warning(f"Timeout reaching WOS API for player {player_id}")
             raise
         except requests.exceptions.RequestException as e:
+            session.close()
             self.logger.warning(f"Request error reaching WOS API for player {player_id}: {type(e).__name__}")
             raise
 
@@ -1289,7 +1298,9 @@ class GiftOperations(commands.Cog):
             self.processing_stats["captcha_submissions"] += 1
             
             # Submit to gift code API
-            response_giftcode = session.post(self.wos_giftcode_url, data=data)
+            response_giftcode = await asyncio.to_thread(
+                session.post, self.wos_giftcode_url, data=data, timeout=(10, 30)
+            )
             
             # Log the redemption attempt
             log_entry_redeem = f"\n{datetime.now()} API REQ - Gift Code Redeem\nID:{player_id}, Code:{giftcode}, Captcha:{captcha_code}\n"
@@ -1378,6 +1389,7 @@ class GiftOperations(commands.Cog):
         image_bytes = None
         captcha_code = None
         method = "N/A"
+        session = None
 
         try:
             # Cache Check
@@ -1406,7 +1418,7 @@ class GiftOperations(commands.Cog):
             self.captcha_solver.reset_run_stats()
             
             # Get player session
-            session, response_stove_info = self.get_stove_info_wos(player_id=player_id)
+            session, response_stove_info = await self.get_stove_info_wos(player_id=player_id)
             log_entry_player = f"\n{datetime.now()} API REQUEST - Player Info\nPlayer ID: {player_id}\n"
             try:
                 response_json_player = response_stove_info.json()
@@ -1488,6 +1500,8 @@ class GiftOperations(commands.Cog):
             status = "ERROR"
 
         finally:
+            if session:
+                session.close()
             process_end_time = time.time()
             duration = process_end_time - process_start_time
             self.processing_stats["total_fids_processed"] += 1
@@ -1995,7 +2009,8 @@ class GiftOperations(commands.Cog):
 
     async def fetch_captcha(self, player_id, session=None):
         """Fetch a captcha image for a player ID."""
-        if session is None:
+        owns_session = session is None
+        if owns_session:
             session = requests.Session()
             session.mount("https://", HTTPAdapter(max_retries=self.retry_config))
             session.headers.update(get_headers(self.wos_giftcode_redemption_url))
@@ -2008,9 +2023,11 @@ class GiftOperations(commands.Cog):
         data = self.encode_data(data_to_encode)
 
         try:
-            response = session.post(
+            response = await asyncio.to_thread(
+                session.post,
                 self.wos_captcha_url,
                 data=data,
+                timeout=(10, 30),
             )
             
             if response.status_code == 200:
@@ -2025,6 +2042,9 @@ class GiftOperations(commands.Cog):
         except Exception as e:
             self.logger.exception(f"Error fetching captcha: {e}")
             return None, f"CAPTCHA_EXCEPTION: {str(e)}"
+        finally:
+            if owns_session:
+                session.close()
 
     async def show_ocr_settings(self, interaction: discord.Interaction):
             """Show OCR settings menu."""
@@ -5521,10 +5541,11 @@ class OCRSettingsView(discord.ui.View):
         confidence = 0.0
         solve_duration = 0.0
         test_fid = self.cog.get_test_fid()
+        session = None
 
         try:
             logger.info(f"[Test Button] First logging in with test ID {test_fid}...")
-            session, response_stove_info = self.cog.get_stove_info_wos(player_id=test_fid)
+            session, response_stove_info = await self.cog.get_stove_info_wos(player_id=test_fid)
             
             try:
                 player_info_json = response_stove_info.json()
@@ -5672,6 +5693,9 @@ class OCRSettingsView(discord.ui.View):
                 await interaction.followup.send(f"{theme.deniedIcon} An unexpected error occurred during the test: `{e}`. Please check the bot logs.", ephemeral=True)
             except Exception as followup_err:
                 logger.error(f"[Test Button] Failed to send final error followup to user {user_id}: {followup_err}")
+        finally:
+            if session:
+                session.close()
 
     async def clear_redemption_cache_button(self, interaction: discord.Interaction):
         """Handle the clear redemption cache button click."""
