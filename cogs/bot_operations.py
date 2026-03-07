@@ -1369,6 +1369,7 @@ class ControlSettingsView(discord.ui.View):
         self.selected_alliance = None
         self.auto_remove = False
         self.notify_on_transfer = False
+        self.keep_control_log = False
         
         # Create all components but they'll be added/updated dynamically
         self.setup_components()
@@ -1393,16 +1394,16 @@ class ControlSettingsView(discord.ui.View):
         self.alliance_select.callback = self.alliance_selected
         self.add_item(self.alliance_select)
         
-        # Auto-removal toggle button - disabled until alliance selected
-        self.auto_remove_button = discord.ui.Button(
-            label=f"{'Disable' if self.auto_remove else 'Enable'} Auto-Removal",
-            style=discord.ButtonStyle.danger if self.auto_remove else discord.ButtonStyle.success,
-            emoji=f"{theme.refreshIcon}",
-            disabled=(self.selected_alliance is None),
-            row=1
-        )
-        self.auto_remove_button.callback = self.toggle_auto_removal
-        self.add_item(self.auto_remove_button)
+        # Auto-removal toggle button - only shown when alliance is selected
+        if self.selected_alliance:
+            self.auto_remove_button = discord.ui.Button(
+                label=f"{'Disable' if self.auto_remove else 'Enable'} Auto-Removal",
+                style=discord.ButtonStyle.danger if self.auto_remove else discord.ButtonStyle.success,
+                emoji=f"{theme.refreshIcon}",
+                row=1
+            )
+            self.auto_remove_button.callback = self.toggle_auto_removal
+            self.add_item(self.auto_remove_button)
 
         # Notification toggle button - only shown and enabled if auto-removal is enabled
         if self.auto_remove and self.selected_alliance:
@@ -1415,12 +1416,23 @@ class ControlSettingsView(discord.ui.View):
             self.notify_button.callback = self.toggle_notifications
             self.add_item(self.notify_button)
 
+        # Keep control log toggle button
+        if self.selected_alliance:
+            self.keep_log_button = discord.ui.Button(
+                label=f"{'Disable' if self.keep_control_log else 'Enable'} Control Log",
+                style=discord.ButtonStyle.secondary,
+                emoji=f"{theme.listIcon}",
+                row=2
+            )
+            self.keep_log_button.callback = self.toggle_keep_control_log
+            self.add_item(self.keep_log_button)
+
         # Back button
         self.back_button = discord.ui.Button(
             label="Back",
             style=discord.ButtonStyle.secondary,
             emoji=f"{theme.backIcon}",
-            row=2
+            row=3
         )
         self.back_button.callback = self.back_to_bot_operations
         self.add_item(self.back_button)
@@ -1432,19 +1444,22 @@ class ControlSettingsView(discord.ui.View):
             
             # Get current settings from database
             self.alliance_cursor.execute("""
-                SELECT auto_remove_on_transfer, notify_on_transfer 
-                FROM alliancesettings 
+                SELECT auto_remove_on_transfer, notify_on_transfer, keep_control_log
+                FROM alliancesettings
                 WHERE alliance_id = ?
             """, (self.selected_alliance,))
             result = self.alliance_cursor.fetchone()
             self.auto_remove = bool(result[0]) if result and result[0] is not None else False
             self.notify_on_transfer = bool(result[1]) if result and len(result) > 1 and result[1] is not None else False
-            
+            self.keep_control_log = bool(result[2]) if result and len(result) > 2 and result[2] is not None else False
+
             status_emoji = f"{theme.verifiedIcon}" if self.auto_remove else f"{theme.deniedIcon}"
             status_text = "Enabled" if self.auto_remove else "Disabled"
             notify_emoji = theme.bellIcon if self.notify_on_transfer else theme.muteIcon
             notify_text = "Enabled" if self.notify_on_transfer else "Disabled"
-            
+            log_emoji = f"{theme.verifiedIcon}" if self.keep_control_log else f"{theme.deniedIcon}"
+            log_text = "Enabled" if self.keep_control_log else "Disabled"
+
             embed = discord.Embed(
                 title=f"{theme.settingsIcon} Control Settings - {alliance_name}",
                 description=(
@@ -1453,9 +1468,15 @@ class ControlSettingsView(discord.ui.View):
                     f"Admin Notification: {notify_emoji} **{notify_text}**\n\n"
                     f"When auto-removal is enabled, users who transfer to another state are automatically "
                     f"removed from this alliance.\n\n"
+                    f"**Control Log**\n"
+                    f"Status: {log_emoji} **{log_text}**\n\n"
+                    f"When enabled (default), the progress message shown during alliance checks is kept in the channel. "
+                    f"When disabled, the progress message is automatically deleted after the check "
+                    f"completes, keeping only the results.\n\n"
                     f"**Current behavior:**\n"
                     f"{'• Users are removed when they transfer states' if self.auto_remove else '• Users remain in the alliance when they transfer states'}\n"
-                    f"{'• Admin receives notifications for removals' if self.notify_on_transfer and self.auto_remove else ''}"
+                    f"{'• Admin receives notifications for removals' if self.notify_on_transfer and self.auto_remove else ''}\n"
+                    f"{'• Control progress message is kept after checks' if self.keep_control_log else '• Control progress message is deleted after checks'}"
                 ),
                 color=theme.emColor3 if self.auto_remove else discord.Color.red()
             )
@@ -1467,8 +1488,9 @@ class ControlSettingsView(discord.ui.View):
                     "**Please select an alliance from the dropdown menu above.**\n\n"
                     "Once selected, you can configure:\n"
                     "• State Transfer Auto-Removal\n"
-                    "• Admin Notifications\n\n"
-                    "These settings control what happens when a user transfers to another state."
+                    "• Admin Notifications\n"
+                    "• Control Log (keep/delete progress messages)\n\n"
+                    "These settings control alliance check behavior."
                 ),
                 color=theme.emColor1
             )
@@ -1551,6 +1573,26 @@ class ControlSettingsView(discord.ui.View):
                 ephemeral=True
             )
     
+    async def toggle_keep_control_log(self, interaction: discord.Interaction):
+        """Toggle keep control log setting"""
+        try:
+            new_value = not self.keep_control_log
+            self.alliance_cursor.execute("""
+                UPDATE alliancesettings
+                SET keep_control_log = ?
+                WHERE alliance_id = ?
+            """, (1 if new_value else 0, self.selected_alliance))
+            self.alliance_db.commit()
+
+            await self.update_view(interaction)
+
+        except Exception as e:
+            print(f"Error toggling keep control log: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} An error occurred while updating the setting.",
+                ephemeral=True
+            )
+
     async def back_to_bot_operations(self, interaction: discord.Interaction):
         """Return to bot operations menu"""
         try:
