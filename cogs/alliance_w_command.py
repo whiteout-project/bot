@@ -8,6 +8,7 @@ import asyncio
 import sqlite3
 import logging
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 logger = logging.getLogger('alliance')
 
@@ -76,7 +77,7 @@ class WCommand(commands.Cog):
             form = f"sign={sign}&{form}"
 
             url = 'https://wos-giftcode-api.centurygame.com/api/player'
-            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            headers = get_headers('https://wos-giftcode-api.centurygame.com')
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
@@ -85,7 +86,7 @@ class WCommand(commands.Cog):
             retry_delay = 60
 
             for attempt in range(max_retries):
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                     async with session.post(url, headers=headers, data=form, ssl=ssl_context) as response:
                         if response.status == 200:
                             data = await response.json()

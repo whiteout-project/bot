@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import sqlite3
 import logging
+import re
 from datetime import datetime
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
@@ -240,7 +241,12 @@ class AllianceHistory(commands.Cog):
                 ephemeral=True
             )
 
-    async def show_recent_changes(self, interaction: discord.Interaction, alliance_name: str, hours: int):
+    async def show_recent_changes(self, interaction: discord.Interaction, alliance_name: str, match: re.Match):
+        time_multipliers = {"h": 1, "d": 24, "mo": 24 * 30}
+        time_dict = {"h": "hour(s)", "d": "day(s)", "mo": "month(s)"}
+        hours = int(match.groups()[0]) * time_multipliers[match.groups()[1]]
+        human_readable_time = f"{match.groups()[0]} {time_dict[match.groups()[1]]}"
+        
         try:
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                 cursor = alliance_db.cursor()
@@ -268,14 +274,14 @@ class AllianceHistory(commands.Cog):
 
             if not changes:
                 await interaction.followup.send(
-                    f"No level changes found in the last {hours} hour(s) for {alliance_name}.",
+                    f"No level changes found in the last {human_readable_time} for {alliance_name}.",
                     ephemeral=True
                 )
                 return
 
             chunks = [changes[i:i + 25] for i in range(0, len(changes), 25)]
             
-            view = RecentChangesView(chunks, members, self.level_mapping, alliance_name, hours)
+            view = RecentChangesView(chunks, members, self.level_mapping, alliance_name, human_readable_time)
             await interaction.followup.send(embed=view.get_embed(), view=view)
 
         except Exception as e:
@@ -286,7 +292,12 @@ class AllianceHistory(commands.Cog):
                 ephemeral=True
             )
 
-    async def show_recent_nickname_changes(self, interaction: discord.Interaction, alliance_name: str, hours: int):
+    async def show_recent_nickname_changes(self, interaction: discord.Interaction, alliance_name: str, match: re.Match):
+        time_multipliers = {"h": 1, "d": 24, "mo": 24 * 30}
+        time_dict = {"h": "hour(s)", "d": "day(s)", "mo": "month(s)"}
+        hours = int(match.groups()[0]) * time_multipliers[match.groups()[1]]
+        human_readable_time = f"{match.groups()[0]} {time_dict[match.groups()[1]]}"
+        
         try:
             with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                 cursor = alliance_db.cursor()
@@ -314,14 +325,14 @@ class AllianceHistory(commands.Cog):
 
             if not changes:
                 await interaction.followup.send(
-                    f"No nickname changes found in the last {hours} hour(s) for {alliance_name}.",
+                    f"No nickname changes found in the last {human_readable_time} for {alliance_name}.",
                     ephemeral=True
                 )
                 return
 
             chunks = [changes[i:i + 25] for i in range(0, len(changes), 25)]
             
-            view = RecentNicknameChangesView(chunks, members, alliance_name, hours)
+            view = RecentNicknameChangesView(chunks, members, alliance_name, human_readable_time)
             await interaction.followup.send(embed=view.get_embed(), view=view)
 
         except Exception as e:
@@ -591,7 +602,7 @@ class HistoryView(discord.ui.View):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, hours=1)
+            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "1h"))
         except Exception as e:
             logger.error(f"Error in last_hour_callback: {e}")
             print(f"Error in last_hour_callback: {e}")
@@ -610,7 +621,7 @@ class HistoryView(discord.ui.View):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, hours=24)
+            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "24h"))
         except Exception as e:
             logger.error(f"Error in last_day_callback: {e}")
             print(f"Error in last_day_callback: {e}")
@@ -755,7 +766,7 @@ class MemberListView(discord.ui.View):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, hours=1)
+            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "1h"))
         except Exception as e:
             logger.error(f"Error in last_hour_callback: {e}")
             print(f"Error in last_hour_callback: {e}")
@@ -774,7 +785,7 @@ class MemberListView(discord.ui.View):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, hours=24)
+            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "24h"))
         except Exception as e:
             logger.error(f"Error in last_day_callback: {e}")
             print(f"Error in last_day_callback: {e}")
@@ -986,7 +997,7 @@ class MemberListViewNickname(discord.ui.View):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, hours=1)
+            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "1h"))
         except Exception as e:
             logger.error(f"Error in last_hour_callback: {e}")
             print(f"Error in last_hour_callback: {e}")
@@ -1005,7 +1016,7 @@ class MemberListViewNickname(discord.ui.View):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, hours=24)
+            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "24h"))
         except Exception as e:
             logger.error(f"Error in last_day_callback: {e}")
             print(f"Error in last_day_callback: {e}")
@@ -1104,27 +1115,37 @@ class CustomTimeModal(discord.ui.Modal, title="Custom Time Range"):
         super().__init__()
         self.cog = cog
         self.alliance_name = alliance_name
-        self.hours = discord.ui.TextInput(
-            label="Hours (1-24)",
-            placeholder="Enter number of hours (max 24)...",
+        self.time_frame = discord.ui.TextInput(
+            label="Time Frame",
+            placeholder="eg. 24h, 3d, 2mo",
             required=True,
-            min_length=1,
-            max_length=2
+            min_length=2
         )
-        self.add_item(self.hours)
+        self.add_item(self.time_frame)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            hours = int(self.hours.value)
-            if hours < 1 or hours > 24:
+            time_frame = self.time_frame.value.strip().lower()
+            time_pattern = r"^(\d+)(h|d|mo)$"
+            
+            match = re.match(time_pattern, time_frame)
+            
+            if match and int(match.groups()[0]) < 1:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Please enter a number between 1 and 24.",
+                    f"{theme.deniedIcon} Please enter a number 1 or greater.",
+                    ephemeral=True
+                )
+                return
+            
+            if not match:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Invalid format. Please enter a valid time frame (e.g. 24h, 3d, 2mo).",
                     ephemeral=True
                 )
                 return
             
             await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, hours)
+            await self.cog.show_recent_changes(interaction, self.alliance_name, match)
                 
         except ValueError:
             await interaction.response.send_message(
@@ -1140,13 +1161,13 @@ class CustomTimeModal(discord.ui.Modal, title="Custom Time Range"):
             )
 
 class RecentChangesView(discord.ui.View):
-    def __init__(self, chunks, members, level_mapping, alliance_name, hours):
+    def __init__(self, chunks, members, level_mapping, alliance_name, time):
         super().__init__(timeout=7200)
         self.chunks = chunks
         self.members = members
         self.level_mapping = level_mapping
         self.alliance_name = alliance_name
-        self.hours = hours
+        self.time = time
         self.current_page = 0
         self.total_pages = len(chunks)
         
@@ -1156,7 +1177,7 @@ class RecentChangesView(discord.ui.View):
         embed = discord.Embed(
             title=f"{theme.levelIcon} Recent Level Changes - {self.alliance_name}",
             description=(
-                f"Showing changes in the last {self.hours} hour(s)\n"
+                f"Showing changes in the last {self.time}\n"
                 f"{theme.upperDivider}\n"
                 f"Total Changes: {sum(len(chunk) for chunk in self.chunks)}\n"
                 f"Page {self.current_page + 1}/{self.total_pages}\n"
@@ -1196,12 +1217,12 @@ class RecentChangesView(discord.ui.View):
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
 class RecentNicknameChangesView(discord.ui.View):
-    def __init__(self, chunks, members, alliance_name, hours):
+    def __init__(self, chunks, members, alliance_name, time):
         super().__init__(timeout=7200)
         self.chunks = chunks
         self.members = members
         self.alliance_name = alliance_name
-        self.hours = hours
+        self.time = time
         self.current_page = 0
         self.total_pages = len(chunks)
         
@@ -1211,7 +1232,7 @@ class RecentNicknameChangesView(discord.ui.View):
         embed = discord.Embed(
             title=f"{theme.editListIcon} Recent Nickname Changes - {self.alliance_name}",
             description=(
-                f"Showing changes in the last {self.hours} hour(s)\n"
+                f"Showing changes in the last {self.time}\n"
                 f"{theme.upperDivider}\n"
                 f"Total Changes: {sum(len(chunk) for chunk in self.chunks)}\n"
                 f"Page {self.current_page + 1}/{self.total_pages}\n"
@@ -1253,27 +1274,37 @@ class CustomTimeModalNickname(discord.ui.Modal, title="Custom Time Range"):
         super().__init__()
         self.cog = cog
         self.alliance_name = alliance_name
-        self.hours = discord.ui.TextInput(
-            label="Hours (1-24)",
-            placeholder="Enter number of hours (max 24)...",
+        self.time_frame = discord.ui.TextInput(
+            label="Time Frame",
+            placeholder="eg. 24h, 3d, 2mo",
             required=True,
-            min_length=1,
-            max_length=2
+            min_length=2
         )
-        self.add_item(self.hours)
+        self.add_item(self.time_frame)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            hours = int(self.hours.value)
-            if hours < 1 or hours > 24:
+            time_frame = self.time_frame.value.strip().lower()
+            time_pattern = r"^(\d+)(h|d|mo)$"
+            
+            match = re.match(time_pattern, time_frame)
+            
+            if match and int(match.groups()[0]) < 1:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Please enter a number between 1 and 24.",
+                    f"{theme.deniedIcon} Please enter a number 1 or greater.",
+                    ephemeral=True
+                )
+                return
+            
+            if not match:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Invalid format. Please enter a valid time frame (e.g. 24h, 3d, 2mo).",
                     ephemeral=True
                 )
                 return
             
             await interaction.response.defer()
-            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, hours)
+            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, match)
                 
         except ValueError:
             await interaction.response.send_message(

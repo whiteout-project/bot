@@ -8,6 +8,7 @@ import ssl
 import logging
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 logger = logging.getLogger('alliance')
 
@@ -136,16 +137,15 @@ class AllianceRegistration(commands.Cog):
         
     async def fetch_user(self, fid: int):
         URL = "https://wos-giftcode-api.centurygame.com/api/player"
-        HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
+        HEADERS = get_headers('https://wos-giftcode-api.centurygame.com')
         
         ssl_context = ssl.create_default_context()
-        session = aiohttp.ClientSession()
-        
+
         data_nosign = f"fid={fid}&time={time.time_ns()}"
         sign = hashlib.md5((data_nosign + "tB87#kPtkxqOS2").encode()).hexdigest()
         data = f"sign={sign}&{data_nosign}"
 
-        try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
             async with session.post(
                 url=URL,
                 data=data,
@@ -158,8 +158,6 @@ class AllianceRegistration(commands.Cog):
                     raise Exception("RATE_LIMITED")
                 else:
                     raise Exception(f"Failed to fetch user data: {response.status}")
-        finally:
-            await session.close()
          
     @discord.app_commands.command(
         name="register",

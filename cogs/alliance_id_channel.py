@@ -12,6 +12,7 @@ import ssl
 from discord.ext import tasks
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
+from .browser_headers import get_headers
 
 logger = logging.getLogger('alliance')
 
@@ -245,13 +246,13 @@ class AllianceIDChannel(commands.Cog):
                     form = f"fid={fid}&time={current_time}"
                     sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
                     form = f"sign={sign}&{form}"
-                    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+                    headers = get_headers('https://wos-giftcode-api.centurygame.com')
 
                     ssl_context = ssl.create_default_context()
                     ssl_context.check_hostname = False
                     ssl_context.verify_mode = ssl.CERT_NONE
 
-                    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context)) as session:
+                    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context), timeout=aiohttp.ClientTimeout(total=15)) as session:
                         async with session.post('https://wos-giftcode-api.centurygame.com/api/player', headers=headers, data=form) as response:
                             if response.status == 429:
                                 if attempt < max_retries - 1:

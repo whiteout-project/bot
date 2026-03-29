@@ -7,6 +7,7 @@ import logging
 from typing import Optional, List, Dict, Callable
 
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 logger = logging.getLogger('bot')
 
@@ -96,8 +97,8 @@ class LoginHandler:
                 form = f"fid={test_fid}&time={current_time}"
                 sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
                 form = f"sign={sign}&{form}"
-                headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                
+                headers = get_headers('https://wos-giftcode-api.centurygame.com')
+
                 async with session.post(self.api1_url, headers=headers, data=form, timeout=5) as response:
                     # API is available if we get 200 (success) or 429 (rate limit)
                     api_status["api1_available"] = response.status in [200, 429]
@@ -112,8 +113,8 @@ class LoginHandler:
                 form = f"fid={test_fid}&time={current_time}"
                 sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
                 form = f"sign={sign}&{form}"
-                headers = {'Content-Type': 'application/x-www-form-urlencoded'}
-                
+                headers = get_headers('https://gof-report-api-formal.centurygame.com')
+
                 async with session.post(self.api2_url, headers=headers, data=form, timeout=5) as response:
                     api_status["api2_available"] = response.status in [200, 429]
             except Exception as e:
@@ -243,7 +244,7 @@ class LoginHandler:
         form = f"fid={fid}&time={current_time}"
         sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
         form = f"sign={sign}&{form}"
-        headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        headers = get_headers(api_url.rsplit('/api/', 1)[0])
         
         try:
             # Use proxy if provided and main request fails
@@ -254,7 +255,7 @@ class LoginHandler:
                 connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             
             async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.post(api_url, headers=headers, data=form) as response:
+                async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     # Record the API request
                     self._record_api_request(api_num)
                     

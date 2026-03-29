@@ -382,13 +382,14 @@ class NotificationSystem(commands.Cog):
                     notification_description = f"EMBED_MESSAGE:{title}"
 
             tz = pytz.timezone(timezone)
-            next_notification = start_date.replace(
+            naive_dt = start_date.replace(
                 hour=hour,
                 minute=minute,
                 second=0,
                 microsecond=0,
-                tzinfo=tz
+                tzinfo=None
             )
+            next_notification = tz.localize(naive_dt)
 
             self.cursor.execute("""
                 INSERT INTO bear_notifications
@@ -1549,21 +1550,21 @@ class RepeatOptionView(discord.ui.View):
             elif interval_text:
                 repeat_text = f"{theme.refreshIcon} Repeats every {interval_text}"
             elif repeat_minutes == -1:  # Weekday-based repeat (days stored in notification_days table)
-                repeat_text = "{theme.refreshIcon} Repeats on selected weekdays"
+                repeat_text = f"{theme.refreshIcon} Repeats on selected weekdays"
             else:
                 minutes = repeat_minutes
                 if minutes == 1:
-                    repeat_text = "{theme.refreshIcon} Repeats every minute"
+                    repeat_text = f"{theme.refreshIcon} Repeats every minute"
                 elif minutes == 60:
-                    repeat_text = "{theme.refreshIcon} Repeats every hour"
+                    repeat_text = f"{theme.refreshIcon} Repeats every hour"
                 elif minutes == 1440:
-                    repeat_text = "{theme.refreshIcon} Repeats daily"
+                    repeat_text = f"{theme.refreshIcon} Repeats daily"
                 elif minutes == 2880:
-                    repeat_text = "{theme.refreshIcon} Repeats every 2 days"
+                    repeat_text = f"{theme.refreshIcon} Repeats every 2 days"
                 elif minutes == 4320:
-                    repeat_text = "{theme.refreshIcon} Repeats every 3 days"
+                    repeat_text = f"{theme.refreshIcon} Repeats every 3 days"
                 elif minutes == 10080:
-                    repeat_text = "{theme.refreshIcon} Repeats weekly"
+                    repeat_text = f"{theme.refreshIcon} Repeats weekly"
                 else:
                     repeat_text = f"{theme.refreshIcon} Repeats every {minutes} minutes"
 
@@ -1764,7 +1765,10 @@ class ConfirmDaysButton(discord.ui.Button):
 
         repeat_view = self.days_menu_view.repeat_view
 
-        interval_text = "" + ", ".join(days[:-1]) + " and " + days[-1]
+        if len(days) == 1:
+            interval_text = days[0]
+        else:
+            interval_text = ", ".join(days[:-1]) + " and " + days[-1]
 
         await repeat_view.save_notification(
             interaction,
@@ -3110,7 +3114,7 @@ class BearTrapView(discord.ui.View):
 
                     # Get event emoji and display name
                     if event_type:
-                        from notification_event_types import get_event_icon
+                        from .notification_event_types import get_event_icon
                         event_emoji = get_event_icon(event_type)
                         display_name = event_type
                     else:
@@ -3187,7 +3191,7 @@ class BearTrapView(discord.ui.View):
 
             class PaginationButton(discord.ui.Button):
                 def __init__(self, label, page_change, emoji=None):
-                    super().__init__(label=label, style=discord.ButtonStyle.primary, emoji=emoji)
+                    super().__init__(label=label, emoji=emoji, style=discord.ButtonStyle.primary)
                     self.page_change = page_change
 
                 async def callback(self, interaction: discord.Interaction):
@@ -3210,6 +3214,7 @@ class BearTrapView(discord.ui.View):
             prev_button = PaginationButton(label="Previous", emoji=f"{theme.prevIcon}", page_change=-1)
             prev_button.disabled = current_page == 0
             next_button = PaginationButton(label="Next", emoji=f"{theme.nextIcon}", page_change=1)
+            next_button.disabled = current_page == total_pages - 1
 
             class SearchButton(discord.ui.Button):
                 def __init__(self, label, cog):
@@ -3613,8 +3618,8 @@ class BearTrapView(discord.ui.View):
                                         lines = current_embed.description.split('\n')
                                         updated_lines = []
                                         for line in lines:
-                                            if line.startswith("**🧹 Message Cleanup:**"):
-                                                updated_lines.append(f"**🧹 Message Cleanup:** {delete_delay_display}")
+                                            if "Message Cleanup:**" in line:
+                                                updated_lines.append(f"**{theme.trashIcon} Message Cleanup:** {delete_delay_display}")
                                             else:
                                                 updated_lines.append(line)
 
@@ -4105,6 +4110,12 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
         try:
             channel = self.values[0]
             actual_channel = interaction.guild.get_channel(channel.id)
+            if not actual_channel:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Channel not found or inaccessible!",
+                    ephemeral=True
+                )
+                return
             if not actual_channel.permissions_for(interaction.guild.me).send_messages:
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} I don't have permission to send messages in this channel!",

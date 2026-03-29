@@ -166,7 +166,7 @@ class EmbedFieldModal(discord.ui.Modal):
                 try:
                     int_color = int(value, 16)
                 except ValueError:
-                    await interaction.response.send_message("Invalid hex color code!", ephemeral=True)
+                    await interaction.followup.send("Invalid hex color code!", ephemeral=True)
                     return
 
                 self.parent_view.color = int_color
@@ -867,9 +867,9 @@ class PlainEditorView(discord.ui.View):
                                 self.parent_view.description = f"CUSTOM_TIMES:{new_times}|{self.parent_view.description}"
 
                             # ✅ Update notification and embed
+                            await modal_interaction.response.defer()
                             await self.parent_view.cog.update_notification(self.parent_view)
                             await self.parent_view.update_embed(modal_interaction)
-                            await modal_interaction.response.defer()
 
                     return await interaction.response.send_modal(CustomTimeModal(self))
 

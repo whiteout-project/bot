@@ -84,6 +84,12 @@ class AllianceSync(commands.Cog):
                 ADD COLUMN start_time TEXT DEFAULT NULL
             """)
 
+        if 'keep_control_log' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings
+                ADD COLUMN keep_control_log INTEGER DEFAULT 1
+            """)
+
         self.conn_alliance.commit()
 
         # Create invalid_id_tracker table for 3-strike removal system
@@ -137,6 +143,16 @@ class AllianceSync(commands.Cog):
         result = self.cursor_alliance.fetchone()
         # Default to 0 (disabled) if not set
         return result[0] if result and result[0] is not None else 0
+
+    def get_keep_control_log_setting(self, alliance_id):
+        """Get the keep_control_log setting for a specific alliance"""
+        self.cursor_alliance.execute("""
+            SELECT keep_control_log
+            FROM alliancesettings
+            WHERE alliance_id = ?
+        """, (alliance_id,))
+        result = self.cursor_alliance.fetchone()
+        return result[0] if result and result[0] is not None else 1
 
     def increment_invalid_counter(self, fid: str, alliance_id: str, nickname: str) -> int:
         """Increment the 40004 error counter for a player. Returns new fail_count."""
@@ -611,7 +627,14 @@ class AllianceSync(commands.Cog):
             )
 
         if message:
-            await message.edit(embed=embed)
+            keep_log = self.get_keep_control_log_setting(alliance_id)
+            if keep_log:
+                await message.edit(embed=embed)
+            else:
+                try:
+                    await message.delete()
+                except discord.NotFound:
+                    pass
         self.logger.info(f"{alliance_name} Alliance Sync completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info(f"{alliance_name} Alliance Total Duration: {duration}")
         
