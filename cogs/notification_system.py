@@ -68,9 +68,9 @@ class NotificationSystem(commands.Cog):
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.commit()
 
-        # Rate limiting for channel unavailable warnings
-        self.channel_warning_timestamps = {}
-        self.channel_warning_interval = 300
+        # Track when channels were first seen as missing (channel_id -> first_seen_missing timestamp)
+        self.channel_missing_since = {}
+        self.CHANNEL_MISSING_THRESHOLD = 1800  # Confirm and auto-disable after 30 minutes
 
         # repeat_minutes value -1 means weekday-based repeat, 0 means no repeat
         self.cursor.execute("""
@@ -223,15 +223,141 @@ class NotificationSystem(commands.Cog):
         if hasattr(self, 'conn'):
             self.conn.close()
 
-    def should_warn_about_channel(self, channel_id: int) -> bool:
-        """Check if we should warn about this channel being unavailable."""
-        current_time = time.time()
-        last_warning = self.channel_warning_timestamps.get(channel_id, 0)
-        
-        if current_time - last_warning >= self.channel_warning_interval:
-            self.channel_warning_timestamps[channel_id] = current_time
-            return True
-        return False
+    async def auto_disable_notification(self, channel_id: int):
+        """Auto-disable notifications after their channel has been confirmed missing for a sustained period."""
+        now = time.time()
+
+        if channel_id not in self.channel_missing_since:
+            self.channel_missing_since[channel_id] = now
+            return
+
+        elapsed = now - self.channel_missing_since[channel_id]
+        if elapsed < self.CHANNEL_MISSING_THRESHOLD:
+            return
+
+        # Channel has been missing from cache long enough — confirm via API before disabling
+        try:
+            await self.bot.fetch_channel(channel_id)
+            # Channel still exists (maybe bot just reconnected) — reset tracker
+            self.channel_missing_since.pop(channel_id, None)
+            return
+        except discord.NotFound:
+            # Channel is confirmed deleted — proceed with disabling
+            pass
+        except discord.Forbidden:
+            # Channel exists but bot lost access — notify admins but don't disable
+            self.channel_missing_since.pop(channel_id, None)
+            await self.notify_admins_channel_issue(channel_id, "lost access")
+            return
+        except Exception:
+            # Transient error (rate limit, network) — keep waiting
+            return
+
+        # Disable all notifications for this channel
+        try:
+            self.cursor.execute(
+                "SELECT id, description FROM bear_notifications WHERE channel_id = ? AND is_enabled = 1",
+                (channel_id,)
+            )
+            affected = self.cursor.fetchall()
+
+            if not affected:
+                self.channel_missing_since.pop(channel_id, None)
+                return
+
+            self.cursor.execute(
+                "UPDATE bear_notifications SET is_enabled = 0 WHERE channel_id = ? AND is_enabled = 1",
+                (channel_id,)
+            )
+            self.conn.commit()
+            self.channel_missing_since.pop(channel_id, None)
+
+            print(f"[AUTO-DISABLE] {len(affected)} notification(s) disabled — channel {channel_id} confirmed deleted after {int(elapsed)}s")
+            await self.notify_admins_channel_disabled(channel_id, affected)
+
+        except Exception as e:
+            logger.error(f"Error auto-disabling notifications for channel {channel_id}: {e}")
+            print(f"[AUTO-DISABLE] Error disabling notifications for channel {channel_id}: {e}")
+
+    async def notify_admins_channel_disabled(self, channel_id: int, affected: list):
+        """Send a DM to global admins when notifications are auto-disabled due to a deleted channel."""
+        try:
+            with sqlite3.connect('db/settings.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
+                admins = cursor.fetchall()
+
+            if not admins:
+                return
+
+            notif_list = []
+            for notif_id, description in affected:
+                desc = description[:50] + "..." if len(description) > 50 else description
+                if "EMBED_MESSAGE:" in desc:
+                    desc = "(Embed notification)"
+                notif_list.append(f"- **ID {notif_id}:** {desc}")
+
+            embed = discord.Embed(
+                title=f"{theme.alertIcon} Notifications Auto-Disabled",
+                description=(
+                    f"**{len(affected)}** notification(s) were automatically disabled because their "
+                    f"channel was deleted.\n\n"
+                    f"**Channel ID:** `{channel_id}`\n\n"
+                    + "\n".join(notif_list[:10])
+                    + (f"\n*...and {len(affected) - 10} more*" if len(affected) > 10 else "")
+                    + "\n\nYou can re-enable them after setting a valid channel."
+                ),
+                color=theme.emColor2
+            )
+
+            for (admin_id,) in admins:
+                try:
+                    user = await self.bot.fetch_user(admin_id)
+                    if user:
+                        await user.send(embed=embed)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error notifying admins about disabled notifications: {e}")
+            print(f"[AUTO-DISABLE] Error notifying admins: {e}")
+
+    async def notify_admins_channel_issue(self, channel_id: int, issue: str):
+        """Send a DM to global admins when the bot has lost access to a notification channel."""
+        try:
+            with sqlite3.connect('db/settings.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
+                admins = cursor.fetchall()
+
+            if not admins:
+                return
+
+            self.cursor.execute(
+                "SELECT COUNT(*) FROM bear_notifications WHERE channel_id = ? AND is_enabled = 1",
+                (channel_id,)
+            )
+            count = self.cursor.fetchone()[0]
+
+            embed = discord.Embed(
+                title=f"{theme.warnIcon} Notification Channel Issue",
+                description=(
+                    f"The bot has **{issue}** to a channel with **{count}** active notification(s).\n\n"
+                    f"**Channel ID:** `{channel_id}`\n\n"
+                    f"Notifications have **not** been disabled. Please check the channel permissions."
+                ),
+                color=theme.emColor2
+            )
+
+            for (admin_id,) in admins:
+                try:
+                    user = await self.bot.fetch_user(admin_id)
+                    if user:
+                        await user.send(embed=embed)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Error notifying admins about channel issue: {e}")
+            print(f"[AUTO-DISABLE] Error notifying admins about channel issue: {e}")
 
     async def save_notification(self, guild_id: int, channel_id: int, start_date: datetime,
                                 hour: int, minute: int, timezone: str, description: str,
@@ -641,9 +767,11 @@ class NotificationSystem(commands.Cog):
 
             channel = self.bot.get_channel(channel_id)
             if not channel:
-                if self.should_warn_about_channel(channel_id):
-                    print(f"Warning: Channel {channel_id} not found for notification {id}.")
+                await self.auto_disable_notification(channel_id)
                 return
+
+            # Channel found — clear any missing tracker
+            self.channel_missing_since.pop(channel_id, None)
 
             tz = pytz.timezone(timezone)
             now = datetime.now(tz)

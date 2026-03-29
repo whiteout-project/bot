@@ -189,6 +189,15 @@ class NotificationSchedule(commands.Cog):
 
         while not self.bot.is_closed():
             try:
+                # Check if bear_notifications table exists (created by notification_system cog)
+                self.cursor.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='bear_notifications'
+                """)
+                if not self.cursor.fetchone():
+                    await asyncio.sleep(300)
+                    continue
+
                 now_utc = datetime.now(pytz.UTC)
 
                 # Get all notifications that are approaching
