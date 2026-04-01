@@ -221,7 +221,13 @@ class Control(commands.Cog):
             'socket',
             'ssl',
             'certificate',
-            'host'
+            'host',
+            '403',
+            'forbidden',
+            '429',
+            '502',
+            '503',
+            '504',
         ]
         error_lower = error_msg.lower()
         return any(indicator in error_lower for indicator in network_indicators)
