@@ -1,3 +1,6 @@
+"""
+Notification event editor. UI for creating and modifying notification events.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

@@ -1,3 +1,6 @@
+"""
+Event attendance tracking. Records and manages attendance for alliance events.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

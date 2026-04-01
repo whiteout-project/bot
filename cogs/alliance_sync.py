@@ -1,3 +1,6 @@
+"""
+Automatic alliance data synchronization. Periodically fetches player data from the WOS API.
+"""
 import discord
 from discord.ext import commands, tasks
 import sqlite3
@@ -206,7 +209,13 @@ class AllianceSync(commands.Cog):
             'socket',
             'ssl',
             'certificate',
-            'host'
+            'host',
+            '403',
+            'forbidden',
+            '429',
+            '502',
+            '503',
+            '504',
         ]
         error_lower = error_msg.lower()
         return any(indicator in error_lower for indicator in network_indicators)
@@ -822,11 +831,11 @@ class AllianceSync(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.monitor_started:
-            print("[SYNC] Starting monitor...")
+            self.logger.info("Starting monitor...")
 
             # Check API availability
             await self.login_handler.check_apis_availability()
-            print(f"[SYNC] {self.login_handler.get_mode_text(for_console=True)}")
+            self.logger.info(self.login_handler.get_mode_text(for_console=True))
             
             # Start the centralized queue processor
             await self.login_handler.start_queue_processor()
@@ -885,12 +894,9 @@ class AllianceSync(commands.Cog):
 
     async def cog_load(self):
         try:
-            print("[MONITOR] Cog loaded successfully")
+            self.logger.info("Alliance sync cog loaded")
         except Exception as e:
             self.logger.error(f"Error in cog_load: {e}")
-            print(f"[ERROR] Error in cog_load: {e}")
-            import traceback
-            print(traceback.format_exc())
 
     @tasks.loop(minutes=1)
     async def monitor_alliance_changes(self):

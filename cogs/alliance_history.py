@@ -1,3 +1,6 @@
+"""
+Alliance history cog. Tracks and displays nickname and furnace level changes.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

@@ -1,3 +1,6 @@
+"""
+Minister archive. Stores and displays historical minister appointment data.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

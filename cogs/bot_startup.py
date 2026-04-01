@@ -1,3 +1,6 @@
+"""
+Startup DM and orphan detection. Sends status reports to admins and detects orphaned users.
+"""
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -340,7 +343,6 @@ class BotStartup(commands.Cog):
             admins = cursor.fetchall()
 
         if not admins:
-            print(f"[ORPHAN CHECK] Found {total_count} orphaned users but no global admin to notify")
             logger.warning(f"Found {total_count} orphaned users but no global admin to notify")
             return
 
@@ -352,13 +354,15 @@ class BotStartup(commands.Cog):
                 user = await self.bot.fetch_user(admin_id)
                 if user:
                     await user.send(embed=embed, view=view)
-                    print(f"[ORPHAN CHECK] Notified admin {user.name} about {total_count} orphaned users")
+                    logger.info(f"Notified admin {user.name} about {total_count} orphaned users")
             except Exception as e:
-                print(f"[ORPHAN CHECK] Failed to notify admin {admin_id}: {e}")
                 logger.error(f"Failed to notify admin {admin_id} about orphaned users: {e}")
 
     @commands.Cog.listener()
     async def on_ready(self):
+        if getattr(self.bot, 'no_dm', False):
+            return
+
         try:
             with sqlite3.connect('db/settings.sqlite') as settings_db:
                 cursor = settings_db.cursor()
@@ -496,18 +500,18 @@ class BotStartup(commands.Cog):
                         )
                         await admin_user.send(embed=alliance_embed)
 
-                    print("Activation messages sent to admin user.")
+                    logger.info("Activation messages sent to admin user.")
+                    self.bot.startup_dm_sent = True
                 else:
-                    print(f"User with Admin ID {admin_id} not found.")
+                    logger.warning(f"User with Admin ID {admin_id} not found.")
             else:
-                print("No record found in the admin table.")
+                logger.warning("No record found in the admin table.")
 
             # Check for orphaned users and notify global admins
             await self.check_and_notify_orphans()
 
         except Exception as e:
-            logger.error(f"An error occurred: {e}")
-            print(f"An error occurred: {e}")
+            logger.error(f"An error occurred during startup: {e}")
 
     @app_commands.command(name="channel", description="Learn the ID of a channel.")
     @app_commands.describe(channel="The channel you want to learn the ID of")

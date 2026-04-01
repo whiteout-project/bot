@@ -1,3 +1,6 @@
+"""
+Gift code distribution API client. Syncs codes with the shared gift-code-api service.
+"""
 import json
 import aiohttp
 import asyncio

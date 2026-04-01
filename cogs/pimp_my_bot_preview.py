@@ -1,6 +1,5 @@
 """
-Theme Preview - Generates realistic preview of theme appearance.
-Shows multiple preview pages that mimic real bot embeds.
+Theme preview generator. Shows sample embeds that mimic real bot output.
 """
 import discord
 import logging

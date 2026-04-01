@@ -1,3 +1,6 @@
+"""
+Notification event type definitions. Configures icons, durations, and time slots per event.
+"""
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple

@@ -1,3 +1,6 @@
+"""
+Notification templates. Provides reusable event presets for quick setup.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

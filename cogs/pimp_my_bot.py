@@ -1,6 +1,5 @@
 """
-Theme management system for bot customization.
-Provides icons, colors, and dividers that can be customized via themes.
+Theme system singleton. Provides icons, colors, and dividers for bot-wide customization.
 """
 import discord
 from discord.ext import commands
@@ -82,7 +81,9 @@ ICON_CATEGORIES = {
         "robotIcon", "supportIcon", "chatIcon", "boltIcon", "testIcon",
         "cleanIcon", "paletteIcon", "starIcon", "heartIcon", "messageIcon",
         "shutdownZzzIcon", "shutdownDoorIcon", "shutdownHandIcon", "shutdownMoonIcon",
-        "shutdownPlugIcon", "shutdownStopIcon", "shutdownClapperIcon", "shutdownSparkleIcon"
+        "shutdownPlugIcon", "shutdownStopIcon", "shutdownClapperIcon", "shutdownSparkleIcon",
+        "startupGiftIcon", "startupBoxingIcon", "startupRocketIcon", "startupLockIcon",
+        "startupFireIcon", "startupSwordsIcon", "startupIceIcon", "startupCashIcon"
     ]
 }
 
@@ -123,6 +124,10 @@ DEFAULT_ICON_VALUES = {
     'shutdownZzzIcon': '💤', 'shutdownDoorIcon': '🚪', 'shutdownHandIcon': '👋',
     'shutdownMoonIcon': '🌙', 'shutdownPlugIcon': '🔌', 'shutdownStopIcon': '🛑',
     'shutdownClapperIcon': '🎬', 'shutdownSparkleIcon': '✨',
+    # Startup icons
+    'startupGiftIcon': '🎁', 'startupBoxingIcon': '🥊', 'startupRocketIcon': '🚀',
+    'startupLockIcon': '🔒', 'startupFireIcon': '🔥', 'startupSwordsIcon': '⚔️',
+    'startupIceIcon': '🧊', 'startupCashIcon': '💸',
     # Misc icons
     'medalIcon': '🎖️', 'checkIcon': '☑️', 'circleIcon': '⚪',
     'userIcon': '👤', 'trashIcon': '🗑️', 'refreshIcon': '🔄', 'levelIcon': '🔢',
@@ -343,6 +348,9 @@ class ThemeManager:
                     shutdownZzzIcon TEXT, shutdownDoorIcon TEXT, shutdownHandIcon TEXT,
                     shutdownMoonIcon TEXT, shutdownPlugIcon TEXT, shutdownStopIcon TEXT,
                     shutdownClapperIcon TEXT, shutdownSparkleIcon TEXT,
+                    startupGiftIcon TEXT, startupBoxingIcon TEXT, startupRocketIcon TEXT,
+                    startupLockIcon TEXT, startupFireIcon TEXT, startupSwordsIcon TEXT,
+                    startupIceIcon TEXT, startupCashIcon TEXT,
                     medalIcon TEXT, checkIcon TEXT, circleIcon TEXT,
                     userIcon TEXT, trashIcon TEXT, refreshIcon TEXT, levelIcon TEXT,
                     lockIcon TEXT, cleanIcon TEXT, archiveIcon TEXT, upIcon TEXT, downIcon TEXT,
@@ -385,6 +393,25 @@ class ThemeManager:
                 if col_name not in existing_columns:
                     cursor.execute(f"ALTER TABLE pimpsettings ADD COLUMN {col_name} INTEGER DEFAULT 0")
 
+            # Migration: Add startup icon columns if they don't exist
+            startup_icons = [
+                'startupGiftIcon', 'startupBoxingIcon', 'startupRocketIcon',
+                'startupLockIcon', 'startupFireIcon', 'startupSwordsIcon',
+                'startupIceIcon', 'startupCashIcon'
+            ]
+            for col_name in startup_icons:
+                if col_name not in existing_columns:
+                    cursor.execute(f"ALTER TABLE pimpsettings ADD COLUMN {col_name} TEXT")
+
+            # Backfill NULL icon columns with defaults for all existing themes
+            for icon_name, default_value in DEFAULT_ICON_VALUES.items():
+                if icon_name in existing_columns or icon_name in startup_icons:
+                    cursor.execute(
+                        f"UPDATE pimpsettings SET {icon_name} = ? WHERE {icon_name} IS NULL",
+                        (default_value,)
+                    )
+            conn.commit()
+
             # Check if default theme exists
             cursor.execute("SELECT COUNT(*) FROM pimpsettings WHERE themeName='default'")
             if cursor.fetchone()[0] == 0:
@@ -418,6 +445,9 @@ class ThemeManager:
                         shutdownZzzIcon, shutdownDoorIcon, shutdownHandIcon,
                         shutdownMoonIcon, shutdownPlugIcon, shutdownStopIcon,
                         shutdownClapperIcon, shutdownSparkleIcon,
+                        startupGiftIcon, startupBoxingIcon, startupRocketIcon,
+                        startupLockIcon, startupFireIcon, startupSwordsIcon,
+                        startupIceIcon, startupCashIcon,
                         medalIcon, checkIcon, circleIcon,
                         userIcon, trashIcon, refreshIcon, levelIcon,
                         lockIcon, cleanIcon, archiveIcon, upIcon, downIcon,
@@ -458,6 +488,9 @@ class ThemeManager:
                         '💤', '🚪', '👋',
                         '🌙', '🔌', '🛑',
                         '🎬', '✨',
+                        '🎁', '🥊', '🚀',
+                        '🔒', '🔥', '⚔️',
+                        '🧊', '💸',
                         '🎖️', '☑️', '⚪',
                         '👤', '🗑️', '🔄', '🔢',
                         '🔐', '🧹', '🗃️', '⬆️', '⬇️',
@@ -517,7 +550,7 @@ class ThemeManager:
         """Apply theme data from database row dictionary."""
         # Apply icons using the ICON_NAMES constant
         for icon_name in ICON_NAMES:
-            value = theme_dict.get(icon_name) or DEFAULT_EMOJI
+            value = theme_dict.get(icon_name) or DEFAULT_ICON_VALUES.get(icon_name) or DEFAULT_EMOJI
             setattr(self, icon_name, value)
 
         # Apply divider settings using the shared build_divider function
@@ -2646,7 +2679,10 @@ class Theme(commands.Cog):
             'globeIcon': '1f30d', 'wizardIcon': '1f9d9', 'muteIcon': '1f515',
             'shutdownZzzIcon': '1f4a4', 'shutdownDoorIcon': '1f6aa', 'shutdownHandIcon': '1f44b',
             'shutdownMoonIcon': '1f319', 'shutdownPlugIcon': '1f50c', 'shutdownStopIcon': '1f6d1',
-            'shutdownClapperIcon': '1f3ac', 'shutdownSparkleIcon': '2728'
+            'shutdownClapperIcon': '1f3ac', 'shutdownSparkleIcon': '2728',
+            'startupGiftIcon': '1f381', 'startupBoxingIcon': '1f94a', 'startupRocketIcon': '1f680',
+            'startupLockIcon': '1f512', 'startupFireIcon': '1f525', 'startupSwordsIcon': '2694',
+            'startupIceIcon': '1f9ca', 'startupCashIcon': '1f4b8'
         }
 
         cdn_base = "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/"

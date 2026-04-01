@@ -1,14 +1,13 @@
+"""
+Alliance registration flow. Lets users link their game account to Discord.
+"""
 import discord
 from discord.ext import commands
-import hashlib
 import sqlite3
-import aiohttp
-import time
-import ssl
 import logging
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
-from .browser_headers import get_headers
+from .login_handler import LoginHandler
 
 logger = logging.getLogger('alliance')
 
@@ -136,28 +135,16 @@ class AllianceRegistration(commands.Cog):
         ][:25]
         
     async def fetch_user(self, fid: int):
-        URL = "https://wos-giftcode-api.centurygame.com/api/player"
-        HEADERS = get_headers('https://wos-giftcode-api.centurygame.com')
-        
-        ssl_context = ssl.create_default_context()
+        result = await LoginHandler().fetch_player_data(str(fid))
 
-        data_nosign = f"fid={fid}&time={time.time_ns()}"
-        sign = hashlib.md5((data_nosign + "tB87#kPtkxqOS2").encode()).hexdigest()
-        data = f"sign={sign}&{data_nosign}"
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.post(
-                url=URL,
-                data=data,
-                headers=HEADERS,
-                ssl=ssl_context
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                elif response.status == 429:
-                    raise Exception("RATE_LIMITED")
-                else:
-                    raise Exception(f"Failed to fetch user data: {response.status}")
+        if result['status'] == 'success':
+            return {"msg": "success", "data": result['data']}
+        elif result['status'] == 'rate_limited':
+            raise Exception("RATE_LIMITED")
+        elif result['status'] == 'not_found':
+            return {"msg": "role not exist"}
+        else:
+            raise Exception(result.get('error_message', 'Failed to fetch user data'))
          
     @discord.app_commands.command(
         name="register",

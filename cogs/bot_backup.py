@@ -1,3 +1,6 @@
+"""
+Database backup and restore system. Manages scheduled and manual backups.
+"""
 import discord
 from discord.ext import commands, tasks
 import sqlite3

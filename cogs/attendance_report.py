@@ -1,3 +1,6 @@
+"""
+Attendance report generator. Produces charts and summaries using matplotlib.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

@@ -1,3 +1,6 @@
+"""
+Alliance log viewer. Displays alliance control message history and member activity.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

@@ -1,6 +1,5 @@
 """
-Theme Editor - Central UI for creating and editing themes.
-Provides categorized icon editing with a central hub for navigation.
+Theme editor UI. Provides categorized icon, color, and divider editing.
 """
 import discord
 import sqlite3

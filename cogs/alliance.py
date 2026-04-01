@@ -1,3 +1,6 @@
+"""
+Alliance management cog. Handles alliance CRUD, settings, and member listing.
+"""
 import discord
 from discord import app_commands
 from discord.ext import commands

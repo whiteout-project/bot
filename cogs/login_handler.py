@@ -1,3 +1,6 @@
+"""
+Centralized login and player data handler. Manages dual-API access and rate limiting.
+"""
 import aiohttp
 import asyncio
 import hashlib
@@ -458,8 +461,14 @@ class LoginHandler:
                         await operation['callback']()
 
                 except Exception as e:
-                    logger.error(f"Operation failed: {operation['description']} - Error: {e}")
-                    print(f"Operation failed: {operation['description']} - Error: {e}")
+                    error_str = str(e)
+                    logger.error(f"Operation failed: {operation['description']} - Error: {error_str}")
+                    if '503' in error_str or '502' in error_str or 'connect error' in error_str.lower():
+                        from cogs import bot_startup_display as startup
+                        startup.warn(f"Discord temporarily unavailable — {operation['description']} will retry automatically")
+                    else:
+                        from cogs import bot_startup_display as startup
+                        startup.phase_fail(f"{operation['description']}", details=[str(e)])
                     # Send error message if interaction is available
                     if operation.get('interaction'):
                         try:

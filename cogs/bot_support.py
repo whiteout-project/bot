@@ -1,3 +1,6 @@
+"""
+Support ticket system. Allows users to create and manage support requests.
+"""
 import discord
 from discord.ext import commands
 import logging

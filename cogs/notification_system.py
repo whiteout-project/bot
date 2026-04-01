@@ -1,3 +1,6 @@
+"""
+Notification management cog. Handles notification channel setup and event configuration.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
@@ -2355,7 +2358,7 @@ class EventTypeDropdown(discord.ui.Select):
         await interaction.response.edit_message(view=self.parent_view)
 
 class TimeSelectModal(discord.ui.Modal):
-    def __init__(self, cog: BearTrap):
+    def __init__(self, cog):
         super().__init__(title="Set Notification Time")
         self.cog = cog
 

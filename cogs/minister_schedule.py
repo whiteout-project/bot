@@ -1,18 +1,17 @@
+"""
+Minister rotation logic. Handles scheduling, swaps, and automatic role assignments.
+"""
 import discord
 from discord import app_commands
 from discord.ext import commands
 import asyncio
 import sqlite3
-import aiohttp
-import hashlib
 import logging
-from aiohttp_socks import ProxyConnector
-import time
 import re
 from datetime import datetime
 import json
 from .pimp_my_bot import theme
-from .browser_headers import get_headers
+from .login_handler import LoginHandler
 
 logger = logging.getLogger('bot')
 
@@ -23,7 +22,6 @@ try:
 except ImportError:
     ARABIC_SUPPORT = False
 
-SECRET = 'tB87#kPtkxqOS2'
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, bot, context: str):
@@ -221,22 +219,14 @@ class MinisterSchedule(commands.Cog):
             pass
 
     async def fetch_user_data(self, fid, proxy=None):
-        url = 'https://wos-giftcode-api.centurygame.com/api/player'
-        headers = get_headers('https://wos-giftcode-api.centurygame.com')
-        current_time = int(time.time() * 1000)
-        form = f"fid={fid}&time={current_time}"
-        sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
-        form = f"sign={sign}&{form}"
-
-        try:
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as session:
-                async with session.post(url, headers=headers, data=form, ssl=False) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        return response.status
-        except Exception as e:
+        result = await LoginHandler().fetch_player_data(str(fid), use_proxy=proxy)
+        if result['status'] == 'success':
+            return {"data": result['data']}
+        elif result['status'] == 'rate_limited':
+            return 429
+        elif result['status'] == 'not_found':
+            return {"data": None}
+        else:
             return None
 
     async def send_embed_to_channel(self, embed):

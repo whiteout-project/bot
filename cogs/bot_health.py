@@ -1,6 +1,5 @@
 """
-Bot Health Dashboard
-Shows overall bot health status, manages automated DB maintenance, and provides manual file cleanup tools.
+Bot health dashboard. Shows API status, database health, system info, and cleanup tools.
 """
 import discord
 from discord.ext import commands, tasks
@@ -94,6 +93,7 @@ class BotHealth(commands.Cog):
         self.archive_path = "log/archive"
         self.settings_db_path = "db/settings.sqlite"
         self.gift_api_url = "http://gift-code-api.whiteout-bot.com/giftcode_api.php"
+        self.gift_api_key = "super_secret_bot_token_nobody_will_ever_find"
 
         self.logger = logging.getLogger('bot')
         self.start_time = datetime.now(timezone.utc)
@@ -250,7 +250,8 @@ class BotHealth(commands.Cog):
             timeout = aiohttp.ClientTimeout(total=5)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 start = datetime.now()
-                async with session.get(self.gift_api_url) as response:
+                headers = {'X-API-Key': self.gift_api_key}
+                async with session.get(self.gift_api_url, headers=headers) as response:
                     elapsed = (datetime.now() - start).total_seconds()
 
                     if response.status == 200:

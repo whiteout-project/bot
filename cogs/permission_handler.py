@@ -1,10 +1,8 @@
 """
-Centralized Permission Handler
-
-Permission Tiers:
-- Global Admin (is_initial=1): Access to ALL alliances, admin management, bot settings
-- Server Admin (is_initial=0, no adminserver entries): All alliances on their Discord server
-- Alliance Admin (is_initial=0, has adminserver entries): Only their assigned alliance(s)
+Centralized permission handler. Manages three admin tiers:
+- Global Admin (is_initial=1): all alliances, admin management, bot settings
+- Server Admin (is_initial=0, no adminserver): all alliances on their Discord server
+- Alliance Admin (is_initial=0, has adminserver): only assigned alliance(s)
 """
 
 import sqlite3

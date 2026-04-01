@@ -1,18 +1,16 @@
+"""
+Minister scheduling menu. UI for managing state minister appointments and rotations.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
-import time
-import hashlib
-import aiohttp
 import logging
-from aiohttp_socks import ProxyConnector
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
-from .browser_headers import get_headers
+from .login_handler import LoginHandler
 
 logger = logging.getLogger('bot')
 
-SECRET = 'tB87#kPtkxqOS2'
 
 class UserFilterModal(discord.ui.Modal, title="Filter Users"):
     def __init__(self, parent_view):
@@ -775,22 +773,14 @@ class MinisterMenu(commands.Cog):
             pass
 
     async def fetch_user_data(self, fid, proxy=None):
-        url = 'https://wos-giftcode-api.centurygame.com/api/player'
-        headers = get_headers('https://wos-giftcode-api.centurygame.com')
-        current_time = int(time.time() * 1000)
-        form = f"fid={fid}&time={current_time}"
-        sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
-        form = f"sign={sign}&{form}"
-
-        try:
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15)) as session:
-                async with session.post(url, headers=headers, data=form, ssl=False) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        return response.status
-        except Exception as e:
+        result = await LoginHandler().fetch_player_data(str(fid), use_proxy=proxy)
+        if result['status'] == 'success':
+            return {"data": result['data']}
+        elif result['status'] == 'rate_limited':
+            return 429
+        elif result['status'] == 'not_found':
+            return {"data": None}
+        else:
             return None
 
     async def is_admin(self, user_id: int) -> bool:

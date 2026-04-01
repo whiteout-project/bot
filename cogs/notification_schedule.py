@@ -1,3 +1,6 @@
+"""
+Notification scheduler. Runs background tasks that send event notifications on time.
+"""
 import discord
 from discord.ext import commands
 import sqlite3

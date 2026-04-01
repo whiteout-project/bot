@@ -1,8 +1,5 @@
 """
-Main Menu Cog
-
 Centralized menu system that handles all main menu logic and routing.
-Replaces the scattered approach where alliance.py managed the main menu.
 """
 
 import discord
@@ -37,6 +34,8 @@ class MainMenu(commands.Cog):
                     f"└ Event notification system for Bear, KE, and more\n\n"
                     f"{theme.listIcon} **Attendance Tracking**\n"
                     f"└ Track and export event attendance\n\n"
+                    f"{theme.chartIcon} **Bear Tracking**\n"
+                    f"└ Track bear hunt damage and view statistics\n\n"
                     f"{theme.ministerIcon} **Minister Scheduling**\n"
                     f"└ Manage state minister appointments\n\n"
                     f"{theme.paletteIcon} **Themes**\n"
@@ -304,6 +303,27 @@ class MainMenuView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error loading Attendance menu: {e}")
             print(f"Error loading Attendance menu: {e}")
+
+    @discord.ui.button(
+        label="Bear Tracking",
+        emoji=theme.chartIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="bear_tracking",
+        row=1
+    )
+    async def bear_tracking_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            bear_cog = self.cog.bot.get_cog("BearTrack")
+            if bear_cog:
+                await bear_cog.show_bear_track_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Bear Tracking module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Error loading Bear Tracking menu: {e}")
+            print(f"Error loading Bear Tracking menu: {e}")
 
     @discord.ui.button(
         label="Minister Scheduling",

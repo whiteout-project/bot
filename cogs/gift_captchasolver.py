@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
-# Gift Captcha Solver for WOS Discord Bot
-# Version 3 - now with ONNX model
-
+"""
+Captcha solver using an ONNX neural network model for gift code redemption.
+"""
 import os
 import io
 import time

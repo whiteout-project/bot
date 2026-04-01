@@ -1,3 +1,6 @@
+"""
+Alliance member operations. Handles member imports, removals, and transfers.
+"""
 import discord
 from discord.ext import commands
 from discord import app_commands

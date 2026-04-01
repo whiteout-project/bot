@@ -1,3 +1,6 @@
+"""
+Core bot operations. Admin management, alliance control messages, and bot settings.
+"""
 import discord
 from discord.ext import commands
 import os
