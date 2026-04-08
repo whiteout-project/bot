@@ -31,7 +31,7 @@ class GiftCaptchaSolver:
 
         Args:
             save_images (int): Image saving mode (0=None, 1=Failed, 2=Success, 3=All).
-                               Note: Saving logic is primarily handled in gift_operations.py now.
+                               Controlled via --save-captcha CLI arg.
         """
         self.save_images_mode = save_images
         self.onnx_session = None

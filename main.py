@@ -1045,6 +1045,20 @@ if __name__ == "__main__":
     bot = CustomBot(command_prefix="/", intents=intents)
     bot.no_dm = '--no-dm' in sys.argv
 
+    # Captcha image saving (dev/debug only)
+    # --save-captcha=1 (failed only), =2 (success only), =3 (all)
+    bot.save_captcha = 0
+    for arg in sys.argv:
+        if arg.startswith('--save-captcha='):
+            try:
+                bot.save_captcha = int(arg.split('=', 1)[1])
+                if bot.save_captcha not in (0, 1, 2, 3):
+                    print(f"Invalid --save-captcha value: {bot.save_captcha}. Must be 0-3. Defaulting to 0.")
+                    bot.save_captcha = 0
+            except ValueError:
+                print("Invalid --save-captcha value. Must be 0-3. Defaulting to 0.")
+                bot.save_captcha = 0
+
     init(autoreset=True)
 
     token_file = "bot_token.txt"

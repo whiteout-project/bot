@@ -188,16 +188,16 @@ async def show_ocr_settings(cog, interaction: discord.Interaction):
                     await interaction.response.send_message(error_msg, ephemeral=True)
                 return
 
-            cog.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
+            cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
             ocr_settings = cog.settings_cursor.fetchone()
 
             if not ocr_settings:
                 cog.logger.warning("No OCR settings found in DB, inserting defaults.")
-                cog.settings_cursor.execute("INSERT INTO ocr_settings (enabled, save_images) VALUES (1, 0)")
+                cog.settings_cursor.execute("INSERT INTO ocr_settings (enabled) VALUES (1)")
                 cog.settings_conn.commit()
-                ocr_settings = (1, 0)
+                ocr_settings = (1,)
 
-            enabled, save_images_setting = ocr_settings
+            enabled = ocr_settings[0]
             current_test_fid = get_test_fid(cog)
 
             onnx_available = False
@@ -225,11 +225,6 @@ async def show_ocr_settings(cog, interaction: discord.Interaction):
                     onnx_available = False
                     solver_status_msg = "onnxruntime library missing"
 
-            save_options_text = {
-                0: f"{theme.deniedIcon} None", 1: f"{theme.warnIcon} Failed Only", 2: f"{theme.verifiedIcon} Success Only", 3: f"{theme.saveIcon} All"
-            }
-            save_images_display = save_options_text.get(save_images_setting, f"Unknown ({save_images_setting})")
-
             embed = discord.Embed(
                 title=f"{theme.searchIcon} CAPTCHA Solver Settings (ONNX)",
                 description=(
@@ -237,7 +232,6 @@ async def show_ocr_settings(cog, interaction: discord.Interaction):
                     f"**Current Settings**\n"
                     f"{theme.upperDivider}\n"
                     f"{theme.robotIcon} **OCR Enabled:** {f'{theme.verifiedIcon} Yes' if enabled == 1 else f'{theme.deniedIcon} No'}\n"
-                    f"{theme.saveIcon} **Save CAPTCHA Images:** {save_images_display}\n"
                     f"{theme.fidIcon} **Test ID:** `{current_test_fid}`\n"
                     f"{theme.giftIcon} **ONNX Runtime:** {f'{theme.verifiedIcon} Found' if onnx_available else f'{theme.deniedIcon} Missing'}\n"
                     f"{theme.settingsIcon} **Solver Status:** `{solver_status_msg}`\n"
@@ -287,13 +281,7 @@ async def show_ocr_settings(cog, interaction: discord.Interaction):
                 inline=False
             )
 
-            embed.add_field(
-                name=f"{theme.warnIcon} Important Note",
-                value="Saving images (especially 'All') can consume significant disk space over time.",
-                inline=False
-            )
-
-            view = OCRSettingsView(cog, ocr_settings, onnx_available)
+            view = OCRSettingsView(cog, enabled, onnx_available)
 
             if interaction.response.is_done():
                 try:
@@ -321,49 +309,36 @@ async def show_ocr_settings(cog, interaction: discord.Interaction):
                 await interaction.response.send_message(error_message, ephemeral=True)
 
 
-async def update_ocr_settings(cog, interaction, enabled=None, save_images=None):
+async def update_ocr_settings(cog, interaction, enabled=None):
     """Update OCR settings in the database and reinitialize the solver if needed."""
     try:
-        cog.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
+        cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
         current_settings = cog.settings_cursor.fetchone()
-        if not current_settings:
-            current_settings = (1, 0)
-
-        current_enabled, current_save_images = current_settings
+        current_enabled = current_settings[0] if current_settings else 1
 
         target_enabled = enabled if enabled is not None else current_enabled
-        target_save_images = save_images if save_images is not None else current_save_images
 
         cog.settings_cursor.execute("""
-            UPDATE ocr_settings SET enabled = ?, save_images = ?
+            UPDATE ocr_settings SET enabled = ?
             WHERE id = (SELECT MAX(id) FROM ocr_settings)
-            """, (target_enabled, target_save_images))
+            """, (target_enabled,))
         if cog.settings_cursor.rowcount == 0:
             cog.settings_cursor.execute("""
-                INSERT INTO ocr_settings (enabled, save_images) VALUES (?, ?)
-                """, (target_enabled, target_save_images))
+                INSERT INTO ocr_settings (enabled) VALUES (?)
+                """, (target_enabled,))
         cog.settings_conn.commit()
-        cog.logger.info(f"GiftOps: Updated OCR settings in DB -> Enabled={target_enabled}, SaveImages={target_save_images}")
+        cog.logger.info(f"GiftOps: Updated OCR settings in DB -> Enabled={target_enabled}")
 
         message_suffix = "Settings updated."
-        reinitialize_solver = False
 
         if enabled is not None and enabled != current_enabled:
-            reinitialize_solver = True
             message_suffix = f"Solver has been {'enabled' if target_enabled == 1 else 'disabled'}."
-
-        if save_images is not None and cog.captcha_solver and cog.captcha_solver.is_initialized:
-            cog.captcha_solver.save_images_mode = target_save_images
-            cog.logger.info(f"GiftOps: Updated live captcha_solver.save_images_mode to {target_save_images}")
-            if not reinitialize_solver:
-                message_suffix = "Image saving preference updated."
-
-        if reinitialize_solver:
             cog.captcha_solver = None
             if target_enabled == 1:
                 cog.logger.info("GiftOps: OCR is being enabled/reinitialized...")
                 try:
-                    cog.captcha_solver = GiftCaptchaSolver(save_images=target_save_images)
+                    save_captcha = getattr(cog.bot, 'save_captcha', 0)
+                    cog.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
                     if cog.captcha_solver.is_initialized:
                         cog.logger.info("GiftOps: ONNX solver reinitialized successfully.")
                         message_suffix += " Solver reinitialized."
@@ -1009,11 +984,10 @@ class ClearCacheConfirmView(discord.ui.View):
 
 
 class OCRSettingsView(discord.ui.View):
-    def __init__(self, cog, ocr_settings, onnx_available):
+    def __init__(self, cog, enabled, onnx_available):
         super().__init__(timeout=7200)
         self.cog = cog
-        self.enabled = ocr_settings[0]
-        self.save_images_setting = ocr_settings[1]
+        self.enabled = enabled
         self.onnx_available = onnx_available
         self.disable_controls = not onnx_available
 
@@ -1054,22 +1028,6 @@ class OCRSettingsView(discord.ui.View):
         self.clear_cache_button_item.callback = self.clear_redemption_cache_button
         self.add_item(self.clear_cache_button_item)
 
-        # Row 2: Image Save Select Menu
-        self.image_save_select_item = discord.ui.Select(
-            placeholder="Select Captcha Image Saving Option",
-            min_values=1, max_values=1, row=2, custom_id="image_save_select",
-            options=[
-                discord.SelectOption(label="Don't Save Any Images", value="0", description="Fastest, no disk usage"),
-                discord.SelectOption(label="Save Only Failed Captchas", value="1", description="For debugging server rejects"),
-                discord.SelectOption(label="Save Only Successful Captchas", value="2", description="To see what worked"),
-                discord.SelectOption(label="Save All Captchas (High Disk Usage!)", value="3", description="Comprehensive debugging")
-            ],
-            disabled=self.disable_controls
-        )
-        for option in self.image_save_select_item.options:
-            option.default = (str(self.save_images_setting) == option.value)
-        self.image_save_select_item.callback = self.image_save_select_callback
-        self.add_item(self.image_save_select_item)
 
     async def change_test_fid_button(self, interaction: discord.Interaction):
         """Handle the change test ID button click."""
@@ -1189,61 +1147,6 @@ class OCRSettingsView(discord.ui.View):
                 ), color=theme.emColor3 if success else discord.Color.red()
             )
 
-            save_path_str = None
-            save_error_str = None
-            try:
-                self.cog.settings_cursor.execute("SELECT save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
-                save_setting_row = self.cog.settings_cursor.fetchone()
-                current_save_mode = save_setting_row[0] if save_setting_row else 0
-
-                should_save_img = False
-                save_tag = "UNKNOWN"
-                if success and current_save_mode in [2, 3]:
-                    should_save_img = True
-                    save_tag = captcha_code if captcha_code else "SUCCESS_NOCDE"
-                elif not success and current_save_mode in [1, 3]:
-                    should_save_img = True
-                    save_tag = "FAILED"
-
-                if should_save_img and image_bytes:
-                    logger.info(f"[Test Button] Attempting to save image based on mode {current_save_mode}. Status success={success}, tag='{save_tag}'")
-                    captcha_dir = self.cog.captcha_solver.captcha_dir
-                    safe_tag = re.sub(r'[\\/*?:"<>|]', '_', save_tag)
-                    timestamp = int(time.time())
-
-                    if success:
-                         base_filename = f"{safe_tag}.png"
-                    else:
-                         base_filename = f"FAIL_{safe_tag}_{timestamp}.png"
-
-                    test_path = os.path.join(captcha_dir, base_filename)
-
-                    counter = 1
-                    orig_path = test_path
-                    while os.path.exists(test_path) and counter <= 100:
-                        name, ext = os.path.splitext(orig_path)
-                        test_path = f"{name}_{counter}{ext}"
-                        counter += 1
-
-                    if counter > 100:
-                        save_error_str = f"Could not find unique filename for {base_filename} after 100 tries."
-                        logger.warning(f"[Test Button] {save_error_str}")
-                    else:
-                        os.makedirs(captcha_dir, exist_ok=True)
-                        with open(test_path, "wb") as f:
-                            f.write(image_bytes)
-                        save_path_str = os.path.basename(test_path)
-                        logger.info(f"[Test Button] Saved test captcha image to {test_path}")
-
-            except Exception as img_save_err:
-                logger.exception(f"[Test Button] Error saving test image: {img_save_err}")
-                save_error_str = f"Error during saving: {img_save_err}"
-
-            if save_path_str:
-                embed.add_field(name="📸 Captcha Image Saved", value=f"`{save_path_str}` in `{os.path.relpath(self.cog.captcha_solver.captcha_dir)}`", inline=False)
-            elif save_error_str:
-                embed.add_field(name=f"{theme.warnIcon} Image Save Error", value=save_error_str, inline=False)
-
             await interaction.followup.send(embed=embed, ephemeral=True)
             logger.info(f"[Test Button] Test completed for user {user_id}.")
 
@@ -1316,30 +1219,3 @@ class OCRSettingsView(discord.ui.View):
         confirm_view = ClearCacheConfirmView(self.cog)
         await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
 
-    async def image_save_select_callback(self, interaction: discord.Interaction):
-        if not self.onnx_available:
-            await interaction.response.send_message(f"{theme.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            selected_value = int(interaction.data["values"][0])
-
-            success, message = await self.cog.update_ocr_settings(
-                interaction=interaction,
-                save_images=selected_value
-            )
-
-            if success:
-                self.save_images_setting = selected_value
-                for option in self.image_save_select_item.options:
-                    option.default = (str(self.save_images_setting) == option.value)
-            else:
-                await interaction.followup.send(f"{theme.deniedIcon} {message}", ephemeral=True)
-
-        except ValueError:
-            await interaction.followup.send(f"{theme.deniedIcon} Invalid selection value for image saving.", ephemeral=True)
-        except Exception as e:
-            self.cog.logger.exception("Error processing image save selection in OCRSettingsView.")
-            await interaction.followup.send(f"{theme.deniedIcon} An error occurred while updating image saving settings.", ephemeral=True)

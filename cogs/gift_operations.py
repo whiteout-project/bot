@@ -150,19 +150,19 @@ class GiftOperations(commands.Cog):
             self.settings_cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ocr_settings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enabled INTEGER DEFAULT 1,
-                    save_images INTEGER DEFAULT 0
+                    enabled INTEGER DEFAULT 1
                 )""")
             self.settings_conn.commit()
 
-            self.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
+            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
             ocr_settings = self.settings_cursor.fetchone()
+            save_captcha = getattr(self.bot, 'save_captcha', 0)
 
             if ocr_settings:
-                enabled, save_images = ocr_settings
+                enabled = ocr_settings[0]
                 if enabled == 1:
                     self.logger.info("GiftOps __init__: OCR is enabled. Initializing ONNX solver...")
-                    self.captcha_solver = GiftCaptchaSolver(save_images=save_images)
+                    self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
                     if not self.captcha_solver.is_initialized:
                         self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
                         self.captcha_solver = None
@@ -172,9 +172,9 @@ class GiftOperations(commands.Cog):
                     self.logger.info("GiftOps __init__: OCR is disabled in settings.")
             else:
                 self.logger.warning("GiftOps __init__: No OCR settings found in DB. Inserting defaults.")
-                self.settings_cursor.execute("INSERT INTO ocr_settings (enabled, save_images) VALUES (1, 0)")
+                self.settings_cursor.execute("INSERT INTO ocr_settings (enabled) VALUES (1)")
                 self.settings_conn.commit()
-                self.captcha_solver = GiftCaptchaSolver(save_images=0)
+                self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
                 if not self.captcha_solver.is_initialized:
                     self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize with defaults.")
                     self.captcha_solver = None
@@ -240,6 +240,7 @@ class GiftOperations(commands.Cog):
     async def on_ready(self):
         self.logger.info("GiftOps Cog: on_ready triggered.")
         try:
+            # Clean up old columns from ocr_settings if present
             try:
                 self.logger.info("Checking ocr_settings table schema...")
                 conn_info = sqlite3.connect('db/settings.sqlite')
@@ -249,6 +250,7 @@ class GiftOperations(commands.Cog):
                 columns_to_drop = []
                 if 'use_gpu' in columns: columns_to_drop.append('use_gpu')
                 if 'gpu_device' in columns: columns_to_drop.append('gpu_device')
+                if 'save_images' in columns: columns_to_drop.append('save_images')
 
                 if columns_to_drop:
                     sqlite_version = sqlite3.sqlite_version_info
@@ -273,8 +275,7 @@ class GiftOperations(commands.Cog):
             self.settings_cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ocr_settings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enabled INTEGER DEFAULT 1,
-                    save_images INTEGER DEFAULT 0
+                    enabled INTEGER DEFAULT 1
                 )
             """)
             self.settings_conn.commit()
@@ -282,18 +283,19 @@ class GiftOperations(commands.Cog):
             self.settings_cursor.execute("SELECT COUNT(*) FROM ocr_settings")
             count = self.settings_cursor.fetchone()[0]
             if count == 0:
-                self.settings_cursor.execute("INSERT INTO ocr_settings (enabled, save_images) VALUES (1, 0)")
+                self.settings_cursor.execute("INSERT INTO ocr_settings (enabled) VALUES (1)")
                 self.settings_conn.commit()
 
             if self.captcha_solver is None:
                 self.logger.warning("Captcha solver not initialized in __init__, attempting again in on_ready...")
-                self.settings_cursor.execute("SELECT enabled, save_images FROM ocr_settings ORDER BY id DESC LIMIT 1")
+                self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
                 ocr_settings = self.settings_cursor.fetchone()
                 if ocr_settings:
-                    enabled, save_images_setting = ocr_settings
+                    enabled = ocr_settings[0]
                     if enabled == 1:
                         try:
-                            self.captcha_solver = GiftCaptchaSolver(save_images=save_images_setting)
+                            save_captcha = getattr(self.bot, 'save_captcha', 0)
+                            self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
                             if not self.captcha_solver.is_initialized:
                                 self.captcha_solver = None
                         except Exception:
@@ -516,8 +518,8 @@ class GiftOperations(commands.Cog):
     async def show_ocr_settings(self, interaction):
         return await gift_settings.show_ocr_settings(self, interaction)
 
-    async def update_ocr_settings(self, interaction, enabled=None, save_images=None):
-        return await gift_settings.update_ocr_settings(self, interaction, enabled, save_images)
+    async def update_ocr_settings(self, interaction, enabled=None):
+        return await gift_settings.update_ocr_settings(self, interaction, enabled)
 
     async def show_redemption_priority(self, interaction):
         return await gift_settings.show_redemption_priority(self, interaction)

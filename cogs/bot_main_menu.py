@@ -32,7 +32,7 @@ class MainMenu(commands.Cog):
                     f"└ Manage gift codes and rewards\n\n"
                     f"{theme.bellIcon} **Notifications**\n"
                     f"└ Event notification system for Bear, KE, and more\n\n"
-                    f"{theme.listIcon} **Attendance Tracking**\n"
+                    f"{theme.listIcon} **Attendance**\n"
                     f"└ Track and export event attendance\n\n"
                     f"{theme.chartIcon} **Bear Tracking**\n"
                     f"└ Track bear hunt damage and view statistics\n\n"
@@ -284,7 +284,7 @@ class MainMenuView(discord.ui.View):
             print(f"Error loading Notifications menu: {e}")
 
     @discord.ui.button(
-        label="Attendance Tracking",
+        label="Attendance",
         emoji=theme.listIcon,
         style=discord.ButtonStyle.primary,
         custom_id="attendance_tracking",
