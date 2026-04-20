@@ -53,13 +53,7 @@ class LoginHandler:
         
         # Alliance operation locks to prevent conflicts
         self.alliance_locks = {}
-        
-        # Centralized operation queue
-        self.operation_queue = asyncio.Queue()
-        self.operation_lock = asyncio.Lock()
-        self.current_operation = None
-        self.queue_processor_task = None
-        
+
         # SSL context (reusable)
         self.ssl_context = self._create_ssl_context()
 
@@ -417,83 +411,3 @@ class LoginHandler:
                              (self.rate_limit_per_api - len(self.api1_requests if 1 in self.available_apis else self.api2_requests))
         }
     
-    async def start_queue_processor(self):
-        """Start the queue processor if not already running"""
-        if not self.queue_processor_task or self.queue_processor_task.done():
-            self.queue_processor_task = asyncio.create_task(self._process_operation_queue())
-    
-    async def queue_operation(self, operation_info: Dict) -> int:
-        """
-        Queue an operation and return its position
-        operation_info should contain:
-        - type: 'member_addition' | 'alliance_control' | 'gift_code' etc
-        - callback: async function to execute
-        - description: string description
-        - alliance_id: optional alliance ID for locking
-        - interaction: discord interaction for status updates
-        """
-        # Mark if this operation will be queued (not the first)
-        current_size = self.operation_queue.qsize()
-        operation_info['was_queued'] = current_size > 0
-        
-        await self.operation_queue.put(operation_info)
-        queue_size = self.operation_queue.qsize()
-        
-        # Start processor if not running
-        await self.start_queue_processor()
-        
-        return queue_size
-    
-    async def _process_operation_queue(self):
-        """Process queued operations one at a time"""
-        while True:
-            try:
-                # Wait for an operation
-                operation = await self.operation_queue.get()
-                self.current_operation = operation
-                
-                try:
-                    # Use alliance lock if specified
-                    if operation.get('alliance_id'):
-                        async with self.get_alliance_lock(str(operation['alliance_id'])):
-                            await operation['callback']()
-                    else:
-                        await operation['callback']()
-
-                except Exception as e:
-                    error_str = str(e)
-                    logger.error(f"Operation failed: {operation['description']} - Error: {error_str}")
-                    if '503' in error_str or '502' in error_str or 'connect error' in error_str.lower():
-                        from cogs import bot_startup_display as startup
-                        startup.warn(f"Discord temporarily unavailable — {operation['description']} will retry automatically")
-                    else:
-                        from cogs import bot_startup_display as startup
-                        startup.phase_fail(f"{operation['description']}", details=[str(e)])
-                    # Send error message if interaction is available
-                    if operation.get('interaction'):
-                        try:
-                            await operation['interaction'].followup.send(
-                                f"{theme.deniedIcon} Operation failed: {str(e)}", ephemeral=True
-                            )
-                        except Exception:
-                            pass
-                
-                finally:
-                    self.current_operation = None
-                    self.operation_queue.task_done()
-                
-            except asyncio.CancelledError:
-                # Normal shutdown - no need to log as error
-                break
-            except Exception as e:
-                logger.error(f"Queue processor error: {e}")
-                print(f"Queue processor error: {e}")
-                await asyncio.sleep(1)  # Prevent tight loop on error
-    
-    def get_queue_info(self) -> Dict:
-        """Get current queue status"""
-        return {
-            'queue_size': self.operation_queue.qsize(),
-            'current_operation': self.current_operation,
-            'is_processing': self.current_operation is not None
-        }

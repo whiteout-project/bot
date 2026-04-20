@@ -1293,7 +1293,7 @@ class ThemeMenuView(discord.ui.View):
                 "To import a theme, send a message in this channel with:\n\n"
                 "1. A `.json` theme file attached\n"
                 "2. The bot will process it within 2 minutes\n\n"
-                f"{theme.infoIcon} **Tip:** Use `/theme import_file:` for direct import."
+                f"{theme.infoIcon} **Tip:** Use `/pimp import file:` for direct import."
             ),
             color=theme.emColor1
         )

@@ -1103,15 +1103,28 @@ if __name__ == "__main__":
 
         with connections["conn_settings"] as conn_settings:
             conn_settings.execute("""CREATE TABLE IF NOT EXISTS botsettings (
-                id INTEGER PRIMARY KEY, 
-                channelid INTEGER, 
-                giftcodestatus TEXT 
+                id INTEGER PRIMARY KEY,
+                channelid INTEGER,
+                giftcodestatus TEXT
             )""")
-            
+
             conn_settings.execute("""CREATE TABLE IF NOT EXISTS admin (
-                id INTEGER PRIMARY KEY, 
+                id INTEGER PRIMARY KEY,
                 is_initial INTEGER
             )""")
+
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS process_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                priority INTEGER NOT NULL,
+                alliance_id INTEGER,
+                details TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                completed_at TEXT
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_process_queue_status_priority
+                ON process_queue(status, priority, id)""")
 
         with connections["conn_users"] as conn_users:
             conn_users.execute("""CREATE TABLE IF NOT EXISTS users (
@@ -1153,7 +1166,7 @@ if __name__ == "__main__":
     startup.phase_ok("Database ready")
 
     async def load_cogs():
-        cogs = ["pimp_my_bot", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track", "attendance_ocr"]
+        cogs = ["pimp_my_bot", "process_queue", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track", "attendance_ocr"]
 
         failed_cogs = []
 

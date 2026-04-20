@@ -18,168 +18,81 @@ from requests.adapters import HTTPAdapter
 
 from .pimp_my_bot import theme
 from .browser_headers import get_headers
+from .process_queue import GIFT_VALIDATE, GIFT_REDEEM, PreemptedException
 
 
-async def add_to_validation_queue(cog, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None, batch_id=None):
-    """Add a gift code to the validation queue for processing."""
-    async with cog.validation_queue_lock:
-        queue_item = {
-            'giftcode': giftcode,
-            'source': source,
-            'message': message,
-            'channel': channel,
-            'timestamp': datetime.now(),
-            'status': 'queued',
-            'operation_type': operation_type,
-            'alliance_id': alliance_id,
-            'interaction': interaction,
-            'batch_id': batch_id
-        }
-        cog.validation_queue.append(queue_item)
-        cog.logger.info(f"Added gift code '{giftcode}' to validation queue (source: {source}, type: {operation_type}, queue length: {len(cog.validation_queue)})")
+async def enqueue_validation(cog, giftcode, source, message=None, channel=None):
+    """Enqueue a gift code validation operation in the ProcessQueue."""
 
-        # Start queue processing if not already running
-        if not cog.validation_queue_task or cog.validation_queue_task.done():
-            cog.validation_queue_task = asyncio.create_task(process_validation_queue(cog))
-
-
-async def process_validation_queue(cog):
-    """Process the validation queue one item at a time."""
-    cog.logger.info("Starting validation queue processing")
-
-    while True:
-        async with cog.validation_queue_lock:
-            if not cog.validation_queue:
-                cog.logger.info("Validation queue is empty, stopping processing")
-                break
-
-            queue_item = cog.validation_queue.popleft()
-            cog.validation_in_progress = True
-
-        try:
-            await _process_queue_item(cog, queue_item)
-        except Exception as e:
-            cog.logger.exception(f"Error processing queue item {queue_item['giftcode']}: {e}")
-        finally:
-            cog.validation_in_progress = False
-            await asyncio.sleep(0.5)  # Small delay between validations
-
-    cog.logger.info("Validation queue processing completed")
-
-
-async def _process_queue_item(cog, queue_item):
-    """Process a single queue item."""
-    giftcode = queue_item['giftcode']
-    source = queue_item['source']
-    message = queue_item.get('message')
-    channel = queue_item.get('channel')
-    operation_type = queue_item.get('operation_type', 'automatic')
-    alliance_id = queue_item.get('alliance_id')
-    interaction = queue_item.get('interaction')
-    batch_id = queue_item.get('batch_id')
-
-    cog.logger.info(f"Processing gift code '{giftcode}' from queue (source: {source}, type: {operation_type})")
-
-    # Handle redemption
-    if operation_type == 'redemption':
-        if alliance_id:
-            try:
-                # Get alliance name
-                cog.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                alliance_result = cog.alliance_cursor.fetchone()
-                alliance_name = alliance_result[0] if alliance_result else f"Alliance {alliance_id}"
-
-                # Handle batch progress update
-                if batch_id and batch_id in cog.redemption_batches:
-                    batch = cog.redemption_batches[batch_id]
-                    batch['alliances'][alliance_id]['status'] = 'processing'
-                    await _update_batch_progress(cog, batch_id)
-
-                # Send starting message only if interaction exists (non-batch)
-                progress_message = None
-                if interaction and not batch_id:
-                    start_embed = discord.Embed(
-                        title=f"{theme.refreshIcon} Processing Redemption",
-                        description=f"Starting gift code redemption for **{alliance_name}**...\n"
-                                   f"**Gift Code:** `{giftcode}`",
-                        color=theme.emColor1
-                    )
-                    progress_message = await interaction.followup.send(embed=start_embed, ephemeral=True)
-
-                # Execute the redemption
-                await use_giftcode_for_alliance(cog, alliance_id, giftcode)
-
-                # Handle batch completion update
-                if batch_id and batch_id in cog.redemption_batches:
-                    batch = cog.redemption_batches[batch_id]
-                    total_codes = batch.get('total_codes', 1)
-
-                    # Increment codes completed for this alliance
-                    batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
-                    codes_done = batch['alliances'][alliance_id]['codes_completed']
-
-                    # Mark alliance as completed only when all codes are done for it
-                    if codes_done >= total_codes:
-                        batch['alliances'][alliance_id]['status'] = 'completed'
-                    else:
-                        batch['alliances'][alliance_id]['status'] = 'processing'
-
-                    await _update_batch_progress(cog, batch_id)
-
-                    # Clean up batch if all alliances complete
-                    all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
-                    if all_done:
-                        del cog.redemption_batches[batch_id]
-
-                # Update the message with completion status if we have a message to update (non-batch)
-                elif interaction and progress_message:
-                    complete_embed = discord.Embed(
-                        title=f"{theme.verifiedIcon} Redemption Complete",
-                        description=f"Gift code redemption completed for **{alliance_name}**.\n"
-                                   f"**Gift Code:** `{giftcode}`",
-                        color=theme.emColor3
-                    )
-                    try:
-                        await progress_message.edit(embed=complete_embed)
-                    except Exception:
-                        pass
-            except Exception as e:
-                cog.logger.exception(f"Error in manual redemption for alliance {alliance_id}: {e}")
-
-                # Handle batch error update
-                if batch_id and batch_id in cog.redemption_batches:
-                    batch = cog.redemption_batches[batch_id]
-                    total_codes = batch.get('total_codes', 1)
-
-                    # Still count this as a code attempt for progress
-                    batch['alliances'][alliance_id]['codes_completed'] = batch['alliances'][alliance_id].get('codes_completed', 0) + 1
-                    codes_done = batch['alliances'][alliance_id]['codes_completed']
-
-                    # Mark alliance as error (but continue with other alliances)
-                    if codes_done >= total_codes:
-                        batch['alliances'][alliance_id]['status'] = 'error'
-
-                    await _update_batch_progress(cog, batch_id)
-
-                    # Clean up batch if all alliances complete
-                    all_done = all(info['status'] in ('completed', 'error') for info in batch['alliances'].values())
-                    if all_done:
-                        del cog.redemption_batches[batch_id]
-
-                elif interaction:
-                    error_embed = discord.Embed(
-                        title=f"{theme.deniedIcon} Redemption Error",
-                        description=f"An error occurred during redemption for **{alliance_name}**: {str(e)}",
-                        color=theme.emColor2
-                    )
-                    if progress_message:
-                        try:
-                            await progress_message.edit(embed=error_embed)
-                        except Exception:
-                            await interaction.followup.send(embed=error_embed, ephemeral=True)
-                    else:
-                        await interaction.followup.send(embed=error_embed, ephemeral=True)
+    process_queue = cog.bot.get_cog('ProcessQueue')
+    if not process_queue:
+        cog.logger.error("ProcessQueue cog not available, cannot enqueue validation")
         return
+
+    details = {
+        'giftcode': giftcode,
+        'source': source,
+    }
+    if channel:
+        details['channel_id'] = channel.id
+    if message:
+        details['message_id'] = message.id
+
+    process_queue.enqueue(
+        action='gift_validate',
+        priority=GIFT_VALIDATE,
+        details=details,
+    )
+    cog.logger.info(f"Enqueued validation for code '{giftcode}' (source: {source})")
+
+
+async def enqueue_redemption(cog, giftcode, alliance_id, source='manual', batch_id=None):
+    """Enqueue a gift code redemption operation in the ProcessQueue."""
+    process_queue = cog.bot.get_cog('ProcessQueue')
+    if not process_queue:
+        cog.logger.error("ProcessQueue cog not available, cannot enqueue redemption")
+        return
+
+    details = {
+        'giftcode': giftcode,
+        'source': source,
+    }
+    if batch_id:
+        details['batch_id'] = batch_id
+
+    process_queue.enqueue(
+        action='gift_redeem',
+        priority=GIFT_REDEEM,
+        alliance_id=alliance_id,
+        details=details,
+    )
+    cog.logger.info(f"Enqueued redemption for code '{giftcode}' alliance {alliance_id}")
+
+
+async def handle_gift_validate_process(cog, process):
+    """ProcessQueue handler for gift_validate actions."""
+    details = process.get('details', {})
+    giftcode = details.get('giftcode')
+    source = details.get('source', 'unknown')
+    channel_id = details.get('channel_id')
+    message_id = details.get('message_id')
+
+    if not giftcode:
+        cog.logger.error(f"gift_validate process {process['id']} missing giftcode")
+        return
+
+    cog.logger.info(f"Processing gift code validation '{giftcode}' from queue (source: {source})")
+
+    # Look up message and channel if IDs were provided
+    channel = None
+    message = None
+    if channel_id:
+        channel = cog.bot.get_channel(channel_id)
+        if channel and message_id:
+            try:
+                message = await channel.fetch_message(message_id)
+            except Exception:
+                message = None
 
     # Check if code already exists
     cog.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
@@ -194,10 +107,13 @@ async def _process_queue_item(cog, queue_item):
     if message and channel:
         processing_embed = discord.Embed(
             title=f"{theme.refreshIcon} Processing Gift Code...",
-            description=f"Validating `{giftcode}` (Position in queue: Processing now)",
+            description=f"Validating `{giftcode}`",
             color=theme.emColor1
         )
-        processing_message = await channel.send(embed=processing_embed)
+        try:
+            processing_message = await channel.send(embed=processing_embed)
+        except Exception:
+            processing_message = None
 
     # Perform validation
     is_valid, validation_msg = await validate_gift_code_immediately(cog, giftcode, source)
@@ -209,6 +125,76 @@ async def _process_queue_item(cog, queue_item):
     # Process auto-use if valid
     if is_valid:
         await _process_auto_use(cog, giftcode)
+
+
+async def _record_batch_start(cog, batch_id, alliance_id):
+    """Mark an alliance as processing in a batch and refresh the progress embed."""
+    if not batch_id or batch_id not in cog.redemption_batches:
+        return
+    batch = cog.redemption_batches[batch_id]
+    if alliance_id not in batch['alliances']:
+        return
+    batch['alliances'][alliance_id]['status'] = 'processing'
+    await _update_batch_progress(cog, batch_id)
+
+
+async def _record_batch_result(cog, batch_id, alliance_id, success):
+    """Record one code's completion (success or error) for an alliance in a batch.
+
+    Increments the alliance's code counter, flips its status once all codes are
+    done, refreshes the progress embed, and cleans up the batch if every
+    alliance is finished.
+    """
+    if not batch_id or batch_id not in cog.redemption_batches:
+        return
+    batch = cog.redemption_batches[batch_id]
+    alliances = batch['alliances']
+    if alliance_id not in alliances:
+        return
+
+    total_codes = batch.get('total_codes', 1)
+    alliances[alliance_id]['codes_completed'] = alliances[alliance_id].get('codes_completed', 0) + 1
+    codes_done = alliances[alliance_id]['codes_completed']
+
+    if codes_done >= total_codes:
+        alliances[alliance_id]['status'] = 'completed' if success else 'error'
+    elif success:
+        alliances[alliance_id]['status'] = 'processing'
+    else:
+        alliances[alliance_id]['status'] = 'error'
+
+    await _update_batch_progress(cog, batch_id)
+
+    if all(info['status'] in ('completed', 'error') for info in alliances.values()):
+        del cog.redemption_batches[batch_id]
+
+
+async def handle_gift_redeem_process(cog, process):
+    """ProcessQueue handler for gift_redeem actions."""
+    details = process.get('details', {})
+    giftcode = details.get('giftcode')
+    alliance_id = process.get('alliance_id')
+    batch_id = details.get('batch_id')
+
+    if not giftcode or not alliance_id:
+        cog.logger.error(f"gift_redeem process {process['id']} missing giftcode or alliance_id")
+        return
+
+    cog.logger.info(f"Processing gift code redemption '{giftcode}' for alliance {alliance_id}")
+
+    await _record_batch_start(cog, batch_id, alliance_id)
+
+    try:
+        await use_giftcode_for_alliance(cog, alliance_id, giftcode)
+    except PreemptedException:
+        # Let the processor re-queue this process; don't touch batch state
+        raise
+    except Exception as e:
+        cog.logger.exception(f"Error in redemption for alliance {alliance_id}: {e}")
+        await _record_batch_result(cog, batch_id, alliance_id, success=False)
+        raise
+
+    await _record_batch_result(cog, batch_id, alliance_id, success=True)
 
 
 async def _send_existing_code_response(cog, message, giftcode, channel):
@@ -283,42 +269,43 @@ async def _process_auto_use(cog, giftcode):
     if auto_alliances:
         cog.logger.info(f"Queueing auto-use for {len(auto_alliances)} alliances for code '{giftcode}'")
         for alliance in auto_alliances:
-            # Add to queue instead of direct execution
-            await add_to_validation_queue(
-                cog,
-                giftcode=giftcode,
-                source='auto',
-                operation_type='redemption',
-                alliance_id=alliance[0],
-                interaction=None  # No interaction for auto-use
-            )
+            await enqueue_redemption(cog, giftcode=giftcode, alliance_id=alliance[0], source='auto')
 
 
 async def get_queue_status(cog):
-    """Get current queue status."""
-    async with cog.validation_queue_lock:
-        # Group queue items by gift code
-        queue_by_code = {}
-        for idx, item in enumerate(cog.validation_queue):
-            code = item['giftcode']
-            if code not in queue_by_code:
-                queue_by_code[code] = []
-            queue_by_code[code].append({
-                'position': idx + 1,
-                'alliance_id': item.get('alliance_id'),
-                'source': item.get('source')
-            })
+    """Get current queue status from the ProcessQueue cog.
 
-        return {
-            'queue_length': len(cog.validation_queue),
-            'processing': cog.validation_in_progress,
-            'items': [{'giftcode': item['giftcode'], 'source': item['source']} for item in cog.validation_queue],
-            'queue_by_code': queue_by_code
-        }
+    Returns a dict with `queue_length` (total queued) and `queue_by_code`
+    (per-gift-code breakdown of queued operations).
+    """
+    process_queue = cog.bot.get_cog('ProcessQueue')
+    if not process_queue:
+        return {'queue_length': 0, 'queue_by_code': {}}
+
+    queue_size = process_queue.get_queue_info()['queue_size']
+
+    # Build per-code breakdown across gift_validate and gift_redeem actions
+    queue_by_code = {}
+    position = 1
+    for action in ('gift_validate', 'gift_redeem'):
+        for proc in process_queue.get_queued_processes_by_action(action):
+            details = proc.get('details', {})
+            code = details.get('giftcode', 'unknown')
+            queue_by_code.setdefault(code, []).append({
+                'position': position,
+                'alliance_id': proc.get('alliance_id'),
+                'source': details.get('source', 'unknown'),
+            })
+            position += 1
+
+    return {
+        'queue_length': queue_size,
+        'queue_by_code': queue_by_code,
+    }
 
 
 async def add_manual_redemption_to_queue(cog, giftcodes, alliance_ids, interaction):
-    """Add manual redemption requests to validation queue.
+    """Add manual redemption requests to ProcessQueue.
 
     Args:
         giftcodes: Single gift code string or list of gift codes
@@ -361,14 +348,12 @@ async def add_manual_redemption_to_queue(cog, giftcodes, alliance_ids, interacti
     # Queue order: Alliance 1 -> all codes, then Alliance 2 -> all codes, etc.
     for alliance_id in alliance_ids:
         for giftcode in giftcodes:
-            await add_to_validation_queue(
+            await enqueue_redemption(
                 cog,
                 giftcode=giftcode,
-                source='manual',
-                operation_type='redemption',
                 alliance_id=alliance_id,
-                interaction=interaction if not batch_id else None,
-                batch_id=batch_id
+                source='manual',
+                batch_id=batch_id,
             )
 
             queue_status = await get_queue_status(cog)
@@ -1391,13 +1376,11 @@ async def periodic_validation_loop_body(cog):
 
                                 for alliance in auto_alliances:
                                     try:
-                                        await add_to_validation_queue(
+                                        await enqueue_redemption(
                                             cog,
                                             giftcode=giftcode,
-                                            source='periodic-auto',
-                                            operation_type='redemption',
                                             alliance_id=alliance[0],
-                                            interaction=None
+                                            source='periodic-auto',
                                         )
                                     except Exception as e:
                                         cog.logger.exception(f"Error queueing delayed auto-redemption for code {giftcode} to alliance {alliance[0]}: {e}")
@@ -1761,10 +1744,27 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
         last_embed_update = time.time()
         code_is_invalid = False
 
+        # Cooperative preemption: yield to higher-priority work between players
+        process_queue_cog = cog.bot.get_cog('ProcessQueue')
+
         while active_members_to_process or retry_queue:
             if code_is_invalid:
                 cog.logger.info(f"GiftOps: Code {giftcode} detected as invalid, stopping redemption.")
                 break
+
+            # On preempt, only terminal statuses in batch_results are persisted;
+            # retry_queue and unfinalised failed_users_dict are dropped and
+            # re-attempted from scratch on resume (DB dedup keeps correctness).
+            if process_queue_cog and process_queue_cog.should_preempt():
+                cog.logger.info(
+                    f"GiftOps: Preempting redemption for {alliance_name} - higher priority work waiting "
+                    f"(pending retry_queue={len(retry_queue)}, unfinalised failed={len(failed_users_dict)}, "
+                    f"remaining active={len(active_members_to_process)})"
+                )
+                if batch_results:
+                    batch_process_alliance_results(cog, batch_results)
+                    batch_results = []
+                raise PreemptedException()
 
             current_time = time.time()
 
@@ -2054,6 +2054,8 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
 
         return True
 
+    except PreemptedException:
+        raise
     except Exception as e:
         cog.logger.exception(f"GiftOps: UNEXPECTED ERROR in use_giftcode_for_alliance for {alliance_id}/{giftcode}: {str(e)}")
         cog.logger.exception(f"Traceback: {traceback.format_exc()}")

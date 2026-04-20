@@ -37,9 +37,11 @@ class GiftCodeAPI:
         if hasattr(bot, 'conn'):
             self.conn = bot.conn
             self.cursor = self.conn.cursor()
+            self._owns_conn = False
         else:
             self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0, check_same_thread=False)
             self.cursor = self.conn.cursor()
+            self._owns_conn = True
 
         self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
@@ -59,8 +61,8 @@ class GiftCodeAPI:
         self.ssl_context.verify_mode = ssl.CERT_NONE
         
         self.logger = logging.getLogger('gift')
-        
-        asyncio.create_task(self.start_api_check())
+
+        self._api_check_task = asyncio.create_task(self.start_api_check())
 
     async def _execute_with_retry(self, operation, *args, max_retries=3, delay=0.1):
         """Execute a database operation with retry logic for handling locks."""
@@ -113,9 +115,13 @@ class GiftCodeAPI:
             self.logger.exception(f"Fatal error in API check loop: {e}")
 
     def cog_unload(self):
-        """Clean up database connections when cog is unloaded."""
+        """Clean up database connections and the API check task when unloaded."""
+        task = getattr(self, '_api_check_task', None)
+        if task is not None and not task.done():
+            task.cancel()
         try:
-            self.conn.close()
+            if getattr(self, '_owns_conn', True):
+                self.conn.close()
             self.settings_conn.close()
             self.users_conn.close()
         except Exception:
@@ -421,14 +427,14 @@ class GiftCodeAPI:
                                                 gift_operations = self.bot.get_cog('GiftOperations')
                                                 if gift_operations:
                                                     self.logger.info(f"Queueing auto-distribution for code {code} to {len(auto_alliances)} alliances")
+                                                    from . import gift_redemption
                                                     for alliance in auto_alliances:
-                                                        try:  # Use the queue system
-                                                            await gift_operations.add_to_validation_queue(
+                                                        try:
+                                                            await gift_redemption.enqueue_redemption(
+                                                                gift_operations,
                                                                 giftcode=code,
-                                                                source='api-auto',
-                                                                operation_type='redemption',
                                                                 alliance_id=alliance[0],
-                                                                interaction=None
+                                                                source='api-auto',
                                                             )
                                                         except Exception as e:
                                                             self.logger.exception(f"Error queueing auto-distribution for code {code} to alliance {alliance[0]}: {e}")

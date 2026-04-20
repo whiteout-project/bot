@@ -13,8 +13,6 @@ import re
 import os
 import traceback
 import logging
-from datetime import datetime
-from collections import deque
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from .gift_operationsapi import GiftCodeAPI
@@ -124,15 +122,10 @@ class GiftOperations(commands.Cog):
         self.validation_cooldown = 5
         self._last_cleanup_date = None
 
-        # Gift Code Validation Queue System
-        self.validation_queue = deque()
-        self.validation_in_progress = False
-        self.validation_queue_lock = asyncio.Lock()
-        self.validation_queue_task = None
         self.test_captcha_cooldowns = {}
         self.test_captcha_delay = 60
 
-        # Batch redemption tracking
+        # Batch redemption tracking (in-memory only, for live progress messages)
         self.redemption_batches = {}
 
         self.processing_stats = {
@@ -327,6 +320,21 @@ class GiftOperations(commands.Cog):
             if not self.periodic_validation_loop.is_running():
                 self.periodic_validation_loop.start()
 
+            # Register handlers with the ProcessQueue cog
+            process_queue_cog = self.bot.get_cog('ProcessQueue')
+            if process_queue_cog:
+                process_queue_cog.register_handler(
+                    'gift_validate',
+                    lambda process: gift_redemption.handle_gift_validate_process(self, process)
+                )
+                process_queue_cog.register_handler(
+                    'gift_redeem',
+                    lambda process: gift_redemption.handle_gift_redeem_process(self, process)
+                )
+                self.logger.info("GiftOps: Registered gift_validate and gift_redeem handlers with ProcessQueue")
+            else:
+                self.logger.error("GiftOps: ProcessQueue cog not found, gift code operations will not work")
+
             self.logger.info("GiftOps Cog: on_ready setup finished successfully.")
 
         except sqlite3.Error as db_err:
@@ -365,7 +373,7 @@ class GiftOperations(commands.Cog):
                 return
 
             self.logger.info(f"GiftOps: [on_message] Detected potential code '{giftcode}' in channel {message.channel.id}")
-            await self.add_to_validation_queue(giftcode, "channel", message, message.channel)
+            await gift_redemption.enqueue_validation(self, giftcode, "channel", message, message.channel)
 
         except Exception as e:
             self.logger.exception(f"GiftOps: UNEXPECTED Error in on_message handler: {str(e)}")
@@ -418,12 +426,6 @@ class GiftOperations(commands.Cog):
         await safe_edit_message(interaction, embed=gift_menu_embed, view=view)
 
     # ── Delegation to gift_redemption ─────────────────────────────────
-
-    async def add_to_validation_queue(self, giftcode, source, message=None, channel=None, operation_type='automatic', alliance_id=None, interaction=None, batch_id=None):
-        return await gift_redemption.add_to_validation_queue(self, giftcode, source, message, channel, operation_type, alliance_id, interaction, batch_id)
-
-    async def process_validation_queue(self):
-        return await gift_redemption.process_validation_queue(self)
 
     async def validate_gift_code_immediately(self, giftcode, source="unknown"):
         return await gift_redemption.validate_gift_code_immediately(self, giftcode, source)

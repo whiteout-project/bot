@@ -12,6 +12,7 @@ import traceback
 import logging
 from .login_handler import LoginHandler
 from .pimp_my_bot import theme
+from .process_queue import ALLIANCE_SYNC, PreemptedException
 
 level_mapping = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -350,10 +351,18 @@ class AllianceSync(commands.Cog):
                 return []
             return [str(item) for item in input_list if item]
 
+        # Cooperative preemption: yield to higher-priority work between members
+        process_queue_cog = self.bot.get_cog('ProcessQueue')
+
         i = 0
         while i < total_users:
             batch_users = users[i:i+20]
             for fid, old_nickname, old_furnace_lv, old_stove_lv_content, old_kid in batch_users:
+                # Check for higher-priority work
+                if process_queue_cog and process_queue_cog.should_preempt():
+                    self.logger.info(f"AllianceSync: Preempting sync for {alliance_name} - higher priority work waiting")
+                    raise PreemptedException()
+
                 data = await self.fetch_user_data(fid)
                 
                 if data == 429:
@@ -802,13 +811,27 @@ class AllianceSync(commands.Cog):
                         await asyncio.sleep(60)
                         continue
 
-                    # Queue the control check
-                    await self.login_handler.queue_operation({
-                        'type': 'alliance_sync',
-                        'callback': lambda ch=channel, aid=alliance_id: self.check_agslist(ch, aid, interaction_message=None),
-                        'description': f'Scheduled control check for alliance {alliance_id}',
-                        'alliance_id': alliance_id
-                    })
+                    # Queue the scheduled control check via ProcessQueue, but only
+                    # if a prior scheduled sync for this alliance hasn't already
+                    # been run / is still waiting its turn. Prevents duplicate
+                    # rows piling up when higher-priority work monopolises the
+                    # queue.
+                    process_queue = self.bot.get_cog('ProcessQueue')
+                    if process_queue:
+                        if process_queue.has_queued_or_active('alliance_sync', alliance_id=alliance_id):
+                            self.logger.info(
+                                f"[SYNC] Skipping scheduled sync for alliance {alliance_id}: "
+                                f"previous sync still queued/active"
+                            )
+                        else:
+                            process_queue.enqueue(
+                                action='alliance_sync',
+                                priority=ALLIANCE_SYNC,
+                                alliance_id=alliance_id,
+                                details={'channel_id': channel_id},
+                            )
+                    else:
+                        self.logger.error(f"ProcessQueue not available, cannot enqueue scheduled sync for alliance {alliance_id}")
 
                     # Sleep for the interval
                     await asyncio.sleep(interval * 60)
@@ -828,6 +851,55 @@ class AllianceSync(commands.Cog):
             print(f"[ERROR] Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             traceback.print_exc()
 
+    async def handle_alliance_control_process(self, process):
+        """ProcessQueue handler for alliance_control actions (manual user-triggered checks)."""
+        details = process.get('details', {})
+        alliance_id = process.get('alliance_id')
+        channel_id = details.get('channel_id')
+        alliance_name = details.get('alliance_name')
+        is_batch = details.get('is_batch', False)
+        batch_info = details.get('batch_info')
+
+        if not alliance_id or not channel_id:
+            self.logger.error(f"alliance_control process {process['id']} missing alliance_id or channel_id")
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            self.logger.error(f"alliance_control process {process['id']}: channel {channel_id} not found")
+            return
+
+        # Look up live runtime context (interaction_message) — None if missing or after restart
+        process_queue = self.bot.get_cog('ProcessQueue')
+        runtime = process_queue.get_runtime_context(process['id']) if process_queue else {}
+        interaction_message = runtime.get('interaction_message')
+
+        await self.check_agslist(
+            channel,
+            alliance_id,
+            interaction_message=interaction_message,
+            alliance_name=alliance_name,
+            is_batch=is_batch,
+            batch_info=batch_info,
+        )
+
+    async def handle_alliance_sync_process(self, process):
+        """ProcessQueue handler for alliance_sync actions (scheduled background checks)."""
+        details = process.get('details', {})
+        alliance_id = process.get('alliance_id')
+        channel_id = details.get('channel_id')
+
+        if not alliance_id or not channel_id:
+            self.logger.error(f"alliance_sync process {process['id']} missing alliance_id or channel_id")
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            self.logger.error(f"alliance_sync process {process['id']}: channel {channel_id} not found")
+            return
+
+        await self.check_agslist(channel, alliance_id, interaction_message=None)
+
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.monitor_started:
@@ -836,14 +908,20 @@ class AllianceSync(commands.Cog):
             # Check API availability
             await self.login_handler.check_apis_availability()
             self.logger.info(self.login_handler.get_mode_text(for_console=True))
-            
-            # Start the centralized queue processor
-            await self.login_handler.start_queue_processor()
-            
+
+            # Register handlers with the ProcessQueue cog
+            process_queue_cog = self.bot.get_cog('ProcessQueue')
+            if process_queue_cog:
+                process_queue_cog.register_handler('alliance_control', self.handle_alliance_control_process)
+                process_queue_cog.register_handler('alliance_sync', self.handle_alliance_sync_process)
+                self.logger.info("AllianceSync: Registered alliance_control and alliance_sync handlers with ProcessQueue")
+            else:
+                self.logger.error("AllianceSync: ProcessQueue cog not found, alliance operations will not work")
+
             self.monitor_alliance_changes.start()
             await self.start_alliance_checks()
             self.monitor_started = True
-            self.logger.info("Monitor and queue processor started successfully")
+            self.logger.info("Monitor and handlers registered successfully")
 
     async def start_alliance_checks(self):
         try:
@@ -977,6 +1055,15 @@ class AllianceSync(commands.Cog):
     async def after_monitor_alliance_changes(self):
         if self.monitor_alliance_changes.failed():
             print(Fore.RED + "Monitor alliance changes task failed. Restarting..." + Style.RESET_ALL)
+            # Cancel per-alliance schedulers and wait for them to exit so the
+            # restarted monitor doesn't spawn duplicates racing against zombies.
+            pending = [t for t in self.alliance_tasks.values() if t and not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self.alliance_tasks.clear()
+            self.is_running.clear()
             self.monitor_alliance_changes.restart()
 
 async def setup(bot):

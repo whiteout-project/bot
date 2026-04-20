@@ -9,6 +9,7 @@ import asyncio
 import logging
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
+from .process_queue import ALLIANCE_CONTROL
 
 logger = logging.getLogger('alliance')
 
@@ -378,18 +379,23 @@ class Alliance(commands.Cog):
                     async def alliance_check_callback(select_interaction: discord.Interaction):
                         try:
                             selected_value = select_interaction.data["values"][0]
-                            control_cog = self.bot.get_cog('AllianceSync')
 
-                            if not control_cog:
+                            if not self.bot.get_cog('AllianceSync'):
                                 await select_interaction.response.send_message("Alliance Sync module not found.", ephemeral=True)
                                 return
-                            
-                            # Ensure the centralized queue processor is running
-                            await control_cog.login_handler.start_queue_processor()
-                            
+
+                            # Get the ProcessQueue cog
+                            process_queue = self.bot.get_cog('ProcessQueue')
+                            if not process_queue:
+                                await select_interaction.response.send_message(
+                                    f"{theme.deniedIcon} Process Queue module not found.",
+                                    ephemeral=True
+                                )
+                                return
+
                             if selected_value == "all":
                                 # Get initial queue position
-                                queue_info = control_cog.login_handler.get_queue_info()
+                                queue_info = process_queue.get_queue_info()
                                 initial_queue_pos = queue_info['queue_size'] + 1
                                 
                                 progress_embed = discord.Embed(
@@ -417,23 +423,30 @@ class Alliance(commands.Cog):
                                         """, (alliance_id,))
                                         channel_data = self.c.fetchone()
                                         channel = self.bot.get_channel(channel_data[0]) if channel_data else select_interaction.channel
-                                        
-                                        # For all alliances, we'll pass the message and track which alliance
-                                        await control_cog.login_handler.queue_operation({
-                                            'type': 'alliance_control',
-                                            'callback': lambda ch=channel, aid=alliance_id, im=msg, an=name, qa=queued_alliances, idx=index: control_cog.check_agslist(
-                                                ch, aid, 
-                                                interaction_message=im, 
-                                                alliance_name=an,
-                                                is_batch=True,
-                                                batch_info={'current': idx + 1, 'total': len(alliances), 'all_names': qa}
-                                            ),
-                                            'description': f'Manual control check for alliance {name}',
-                                            'alliance_id': alliance_id,
-                                            'interaction_message': msg
+                                        if not channel:
+                                            continue
+
+                                        process_id = process_queue.enqueue(
+                                            action='alliance_control',
+                                            priority=ALLIANCE_CONTROL,
+                                            alliance_id=alliance_id,
+                                            details={
+                                                'channel_id': channel.id,
+                                                'alliance_name': name,
+                                                'is_batch': True,
+                                                'batch_info': {
+                                                    'current': index + 1,
+                                                    'total': len(alliances),
+                                                    'all_names': list(queued_alliances),
+                                                },
+                                            },
+                                        )
+                                        # Attach interaction message for live progress updates
+                                        process_queue.attach_runtime_context(process_id, {
+                                            'interaction_message': msg,
                                         })
                                         queued_alliances.append((alliance_id, name))
-                                    
+
                                     except Exception as e:
                                         logger.error(f"Error queuing alliance {name}: {e}")
                                         print(f"Error queuing alliance {name}: {e}")
@@ -455,11 +468,11 @@ class Alliance(commands.Cog):
 
                                 alliance_name, channel_id = alliance_data
                                 channel = self.bot.get_channel(channel_id) if channel_id else select_interaction.channel
-                                
+
                                 # Get queue info for position
-                                queue_info = control_cog.login_handler.get_queue_info()
+                                queue_info = process_queue.get_queue_info()
                                 queue_position = queue_info['queue_size'] + 1
-                                
+
                                 status_embed = discord.Embed(
                                     title=f"{theme.hourglassIcon} Alliance Control Operation",
                                     description=(
@@ -474,13 +487,22 @@ class Alliance(commands.Cog):
                                 )
                                 await select_interaction.response.send_message(embed=status_embed, ephemeral=True)
                                 msg = await select_interaction.original_response()
-                                
-                                await control_cog.login_handler.queue_operation({
-                                    'type': 'alliance_control',
-                                    'callback': lambda ch=channel, aid=alliance_id, im=msg, an=alliance_name: control_cog.check_agslist(ch, aid, interaction_message=im, alliance_name=an),
-                                    'description': f'Manual control check for alliance {alliance_name}',
-                                    'alliance_id': alliance_id,
-                                    'interaction_message': msg
+
+                                if not channel:
+                                    return
+
+                                process_id = process_queue.enqueue(
+                                    action='alliance_control',
+                                    priority=ALLIANCE_CONTROL,
+                                    alliance_id=alliance_id,
+                                    details={
+                                        'channel_id': channel.id,
+                                        'alliance_name': alliance_name,
+                                        'is_batch': False,
+                                    },
+                                )
+                                process_queue.attach_runtime_context(process_id, {
+                                    'interaction_message': msg,
                                 })
 
                         except Exception as e:
