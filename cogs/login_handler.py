@@ -103,7 +103,7 @@ class LoginHandler:
         
         connector = aiohttp.TCPConnector(ssl=self.ssl_context)
         
-        async with aiohttp.ClientSession(connector=connector) as session:
+        async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
             # Test API 1
             try:
                 current_time = int(time.time() * 1000)
@@ -267,7 +267,7 @@ class LoginHandler:
             else:
                 connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
                 async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     # Record the API request
                     self._record_api_request(api_num)
