@@ -194,9 +194,11 @@ def summary(servers, alliances, members, alliance_details=None):
 
 def api_status(name, status, detail=None):
     """Display API connection status."""
-    symbol = _OK if status in ('ok', 'healthy') else _FAIL
+    is_ok = status in ('ok', 'healthy')
+    symbol = _OK if is_ok else _FAIL
+    verb = "Connected to" if is_ok else "Could not reach"
     detail_str = f" ({detail})" if detail else ""
-    print(f"  {symbol} Connected to {name}{detail_str}")
+    print(f"  {symbol} {verb} {name}{detail_str}")
 
 
 def info(message):

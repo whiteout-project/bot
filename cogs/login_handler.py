@@ -87,7 +87,7 @@ class LoginHandler:
         
         connector = aiohttp.TCPConnector(ssl=self.ssl_context)
         
-        async with aiohttp.ClientSession(connector=connector) as session:
+        async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
             # Test API 1
             try:
                 current_time = int(time.time() * 1000)
@@ -101,7 +101,6 @@ class LoginHandler:
                     api_status["api1_available"] = response.status in [200, 429]
             except Exception as e:
                 logger.error(f"API1 availability check failed: {e}")
-                print(f"API1 availability check failed: {e}")
                 api_status["api1_available"] = False
             
             # Test API 2
@@ -116,7 +115,6 @@ class LoginHandler:
                     api_status["api2_available"] = response.status in [200, 429]
             except Exception as e:
                 logger.error(f"API2 availability check failed: {e}")
-                print(f"API2 availability check failed: {e}")
                 api_status["api2_available"] = False
         
         # Update configuration based on availability
@@ -251,7 +249,7 @@ class LoginHandler:
             else:
                 connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             
-            async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
                 async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
                     # Record the API request
                     self._record_api_request(api_num)
