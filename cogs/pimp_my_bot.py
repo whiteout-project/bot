@@ -2162,7 +2162,7 @@ class Theme(commands.Cog):
             }
 
             # Upload to gallery
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), trust_env=True) as session:
                 async with session.post(
                     f"{THEME_GALLERY_URL.rstrip('/')}/api/bot/themes",
                     json=upload_data,
@@ -2212,7 +2212,7 @@ class Theme(commands.Cog):
                 app_id = self.bot.application_id
                 bot_token = self.bot.http.token
 
-                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), trust_env=True) as session:
                     async with session.get(new_url) as resp:
                         if resp.status != 200:
                             return False

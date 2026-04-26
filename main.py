@@ -739,6 +739,24 @@ except Exception as e:
     print(F.RED + f"Error applying SSL context patch: {e}" + R)
 
 if __name__ == "__main__":
+    # ── Proxy support (--proxy flag) ───────────────────────────────────────────
+    # Pass --proxy <url> to route all game API traffic through a proxy server.
+    # Example: python main.py --proxy http://192.168.1.10:18080
+    # If --proxy is passed without a URL, defaults to http://localhost:18080.
+    # This is required when running behind proxysolution-network.
+    if "--proxy" in sys.argv:
+        _proxy_idx = sys.argv.index("--proxy")
+        _proxy_url = (
+            sys.argv[_proxy_idx + 1]
+            if _proxy_idx + 1 < len(sys.argv) and not sys.argv[_proxy_idx + 1].startswith("--")
+            else "http://localhost:18080"
+        )
+        import os as _os
+        _os.environ.setdefault("HTTP_PROXY",  _proxy_url)
+        _os.environ.setdefault("HTTPS_PROXY", _proxy_url)
+        _os.environ.setdefault("http_proxy",  _proxy_url)
+        _os.environ.setdefault("https_proxy", _proxy_url)
+        print(f"[proxy] Game API traffic routed through: {_proxy_url}")
     import requests
 
     # Check for mutually exclusive flags

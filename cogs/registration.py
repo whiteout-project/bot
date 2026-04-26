@@ -140,7 +140,7 @@ class Register(commands.Cog):
         sign = hashlib.md5((data_nosign + "tB87#kPtkxqOS2").encode()).hexdigest()
         data = f"sign={sign}&{data_nosign}"
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), trust_env=True) as session:
             async with session.post(
                 url=URL,
                 data=data,
