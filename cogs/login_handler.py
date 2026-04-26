@@ -306,13 +306,13 @@ class LoginHandler:
                         }
                         
         except Exception as e:
-            logger.error(f"Error fetching player data for ID {fid}: {e}")
-            print(f"Error fetching player data for ID {fid}: {e}")
+            err_desc = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.error(f"Error fetching player data for ID {fid}: {err_desc}")
             return {
                 'status': 'error',
                 'data': None,
                 'api_used': api_num,
-                'error_message': str(e)
+                'error_message': err_desc,
             }
     
     async def fetch_player_batch(self, fids: List[str], progress_callback: Optional[Callable] = None, 

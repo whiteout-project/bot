@@ -301,10 +301,10 @@ class NotificationSystem(commands.Cog):
                 notif_list.append(f"- **ID {notif_id}:** {desc}")
 
             embed = discord.Embed(
-                title=f"{theme.alertIcon} Notifications Auto-Disabled",
+                title=f"{theme.warnIcon} Notifications Auto-Disabled",
                 description=(
                     f"**{len(affected)}** notification(s) were automatically disabled because their "
-                    f"channel was deleted.\n\n"
+                    f"channel has gone missing. Have you seen it anywhere?\n\n"
                     f"**Channel ID:** `{channel_id}`\n\n"
                     + "\n".join(notif_list[:10])
                     + (f"\n*...and {len(affected) - 10} more*" if len(affected) > 10 else "")

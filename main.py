@@ -993,13 +993,30 @@ if __name__ == "__main__":
 
     setup_logging()
 
-    # Suppress noisy third-party loggers that spam during cog loading
+    # Silence tqdm progress bars (RapidOCR's model downloads emit them
+    # straight to stderr, which logging can't intercept).
+    os.environ.setdefault('TQDM_DISABLE', '1')
+
+    # Route RapidOCR / onnxruntime chatter to log/rapidocr.txt instead of
+    # the console. Those libraries attach their own StreamHandlers at
+    # import time, which bypass propagate/level on the parent logger;
+    # we have to clear those handlers explicitly before attaching ours.
+    rapidocr_log_path = os.path.join('log', 'rapidocr.txt')
+    rapidocr_handler = logging.handlers.RotatingFileHandler(
+        rapidocr_log_path, maxBytes=2 * 1024 * 1024, backupCount=1, encoding='utf-8',
+    )
+    rapidocr_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    )
+    rapidocr_handler.setLevel(logging.INFO)
     for noisy_logger in ['RapidOCR', 'rapidocr', 'rapidocr.main', 'rapidocr.base',
                          'rapidocr.download_file', 'onnxruntime']:
         _noisy = logging.getLogger(noisy_logger)
-        _noisy.setLevel(logging.ERROR)
+        for h in list(_noisy.handlers):
+            _noisy.removeHandler(h)
+        _noisy.setLevel(logging.INFO)
         _noisy.propagate = False
-        _noisy.addHandler(logging.NullHandler())
+        _noisy.addHandler(rapidocr_handler)
 
     # Stdout filter: redirect tagged print() calls from cogs to log files
     class _ConsoleFilter:

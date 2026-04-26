@@ -54,18 +54,7 @@ class AllianceSync(commands.Cog):
         self.cursor_settings = self.conn_settings.cursor()
         self.conn_settings.execute("PRAGMA journal_mode=WAL")
         self.conn_settings.execute("PRAGMA synchronous=NORMAL")
-        self.cursor_settings.execute("""
-            CREATE TABLE IF NOT EXISTS auto (
-                id INTEGER PRIMARY KEY,
-                value INTEGER DEFAULT 1
-            )
-        """)
-        
-        self.cursor_settings.execute("SELECT COUNT(*) FROM auto")
-        if self.cursor_settings.fetchone()[0] == 0:
-            self.cursor_settings.execute("INSERT INTO auto (value) VALUES (1)")
-        self.conn_settings.commit()
-        
+
         # Add update settings columns to alliancesettings if they don't exist
         self.cursor_alliance.execute("PRAGMA table_info(alliancesettings)")
         columns = [col[1] for col in self.cursor_alliance.fetchall()]
@@ -93,6 +82,25 @@ class AllianceSync(commands.Cog):
                 ALTER TABLE alliancesettings
                 ADD COLUMN keep_control_log INTEGER DEFAULT 1
             """)
+
+        if 'show_sync_message' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings
+                ADD COLUMN show_sync_message INTEGER DEFAULT 1
+            """)
+            try:
+                self.cursor_settings.execute("SELECT value FROM auto LIMIT 1")
+                prior_global = self.cursor_settings.fetchone()
+                if prior_global is not None:
+                    self.cursor_alliance.execute(
+                        "UPDATE alliancesettings SET show_sync_message = ?",
+                        (int(prior_global[0]) if prior_global[0] is not None else 1,),
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    f"show_sync_message backfill from legacy auto.value failed: {e}. "
+                    f"All alliances will default to ON."
+                )
 
         self.conn_alliance.commit()
 
@@ -258,7 +266,7 @@ class AllianceSync(commands.Cog):
             self.logger.error(f"Failed to remove invalid ID {fid}: {str(e)}")
             return False, None
 
-    async def check_agslist(self, channel, alliance_id, interaction=None, interaction_message=None, alliance_name=None, is_batch=False, batch_info=None):
+    async def check_agslist(self, channel, alliance_id, interaction=None, interaction_message=None, alliance_name=None, is_batch=False, batch_info=None, progress_message=None, process_id=None):
         async with self.db_lock:
             self.cursor_users.execute("SELECT fid, nickname, furnace_lv, stove_lv_content, kid FROM users WHERE alliance = ?", (alliance_id,))
             users = self.cursor_users.fetchall()
@@ -315,11 +323,12 @@ class AllianceSync(commands.Cog):
                 self.logger.warning(f"Could not update interaction message at start: {e}")
         
         async with self.db_lock:
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("SELECT value FROM auto LIMIT 1")
-                result = cursor.fetchone()
-                auto_value = result[0] if result else 1
+            self.cursor_alliance.execute(
+                "SELECT show_sync_message FROM alliancesettings WHERE alliance_id = ?",
+                (alliance_id,),
+            )
+            row = self.cursor_alliance.fetchone()
+            auto_value = row[0] if row and row[0] is not None else 1
         
         embed = discord.Embed(
             title=f"{theme.allianceIcon} {alliance_name} Alliance Sync",
@@ -339,8 +348,32 @@ class AllianceSync(commands.Cog):
         embed.set_footer(text=f"{theme.boltIcon} Automatic Alliance Sync System")
         
         message = None
-        if auto_value == 1:
+        if progress_message is not None:
+            # Recovery path: re-use the message from the pre-restart run so
+            # the channel doesn't accumulate a stuck "Members checked: X/Y"
+            # embed next to a fresh one from the resumed attempt.
+            message = progress_message
+            embed.description = f"{theme.refreshIcon} Sync resumed after bot restart — re-checking all members…"
+            try:
+                await message.edit(embed=embed)
+            except Exception as e:
+                self.logger.warning(f"Could not edit resumed progress message: {e}")
+                message = None
+
+        if message is None and auto_value == 1:
             message = await channel.send(embed=embed)
+            # Checkpoint the message id so if this run gets interrupted and
+            # recovered, the next attempt can re-use the same message.
+            if process_id is not None and message is not None:
+                pq = self.bot.get_cog('ProcessQueue')
+                if pq:
+                    try:
+                        pq.update_details(process_id, {
+                            'channel_id': channel.id,
+                            'progress_message_id': message.id,
+                        })
+                    except Exception as e:
+                        self.logger.warning(f"Could not checkpoint progress message id: {e}")
 
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
         members_to_remove = []  # Track members that should be removed for bulk check
@@ -898,7 +931,28 @@ class AllianceSync(commands.Cog):
             self.logger.error(f"alliance_sync process {process['id']}: channel {channel_id} not found")
             return
 
-        await self.check_agslist(channel, alliance_id, interaction_message=None)
+        # Recovery path: if a prior attempt posted a progress message and got
+        # interrupted, re-fetch it so check_agslist can update the existing
+        # embed instead of leaving it stuck while a fresh one runs beside it.
+        progress_message = None
+        msg_id = details.get('progress_message_id')
+        if msg_id:
+            try:
+                progress_message = await channel.fetch_message(int(msg_id))
+                self.logger.info(
+                    f"alliance_sync {process['id']}: resuming with existing message {msg_id}"
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"alliance_sync {process['id']}: could not fetch prior progress message {msg_id} ({e})"
+                )
+
+        await self.check_agslist(
+            channel, alliance_id,
+            interaction_message=None,
+            progress_message=progress_message,
+            process_id=process['id'],
+        )
 
     @commands.Cog.listener()
     async def on_ready(self):

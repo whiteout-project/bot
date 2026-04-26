@@ -59,7 +59,7 @@ class OrphanCleanupView(OrphanViewBase):
             for aid, users in self.orphaned_users.items()
         )
         return discord.Embed(
-            title=f"{theme.alertIcon} Orphaned Users Detected",
+            title=f"{theme.warnIcon} Orphaned Users Detected",
             description=(
                 f"Found **{total_count}** users linked to alliances that no longer exist.\n\n"
                 "These users cannot be added to new alliances until resolved.\n\n"
@@ -374,10 +374,6 @@ class BotStartup(commands.Cog):
                 admin_user = await self.bot.fetch_user(admin_id)
                 
                 if admin_user:
-                    cursor.execute("SELECT value FROM auto LIMIT 1")
-                    auto_result = cursor.fetchone()
-                    auto_value = auto_result[0] if auto_result else 1
-                    
                     # Check OCR initialization status
                     ocr_status = f"{theme.deniedIcon}"
                     ocr_details = "Not initialized"
@@ -393,7 +389,7 @@ class BotStartup(commands.Cog):
                             ocr_details = "GiftOperations cog not found"
                     except Exception as e:
                         ocr_details = f"Error checking OCR: {str(e)[:30]}..."
-                    
+
                     status_embed = discord.Embed(
                         title=f"{theme.robotIcon} Bot Successfully Activated",
                         description=(
@@ -402,7 +398,6 @@ class BotStartup(commands.Cog):
                             f"{theme.verifiedIcon} Bot is now online and operational\n"
                             f"{theme.verifiedIcon} Database connections established\n"
                             f"{theme.verifiedIcon} Command systems initialized\n"
-                            f"{theme.verifiedIcon if auto_value == 1 else theme.deniedIcon} Alliance Control Messages\n"
                             f"{ocr_status} {ocr_details}\n"
                             f"{theme.middleDivider}\n"
                         ),

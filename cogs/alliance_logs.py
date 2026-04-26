@@ -125,79 +125,12 @@ class AllianceLogs(commands.Cog):
         custom_id = interaction.data.get("custom_id", "")
 
         if custom_id == "back_from_logs_to_settings":
-            # Navigate back to Settings sub-menu
             main_menu_cog = self.bot.get_cog("MainMenu")
             if main_menu_cog:
-                await main_menu_cog.show_settings(interaction)
+                await main_menu_cog.show_alliance_management(interaction)
             return
 
-        if custom_id == "log_system":
-            try:
-                from .permission_handler import PermissionManager
-                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
-
-                if not is_admin:
-                    await interaction.response.send_message(
-                        f"{theme.deniedIcon} Only administrators can access the log system.",
-                        ephemeral=True
-                    )
-                    return
-
-                log_embed = discord.Embed(
-                    title=f"{theme.listIcon} Alliance Log System",
-                    description=(
-                        f"Select an option to manage alliance logs:\n\n"
-                        f"**Available Options**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.editListIcon} **Set Log Channel**\n"
-                        f"└ Assign a log channel to an alliance\n\n"
-                        f"{theme.trashIcon} **Remove Log Channel**\n"
-                        f"└ Remove alliance log channel\n\n"
-                        f"{theme.chartIcon} **View Log Channels**\n"
-                        f"└ List all alliance log channels\n"
-                        f"{theme.lowerDivider}"
-                    ),
-                    color=theme.emColor1
-                )
-
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(
-                    label="Set Log Channel",
-                    emoji=f"{theme.editListIcon}",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="set_log_channel",
-                    row=0
-                ))
-                view.add_item(discord.ui.Button(
-                    label="Remove Log Channel",
-                    emoji=f"{theme.trashIcon}",
-                    style=discord.ButtonStyle.danger,
-                    custom_id="remove_log_channel",
-                    row=0
-                ))
-                view.add_item(discord.ui.Button(
-                    label="View Log Channels",
-                    emoji=f"{theme.chartIcon}",
-                    style=discord.ButtonStyle.secondary,
-                    custom_id="view_log_channels",
-                    row=1
-                ))
-
-                await interaction.response.send_message(
-                    embed=log_embed,
-                    view=view,
-                    ephemeral=True
-                )
-
-            except Exception as e:
-                logger.error(f"Error in log system menu: {e}")
-                print(f"Error in log system menu: {e}")
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while accessing the log system.",
-                    ephemeral=True
-                )
-
-        elif custom_id == "set_log_channel":
+        if custom_id == "set_log_channel":
             try:
                 from .permission_handler import PermissionManager
 

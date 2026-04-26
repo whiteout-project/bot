@@ -65,10 +65,15 @@ LATENCY_ERROR_MS = 500
 
 # Active log file names (files that should not be archived)
 ACTIVE_LOG_NAMES = [
+    # Category logs written by the RotatingFileHandlers in main.setup_logging —
+    # never archive these; Windows will WinError 32 on the open handle.
+    'alliance.txt', 'bot.txt', 'gift.txt', 'notification.txt', 'redemption.txt',
+    'rapidocr.txt',
+    # Per-feature logs written directly by cogs
     'alliance_control.txt', 'alliance_memberlog.txt', 'alliance_sync.txt',
     'backuplog.txt', 'bear_trap.txt', 'db_maintenance.txt', 'gift_ops.txt',
     'gift_solver.txt', 'giftlog.txt', 'id_channel_log.txt', 'login_handler.txt',
-    'notifications.txt', 'verification.txt', 'add_memberlog.txt'
+    'notifications.txt', 'verification.txt', 'add_memberlog.txt',
 ]
 
 # Helper/utility files in cogs folder that are NOT loaded as cogs directly
