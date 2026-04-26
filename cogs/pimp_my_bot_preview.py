@@ -1,12 +1,14 @@
 """
-Theme Preview - Generates realistic preview of theme appearance.
-Shows multiple preview pages that mimic real bot embeds.
+Theme preview generator. Shows sample embeds that mimic real bot output.
 """
 import discord
+import logging
 
 from .pimp_my_bot import (
     theme, DEFAULT_EMOJI, check_interaction_user, build_divider
 )
+
+logger = logging.getLogger('bot')
 
 class ThemePreviewView(discord.ui.View):
     """View for showing theme preview with multiple real-world embed examples."""

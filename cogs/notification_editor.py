@@ -1,11 +1,17 @@
+"""
+Notification event editor. UI for creating and modifying notification events.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 import re
-from .bear_event_types import get_event_icon
+from .notification_event_types import get_event_icon
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('notification')
 
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
     """
@@ -173,6 +179,7 @@ class EmbedFieldModal(discord.ui.Modal):
             await self.parent_view.cog.update_embed_notification(self.parent_view)
             await self.parent_view.update_embed_view(interaction)
         except Exception as e:
+            logger.error(f"Error in modal for {self.field_name}: {e}")
             print(f"Error in modal for {self.field_name}: {e}")
             await interaction.followup.send(f"An error occurred! {e}", ephemeral=True)
 
@@ -211,7 +218,7 @@ class EmbedDataView(discord.ui.View):
             try:
                 next_dt = datetime.fromisoformat(self.next_notification.replace("+00:00", ""))
                 example_date = next_dt.strftime("%b %d")
-            except:
+            except Exception:
                 example_date = "Dec 06"
         else:
             example_date = "Dec 06"
@@ -438,6 +445,7 @@ class PlainEditorView(discord.ui.View):
                     self.weekdays = weekday_value[0]
                 conn.close()
             except Exception as e:
+                logger.error(f"Failed to load weekdays: {e}")
                 print(f"Failed to load weekdays: {e}")
 
         for child in self.children:
@@ -480,6 +488,7 @@ class PlainEditorView(discord.ui.View):
             try:
                 await self.cog.start_edit_process(interaction, self.notification_id, original_message=self.message)
             except Exception as e:
+                logger.error(f"Error in edit_embed button: {e}")
                 print(f"error: {e}")
         elif "PLAIN_MESSAGE" in self.description:
             button.label = "Description"
@@ -520,6 +529,7 @@ class PlainEditorView(discord.ui.View):
                         await self.parent_view.cog.update_notification(self.parent_view)
                         await self.parent_view.update_embed(modal_interaction)
                     except Exception as e:
+                        logger.error(f"Error in DescriptionModal: {e}")
                         print(f"Error in DescriptionModal: {e}")
                         await modal_interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
 
@@ -603,12 +613,14 @@ class PlainEditorView(discord.ui.View):
                 except ValueError:
                     await modal_interaction.followup.send(f"{theme.deniedIcon} Invalid input! Please enter numbers only.", ephemeral=True)
                 except Exception as e:
+                    logger.error(f"Error in TimeModal: {e}")
                     print(f"Error in TimeModal: {e}")
                     await modal_interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
 
         try:
             await interaction.response.send_modal(TimeModal(self))
         except Exception as e:
+            logger.error(f"Error sending modal: {e}")
             print(f"Error sending modal: {e}")
 
     @discord.ui.button(label="Repeat", style=discord.ButtonStyle.primary)
@@ -687,6 +699,7 @@ class PlainEditorView(discord.ui.View):
                 )
 
             except Exception as e:
+                logger.error(f"Error in send_day_selector: {e}")
                 print(f"Error in send_day_selector: {e}")
 
         async def send_custom_modal(interaction: discord.Interaction, parent_view):
@@ -722,6 +735,7 @@ class PlainEditorView(discord.ui.View):
                         await self.parent_view.update_embed(modal_interaction)
 
                     except Exception as e:
+                        logger.error(f"Error in CustomRepeatModal: {e}")
                         print(f"Error in CustomRepeatModal: {e}")
                         await modal_interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
 
@@ -989,6 +1003,7 @@ class NotificationEditor(commands.Cog):
                 await interaction.response.defer()
                 message = await interaction.followup.send(embed=embed, view=view, ephemeral=True)
             except Exception as e:
+                logger.error(f"Error during PLAIN_MESSAGE handling: {e}")
                 print(f"[ERROR] During PLAIN_MESSAGE handling: {e}")
                 await interaction.followup.send(f"An error occurred in PLAIN_MESSAGE section. {e}", ephemeral=True)
                 return
@@ -1025,7 +1040,7 @@ class NotificationEditor(commands.Cog):
 
         # Notify schedule boards of update
         if guild_id:
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            schedule_cog = self.bot.get_cog("NotificationSchedule")
             if schedule_cog:
                 await schedule_cog.on_notification_updated(guild_id, view.channel_id)
 
@@ -1050,7 +1065,7 @@ class NotificationEditor(commands.Cog):
             guild_id, channel_id = result
 
             # Notify schedule boards of update
-            schedule_cog = self.bot.get_cog("BearTrapSchedule")
+            schedule_cog = self.bot.get_cog("NotificationSchedule")
             if schedule_cog:
                 await schedule_cog.on_notification_updated(guild_id, channel_id)
 

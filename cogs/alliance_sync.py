@@ -1,3 +1,6 @@
+"""
+Automatic alliance data synchronization. Periodically fetches player data from the WOS API.
+"""
 import discord
 from discord.ext import commands, tasks
 import sqlite3
@@ -7,9 +10,9 @@ from colorama import Fore, Style
 import os
 import traceback
 import logging
-from logging.handlers import RotatingFileHandler
 from .login_handler import LoginHandler
 from .pimp_my_bot import theme
+from .process_queue import ALLIANCE_SYNC, PreemptedException
 
 level_mapping = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -25,59 +28,34 @@ level_mapping = {
     80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
 }
 
-class Control(commands.Cog):
+class AllianceSync(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn_alliance = sqlite3.connect('db/alliance.sqlite')
-        self.conn_users = sqlite3.connect('db/users.sqlite')
-        self.conn_changes = sqlite3.connect('db/changes.sqlite')
-        
-        # Setup logger for alliance control
-        self.logger = logging.getLogger('alliance_control')
-        self.logger.setLevel(logging.INFO)
-        self.logger.propagate = False
-        
-        # Clear existing handlers
-        if self.logger.hasHandlers():
-            self.logger.handlers.clear()
-        
-        # Create log directory if it doesn't exist
-        os.makedirs('log', exist_ok=True)
-        
-        # Rotating file handler for alliance control logs
-        # maxBytes = 1MB (1024 * 1024), backupCount = 1
-        file_handler = RotatingFileHandler(
-            'log/alliance_control.txt',
-            maxBytes=1024*1024,  # 1MB
-            backupCount=1,
-            encoding='utf-8'
-        )
-        file_handler.setLevel(logging.INFO)
-        
-        # Formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        file_handler.setFormatter(formatter)
-        
-        self.logger.addHandler(file_handler)
+        self.conn_alliance = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
+        self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
+        self.conn_changes = sqlite3.connect('db/changes.sqlite', timeout=30.0, check_same_thread=False)
+
+        # Use centralized alliance logger
+        self.logger = logging.getLogger('alliance')
+
         self.cursor_alliance = self.conn_alliance.cursor()
         self.cursor_users = self.conn_users.cursor()
         self.cursor_changes = self.conn_changes.cursor()
-        
-        self.conn_settings = sqlite3.connect('db/settings.sqlite')
+
+        # Enable WAL mode for better concurrent access
+        self.conn_alliance.execute("PRAGMA journal_mode=WAL")
+        self.conn_alliance.execute("PRAGMA synchronous=NORMAL")
+        self.conn_users.execute("PRAGMA journal_mode=WAL")
+        self.conn_users.execute("PRAGMA synchronous=NORMAL")
+        self.conn_changes.execute("PRAGMA journal_mode=WAL")
+        self.conn_changes.execute("PRAGMA synchronous=NORMAL")
+
+        self.conn_settings = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.cursor_settings = self.conn_settings.cursor()
-        self.cursor_settings.execute("""
-            CREATE TABLE IF NOT EXISTS auto (
-                id INTEGER PRIMARY KEY,
-                value INTEGER DEFAULT 1
-            )
-        """)
-        
-        self.cursor_settings.execute("SELECT COUNT(*) FROM auto")
-        if self.cursor_settings.fetchone()[0] == 0:
-            self.cursor_settings.execute("INSERT INTO auto (value) VALUES (1)")
-        self.conn_settings.commit()
-        
-        # Add control settings columns to alliancesettings if they don't exist
+        self.conn_settings.execute("PRAGMA journal_mode=WAL")
+        self.conn_settings.execute("PRAGMA synchronous=NORMAL")
+
+        # Add update settings columns to alliancesettings if they don't exist
         self.cursor_alliance.execute("PRAGMA table_info(alliancesettings)")
         columns = [col[1] for col in self.cursor_alliance.fetchall()]
         
@@ -104,6 +82,25 @@ class Control(commands.Cog):
                 ALTER TABLE alliancesettings
                 ADD COLUMN keep_control_log INTEGER DEFAULT 1
             """)
+
+        if 'show_sync_message' not in columns:
+            self.cursor_alliance.execute("""
+                ALTER TABLE alliancesettings
+                ADD COLUMN show_sync_message INTEGER DEFAULT 1
+            """)
+            try:
+                self.cursor_settings.execute("SELECT value FROM auto LIMIT 1")
+                prior_global = self.cursor_settings.fetchone()
+                if prior_global is not None:
+                    self.cursor_alliance.execute(
+                        "UPDATE alliancesettings SET show_sync_message = ?",
+                        (int(prior_global[0]) if prior_global[0] is not None else 1,),
+                    )
+            except Exception as e:
+                self.logger.warning(
+                    f"show_sync_message backfill from legacy auto.value failed: {e}. "
+                    f"All alliances will default to ON."
+                )
 
         self.conn_alliance.commit()
 
@@ -269,7 +266,7 @@ class Control(commands.Cog):
             self.logger.error(f"Failed to remove invalid ID {fid}: {str(e)}")
             return False, None
 
-    async def check_agslist(self, channel, alliance_id, interaction=None, interaction_message=None, alliance_name=None, is_batch=False, batch_info=None):
+    async def check_agslist(self, channel, alliance_id, interaction=None, interaction_message=None, alliance_name=None, is_batch=False, batch_info=None, progress_message=None, process_id=None):
         async with self.db_lock:
             self.cursor_users.execute("SELECT fid, nickname, furnace_lv, stove_lv_content, kid FROM users WHERE alliance = ?", (alliance_id,))
             users = self.cursor_users.fetchall()
@@ -287,7 +284,7 @@ class Control(commands.Cog):
             alliance_name = alliance_name_from_db
 
         start_time = datetime.now()
-        self.logger.info(f"{alliance_name} Alliance Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"{alliance_name} Alliance Sync started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Update ephemeral message at start if provided
         if interaction_message:
@@ -295,7 +292,7 @@ class Control(commands.Cog):
                 if is_batch and batch_info:
                     # For batch processing (all alliances)
                     status_embed = discord.Embed(
-                        title=f"{theme.refreshIcon} Alliance Control Operation",
+                        title=f"{theme.refreshIcon} Alliance Sync Operation",
                         description=(
                             f"{theme.upperDivider}\n"
                             f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
@@ -309,7 +306,7 @@ class Control(commands.Cog):
                 else:
                     # For single alliance processing
                     status_embed = discord.Embed(
-                        title=f"{theme.refreshIcon} Alliance Control Operation",
+                        title=f"{theme.refreshIcon} Alliance Sync Operation",
                         description=(
                             f"{theme.upperDivider}\n"
                             f"{theme.chartIcon} **Type:** Single Alliance\n"
@@ -326,20 +323,21 @@ class Control(commands.Cog):
                 self.logger.warning(f"Could not update interaction message at start: {e}")
         
         async with self.db_lock:
-            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                cursor = settings_db.cursor()
-                cursor.execute("SELECT value FROM auto LIMIT 1")
-                result = cursor.fetchone()
-                auto_value = result[0] if result else 1
+            self.cursor_alliance.execute(
+                "SELECT show_sync_message FROM alliancesettings WHERE alliance_id = ?",
+                (alliance_id,),
+            )
+            row = self.cursor_alliance.fetchone()
+            auto_value = row[0] if row and row[0] is not None else 1
         
         embed = discord.Embed(
-            title=f"{theme.allianceIcon} {alliance_name} Alliance Control",
+            title=f"{theme.allianceIcon} {alliance_name} Alliance Sync",
             description=f"{theme.searchIcon} Checking for changes in member status...",
             color=theme.emColor1
         )
         embed.add_field(
             name=f"{theme.chartIcon} Status",
-            value=f"{theme.hourglassIcon} Control started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
+            value=f"{theme.hourglassIcon} Sync started at {start_time.strftime('%Y-%m-%d %H:%M:%S')}",
             inline=False
         )
         embed.add_field(
@@ -347,11 +345,35 @@ class Control(commands.Cog):
             value=f"{theme.verifiedIcon} Members checked: {checked_users}/{total_users}",
             inline=False
         )
-        embed.set_footer(text=f"{theme.boltIcon} Automatic Alliance Control System")
+        embed.set_footer(text=f"{theme.boltIcon} Automatic Alliance Sync System")
         
         message = None
-        if auto_value == 1:
+        if progress_message is not None:
+            # Recovery path: re-use the message from the pre-restart run so
+            # the channel doesn't accumulate a stuck "Members checked: X/Y"
+            # embed next to a fresh one from the resumed attempt.
+            message = progress_message
+            embed.description = f"{theme.refreshIcon} Sync resumed after bot restart — re-checking all members…"
+            try:
+                await message.edit(embed=embed)
+            except Exception as e:
+                self.logger.warning(f"Could not edit resumed progress message: {e}")
+                message = None
+
+        if message is None and auto_value == 1:
             message = await channel.send(embed=embed)
+            # Checkpoint the message id so if this run gets interrupted and
+            # recovered, the next attempt can re-use the same message.
+            if process_id is not None and message is not None:
+                pq = self.bot.get_cog('ProcessQueue')
+                if pq:
+                    try:
+                        pq.update_details(process_id, {
+                            'channel_id': channel.id,
+                            'progress_message_id': message.id,
+                        })
+                    except Exception as e:
+                        self.logger.warning(f"Could not checkpoint progress message id: {e}")
 
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
         members_to_remove = []  # Track members that should be removed for bulk check
@@ -362,10 +384,18 @@ class Control(commands.Cog):
                 return []
             return [str(item) for item in input_list if item]
 
+        # Cooperative preemption: yield to higher-priority work between members
+        process_queue_cog = self.bot.get_cog('ProcessQueue')
+
         i = 0
         while i < total_users:
             batch_users = users[i:i+20]
             for fid, old_nickname, old_furnace_lv, old_stove_lv_content, old_kid in batch_users:
+                # Check for higher-priority work
+                if process_queue_cog and process_queue_cog.should_preempt():
+                    self.logger.info(f"AllianceSync: Preempting sync for {alliance_name} - higher priority work waiting")
+                    raise PreemptedException()
+
                 data = await self.fetch_user_data(fid)
                 
                 if data == 429:
@@ -602,7 +632,7 @@ class Control(commands.Cog):
             embed.set_field_at(
                 0,
                 name=f"{theme.chartIcon} Final Status",
-                value=f"{theme.verifiedIcon} Control completed with changes\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
+                value=f"{theme.verifiedIcon} Sync completed with changes\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}",
                 inline=False
             )
             embed.add_field(
@@ -638,7 +668,7 @@ class Control(commands.Cog):
             embed.set_field_at(
                 0,
                 name=f"{theme.chartIcon} Final Status",
-                value=f"{theme.verifiedIcon} Control completed successfully\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{theme.listIcon} No changes detected",
+                value=f"{theme.verifiedIcon} Sync completed successfully\n{theme.alarmClockIcon} {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n{theme.listIcon} No changes detected",
                 inline=False
             )
             embed.add_field(
@@ -656,7 +686,7 @@ class Control(commands.Cog):
                     await message.delete()
                 except discord.NotFound:
                     pass
-        self.logger.info(f"{alliance_name} Alliance Control completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.info(f"{alliance_name} Alliance Sync completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         self.logger.info(f"{alliance_name} Alliance Total Duration: {duration}")
         
         # Update ephemeral message at completion if provided
@@ -669,7 +699,7 @@ class Control(commands.Cog):
                     if batch_info['current'] == batch_info['total']:
                         # Final completion message for all alliances
                         status_embed = discord.Embed(
-                            title=f"{theme.verifiedIcon} Alliance Control Complete",
+                            title=f"{theme.verifiedIcon} Alliance Sync Complete",
                             description=(
                                 f"{theme.upperDivider}\n"
                                 f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
@@ -684,7 +714,7 @@ class Control(commands.Cog):
                     else:
                         # Still processing other alliances - just update progress
                         status_embed = discord.Embed(
-                            title=f"{theme.refreshIcon} Alliance Control Operation",
+                            title=f"{theme.refreshIcon} Alliance Sync Operation",
                             description=(
                                 f"{theme.upperDivider}\n"
                                 f"{theme.chartIcon} **Type:** All Alliances ({batch_info['total']} total)\n"
@@ -698,7 +728,7 @@ class Control(commands.Cog):
                 else:
                     # Single alliance completion
                     status_embed = discord.Embed(
-                        title=f"{theme.verifiedIcon} Alliance Control Complete",
+                        title=f"{theme.verifiedIcon} Alliance Sync Complete",
                         description=(
                             f"{theme.upperDivider}\n"
                             f"{theme.chartIcon} **Type:** Single Alliance\n"
@@ -731,7 +761,7 @@ class Control(commands.Cog):
                     description="\n\n".join(current_chunk),
                     color=color
                 )
-                embed.set_footer(text="Alliance Control System")
+                embed.set_footer(text="Alliance Sync System")
                 await channel.send(embed=embed)
                 current_chunk = [desc]
                 current_length = desc_length
@@ -777,7 +807,8 @@ class Control(commands.Cog):
             delay_seconds = (target - now).total_seconds()
             return max(0, int(delay_seconds))
         except (ValueError, AttributeError) as e:
-            print(f"[CONTROL] Invalid start_time format '{start_time}': {e}")
+            self.logger.error(f"Invalid start_time format '{start_time}': {e}")
+            print(f"[SYNC] Invalid start_time format '{start_time}': {e}")
             return interval * 60  # Fall back to interval delay
 
     async def schedule_alliance_check(self, alliance_id):
@@ -786,7 +817,7 @@ class Control(commands.Cog):
             # Get initial settings
             cached = self.current_task_settings.get(alliance_id)
             if not cached:
-                print(f"[CONTROL] No cached settings for alliance {alliance_id}, stopping")
+                print(f"[SYNC] No cached settings for alliance {alliance_id}, stopping")
                 return
 
             channel_id, interval, start_time = cached
@@ -801,7 +832,7 @@ class Control(commands.Cog):
                     # Fetch fresh settings from cache (updated by monitor loop)
                     cached = self.current_task_settings.get(alliance_id)
                     if not cached:
-                        print(f"[CONTROL] Alliance {alliance_id} removed from settings, stopping")
+                        print(f"[SYNC] Alliance {alliance_id} removed from settings, stopping")
                         break
 
                     channel_id, interval, start_time = cached
@@ -809,17 +840,31 @@ class Control(commands.Cog):
                     # Get the channel fresh each time
                     channel = self.bot.get_channel(channel_id)
                     if channel is None:
-                        print(f"[CONTROL] Channel {channel_id} not found for alliance {alliance_id}")
+                        print(f"[SYNC] Channel {channel_id} not found for alliance {alliance_id}")
                         await asyncio.sleep(60)
                         continue
 
-                    # Queue the control check
-                    await self.login_handler.queue_operation({
-                        'type': 'alliance_control',
-                        'callback': lambda ch=channel, aid=alliance_id: self.check_agslist(ch, aid, interaction_message=None),
-                        'description': f'Scheduled control check for alliance {alliance_id}',
-                        'alliance_id': alliance_id
-                    })
+                    # Queue the scheduled control check via ProcessQueue, but only
+                    # if a prior scheduled sync for this alliance hasn't already
+                    # been run / is still waiting its turn. Prevents duplicate
+                    # rows piling up when higher-priority work monopolises the
+                    # queue.
+                    process_queue = self.bot.get_cog('ProcessQueue')
+                    if process_queue:
+                        if process_queue.has_queued_or_active('alliance_sync', alliance_id=alliance_id):
+                            self.logger.info(
+                                f"[SYNC] Skipping scheduled sync for alliance {alliance_id}: "
+                                f"previous sync still queued/active"
+                            )
+                        else:
+                            process_queue.enqueue(
+                                action='alliance_sync',
+                                priority=ALLIANCE_SYNC,
+                                alliance_id=alliance_id,
+                                details={'channel_id': channel_id},
+                            )
+                    else:
+                        self.logger.error(f"ProcessQueue not available, cannot enqueue scheduled sync for alliance {alliance_id}")
 
                     # Sleep for the interval
                     await asyncio.sleep(interval * 60)
@@ -828,31 +873,109 @@ class Control(commands.Cog):
                     self.logger.info(f"Task cancelled for alliance {alliance_id}")
                     raise
                 except Exception as e:
+                    self.logger.error(f"Error in schedule_alliance_check for alliance {alliance_id}: {e}")
                     print(f"[ERROR] Error in schedule_alliance_check for alliance {alliance_id}: {e}")
                     await asyncio.sleep(60)
 
         except asyncio.CancelledError:
             self.logger.info(f"Schedule task cancelled for alliance {alliance_id}")
         except Exception as e:
+            self.logger.error(f"Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             print(f"[ERROR] Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             traceback.print_exc()
+
+    async def handle_alliance_control_process(self, process):
+        """ProcessQueue handler for alliance_control actions (manual user-triggered checks)."""
+        details = process.get('details', {})
+        alliance_id = process.get('alliance_id')
+        channel_id = details.get('channel_id')
+        alliance_name = details.get('alliance_name')
+        is_batch = details.get('is_batch', False)
+        batch_info = details.get('batch_info')
+
+        if not alliance_id or not channel_id:
+            self.logger.error(f"alliance_control process {process['id']} missing alliance_id or channel_id")
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            self.logger.error(f"alliance_control process {process['id']}: channel {channel_id} not found")
+            return
+
+        # Look up live runtime context (interaction_message) — None if missing or after restart
+        process_queue = self.bot.get_cog('ProcessQueue')
+        runtime = process_queue.get_runtime_context(process['id']) if process_queue else {}
+        interaction_message = runtime.get('interaction_message')
+
+        await self.check_agslist(
+            channel,
+            alliance_id,
+            interaction_message=interaction_message,
+            alliance_name=alliance_name,
+            is_batch=is_batch,
+            batch_info=batch_info,
+        )
+
+    async def handle_alliance_sync_process(self, process):
+        """ProcessQueue handler for alliance_sync actions (scheduled background checks)."""
+        details = process.get('details', {})
+        alliance_id = process.get('alliance_id')
+        channel_id = details.get('channel_id')
+
+        if not alliance_id or not channel_id:
+            self.logger.error(f"alliance_sync process {process['id']} missing alliance_id or channel_id")
+            return
+
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            self.logger.error(f"alliance_sync process {process['id']}: channel {channel_id} not found")
+            return
+
+        # Recovery path: if a prior attempt posted a progress message and got
+        # interrupted, re-fetch it so check_agslist can update the existing
+        # embed instead of leaving it stuck while a fresh one runs beside it.
+        progress_message = None
+        msg_id = details.get('progress_message_id')
+        if msg_id:
+            try:
+                progress_message = await channel.fetch_message(int(msg_id))
+                self.logger.info(
+                    f"alliance_sync {process['id']}: resuming with existing message {msg_id}"
+                )
+            except Exception as e:
+                self.logger.warning(
+                    f"alliance_sync {process['id']}: could not fetch prior progress message {msg_id} ({e})"
+                )
+
+        await self.check_agslist(
+            channel, alliance_id,
+            interaction_message=None,
+            progress_message=progress_message,
+            process_id=process['id'],
+        )
 
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.monitor_started:
-            print("[CONTROL] Starting monitor...")
+            self.logger.info("Starting monitor...")
 
             # Check API availability
             await self.login_handler.check_apis_availability()
-            print(f"[CONTROL] {self.login_handler.get_mode_text(for_console=True)}")
-            
-            # Start the centralized queue processor
-            await self.login_handler.start_queue_processor()
-            
+            self.logger.info(self.login_handler.get_mode_text(for_console=True))
+
+            # Register handlers with the ProcessQueue cog
+            process_queue_cog = self.bot.get_cog('ProcessQueue')
+            if process_queue_cog:
+                process_queue_cog.register_handler('alliance_control', self.handle_alliance_control_process)
+                process_queue_cog.register_handler('alliance_sync', self.handle_alliance_sync_process)
+                self.logger.info("AllianceSync: Registered alliance_control and alliance_sync handlers with ProcessQueue")
+            else:
+                self.logger.error("AllianceSync: ProcessQueue cog not found, alliance operations will not work")
+
             self.monitor_alliance_changes.start()
             await self.start_alliance_checks()
             self.monitor_started = True
-            self.logger.info("Monitor and queue processor started successfully")
+            self.logger.info("Monitor and handlers registered successfully")
 
     async def start_alliance_checks(self):
         try:
@@ -893,20 +1016,19 @@ class Control(commands.Cog):
 
                 if scheduled_alliances:
                     msg = f"Scheduled controls for {len(scheduled_alliances)} alliance(s): {', '.join(scheduled_alliances)}"
-                    print(f"[CONTROL] {msg}")
+                    print(f"[SYNC] {msg}")
                     self.logger.info(msg)
 
         except Exception as e:
+            self.logger.error(f"Error in start_alliance_checks: {e}")
             print(f"[ERROR] Error in start_alliance_checks: {e}")
             traceback.print_exc()
 
     async def cog_load(self):
         try:
-            print("[MONITOR] Cog loaded successfully")
+            self.logger.info("Alliance sync cog loaded")
         except Exception as e:
-            print(f"[ERROR] Error in cog_load: {e}")
-            import traceback
-            print(traceback.format_exc())
+            self.logger.error(f"Error in cog_load: {e}")
 
     @tasks.loop(minutes=1)
     async def monitor_alliance_changes(self):
@@ -924,7 +1046,7 @@ class Control(commands.Cog):
 
                     # If interval is 0, stop the task
                     if interval == 0 and task_exists:
-                        print(f"[CONTROL] Stopping alliance {alliance_id} - interval set to 0")
+                        print(f"[SYNC] Stopping alliance {alliance_id} - interval set to 0")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
@@ -937,7 +1059,7 @@ class Control(commands.Cog):
                     settings_changed = cached_settings and cached_settings != (channel_id, interval, start_time)
                     if settings_changed and task_exists:
                         old_channel, old_interval, old_start = cached_settings
-                        print(f"[CONTROL] Settings changed for alliance {alliance_id}:")
+                        print(f"[SYNC] Settings changed for alliance {alliance_id}:")
                         if old_channel != channel_id:
                             print(f"  Channel: {old_channel} -> {channel_id}")
                         if old_interval != interval:
@@ -965,7 +1087,7 @@ class Control(commands.Cog):
                 # Clean up tasks for removed alliances
                 for alliance_id in list(self.alliance_tasks.keys()):
                     if alliance_id not in current_settings:
-                        print(f"[CONTROL] Removing task for deleted alliance {alliance_id}")
+                        print(f"[SYNC] Removing task for deleted alliance {alliance_id}")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
@@ -974,6 +1096,7 @@ class Control(commands.Cog):
                             del self.current_task_settings[alliance_id]
 
         except Exception as e:
+            self.logger.error(f"Error in monitor_alliance_changes: {e}")
             print(f"[ERROR] Error in monitor_alliance_changes: {e}")
             import traceback
             print(traceback.format_exc())
@@ -986,8 +1109,16 @@ class Control(commands.Cog):
     async def after_monitor_alliance_changes(self):
         if self.monitor_alliance_changes.failed():
             print(Fore.RED + "Monitor alliance changes task failed. Restarting..." + Style.RESET_ALL)
+            # Cancel per-alliance schedulers and wait for them to exit so the
+            # restarted monitor doesn't spawn duplicates racing against zombies.
+            pending = [t for t in self.alliance_tasks.values() if t and not t.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self.alliance_tasks.clear()
+            self.is_running.clear()
             self.monitor_alliance_changes.restart()
 
 async def setup(bot):
-    control_cog = Control(bot)
-    await bot.add_cog(control_cog)
+    await bot.add_cog(AllianceSync(bot))

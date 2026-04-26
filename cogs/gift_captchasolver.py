@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
-# Gift Captcha Solver for WOS Discord Bot
-# Version 3 - now with ONNX model
-
+"""
+Captcha solver using an ONNX neural network model for gift code redemption.
+"""
 import os
 import io
 import time
@@ -32,24 +31,15 @@ class GiftCaptchaSolver:
 
         Args:
             save_images (int): Image saving mode (0=None, 1=Failed, 2=Success, 3=All).
-                               Note: Saving logic is primarily handled in gift_operations.py now.
+                               Controlled via --save-captcha CLI arg.
         """
         self.save_images_mode = save_images
         self.onnx_session = None
         self.model_metadata = None
         self.is_initialized = False
 
-        # Logger setup
-        self.logger = logging.getLogger("gift_solver")
-        if not self.logger.hasHandlers():
-            self.logger.setLevel(logging.INFO)
-            self.logger.propagate = False
-            log_dir = 'log'
-            os.makedirs(log_dir, exist_ok=True)
-            log_file = os.path.join(log_dir, 'gift_solver.txt')
-            handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=3 * 1024 * 1024, backupCount=3, encoding='utf-8')
-            handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
-            self.logger.addHandler(handler)
+        # Use centralized gift logger
+        self.logger = logging.getLogger('gift')
 
         self.captcha_dir = 'captcha_images'
         os.makedirs(self.captcha_dir, exist_ok=True)

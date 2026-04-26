@@ -1,18 +1,24 @@
+"""
+Alliance log viewer. Displays alliance control message history and member activity.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
 
-class LogSystem(commands.Cog):
+logger = logging.getLogger('alliance')
+
+class AllianceLogs(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.settings_db = sqlite3.connect('db/settings.sqlite', check_same_thread=False)
+        self.settings_db = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_db.cursor()
-        
-        self.alliance_db = sqlite3.connect('db/alliance.sqlite', check_same_thread=False)
+
+        self.alliance_db = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.alliance_cursor = self.alliance_db.cursor()
         
         self.setup_database()
@@ -30,14 +36,86 @@ class LogSystem(commands.Cog):
             self.settings_db.commit()
                 
         except Exception as e:
+            logger.error(f"Error setting up log system database: {e}")
             print(f"Error setting up log system database: {e}")
 
-    def __del__(self):
+    def cog_unload(self):
         try:
             self.settings_db.close()
             self.alliance_db.close()
-        except:
+        except Exception:
             pass
+
+    async def show_log_menu(self, interaction: discord.Interaction):
+        """Display the log system menu - called by MainMenu cog."""
+        try:
+            from .permission_handler import PermissionManager
+            is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+
+            if not is_admin:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Only administrators can access the log system.",
+                    ephemeral=True
+                )
+                return
+
+            log_embed = discord.Embed(
+                title=f"{theme.documentIcon} Alliance Log System",
+                description=(
+                    f"Configure log channels for alliance activity:\n\n"
+                    f"**Available Options**\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.editListIcon} **Set Log Channel**\n"
+                    f"└ Assign a log channel to an alliance\n\n"
+                    f"{theme.trashIcon} **Remove Log Channel**\n"
+                    f"└ Remove alliance log channel\n\n"
+                    f"{theme.chartIcon} **View Log Channels**\n"
+                    f"└ List all alliance log channels\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1
+            )
+
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label="Set Log Channel",
+                emoji=f"{theme.editListIcon}",
+                style=discord.ButtonStyle.primary,
+                custom_id="set_log_channel",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="Remove Log Channel",
+                emoji=f"{theme.trashIcon}",
+                style=discord.ButtonStyle.danger,
+                custom_id="remove_log_channel",
+                row=0
+            ))
+            view.add_item(discord.ui.Button(
+                label="View Log Channels",
+                emoji=f"{theme.chartIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="view_log_channels",
+                row=1
+            ))
+            view.add_item(discord.ui.Button(
+                label="Back",
+                emoji=f"{theme.backIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="back_from_logs_to_settings",
+                row=1
+            ))
+
+            await safe_edit_message(interaction, embed=log_embed, view=view, content=None)
+
+        except Exception as e:
+            logger.error(f"Error in show_log_menu: {e}")
+            print(f"Error in show_log_menu: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while accessing the log system.",
+                    ephemeral=True
+                )
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
@@ -45,73 +123,14 @@ class LogSystem(commands.Cog):
             return
 
         custom_id = interaction.data.get("custom_id", "")
-        
-        if custom_id == "log_system":
-            try:
-                from .permission_handler import PermissionManager
-                is_admin, _ = PermissionManager.is_admin(interaction.user.id)
 
-                if not is_admin:
-                    await interaction.response.send_message(
-                        f"{theme.deniedIcon} Only administrators can access the log system.",
-                        ephemeral=True
-                    )
-                    return
+        if custom_id == "back_from_logs_to_settings":
+            main_menu_cog = self.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_alliance_management(interaction)
+            return
 
-                log_embed = discord.Embed(
-                    title=f"{theme.listIcon} Alliance Log System",
-                    description=(
-                        f"Select an option to manage alliance logs:\n\n"
-                        f"**Available Options**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.editListIcon} **Set Log Channel**\n"
-                        f"└ Assign a log channel to an alliance\n\n"
-                        f"{theme.trashIcon} **Remove Log Channel**\n"
-                        f"└ Remove alliance log channel\n\n"
-                        f"{theme.chartIcon} **View Log Channels**\n"
-                        f"└ List all alliance log channels\n"
-                        f"{theme.lowerDivider}"
-                    ),
-                    color=theme.emColor1
-                )
-
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(
-                    label="Set Log Channel",
-                    emoji=f"{theme.editListIcon}",
-                    style=discord.ButtonStyle.primary,
-                    custom_id="set_log_channel",
-                    row=0
-                ))
-                view.add_item(discord.ui.Button(
-                    label="Remove Log Channel",
-                    emoji=f"{theme.trashIcon}",
-                    style=discord.ButtonStyle.danger,
-                    custom_id="remove_log_channel",
-                    row=0
-                ))
-                view.add_item(discord.ui.Button(
-                    label="View Log Channels",
-                    emoji=f"{theme.chartIcon}",
-                    style=discord.ButtonStyle.secondary,
-                    custom_id="view_log_channels",
-                    row=1
-                ))
-
-                await interaction.response.send_message(
-                    embed=log_embed,
-                    view=view,
-                    ephemeral=True
-                )
-
-            except Exception as e:
-                print(f"Error in log system menu: {e}")
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while accessing the log system.",
-                    ephemeral=True
-                )
-
-        elif custom_id == "set_log_channel":
+        if custom_id == "set_log_channel":
             try:
                 from .permission_handler import PermissionManager
 
@@ -204,6 +223,7 @@ class LogSystem(commands.Cog):
                                 )
 
                             except Exception as e:
+                                logger.error(f"Error setting log channel: {e}")
                                 print(f"Error setting log channel: {e}")
                                 await channel_interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while setting the log channel.",
@@ -225,6 +245,7 @@ class LogSystem(commands.Cog):
                             )
 
                     except Exception as e:
+                        logger.error(f"Error in alliance selection: {e}")
                         print(f"Error in alliance selection: {e}")
                         if not select_interaction.response.is_done():
                             await select_interaction.response.send_message(
@@ -244,6 +265,7 @@ class LogSystem(commands.Cog):
                 )
 
             except Exception as e:
+                logger.error(f"Error in set log channel: {e}")
                 print(f"Error in set log channel: {e}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while setting up the log channel.",
@@ -372,6 +394,7 @@ class LogSystem(commands.Cog):
                                 )
 
                             except Exception as e:
+                                logger.error(f"Error removing log channel: {e}")
                                 print(f"Error removing log channel: {e}")
                                 await button_interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while removing the log channel.",
@@ -420,6 +443,7 @@ class LogSystem(commands.Cog):
                             )
 
                     except Exception as e:
+                        logger.error(f"Error in alliance selection: {e}")
                         print(f"Error in alliance selection: {e}")
                         if not select_interaction.response.is_done():
                             await select_interaction.response.send_message(
@@ -441,6 +465,7 @@ class LogSystem(commands.Cog):
                 )
 
             except Exception as e:
+                logger.error(f"Error in remove log channel: {e}")
                 print(f"Error in remove log channel: {e}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while setting up the removal menu.",
@@ -533,6 +558,7 @@ class LogSystem(commands.Cog):
                 )
 
             except Exception as e:
+                logger.error(f"Error in view log channels: {e}")
                 print(f"Error in view log channels: {e}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while viewing log channels.",
@@ -540,4 +566,4 @@ class LogSystem(commands.Cog):
                 )
 
 async def setup(bot):
-    await bot.add_cog(LogSystem(bot))
+    await bot.add_cog(AllianceLogs(bot))

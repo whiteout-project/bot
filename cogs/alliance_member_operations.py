@@ -1,10 +1,14 @@
+"""
+Alliance member operations. Handles member imports, removals, and transfers.
+"""
 import discord
 from discord.ext import commands
 from discord import app_commands
 import sqlite3
 import asyncio
 import time
-from typing import List
+import logging
+from typing import List, Optional
 from datetime import datetime
 import os
 import csv
@@ -12,6 +16,35 @@ import io
 from .login_handler import LoginHandler
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+from .process_queue import MEMBER_ADD, PreemptedException
+
+logger = logging.getLogger('alliance')
+
+
+class _MemberAddProgress:
+    # Drops the target message after MAX_FAILS edits fail in a row so callers
+    # can fall through to a DM once the ephemeral interaction's 15-min webhook
+    # token expires mid-operation.
+    MAX_FAILS = 3
+
+    def __init__(self, message):
+        self.message = message
+        self._fails = 0
+
+    async def edit(self, embed):
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(embed=embed)
+            self._fails = 0
+        except Exception as e:
+            self._fails += 1
+            if self._fails >= self.MAX_FAILS:
+                logger.warning(
+                    f"member_add: dropping progress message after {self._fails} failed edits "
+                    f"(likely expired interaction: {e}); switching to headless"
+                )
+                self.message = None
 
 class PaginationView(discord.ui.View):
     def __init__(self, chunks: List[discord.Embed], author_id: int):
@@ -66,10 +99,10 @@ def fix_rtl(text):
 class AllianceMemberOperations(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn_alliance = sqlite3.connect('db/alliance.sqlite')
+        self.conn_alliance = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.c_alliance = self.conn_alliance.cursor()
-        
-        self.conn_users = sqlite3.connect('db/users.sqlite')
+
+        self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
         
         self.level_mapping = {
@@ -99,20 +132,14 @@ class AllianceMemberOperations(commands.Cog):
             range(80, 85): "<:fc10:1326752023001174066>"
         }
 
+        # Log directory for audit logs (member additions)
         self.log_directory = 'log'
         if not os.path.exists(self.log_directory):
             os.makedirs(self.log_directory)
         self.log_file = os.path.join(self.log_directory, 'alliance_memberlog.txt')
-        
+
         # Initialize login handler for centralized API management
         self.login_handler = LoginHandler()
-
-    def log_message(self, message: str):
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        log_entry = f"[{timestamp}] {message}\n"
-        
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
 
     def get_fl_emoji(self, fl_level: int) -> str:
         for level_range, emoji in self.fl_emojis.items():
@@ -131,7 +158,7 @@ class AllianceMemberOperations(commands.Cog):
                 f"{theme.minusIcon} `Remove Members` - Remove members from alliance\n"
                 f"{theme.userIcon} `View Members` - View alliance member list\n"
                 f"{theme.chartIcon} `Export Members` - Export member data to CSV/TSV\n"
-                f"{theme.homeIcon} `Main Menu` - Return to main menu"
+                f"{theme.backIcon} `Back` - Return to Alliance Management"
             ),
             color=theme.emColor1
         )
@@ -140,7 +167,7 @@ class AllianceMemberOperations(commands.Cog):
 
         class MemberOperationsView(discord.ui.View):
             def __init__(self, cog):
-                super().__init__()
+                super().__init__(timeout=7200)
                 self.cog = cog
                 self.bot = cog.bot
 
@@ -201,7 +228,8 @@ class AllianceMemberOperations(commands.Cog):
                     )
 
                 except Exception as e:
-                    self.log_message(f"Error in add_member_button: {e}")
+                    logger.error(f"Error in add_member_button: {e}")
+                    print(f"Error in add_member_button: {e}")
                     await button_interaction.response.send_message(
                         "An error occurred while processing your request.", 
                         ephemeral=True
@@ -373,9 +401,11 @@ class AllianceMemberOperations(commands.Cog):
                                                         if alliance_log_channel:
                                                             await alliance_log_channel.send(embed=log_embed)
                                                     except Exception as e:
-                                                        self.log_message(f"Alliance Log Sending Error: {e}")
+                                                        logger.error(f"Alliance Log Sending Error: {e}")
+                                                        print(f"Alliance Log Sending Error: {e}")
                                         except Exception as e:
-                                            self.log_message(f"Log record error: {e}")
+                                            logger.error(f"Log record error: {e}")
+                                            print(f"Log record error: {e}")
                                         
                                         success_embed = discord.Embed(
                                             title=f"{theme.verifiedIcon} Members Deleted",
@@ -444,9 +474,11 @@ class AllianceMemberOperations(commands.Cog):
                                                     if alliance_log_channel:
                                                         await alliance_log_channel.send(embed=log_embed)
                                                 except Exception as e:
-                                                    self.log_message(f"Alliance Log Sending Error: {e}")
+                                                    logger.error(f"Alliance Log Sending Error: {e}")
+                                                    print(f"Alliance Log Sending Error: {e}")
                                     except Exception as e:
-                                        self.log_message(f"Log record error: {e}")
+                                        logger.error(f"Log record error: {e}")
+                                        print(f"Log record error: {e}")
 
                                     success_embed = discord.Embed(
                                         title=f"{theme.verifiedIcon} Members Deleted",
@@ -455,11 +487,12 @@ class AllianceMemberOperations(commands.Cog):
                                     )
                                     try:
                                         await member_interaction.response.edit_message(embed=success_embed, view=None)
-                                    except:
+                                    except Exception:
                                         await member_interaction.edit_original_response(embed=success_embed, view=None)
 
                                 except Exception as e:
-                                    self.log_message(f"Error in bulk member removal: {e}")
+                                    logger.error(f"Error in bulk member removal: {e}")
+                                    print(f"Error in bulk member removal: {e}")
                                     error_embed = discord.Embed(
                                         title=f"{theme.deniedIcon} Error",
                                         description="An error occurred during member removal.",
@@ -467,7 +500,7 @@ class AllianceMemberOperations(commands.Cog):
                                     )
                                     try:
                                         await member_interaction.response.send_message(embed=error_embed, ephemeral=True)
-                                    except:
+                                    except Exception:
                                         await member_interaction.followup.send(embed=error_embed, ephemeral=True)
 
                         member_view.callback = member_callback
@@ -484,7 +517,8 @@ class AllianceMemberOperations(commands.Cog):
                     )
 
                 except Exception as e:
-                    self.log_message(f"Error in remove_member_button: {e}")
+                    logger.error(f"Error in remove_member_button: {e}")
+                    print(f"Error in remove_member_button: {e}")
                     await button_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred during the member deletion process.",
                         ephemeral=True
@@ -623,7 +657,8 @@ class AllianceMemberOperations(commands.Cog):
                     )
 
                 except Exception as e:
-                    self.log_message(f"Error in view_members_button: {e}")
+                    logger.error(f"Error in view_members_button: {e}")
+                    print(f"Error in view_members_button: {e}")
                     if not button_interaction.response.is_done():
                         await button_interaction.response.send_message(
                             f"{theme.deniedIcon} An error occurred while displaying the member list.",
@@ -743,12 +778,12 @@ class AllianceMemberOperations(commands.Cog):
                     )
             
             @discord.ui.button(
-                label="Main Menu", 
-                emoji=theme.homeIcon, 
+                label="Back",
+                emoji=theme.backIcon,
                 style=discord.ButtonStyle.secondary,
                 row=2
             )
-            async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+            async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
                 await self.cog.show_main_menu(interaction)
 
             @discord.ui.button(label="Transfer Members", emoji=theme.retryIcon, style=discord.ButtonStyle.primary, row=0)
@@ -934,6 +969,7 @@ class AllianceMemberOperations(commands.Cog):
                                         )
 
                                     except Exception as e:
+                                        logger.error(f"Transfer error: {e}")
                                         print(f"Transfer error: {e}")
                                         self.cog.log_message(f"Bulk transfer error: {e}")
                                         error_embed = discord.Embed(
@@ -952,7 +988,7 @@ class AllianceMemberOperations(commands.Cog):
                                         embed=target_embed,
                                         view=target_view
                                     )
-                                except:
+                                except Exception:
                                     await member_interaction.edit_original_response(
                                         embed=target_embed,
                                         view=target_view
@@ -965,7 +1001,8 @@ class AllianceMemberOperations(commands.Cog):
                             )
 
                         except Exception as e:
-                            self.log_message(f"Source callback error: {e}")
+                            logger.error(f"Source callback error: {e}")
+                            print(f"Source callback error: {e}")
                             await interaction.response.send_message(
                                 f"{theme.deniedIcon} An error occurred. Please try again.",
                                 ephemeral=True
@@ -979,7 +1016,8 @@ class AllianceMemberOperations(commands.Cog):
                     )
 
                 except Exception as e:
-                    self.log_message(f"Error in transfer_member_button: {e}")
+                    logger.error(f"Error in transfer_member_button: {e}")
+                    print(f"Error in transfer_member_button: {e}")
                     await button_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred during the transfer operation.",
                         ephemeral=True
@@ -987,6 +1025,44 @@ class AllianceMemberOperations(commands.Cog):
 
         view = MemberOperationsView(self)
         await interaction.response.edit_message(embed=embed, view=view)
+
+    def _get_queue_size(self) -> int:
+        """Get the current ProcessQueue size, or 0 if unavailable."""
+        process_queue = self.bot.get_cog('ProcessQueue')
+        if not process_queue:
+            return 0
+        return process_queue.get_queue_info().get('queue_size', 0)
+
+    async def handle_member_add_process(self, process):
+        details = process.get('details', {})
+        alliance_id = details.get('alliance_id')
+        alliance_name = details.get('alliance_name')
+        ids = details.get('ids')
+        invoker_id = details.get('invoker_id')
+        invoker_name = details.get('invoker_name', 'unknown')
+
+        if not alliance_id or not ids:
+            logger.error(f"member_add process {process['id']} missing alliance_id or ids")
+            return
+
+        process_queue = self.bot.get_cog('ProcessQueue')
+        runtime = process_queue.get_runtime_context(process['id']) if process_queue else {}
+        interaction = runtime.get('interaction')
+
+        message = None
+        if interaction is not None:
+            try:
+                message = await interaction.original_response()
+            except Exception as e:
+                logger.warning(f"member_add process {process['id']}: could not fetch progress message ({e}); running headless")
+
+        if message is None:
+            logger.info(f"member_add process {process['id']}: running headless (no live message)")
+
+        await self._process_add_user(
+            message, alliance_id, alliance_name, ids, invoker_id, invoker_name,
+            process_id=process['id'], resumed_state=details.get('resumed_state'),
+        )
 
     async def add_user(self, interaction: discord.Interaction, alliance_id: str, ids: str):
         self.c_alliance.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
@@ -1000,62 +1076,62 @@ class AllianceMemberOperations(commands.Cog):
         if not await self.is_admin(interaction.user.id):
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
-        
-        # Always add to queue to ensure proper ordering
-        queue_position = await self.login_handler.queue_operation({
-            'type': 'member_addition',
-            'callback': lambda: self._process_add_user(interaction, alliance_id, alliance_name, ids),
-            'description': f"Add members to {alliance_name}",
-            'alliance_id': alliance_id,
-            'interaction': interaction
-        })
-        
-        # Check if we need to show queue message
-        queue_info = self.login_handler.get_queue_info()
-        # Calculate member count
-        member_count = len(ids.split(',') if ',' in ids else ids.split('\n'))
-        
-        if queue_position > 1:  # Not the first in queue
-            queue_embed = discord.Embed(
-                title=f"{theme.timeIcon} Operation Queued",
-                description=(
-                    f"Another operation is currently in progress.\n\n"
-                    f"**Your operation has been queued:**\n"
-                    f"{theme.pinIcon} Queue Position: `{queue_position}`\n"
-                    f"{theme.allianceIcon} Alliance: {alliance_name}\n"
-                    f"{theme.userIcon} Members to add: {member_count}\n\n"
-                    f"You will be notified when your operation starts."
-                ),
-                color=theme.emColor4
-            )
-            await interaction.response.send_message(embed=queue_embed, ephemeral=True)
-        else:
-            # First in queue - will start immediately
-            total_count = member_count
-            embed = discord.Embed(
-                title=f"{theme.userIcon} User Addition Progress", 
-                description=f"Processing {total_count} members for **{alliance_name}**...\n\n**Progress:** `0/{total_count}`", 
-                color=theme.emColor1
-            )
-            embed.add_field(
-                name=f"\n{theme.verifiedIcon} Successfully Added (0/{total_count})",
-                value="-",
-                inline=False
-            )
-            embed.add_field(
-                name=f"{theme.deniedIcon} Failed (0/{total_count})", 
-                value="-", 
-                inline=False
-            )
-            embed.add_field(
-                name=f"{theme.warnIcon} Already Exists (0/{total_count})", 
-                value="-", 
-                inline=False
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    async def _process_add_user(self, interaction: discord.Interaction, alliance_id: str, alliance_name: str, ids: str):
-        """Process the actual user addition operation"""
+        process_queue = self.bot.get_cog('ProcessQueue')
+        if not process_queue:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Process Queue module not found.",
+                ephemeral=True
+            )
+            return
+
+        member_count = len(ids.split(',') if ',' in ids else ids.split('\n'))
+
+        # Always send the progress embed up front (whether queued or starting now)
+        embed = discord.Embed(
+            title=f"{theme.userIcon} User Addition Progress",
+            description=f"Processing {member_count} members for **{alliance_name}**...\n\n**Progress:** `0/{member_count}`",
+            color=theme.emColor1
+        )
+        embed.add_field(
+            name=f"\n{theme.verifiedIcon} Successfully Added (0/{member_count})",
+            value="-",
+            inline=False
+        )
+        embed.add_field(
+            name=f"{theme.deniedIcon} Failed (0/{member_count})",
+            value="-",
+            inline=False
+        )
+        embed.add_field(
+            name=f"{theme.warnIcon} Already Exists (0/{member_count})",
+            value="-",
+            inline=False
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        # Enqueue the operation, attaching the live interaction for progress updates
+        process_id = process_queue.enqueue(
+            action='member_add',
+            priority=MEMBER_ADD,
+            alliance_id=int(alliance_id) if str(alliance_id).isdigit() else None,
+            details={
+                'alliance_id': str(alliance_id),
+                'alliance_name': alliance_name,
+                'ids': ids,
+                'invoker_id': interaction.user.id,
+                'invoker_name': interaction.user.name,
+            },
+        )
+        process_queue.attach_runtime_context(process_id, {
+            'interaction': interaction,
+        })
+
+    async def _process_add_user(self, message: Optional[discord.Message], alliance_id: str, alliance_name: str,
+                                ids: str, invoker_id: Optional[int], invoker_name: str,
+                                process_id: Optional[int] = None,
+                                resumed_state: Optional[dict] = None):
+        progress = _MemberAddProgress(message)
         ids_list = []
         
         # Check if this is CSV/TSV data with headers
@@ -1089,8 +1165,6 @@ class AllianceMemberOperations(commands.Cog):
                                 if fid:
                                     ids_list.append(fid)
                         
-                        if ids_list:
-                            self.log_message(f"Parsed CSV/TSV import: Found {len(ids_list)} IDs from {len(rows)-1} rows")
                     else:
                         # No header found, treat first row as data if it looks like IDs
                         if rows[0] and rows[0][0].strip().isdigit():
@@ -1099,8 +1173,8 @@ class AllianceMemberOperations(commands.Cog):
                                     fid = ''.join(c for c in row[0] if c.isdigit())
                                     if fid:
                                         ids_list.append(fid)
-            except Exception as e:
-                self.log_message(f"CSV/TSV parsing failed, falling back to simple parsing: {e}")
+            except Exception:
+                pass  # Fall back to simple parsing
         
         # If CSV/TSV parsing didn't work or wasn't applicable, use simple parsing
         if not ids_list:
@@ -1124,69 +1198,55 @@ class AllianceMemberOperations(commands.Cog):
                 fids_to_process.append(fid)
         
         total_users = len(ids_list)
-        self.log_message(f"Pre-check complete: {len(already_in_db)} already exist, {len(fids_to_process)} to process")
-        
-        # For queued operations, we need to send a new progress embed
-        if interaction.response.is_done():
-            embed = discord.Embed(
-                title=f"{theme.userIcon} User Addition Progress", 
-                description=f"Processing {total_users} members...\n\n**Progress:** `0/{total_users}`", 
-                color=theme.emColor1
-            )
-            embed.add_field(
-                name=f"{theme.verifiedIcon} Successfully Added (0/{total_users})", 
-                value="-", 
-                inline=False
-            )
-            embed.add_field(
-                name=f"{theme.deniedIcon} Failed (0/{total_users})", 
-                value="-", 
-                inline=False
-            )
-            embed.add_field(
-                name=f"{theme.warnIcon} Already Exists (0/{total_users})", 
-                value="-", 
-                inline=False
-            )
-            message = await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            # For immediate operations, the progress embed is already sent
-            message = await interaction.original_response()
-            # Get the embed from the existing message
-            embed = (await interaction.original_response()).embeds[0]
-        
-        # Reset rate limit tracking for this operation
-        self.login_handler.api1_requests = []
-        self.login_handler.api2_requests = []
-        
+
+        # Build a fresh progress embed. When `message` is provided, we edit it in place;
+        # when it's None (headless / crash recovery), we just update the local copy and
+        # DM the final version to the invoker at the end.
+        embed = discord.Embed(
+            title=f"{theme.userIcon} User Addition Progress",
+            description=f"Processing {total_users} members for **{alliance_name}**...\n\n**Progress:** `0/{total_users}`",
+            color=theme.emColor1,
+        )
+        embed.add_field(name=f"\n{theme.verifiedIcon} Successfully Added (0/{total_users})", value="-", inline=False)
+        embed.add_field(name=f"{theme.deniedIcon} Failed (0/{total_users})", value="-", inline=False)
+        embed.add_field(name=f"{theme.warnIcon} Already Exists (0/{total_users})", value="-", inline=False)
+
         # Check API availability before starting
         embed.description = f"{theme.searchIcon} Checking API availability..."
-        await message.edit(embed=embed)
-        
+        await progress.edit(embed)
+
         await self.login_handler.check_apis_availability()
-        
+
         if not self.login_handler.available_apis:
             # No APIs available
             embed.description = f"{theme.deniedIcon} Both APIs are unavailable. Cannot proceed."
             embed.color = discord.Color.red()
-            await message.edit(embed=embed)
+            await progress.edit(embed)
+            await self._notify_invoker_if_headless(progress.message, invoker_id, embed)
             return
         
         # Get processing rate from login handler
         rate_text = self.login_handler.get_processing_rate()
         
         # Update embed with rate information
-        queue_info = f"\n{theme.listIcon} **Operations in queue:** {self.login_handler.get_queue_info()['queue_size']}" if self.login_handler.get_queue_info()['queue_size'] > 0 else ""
+        qs = self._get_queue_size()
+        queue_info = f"\n{theme.listIcon} **Operations in queue:** {qs}" if qs > 0 else ""
         embed.description = f"Processing {total_users} members...\n{rate_text}{queue_info}\n\n**Progress:** `0/{total_users}`"
         embed.color = discord.Color.blue()
-        await message.edit(embed=embed)
+        await progress.edit(embed)
 
-        added_count = 0
-        error_count = 0 
-        already_exists_count = len(already_in_db)
-        added_users = []
-        error_users = []
-        already_exists_users = already_in_db.copy()
+        # On resume after preempt, credit prior-run successes to Successfully-Added
+        # so the counters don't visually reset to zero.
+        prior_added_fids = set(resumed_state.get('added_fids', [])) if resumed_state else set()
+        prior_error_fids = resumed_state.get('error_fids', []) if resumed_state else []
+
+        added_users = [(fid, nick) for (fid, nick) in already_in_db if fid in prior_added_fids]
+        already_exists_users = [(fid, nick) for (fid, nick) in already_in_db if fid not in prior_added_fids]
+        error_users = list(prior_error_fids)
+
+        added_count = len(added_users)
+        error_count = len(error_users)
+        already_exists_count = len(already_exists_users)
 
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         log_file_path = os.path.join(self.log_directory, 'add_memberlog.txt')
@@ -1202,7 +1262,7 @@ class AllianceMemberOperations(commands.Cog):
             with open(log_file_path, 'a', encoding='utf-8') as log_file:
                 log_file.write(f"\n{'='*50}\n")
                 log_file.write(f"Date: {timestamp}\n")
-                log_file.write(f"Administrator: {interaction.user.name} (ID: {interaction.user.id})\n")
+                log_file.write(f"Administrator: {invoker_name} (ID: {invoker_id})\n")
                 log_file.write(f"Alliance: {alliance_name} (ID: {alliance_id})\n")
                 log_file.write(f"Input Format: {input_format}\n")
                 # Avoid nested f-strings for Python 3.9+ compatibility
@@ -1214,29 +1274,58 @@ class AllianceMemberOperations(commands.Cog):
                 log_file.write(f"Total Members to Process: {total_users}\n")
                 log_file.write(f"API Mode: {self.login_handler.get_mode_text()}\n")
                 log_file.write(f"Available APIs: {self.login_handler.available_apis}\n")
-                log_file.write(f"Operations in Queue: {self.login_handler.get_queue_info()['queue_size']}\n")
+                log_file.write(f"Operations in Queue: {self._get_queue_size()}\n")
                 log_file.write('-'*50 + '\n')
 
-            # Update initial display with pre-existing members
+            if added_count > 0:
+                embed.set_field_at(
+                    0,
+                    name=f"{theme.verifiedIcon} Successfully Added ({added_count}/{total_users})",
+                    value="User list cannot be displayed due to exceeding 70 users" if len(added_users) > 70
+                    else ", ".join([n for _, n in added_users]) or "-",
+                    inline=False
+                )
+            if error_count > 0:
+                embed.set_field_at(
+                    1,
+                    name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
+                    value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70
+                    else ", ".join(error_users) or "-",
+                    inline=False
+                )
             if already_exists_count > 0:
                 embed.set_field_at(
                     2,
                     name=f"{theme.warnIcon} Already Exists ({already_exists_count}/{total_users})",
-                    value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70 
+                    value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70
                     else ", ".join([n for _, n in already_exists_users]) or "-",
                     inline=False
                 )
-                await message.edit(embed=embed)
+            if added_count > 0 or error_count > 0 or already_exists_count > 0:
+                await progress.edit(embed)
             
+            # Cooperative preemption: yield to higher-priority work between members
+            process_queue_cog = self.bot.get_cog('ProcessQueue')
+
             index = 0
             while index < len(fids_to_process):
+                # Check for higher-priority work
+                if process_queue_cog and process_queue_cog.should_preempt():
+                    logger.info(f"AllianceMemberOps: Preempting member add for {alliance_name} - higher priority work waiting")
+                    self._checkpoint_member_add_state(
+                        process_queue_cog, process_id, alliance_id, alliance_name,
+                        ids, invoker_id, invoker_name, added_users, error_users,
+                    )
+                    raise PreemptedException()
+
                 fid = fids_to_process[index]
                 try:
                     # Update progress
-                    queue_info = f"\n{theme.listIcon} **Operations in queue:** {self.login_handler.get_queue_info()['queue_size']}" if self.login_handler.get_queue_info()['queue_size'] > 0 else ""
+                    qs = self._get_queue_size()
+                    queue_info = f"\n{theme.listIcon} **Operations in queue:** {qs}" if qs > 0 else ""
                     current_progress = already_exists_count + index + 1
                     embed.description = f"Processing {total_users} members...\n{rate_text}{queue_info}\n\n**Progress:** `{current_progress}/{total_users}`"
-                    await message.edit(embed=embed)
+                    await progress.edit(embed)
                     
                     # Fetch player data using login handler
                     result = await self.login_handler.fetch_player_data(fid)
@@ -1258,10 +1347,11 @@ class AllianceMemberOperations(commands.Cog):
                         
                         # Update display with countdown
                         while remaining_time > 0:
-                            queue_info = f"\n{theme.listIcon} **Operations in queue:** {self.login_handler.get_queue_info()['queue_size']}" if self.login_handler.get_queue_info()['queue_size'] > 0 else ""
+                            qs = self._get_queue_size()
+                            queue_info = f"\n{theme.listIcon} **Operations in queue:** {qs}" if qs > 0 else ""
                             embed.description = f"{theme.warnIcon} Rate limit reached. Waiting {remaining_time:.0f} seconds...{queue_info}"
                             embed.color = discord.Color.orange()
-                            await message.edit(embed=embed)
+                            await progress.edit(embed)
                             
                             # Wait for up to 5 seconds before updating
                             await asyncio.sleep(min(5, remaining_time))
@@ -1302,7 +1392,7 @@ class AllianceMemberOperations(commands.Cog):
                                     else ", ".join([n for _, n in added_users]) or "-",
                                     inline=False
                                 )
-                                await message.edit(embed=embed)
+                                await progress.edit(embed)
                                 
                             except sqlite3.IntegrityError as e:
                                 # This shouldn't happen since we pre-filtered, but handle it just in case
@@ -1318,7 +1408,7 @@ class AllianceMemberOperations(commands.Cog):
                                     else ", ".join([n for _, n in already_exists_users]) or "-",
                                     inline=False
                                 )
-                                await message.edit(embed=embed)
+                                await progress.edit(embed)
                                 
                             except Exception as e:
                                 with open(log_file_path, 'a', encoding='utf-8') as log_file:
@@ -1333,37 +1423,39 @@ class AllianceMemberOperations(commands.Cog):
                                     else ", ".join(error_users) or "-",
                                     inline=False
                                 )
-                                await message.edit(embed=embed)
+                                await progress.edit(embed)
                         else:
                             # No nickname in API response
                             error_count += 1
                             error_users.append(fid)
                     else:
-                            # Handle other error statuses
-                            error_msg = result.get('error_message', 'Unknown error')
-                            with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                                log_file.write(f"ERROR: {error_msg} for ID {fid}\n")
-                            error_count += 1
-                            if fid not in error_users:
-                                error_users.append(fid)
-                            embed.set_field_at(
-                                1,
-                                name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
-                                value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70 
-                                else ", ".join(error_users) or "-",
-                                inline=False
-                            )
-                            await message.edit(embed=embed)
+                        # Handle other error statuses
+                        error_msg = result.get('error_message', 'Unknown error')
+                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                            log_file.write(f"ERROR: {error_msg} for ID {fid}\n")
+                        error_count += 1
+                        if fid not in error_users:
+                            error_users.append(fid)
+                        embed.set_field_at(
+                            1,
+                            name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
+                            value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70
+                            else ", ".join(error_users) or "-",
+                            inline=False
+                        )
+                        await progress.edit(embed)
                     
                     index += 1
 
+                except PreemptedException:
+                    raise
                 except Exception as e:
                     with open(log_file_path, 'a', encoding='utf-8') as log_file:
                         log_file.write(f"ERROR: Request failed for ID {fid}: {str(e)}\n")
-                        error_count += 1
-                        error_users.append(fid)
-                        await message.edit(embed=embed)
-                        index += 1
+                    error_count += 1
+                    error_users.append(fid)
+                    await progress.edit(embed)
+                    index += 1
 
             embed.set_field_at(0, name=f"{theme.verifiedIcon} Successfully Added ({added_count}/{total_users})",
                 value="User list cannot be displayed due to exceeding 70 users" if len(added_users) > 70 
@@ -1383,7 +1475,7 @@ class AllianceMemberOperations(commands.Cog):
                 inline=False
             )
 
-            await message.edit(embed=embed)
+            await progress.edit(embed)
 
             try:
                 with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -1400,7 +1492,7 @@ class AllianceMemberOperations(commands.Cog):
                             title=f"{theme.userIcon} Members Added to Alliance",
                             description=(
                                 f"**Alliance:** {alliance_name}\n"
-                                f"**Administrator:** {interaction.user.name} (`{interaction.user.id}`)\n"
+                                f"**Administrator:** {invoker_name} (`{invoker_id}`)\n"
                                 f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
                                 f"**Results:**\n"
                                 f"{theme.verifiedIcon} Successfully Added: {added_count}\n"
@@ -1435,6 +1527,8 @@ class AllianceMemberOperations(commands.Cog):
                 log_file.write(f"API2 Requests: {len(self.login_handler.api2_requests)}\n")
                 log_file.write(f"{'='*50}\n")
 
+        except PreemptedException:
+            raise
         except Exception as e:
             with open(log_file_path, 'a', encoding='utf-8') as log_file:
                 log_file.write(f"CRITICAL ERROR: {str(e)}\n")
@@ -1444,16 +1538,60 @@ class AllianceMemberOperations(commands.Cog):
         end_time = datetime.now()
         start_time = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
         processing_time = (end_time - start_time).total_seconds()
-        
-        queue_info = f"{theme.listIcon} **Operations still in queue:** {self.login_handler.get_queue_info()['queue_size']}" if self.login_handler.get_queue_info()['queue_size'] > 0 else ""
-        
+
+        qs = self._get_queue_size()
+        queue_info = f"{theme.listIcon} **Operations still in queue:** {qs}" if qs > 0 else ""
+
         embed.title = f"{theme.verifiedIcon} User Addition Completed"
         embed.description = (
             f"Process completed for {total_users} members.\n"
             f"**Processing Time:** {processing_time:.1f} seconds{queue_info}\n\n"
         )
         embed.color = discord.Color.green()
-        await message.edit(embed=embed)
+        await progress.edit(embed)
+
+        await self._notify_invoker_if_headless(progress.message, invoker_id, embed)
+
+    def _checkpoint_member_add_state(self, process_queue_cog, process_id: Optional[int],
+                                     alliance_id: str, alliance_name: str, ids: str,
+                                     invoker_id: Optional[int], invoker_name: str,
+                                     added_users: list, error_users: list):
+        if process_queue_cog is None or process_id is None:
+            return
+        try:
+            process_queue_cog.update_details(process_id, {
+                'alliance_id': str(alliance_id),
+                'alliance_name': alliance_name,
+                'ids': ids,
+                'invoker_id': invoker_id,
+                'invoker_name': invoker_name,
+                'resumed_state': {
+                    'added_fids': [fid for (fid, _) in added_users],
+                    'error_fids': list(error_users),
+                },
+            })
+        except Exception as e:
+            logger.warning(f"member_add: failed to checkpoint state for process {process_id} ({e})")
+
+    async def _notify_invoker_if_headless(self, message: Optional[discord.Message],
+                                          invoker_id: Optional[int], embed: discord.Embed):
+        if message is not None or not invoker_id:
+            return
+        try:
+            user = self.bot.get_user(invoker_id) or await self.bot.fetch_user(invoker_id)
+            if user is None:
+                return
+            note = discord.Embed(
+                description=(
+                    f"{theme.warnIcon} Your earlier member-add operation resumed after a bot restart. "
+                    f"The original progress message is no longer reachable, so here is the final result:"
+                ),
+                color=theme.emColor2,
+            )
+            await user.send(embed=note)
+            await user.send(embed=embed)
+        except Exception as e:
+            logger.warning(f"member_add: could not DM invoker {invoker_id} with headless result ({e})")
 
     async def is_admin(self, user_id):
         try:
@@ -1464,9 +1602,18 @@ class AllianceMemberOperations(commands.Cog):
                 is_admin = result is not None
                 return is_admin
         except Exception as e:
-            self.log_message(f"Error in admin check: {str(e)}")
-            self.log_message(f"Error details: {str(e.__class__.__name__)}")
+            logger.error(f"Error in admin check: {e}")
+            print(f"Error in admin check: {e}")
             return False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        process_queue_cog = self.bot.get_cog('ProcessQueue')
+        if process_queue_cog:
+            process_queue_cog.register_handler('member_add', self.handle_member_add_process)
+            logger.info("AllianceMemberOps: Registered member_add handler with ProcessQueue")
+        else:
+            logger.error("AllianceMemberOps: ProcessQueue cog not found, member_add operations will not work")
 
     def cog_unload(self):
         self.conn_users.close()
@@ -1634,13 +1781,6 @@ class AllianceMemberOperations(commands.Cog):
                 summary_embed.description += f"\n\n{theme.verifiedIcon} **File successfully sent via DM!**"
                 summary_embed.color = discord.Color.green()
                 
-                # Log the export
-                self.log_message(
-                    f"Export completed - User: {interaction.user.name} ({interaction.user.id}), "
-                    f"Alliance: {alliance_name} ({alliance_id}), Members: {len(members)}, "
-                    f"Format: {export_format}, Columns: {', '.join(headers)}"
-                )
-                
             except discord.Forbidden:
                 # DM failed, provide alternative
                 summary_embed.description += (
@@ -1658,7 +1798,8 @@ class AllianceMemberOperations(commands.Cog):
             await interaction.edit_original_response(embed=summary_embed)
             
         except Exception as e:
-            self.log_message(f"Error in process_member_export: {e}")
+            logger.error(f"Error in process_member_export: {e}")
+            print(f"Error in process_member_export: {e}")
             error_embed = discord.Embed(
                 title=f"{theme.deniedIcon} Export Failed",
                 description=f"An error occurred during the export process: {str(e)}",
@@ -1670,25 +1811,27 @@ class AllianceMemberOperations(commands.Cog):
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
     async def show_main_menu(self, interaction: discord.Interaction):
+        """Navigate back to Alliance Management sub-menu."""
         try:
-            alliance_cog = self.bot.get_cog("Alliance")
-            if alliance_cog:
-                await alliance_cog.show_main_menu(interaction)
+            main_menu_cog = self.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_alliance_management(interaction)
             else:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while returning to main menu.",
+                    f"{theme.deniedIcon} An error occurred while returning to menu.",
                     ephemeral=True
                 )
         except Exception as e:
-            self.log_message(f"[ERROR] Main Menu error in member operations: {e}")
+            logger.error(f"Menu navigation error in member operations: {e}")
+            print(f"Menu navigation error in member operations: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while returning to main menu.", 
+                    f"{theme.deniedIcon} An error occurred while returning to menu.",
                     ephemeral=True
                 )
             else:
                 await interaction.followup.send(
-                    f"{theme.deniedIcon} An error occurred while returning to main menu.",
+                    f"{theme.deniedIcon} An error occurred while returning to menu.",
                     ephemeral=True
                 )
 
@@ -1711,9 +1854,10 @@ class AddMemberModal(discord.ui.Modal):
                 ids
             )
         except Exception as e:
+            logger.error(f"Modal submit error: {e}")
             print(f"ERROR: Modal submit error - {str(e)}")
             await interaction.response.send_message(
-                "An error occurred. Please try again.", 
+                "An error occurred. Please try again.",
                 ephemeral=True
             )
 
@@ -1807,6 +1951,7 @@ class AllianceSelectView(discord.ui.View):
             )
             await interaction.response.send_modal(modal)
         except Exception as e:
+            logger.error(f"ID button error: {e}")
             print(f"ID button error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error has occurred. Please try again.",
@@ -1844,8 +1989,8 @@ class IDSearchModal(discord.ui.Modal):
             
             # Check if we're in a history context
             if self.context in ["furnace_history", "nickname_history"]:
-                # Get the Changes cog
-                changes_cog = self.cog.bot.get_cog("Changes") if self.cog else interaction.client.get_cog("Changes")
+                # Get the AllianceHistory cog
+                changes_cog = self.cog.bot.get_cog("AllianceHistory") if self.cog else interaction.client.get_cog("AllianceHistory")
                 if changes_cog:
                     await interaction.response.defer()
                     if self.context == "furnace_history":
@@ -1934,6 +2079,7 @@ class IDSearchModal(discord.ui.Modal):
                             self.cog.log_message(f"Member deleted via ID search: {nickname} (ID: {fid}) from {current_alliance_name}")
 
                         except Exception as e:
+                            logger.error(f"Delete error: {e}")
                             print(f"Delete error: {e}")
                             error_embed = discord.Embed(
                                 title=f"{theme.deniedIcon} Error",
@@ -2051,6 +2197,7 @@ class IDSearchModal(discord.ui.Modal):
                         )
 
                     except Exception as e:
+                        logger.error(f"Transfer error: {e}")
                         print(f"Transfer error: {e}")
                         error_embed = discord.Embed(
                             title=f"{theme.deniedIcon} Error",
@@ -2070,6 +2217,7 @@ class IDSearchModal(discord.ui.Modal):
                 )
 
         except Exception as e:
+            logger.error(f"Error in IDSearchModal on_submit: {e.__class__.__name__}: {e}")
             print(f"Error details: {str(e.__class__.__name__)}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -2457,6 +2605,7 @@ class MemberSelectView(discord.ui.View):
                 await self.update_main_embed(interaction)
 
             except Exception as e:
+                logger.error(f"Select callback error: {e}")
                 print(f"Select callback error: {e}")
                 error_embed = discord.Embed(
                     title=f"{theme.deniedIcon} Error",
@@ -2465,7 +2614,7 @@ class MemberSelectView(discord.ui.View):
                 )
                 try:
                     await interaction.response.edit_message(embed=error_embed, view=self)
-                except:
+                except Exception:
                     await interaction.followup.send(embed=error_embed, ephemeral=True)
 
         select.callback = select_callback
@@ -2547,6 +2696,7 @@ class MemberSelectView(discord.ui.View):
             )
             await interaction.response.send_modal(modal)
         except Exception as e:
+            logger.error(f"ID button error: {e}")
             print(f"ID button error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error has occurred. Please try again.",

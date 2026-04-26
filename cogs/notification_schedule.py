@@ -1,3 +1,6 @@
+"""
+Notification scheduler. Runs background tasks that send event notifications on time.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
@@ -7,34 +10,17 @@ import os
 import math
 import traceback
 import logging
-import logging.handlers
 import asyncio
-from .bear_event_types import get_event_icon
+from .notification_event_types import get_event_icon
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
 
-class BearTrapSchedule(commands.Cog):
+class NotificationSchedule(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-        # Logger Setup for bear_trap.txt (shared with other bear trap cogs)
-        self.logger = logging.getLogger('bear_trap')
-        self.logger.setLevel(logging.INFO)
-        self.logger.propagate = False  # Prevent propagation to root logger
-        log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-        log_dir = 'log'
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        log_file_path = os.path.join(log_dir, 'bear_trap.txt')
-
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file_path, maxBytes=3 * 1024 * 1024, backupCount=1, encoding='utf-8'
-        )
-        file_handler.setFormatter(log_formatter)
-        if not self.logger.hasHandlers():
-            self.logger.addHandler(file_handler)
-
+        # Use centralized notification logger
+        self.logger = logging.getLogger('notification')
         self.logger.info("[SCHEDULE] Cog initializing...")
 
         # Database connection with timeout to prevent locking
@@ -206,6 +192,15 @@ class BearTrapSchedule(commands.Cog):
 
         while not self.bot.is_closed():
             try:
+                # Check if bear_notifications table exists (created by notification_system cog)
+                self.cursor.execute("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='bear_notifications'
+                """)
+                if not self.cursor.fetchone():
+                    await asyncio.sleep(300)
+                    continue
+
                 now_utc = datetime.now(pytz.UTC)
 
                 # Get all notifications that are approaching
@@ -383,12 +378,13 @@ class BearTrapSchedule(commands.Cog):
                         if auto_pin and message.pinned:
                             try:
                                 await message.unpin()
-                            except:
+                            except Exception:
                                 pass
                         await message.delete()
             except discord.NotFound:
                 pass  # Message already deleted
             except Exception as e:
+                self.logger.error(f"[ERROR] Failed to delete Discord message: {e}")
                 print(f"[ERROR] Failed to delete Discord message: {e}")
 
             # Remove from database
@@ -463,7 +459,7 @@ class BearTrapSchedule(commands.Cog):
             if auto_pin:
                 try:
                     await new_message.pin()
-                except:
+                except Exception:
                     pass
 
             # Delete old message
@@ -475,10 +471,10 @@ class BearTrapSchedule(commands.Cog):
                         if auto_pin and old_message.pinned:
                             try:
                                 await old_message.unpin()
-                            except:
+                            except Exception:
                                 pass
                         await old_message.delete()
-            except:
+            except Exception:
                 pass  # Old message already deleted
 
             # Update database
@@ -543,6 +539,7 @@ class BearTrapSchedule(commands.Cog):
             )
 
         except Exception as e:
+            self.logger.error(f"[ERROR] Failed to generate schedule embed: {e}")
             print(f"[ERROR] Failed to generate schedule embed: {e}")
             traceback.print_exc()
             return self._create_error_embed(f"Error generating schedule: {str(e)}")
@@ -814,6 +811,7 @@ class BearTrapSchedule(commands.Cog):
             return embed
 
         except Exception as e:
+            self.logger.error(f"[ERROR] Failed to generate schedule embed internally: {e}")
             print(f"[ERROR] Failed to generate schedule embed internally: {e}")
             traceback.print_exc()
             return self._create_error_embed(f"Error: {str(e)}")
@@ -899,6 +897,7 @@ class BearTrapSchedule(commands.Cog):
             return line
 
         except Exception as e:
+            self.logger.error(f"[ERROR] Failed to format event line: {e}")
             print(f"[ERROR] Failed to format event line: {e}")
             return "• Error formatting event"
 
@@ -973,13 +972,13 @@ class BearTrapSchedule(commands.Cog):
                 else:
                     # Shouldn't happen with our validation, but fallback
                     return pytz.UTC
-            except:
+            except Exception:
                 return pytz.UTC
         else:
             # Etc/GMT zones or other standard pytz timezones
             try:
                 return pytz.timezone(tz_string)
-            except:
+            except Exception:
                 return pytz.UTC
 
     def _format_timezone_display(self, tz_zone: str) -> str:
@@ -1008,7 +1007,7 @@ class BearTrapSchedule(commands.Cog):
                         return f"UTC{sign}{hours}:{minutes:02d}"
                 else:
                     return tz_zone
-            except:
+            except Exception:
                 return tz_zone
         elif tz_zone.startswith("Etc/GMT"):
             # Etc/GMT zones are inverted: Etc/GMT-3 is actually UTC+3
@@ -1034,7 +1033,7 @@ class BearTrapSchedule(commands.Cog):
                 match = re.search(r'Page \d+ of (\d+)', footer_text)
                 if match:
                     return int(match.group(1))
-        except:
+        except Exception:
             pass
         return 1
 
@@ -1075,6 +1074,7 @@ class BearTrapSchedule(commands.Cog):
                     self.conn.commit()
                     return False
                 except Exception as e:
+                    self.logger.error(f"[ERROR] Failed to fetch message: {e}")
                     print(f"[ERROR] Failed to fetch message: {e}")
                     return False
 
@@ -1119,6 +1119,7 @@ class BearTrapSchedule(commands.Cog):
                 await self.update_schedule_board(board_id)
 
         except Exception as e:
+            self.logger.error(f"[ERROR] Failed to update all boards for guild {guild_id}: {e}")
             print(f"[ERROR] Failed to update all boards for guild {guild_id}: {e}")
 
     async def update_boards_for_notification_channel(self, guild_id: int, notification_channel_id: int):
@@ -1145,6 +1146,7 @@ class BearTrapSchedule(commands.Cog):
                 await self.update_schedule_board(board_id)
 
         except Exception as e:
+            self.logger.error(f"[ERROR] Failed to update boards for channel {notification_channel_id}: {e}")
             print(f"[ERROR] Failed to update boards for channel {notification_channel_id}: {e}")
 
     async def on_notification_sent(self, guild_id: int, channel_id: int):
@@ -1224,18 +1226,13 @@ class BearTrapSchedule(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
+            self.logger.error(f"[ERROR] Error showing main menu: {e}")
             print(f"[ERROR] Error showing main menu: {e}")
             traceback.print_exc()
-            try:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while loading the menu.",
-                    ephemeral=True
-                )
-            except discord.InteractionResponded:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} An error occurred while loading the menu.",
-                    ephemeral=True
-                )
+            await safe_edit_message(
+                interaction,
+                content=f"{theme.deniedIcon} An error occurred while loading the menu."
+            )
 
 class ScheduleBoardPaginationView(discord.ui.View):
     """Persistent pagination view for schedule boards"""
@@ -1271,6 +1268,7 @@ class ScheduleBoardPaginationView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=new_view)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Pagination error: {e}")
             print(f"[ERROR] Pagination error: {e}")
             traceback.print_exc()
             await interaction.response.send_message(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1294,6 +1292,7 @@ class ScheduleBoardPaginationView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=new_view)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Pagination error: {e}")
             print(f"[ERROR] Pagination error: {e}")
             traceback.print_exc()
             await interaction.response.send_message(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1308,7 +1307,7 @@ class ScheduleBoardPaginationView(discord.ui.View):
                 match = re.search(r'Page \d+ of (\d+)', footer)
                 if match:
                     return int(match.group(1))
-        except:
+        except Exception:
             pass
         return 1
 
@@ -1348,6 +1347,7 @@ class ScheduleBoardMainView(discord.ui.View):
             )
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in create board button: {e}")
             print(f"[ERROR] Error in create board button: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1363,6 +1363,7 @@ class ScheduleBoardMainView(discord.ui.View):
             )
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in manage board button: {e}")
             print(f"[ERROR] Error in manage board button: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1379,6 +1380,7 @@ class CreateBoardTypeView(discord.ui.View):
         try:
             await self.proceed_to_channel_selection(interaction, "server")
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in server board button: {e}")
             print(f"[ERROR] Error in server board button: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1388,6 +1390,7 @@ class CreateBoardTypeView(discord.ui.View):
         try:
             await self.proceed_to_channel_selection(interaction, "channel")
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in channel board button: {e}")
             print(f"[ERROR] Error in channel board button: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1398,6 +1401,7 @@ class CreateBoardTypeView(discord.ui.View):
             # Return to main schedule board menu
             await self.cog.show_main_menu(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in back button: {e}")
             print(f"[ERROR] Error in back button: {e}")
             traceback.print_exc()
 
@@ -1458,6 +1462,7 @@ class CreateBoardChannelSelectView(discord.ui.View):
             self.target_channel_id = int(interaction.data["values"][0])
             await interaction.response.defer()
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in target channel select: {e}")
             print(f"[ERROR] Error in target channel select: {e}")
             traceback.print_exc()
 
@@ -1481,6 +1486,7 @@ class CreateBoardChannelSelectView(discord.ui.View):
             await self.show_settings(interaction)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in display channel select: {e}")
             print(f"[ERROR] Error in display channel select: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1589,6 +1595,7 @@ class CreateBoardSettingsView(discord.ui.View):
             await interaction.response.send_modal(modal)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in max events button: {e}")
             print(f"[ERROR] Error in max events button: {e}")
             traceback.print_exc()
 
@@ -1701,7 +1708,7 @@ class CreateBoardSettingsView(discord.ui.View):
                         if tz_name.startswith("Etc/GMT"):
                             try:
                                 _ = pytz.timezone(tz_name)
-                            except:
+                            except Exception:
                                 await modal_interaction.response.send_message(
                                     f"{theme.deniedIcon} Invalid timezone!",
                                     ephemeral=True
@@ -1723,6 +1730,7 @@ class CreateBoardSettingsView(discord.ui.View):
             await interaction.response.send_modal(modal)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in timezone button: {e}")
             print(f"[ERROR] Error in timezone button: {e}")
             traceback.print_exc()
 
@@ -1736,6 +1744,7 @@ class CreateBoardSettingsView(discord.ui.View):
             self.timezone_button.disabled = self.use_user_timezone
             await self.refresh_embed(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in use user timezone button: {e}")
             print(f"[ERROR] Error in use user timezone button: {e}")
             traceback.print_exc()
 
@@ -1747,6 +1756,7 @@ class CreateBoardSettingsView(discord.ui.View):
             button.style = discord.ButtonStyle.primary if self.show_disabled else discord.ButtonStyle.secondary
             await self.refresh_embed(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in show disabled button: {e}")
             print(f"[ERROR] Error in show disabled button: {e}")
             traceback.print_exc()
 
@@ -1758,6 +1768,7 @@ class CreateBoardSettingsView(discord.ui.View):
             button.style = discord.ButtonStyle.primary if self.auto_pin else discord.ButtonStyle.secondary
             await self.refresh_embed(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in auto pin button: {e}")
             print(f"[ERROR] Error in auto pin button: {e}")
             traceback.print_exc()
 
@@ -1769,6 +1780,7 @@ class CreateBoardSettingsView(discord.ui.View):
             button.style = discord.ButtonStyle.primary if self.show_repeating_events else discord.ButtonStyle.secondary
             await self.refresh_embed(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in show repeating button: {e}")
             print(f"[ERROR] Error in show repeating button: {e}")
             traceback.print_exc()
 
@@ -1780,6 +1792,7 @@ class CreateBoardSettingsView(discord.ui.View):
             button.style = discord.ButtonStyle.primary if self.hide_daily_reset else discord.ButtonStyle.secondary
             await self.refresh_embed(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in hide daily reset button: {e}")
             print(f"[ERROR] Error in hide daily reset button: {e}")
             traceback.print_exc()
 
@@ -1839,6 +1852,7 @@ class CreateBoardSettingsView(discord.ui.View):
             await interaction.edit_original_response(embed=success_embed, view=success_view)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error creating board: {e}")
             print(f"[ERROR] Error creating board: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -1848,6 +1862,7 @@ class CreateBoardSettingsView(discord.ui.View):
         try:
             await self.cog.show_main_menu(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in cancel button: {e}")
             print(f"[ERROR] Error in cancel button: {e}")
             traceback.print_exc()
 
@@ -1885,6 +1900,7 @@ class CreateBoardSettingsView(discord.ui.View):
             )
             await interaction.response.edit_message(embed=embed, view=self)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error refreshing embed: {e}")
             print(f"[ERROR] Error refreshing embed: {e}")
             traceback.print_exc()
 
@@ -1900,6 +1916,7 @@ class BoardCreatedSuccessView(discord.ui.View):
         try:
             await self.cog.show_main_menu(interaction)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error returning to menu: {e}")
             print(f"[ERROR] Error returning to menu: {e}")
             traceback.print_exc()
 
@@ -2015,11 +2032,12 @@ class CreateBoardSettingsModal(discord.ui.Modal):
             )
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in create board settings modal: {e}")
             print(f"[ERROR] Error in create board settings modal: {e}")
             traceback.print_exc()
             try:
                 await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
-            except:
+            except Exception:
                 await interaction.response.send_message(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
 
 class BoardSelectionView(discord.ui.View):
@@ -2093,6 +2111,7 @@ class BoardSelectionView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=view)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in board select: {e}")
             print(f"[ERROR] Error in board select: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -2163,6 +2182,7 @@ class BoardManagementView(discord.ui.View):
             return embed
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error creating board management embed: {e}")
             print(f"[ERROR] Error creating board management embed: {e}")
             traceback.print_exc()
             return discord.Embed(
@@ -2178,6 +2198,7 @@ class BoardManagementView(discord.ui.View):
             embed = await view._create_settings_embed()
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in edit settings: {e}")
             print(f"[ERROR] Error in edit settings: {e}")
             traceback.print_exc()
 
@@ -2225,6 +2246,7 @@ class BoardManagementView(discord.ui.View):
             )
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in change tracking channel: {e}")
             print(f"[ERROR] Error in change tracking channel: {e}")
             traceback.print_exc()
 
@@ -2267,6 +2289,7 @@ class BoardManagementView(discord.ui.View):
             )
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in move board: {e}")
             print(f"[ERROR] Error in move board: {e}")
             traceback.print_exc()
 
@@ -2287,6 +2310,7 @@ class BoardManagementView(discord.ui.View):
                 ephemeral=True
             )
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in preview: {e}")
             print(f"[ERROR] Error in preview: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -2302,6 +2326,7 @@ class BoardManagementView(discord.ui.View):
             )
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in delete button: {e}")
             print(f"[ERROR] Error in delete button: {e}")
             traceback.print_exc()
 
@@ -2471,6 +2496,7 @@ class EditBoardSettingsView(discord.ui.View):
             await interaction.response.send_modal(MaxEventsModal())
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in max events button: {e}")
             print(f"[ERROR] Error in max events button: {e}")
             traceback.print_exc()
 
@@ -2548,6 +2574,7 @@ class EditBoardSettingsView(discord.ui.View):
             await interaction.response.send_modal(TimezoneModal())
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in timezone button: {e}")
             print(f"[ERROR] Error in timezone button: {e}")
             traceback.print_exc()
 
@@ -2577,6 +2604,7 @@ class EditBoardSettingsView(discord.ui.View):
             await self.cog.update_schedule_board(self.board_id)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error toggling user timezone: {e}")
             print(f"[ERROR] Error toggling user timezone: {e}")
             traceback.print_exc()
 
@@ -2606,6 +2634,7 @@ class EditBoardSettingsView(discord.ui.View):
             await self.cog.update_schedule_board(self.board_id)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error toggling show disabled: {e}")
             print(f"[ERROR] Error toggling show disabled: {e}")
             traceback.print_exc()
 
@@ -2654,6 +2683,7 @@ class EditBoardSettingsView(discord.ui.View):
                         # Message not found
                         pass
                     except Exception as e:
+                        self.cog.logger.error(f"[ERROR] Error pinning/unpinning message: {e}")
                         print(f"[ERROR] Error pinning/unpinning message: {e}")
 
             # Update button style
@@ -2664,6 +2694,7 @@ class EditBoardSettingsView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error toggling pin message: {e}")
             print(f"[ERROR] Error toggling pin message: {e}")
             traceback.print_exc()
 
@@ -2693,6 +2724,7 @@ class EditBoardSettingsView(discord.ui.View):
             await self.cog.update_schedule_board(self.board_id)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error toggling show repeating: {e}")
             print(f"[ERROR] Error toggling show repeating: {e}")
             traceback.print_exc()
 
@@ -2722,6 +2754,7 @@ class EditBoardSettingsView(discord.ui.View):
             await self.cog.update_schedule_board(self.board_id)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error toggling hide daily reset: {e}")
             print(f"[ERROR] Error toggling hide daily reset: {e}")
             traceback.print_exc()
 
@@ -2733,6 +2766,7 @@ class EditBoardSettingsView(discord.ui.View):
             embed = await view.create_embed()
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error in done button: {e}")
             print(f"[ERROR] Error in done button: {e}")
             traceback.print_exc()
 
@@ -2912,6 +2946,7 @@ class EditBoardSettingsModal(discord.ui.Modal):
             await interaction.edit_original_response(embed=embed, view=view)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error updating settings: {e}")
             print(f"[ERROR] Error updating settings: {e}")
             traceback.print_exc()
             await interaction.response.send_message(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -2939,6 +2974,7 @@ class ConfirmDeleteView(discord.ui.View):
                 await self.cog.show_main_menu(interaction)
 
         except Exception as e:
+            self.cog.logger.error(f"[ERROR] Error confirming delete: {e}")
             print(f"[ERROR] Error confirming delete: {e}")
             traceback.print_exc()
             await interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
@@ -2951,4 +2987,4 @@ class ConfirmDeleteView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=view)
 
 async def setup(bot):
-    await bot.add_cog(BearTrapSchedule(bot))
+    await bot.add_cog(NotificationSchedule(bot))

@@ -1,27 +1,32 @@
+"""
+ID channel management. Configures channels where member IDs are displayed.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 import os
 import asyncio
 import time
-import hashlib
-import aiohttp
-import ssl
 from discord.ext import tasks
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
-from .browser_headers import get_headers
+from .pimp_my_bot import theme, safe_edit_message
+from .login_handler import LoginHandler
 
-SECRET = "tB87#kPtkxqOS2"
+logger = logging.getLogger('alliance')
 
-class IDChannel(commands.Cog):
+class AllianceIDChannel(commands.Cog):
+    BACKOFF_DURATION = 300  # 5 minutes between invalid format warnings per channel
+
     def __init__(self, bot):
         self.bot = bot
         self.setup_database()
         self.log_directory = 'log'
         if not os.path.exists(self.log_directory):
             os.makedirs(self.log_directory)
+
+        self.invalid_format_warnings = {}  # {channel_id: last_warning_timestamp}
 
         self.level_mapping = {
             31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -40,18 +45,55 @@ class IDChannel(commands.Cog):
     def setup_database(self):
         if not os.path.exists('db'):
             os.makedirs('db')
-            
+
         conn = sqlite3.connect('db/id_channel.sqlite')
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS id_channels
-                     (guild_id INTEGER, 
+                     (guild_id INTEGER,
                       alliance_id INTEGER,
                       channel_id INTEGER,
                       created_at TEXT,
                       created_by INTEGER,
                       UNIQUE(guild_id, channel_id))''')
+
+        c.execute('''CREATE TABLE IF NOT EXISTS id_channel_settings (
+                     guild_id INTEGER PRIMARY KEY,
+                     scan_enabled INTEGER DEFAULT 1,
+                     scan_limit INTEGER DEFAULT 50,
+                     delete_after INTEGER DEFAULT 10
+                 )''')
+
         conn.commit()
         conn.close()
+
+    def get_guild_settings(self, guild_id):
+        with sqlite3.connect('db/id_channel.sqlite') as db:
+            db.row_factory = sqlite3.Row
+            cursor = db.cursor()
+            cursor.execute("SELECT * FROM id_channel_settings WHERE guild_id = ?", (guild_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return {'guild_id': guild_id, 'scan_enabled': 1, 'scan_limit': 50, 'delete_after': 10}
+
+    def ensure_guild_settings(self, guild_id):
+        with sqlite3.connect('db/id_channel.sqlite') as db:
+            cursor = db.cursor()
+            cursor.execute("INSERT OR IGNORE INTO id_channel_settings (guild_id) VALUES (?)", (guild_id,))
+            db.commit()
+
+    async def warn_invalid_format(self, message):
+        channel_id = message.channel.id
+        now = time.time()
+        last_warning = self.invalid_format_warnings.get(channel_id, 0)
+
+        if now - last_warning < self.BACKOFF_DURATION:
+            return
+
+        self.invalid_format_warnings[channel_id] = now
+        settings = self.get_guild_settings(message.guild.id)
+        await message.add_reaction(theme.deniedIcon)
+        await message.reply("Please enter a valid numeric ID.", delete_after=settings['delete_after'])
 
     async def log_action(self, action_type: str, user_id: int, guild_id: int, details: dict):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -71,7 +113,7 @@ class IDChannel(commands.Cog):
                 user = await self.bot.fetch_user(user_id)
                 if user:
                     user_name = f"{user.name}#{user.discriminator}" if user.discriminator != '0' else user.name
-            except:
+            except Exception:
                 pass
         
         with open(log_file_path, 'a', encoding='utf-8') as log_file:
@@ -90,27 +132,25 @@ class IDChannel(commands.Cog):
         try:
             with sqlite3.connect('db/id_channel.sqlite') as db:
                 cursor = db.cursor()
-                cursor.execute("SELECT channel_id, alliance_id FROM id_channels")
+                cursor.execute("SELECT channel_id, alliance_id, guild_id FROM id_channels")
                 channels = cursor.fetchall()
 
             invalid_channels = []
-            for channel_id, alliance_id in channels:
+            for channel_id, alliance_id, guild_id in channels:
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
                     invalid_channels.append(channel_id)
                     continue
 
-                async for message in channel.history(limit=None, after=datetime.utcnow() - timedelta(days=1)):
+                settings = self.get_guild_settings(guild_id)
+                if not settings['scan_enabled']:
+                    continue
+
+                async for message in channel.history(limit=settings['scan_limit'], after=datetime.now(timezone.utc) - timedelta(days=1)):
                     if message.author.bot:
                         continue
 
-                    # Check if bot already processed this message by checking for bot reactions
-                    already_processed = False
-                    for reaction in message.reactions:
-                        if reaction.me:
-                            already_processed = True
-                            break
-
+                    already_processed = any(reaction.me for reaction in message.reactions)
                     if already_processed:
                         continue
 
@@ -126,7 +166,7 @@ class IDChannel(commands.Cog):
                     cursor = db.cursor()
                     placeholders = ','.join('?' * len(invalid_channels))
                     cursor.execute(f"""
-                        DELETE FROM id_channels 
+                        DELETE FROM id_channels
                         WHERE channel_id IN ({placeholders})
                     """, invalid_channels)
                     db.commit()
@@ -135,24 +175,20 @@ class IDChannel(commands.Cog):
                 self.check_channels_loop.start()
 
         except Exception as e:
-            pass
+            logger.error(f"Error in on_ready: {e}")
+            print(f"Error in on_ready: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        if message.author.bot or not message.guild:
+            return
+
         try:
-            if message.author.bot or not message.guild:
-                return
-
-            for reaction in message.reactions:
-                async for user in reaction.users():
-                    if user == self.bot.user:
-                        return
-
             with sqlite3.connect('db/id_channel.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute("SELECT alliance_id FROM id_channels WHERE channel_id = ?", (message.channel.id,))
                 channel_info = cursor.fetchone()
-            
+
             if not channel_info:
                 return
 
@@ -160,205 +196,191 @@ class IDChannel(commands.Cog):
             content = message.content.strip()
 
             if not content.isdigit():
-                await message.add_reaction(theme.deniedIcon)
+                await self.warn_invalid_format(message)
                 return
 
             fid = int(content)
             await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            pass  # Don't react on exceptions to avoid reaction spam
+            logger.error(f"Error in on_message: {e}")
+            print(f"Error in on_message: {e}")
 
     async def process_fid(self, message, fid, alliance_id):
+        settings = self.get_guild_settings(message.guild.id)
+        delete_after = settings['delete_after']
+
         try:
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
                 cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
                 existing_alliance = cursor.fetchone()
-                
+
                 if existing_alliance:
-                    # Convert to int for comparison (users.alliance is stored as TEXT)
                     existing_alliance_id = int(existing_alliance[0]) if existing_alliance[0] else None
                     if existing_alliance_id == alliance_id:
                         await message.add_reaction(theme.warnIcon)
-                        await message.reply(f"This ID ({fid}) is already registered in this alliance!", delete_after=10)
+                        await message.reply(f"This ID ({fid}) is already registered in this alliance!", delete_after=delete_after)
                         return
                     else:
                         with sqlite3.connect('db/alliance.sqlite') as alliance_db:
                             alliance_cursor = alliance_db.cursor()
                             alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (existing_alliance[0],))
                             alliance_name = alliance_cursor.fetchone()
-                        
+
                         await message.add_reaction(theme.warnIcon)
                         await message.reply(
                             f"This ID ({fid}) is already registered in another alliance: `{alliance_name[0] if alliance_name else 'Unknown Alliance'}`",
-                            delete_after=10
+                            delete_after=delete_after
                         )
                         return
 
-            max_retries = 3
-            retry_delay = 60
+            result = await LoginHandler().fetch_player_data(str(fid))
 
-            for attempt in range(max_retries):
+            if result['status'] == 'rate_limited':
+                wait_time = result.get('wait_time', 60)
+                warning_embed = discord.Embed(
+                    title=f"{theme.warnIcon} API Rate Limit Reached",
+                    description=(
+                        f"Operation is on hold due to API rate limit.\n"
+                        f"**Wait Time:** `{int(wait_time)} seconds`\n\n"
+                        f"Operation will continue automatically, please wait..."
+                    ),
+                    color=discord.Color.orange()
+                )
+                await message.reply(embed=warning_embed)
+                await asyncio.sleep(wait_time)
+                result = await LoginHandler().fetch_player_data(str(fid))
+
+            if result['status'] == 'rate_limited':
+                await message.add_reaction(theme.deniedIcon)
+                await message.reply("Operation failed due to API rate limit. Please try again later.", delete_after=delete_after)
+                return
+
+            if result['status'] == 'not_found':
+                await message.add_reaction(theme.deniedIcon)
+                await message.reply("No player found for this ID!", delete_after=delete_after)
+                return
+
+            if result['status'] == 'error':
+                await message.add_reaction(theme.deniedIcon)
+                error_msg = result.get('error_message', 'An error occurred during the process!')
+                await message.reply(error_msg, delete_after=delete_after)
+                return
+
+            if result['status'] == 'success' and result['data']:
+                nickname = result['data'].get('nickname')
+                furnace_lv = result['data'].get('stove_lv', 0)
+                stove_lv_content = result['data'].get('stove_lv_content', None)
+                kid = result['data'].get('kid', None)
+                avatar_image = result['data'].get('avatar_image', None)
+
                 try:
-                    current_time = int(time.time() * 1000)
-                    form = f"fid={fid}&time={current_time}"
-                    sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
-                    form = f"sign={sign}&{form}"
-                    headers = get_headers('https://wos-giftcode-api.centurygame.com')
+                    with sqlite3.connect('db/users.sqlite') as users_db:
+                        cursor = users_db.cursor()
+                        cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
+                        if cursor.fetchone():
+                            await message.add_reaction(theme.warnIcon)
+                            await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
+                            return
 
-                    ssl_context = ssl.create_default_context()
-                    ssl_context.check_hostname = False
-                    ssl_context.verify_mode = ssl.CERT_NONE
+                        cursor.execute("""
+                            INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (fid, nickname, furnace_lv, kid, stove_lv_content, alliance_id))
+                        users_db.commit()
+                except sqlite3.IntegrityError:
+                    await message.add_reaction(theme.warnIcon)
+                    await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
+                    return
 
-                    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_context), timeout=aiohttp.ClientTimeout(total=15), trust_env=True) as session:
-                        async with session.post('https://wos-giftcode-api.centurygame.com/api/player', headers=headers, data=form) as response:
-                            if response.status == 429:
-                                if attempt < max_retries - 1:
-                                    warning_embed = discord.Embed(
-                                        title=f"{theme.warnIcon} API Rate Limit Reached",
-                                        description=(
-                                            f"Operation is on hold due to API rate limit.\n"
-                                            f"**Remaining Attempts:** `{max_retries - attempt - 1}`\n"
-                                            f"**Wait Time:** `60 seconds`\n\n"
-                                            f"Operation will continue automatically, please wait..."
-                                        ),
-                                        color=discord.Color.orange()
-                                    )
-                                    await message.reply(embed=warning_embed)
-                                    await asyncio.sleep(retry_delay)
-                                    continue
-                                else:
-                                    await message.add_reaction(theme.deniedIcon)
-                                    await message.reply("Operation failed due to API rate limit. Please try again later.", delete_after=10)
-                                    return
+                await message.add_reaction(theme.verifiedIcon)
 
-                            if response.status == 200:
-                                data = await response.json()
+                if furnace_lv > 30:
+                    furnace_level_name = self.level_mapping.get(furnace_lv, f"Level {furnace_lv}")
+                else:
+                    furnace_level_name = f"Level {furnace_lv}"
 
-                                if data.get('data'):
-                                    nickname = data['data'].get('nickname')
-                                    furnace_lv = data['data'].get('stove_lv', 0)
-                                    stove_lv_content = data['data'].get('stove_lv_content', None)
-                                    kid = data['data'].get('kid', None)
-                                    avatar_image = data['data'].get('avatar_image', None)
+                success_embed = discord.Embed(
+                    title=f"{theme.verifiedIcon} Member Successfully Added",
+                    description=(
+                        f"{theme.upperDivider}\n"
+                        f"**{theme.userIcon} Name:** `{nickname}`\n"
+                        f"**{theme.fidIcon} ID:** `{fid}`\n"
+                        f"**{theme.levelIcon} Furnace Level:** `{furnace_level_name}`\n"
+                        f"**{theme.globeIcon} State:** `{kid}`\n"
+                        f"{theme.lowerDivider}"
+                    ),
+                    color=theme.emColor3
+                )
 
-                                    try:
-                                        with sqlite3.connect('db/users.sqlite') as users_db:
-                                            cursor = users_db.cursor()
-                                            cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
-                                            if cursor.fetchone():
-                                                await message.add_reaction(theme.warnIcon)
-                                                await message.reply(f"This ID ({fid}) was added by another process!", delete_after=10)
-                                                return
-                                                
-                                            cursor.execute("""
-                                                INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
-                                                VALUES (?, ?, ?, ?, ?, ?)
-                                            """, (fid, nickname, furnace_lv, kid, stove_lv_content, alliance_id))
-                                            users_db.commit()
-                                    except sqlite3.IntegrityError:
-                                        await message.add_reaction(theme.warnIcon)
-                                        await message.reply(f"This ID ({fid}) was added by another process!", delete_after=10)
-                                        return
+                if avatar_image:
+                    success_embed.set_image(url=avatar_image)
+                if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
+                    success_embed.set_thumbnail(url=stove_lv_content)
 
-                                    await message.add_reaction(theme.verifiedIcon)
+                await message.reply(embed=success_embed)
 
-                                    if furnace_lv > 30:
-                                        furnace_level_name = self.level_mapping.get(furnace_lv, f"Level {furnace_lv}")
-                                    else:
-                                        furnace_level_name = f"Level {furnace_lv}"
-
-                                    success_embed = discord.Embed(
-                                        title=f"{theme.verifiedIcon} Member Successfully Added",
-                                        description=(
-                                            f"{theme.upperDivider}\n"
-                                            f"**{theme.userIcon} Name:** `{nickname}`\n"
-                                            f"**{theme.fidIcon} ID:** `{fid}`\n"
-                                            f"**{theme.levelIcon} Furnace Level:** `{furnace_level_name}`\n"
-                                            f"**{theme.globeIcon} State:** `{kid}`\n"
-                                            f"{theme.lowerDivider}"
-                                        ),
-                                        color=theme.emColor3
-                                    )
-
-                                    if avatar_image:
-                                        success_embed.set_image(url=avatar_image)
-                                    if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
-                                        success_embed.set_thumbnail(url=stove_lv_content)
-
-                                    await message.reply(embed=success_embed)
-
-                                    await self.log_action(
-                                        "ADD_MEMBER",
-                                        message.author.id,
-                                        message.guild.id,
-                                        {
-                                            "fid": fid,
-                                            "nickname": nickname,
-                                            "alliance_id": alliance_id,
-                                            "furnace_level": furnace_level_name
-                                        }
-                                    )
-                                    return
-                                else:
-                                    await message.add_reaction(theme.deniedIcon)
-                                    await message.reply("No player found for this ID!", delete_after=10)
-                                    return
-
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        continue
-                    else:
-                        await message.add_reaction(theme.deniedIcon)
-                        await message.reply("An error occurred during the process!", delete_after=10)
-                        return
+                await self.log_action(
+                    "ADD_MEMBER",
+                    message.author.id,
+                    message.guild.id,
+                    {
+                        "fid": fid,
+                        "nickname": nickname,
+                        "alliance_id": alliance_id,
+                        "furnace_level": furnace_level_name
+                    }
+                )
+                return
 
         except Exception as e:
+            logger.error(f"Error in process_fid: {e}")
+            print(f"Error in process_fid: {e}")
             await message.add_reaction(theme.deniedIcon)
-            await message.reply("An error occurred during the process!", delete_after=10)
+            await message.reply("An error occurred during the process!", delete_after=delete_after)
 
     @tasks.loop(seconds=300)
     async def check_channels_loop(self):
         try:
             with sqlite3.connect('db/id_channel.sqlite') as db:
                 cursor = db.cursor()
-                cursor.execute("SELECT channel_id, alliance_id FROM id_channels")
+                cursor.execute("SELECT channel_id, alliance_id, guild_id FROM id_channels")
                 channels = cursor.fetchall()
 
-            current_time = datetime.utcnow()
-            five_minutes_ago = current_time.timestamp() - 300
+            five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
 
-            for channel_id, alliance_id in channels:
+            for channel_id, alliance_id, guild_id in channels:
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
                     continue
 
-                # Only check messages from the last 5 minutes that haven't been processed
-                async for message in channel.history(limit=50, after=datetime.fromtimestamp(five_minutes_ago, tz=None)):
+                settings = self.get_guild_settings(guild_id)
+                if not settings['scan_enabled']:
+                    continue
+
+                async for message in channel.history(limit=settings['scan_limit'], after=five_minutes_ago):
                     if message.author.bot:
                         continue
 
-                    # Check if bot already processed this message (by checking for bot reactions)
-                    already_processed = False
-                    for reaction in message.reactions:
-                        if reaction.me:
-                            already_processed = True
-                            break
-
+                    already_processed = any(reaction.me for reaction in message.reactions)
                     if already_processed:
                         continue
 
                     content = message.content.strip()
                     if not content.isdigit():
-                        await message.add_reaction(theme.deniedIcon)
+                        await self.warn_invalid_format(message)
                         continue
 
                     fid = int(content)
                     await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            pass
+            logger.error(f"Error in check_channels_loop: {e}")
+            if '503' in str(e) or '502' in str(e) or 'connect error' in str(e).lower():
+                print(f"ID Channel check skipped — Discord is temporarily unavailable. This is normal and will resolve itself.")
+            else:
+                print(f"Error in check_channels_loop: {e}")
 
     async def show_id_channel_menu(self, interaction: discord.Interaction):
         try:
@@ -380,24 +402,167 @@ class IDChannel(commands.Cog):
                     f"{theme.addIcon} Create new ID channel\n"
                     f"{theme.listIcon} View active ID channels\n"
                     f"{theme.trashIcon} Delete existing ID channel\n"
+                    f"{theme.settingsIcon} Configure scan and auto-delete settings\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
             )
             
             view = IDChannelView(self)
-            
-            try:
-                await interaction.response.edit_message(embed=embed, view=view)
-            except discord.InteractionResponded:
-                pass
+
+            await safe_edit_message(interaction, embed=embed, view=view)
                 
         except Exception as e:
+            logger.error(f"Error in show_id_channel_menu: {e}")
+            print(f"Error in show_id_channel_menu: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred. Please try again.",
                     ephemeral=True
                 )
+
+class ScanLimitModal(discord.ui.Modal):
+    def __init__(self, cog, current_value):
+        super().__init__(title="Set Scan Message Limit")
+        self.cog = cog
+        self.limit_input = discord.ui.TextInput(
+            label="Max messages to scan per channel (1-200)",
+            placeholder="50",
+            default=str(current_value),
+            required=True,
+            max_length=3
+        )
+        self.add_item(self.limit_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(self.limit_input.value.strip())
+            if value < 1 or value > 200:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Please enter a value between 1 and 200.",
+                    ephemeral=True
+                )
+                return
+
+            self.cog.ensure_guild_settings(interaction.guild_id)
+            with sqlite3.connect('db/id_channel.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("UPDATE id_channel_settings SET scan_limit = ? WHERE guild_id = ?",
+                              (value, interaction.guild_id))
+                db.commit()
+
+            await IDChannelSettingsView(self.cog).show(interaction)
+        except ValueError:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Please enter a valid number.",
+                ephemeral=True
+            )
+
+
+class DeleteAfterModal(discord.ui.Modal):
+    def __init__(self, cog, current_value):
+        super().__init__(title="Set Auto-Delete Timer")
+        self.cog = cog
+        self.timer_input = discord.ui.TextInput(
+            label="Seconds before bot replies auto-delete (0-300)",
+            placeholder="10",
+            default=str(current_value),
+            required=True,
+            max_length=3
+        )
+        self.add_item(self.timer_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(self.timer_input.value.strip())
+            if value < 0 or value > 300:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Please enter a value between 0 and 300 seconds.",
+                    ephemeral=True
+                )
+                return
+
+            # 0 means no auto-delete (None in the DB)
+            db_value = None if value == 0 else value
+
+            self.cog.ensure_guild_settings(interaction.guild_id)
+            with sqlite3.connect('db/id_channel.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute("UPDATE id_channel_settings SET delete_after = ? WHERE guild_id = ?",
+                              (db_value, interaction.guild_id))
+                db.commit()
+
+            await IDChannelSettingsView(self.cog).show(interaction)
+        except ValueError:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Please enter a valid number.",
+                ephemeral=True
+            )
+
+
+class IDChannelSettingsView(discord.ui.View):
+    def __init__(self, cog):
+        super().__init__(timeout=7200)
+        self.cog = cog
+
+    def build_embed(self, settings):
+        scan_status = f"{theme.verifiedIcon} Enabled" if settings['scan_enabled'] else f"{theme.deniedIcon} Disabled"
+        scan_limit = settings['scan_limit']
+        delete_after = settings['delete_after']
+        delete_text = "Permanent (no auto-delete)" if delete_after is None else f"{delete_after} seconds"
+
+        return discord.Embed(
+            title=f"{theme.settingsIcon} ID Channel Settings",
+            description=(
+                f"Configure how ID channels behave on this server.\n\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.settingsIcon} **Startup Scan:** {scan_status}\n"
+                f"└ Scan for missed IDs when the bot starts or every 5 minutes\n\n"
+                f"{theme.listIcon} **Scan Limit:** `{scan_limit}` messages per channel\n"
+                f"└ Max messages checked per scan (lower = fewer API calls)\n\n"
+                f"{theme.editIcon} **Auto-Delete:** `{delete_text}`\n"
+                f"└ How long bot replies (errors, warnings) stay visible\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1
+        )
+
+    async def show(self, interaction: discord.Interaction):
+        settings = self.cog.get_guild_settings(interaction.guild_id)
+        embed = self.build_embed(settings)
+        await safe_edit_message(interaction, embed=embed, view=self)
+
+    @discord.ui.button(label="Toggle Scan", style=discord.ButtonStyle.primary, row=0)
+    async def toggle_scan(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = self.cog.get_guild_settings(interaction.guild_id)
+        new_value = 0 if settings['scan_enabled'] else 1
+
+        self.cog.ensure_guild_settings(interaction.guild_id)
+        with sqlite3.connect('db/id_channel.sqlite') as db:
+            cursor = db.cursor()
+            cursor.execute("UPDATE id_channel_settings SET scan_enabled = ? WHERE guild_id = ?",
+                          (new_value, interaction.guild_id))
+            db.commit()
+
+        settings['scan_enabled'] = new_value
+        embed = self.build_embed(settings)
+        await safe_edit_message(interaction, embed=embed, view=self)
+
+    @discord.ui.button(label="Scan Limit", style=discord.ButtonStyle.secondary, row=0)
+    async def set_scan_limit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = self.cog.get_guild_settings(interaction.guild_id)
+        await interaction.response.send_modal(ScanLimitModal(self.cog, settings['scan_limit']))
+
+    @discord.ui.button(label="Auto-Delete Timer", style=discord.ButtonStyle.secondary, row=0)
+    async def set_delete_after(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = self.cog.get_guild_settings(interaction.guild_id)
+        current = settings['delete_after'] if settings['delete_after'] is not None else 0
+        await interaction.response.send_modal(DeleteAfterModal(self.cog, current))
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_id_channel_menu(interaction)
+
 
 class IDChannelView(discord.ui.View):
     def __init__(self, cog):
@@ -449,10 +614,10 @@ class IDChannelView(discord.ui.View):
                     creator = None
                     try:
                         creator = await interaction.guild.fetch_member(created_by)
-                    except:
+                    except Exception:
                         try:
                             creator = await interaction.client.fetch_user(created_by)
-                        except:
+                        except Exception:
                             pass
 
                     creator_text = creator.mention if creator else f"Unknown (ID: {created_by})"
@@ -468,6 +633,8 @@ class IDChannelView(discord.ui.View):
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
+            logger.error(f"Error in view_channels_button: {e}")
+            print(f"Error in view_channels_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
@@ -557,6 +724,8 @@ class IDChannelView(discord.ui.View):
                             await select_interaction.message.edit(embed=success_embed, view=None)
                             
                     except Exception as e:
+                        logger.error(f"Error in delete channel select callback: {e}")
+                        print(f"Error in delete channel select callback: {e}")
                         error_embed = discord.Embed(
                             title=f"{theme.deniedIcon} Error",
                             description="An error occurred while deleting the channel.",
@@ -584,6 +753,8 @@ class IDChannelView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in delete_channel_button: {e}")
+            print(f"Error in delete_channel_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
@@ -683,6 +854,8 @@ class IDChannelView(discord.ui.View):
                                 )
                                 await channel_interaction.response.edit_message(embed=error_embed, view=None)
                             except Exception as e:
+                                logger.error(f"Error in channel select callback: {e}")
+                                print(f"Error in channel select callback: {e}")
                                 error_embed = discord.Embed(
                                     title=f"{theme.deniedIcon} Error",
                                     description="An error occurred while creating the channel.",
@@ -717,33 +890,56 @@ class IDChannelView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in create_channel_button: {e}")
+            print(f"Error in create_channel_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred. Please try again.",
                 ephemeral=True
             )
 
     @discord.ui.button(
-        label="Back",
-        emoji=f"{theme.prevIcon}",
+        label="Settings",
+        emoji=f"{theme.settingsIcon}",
         style=discord.ButtonStyle.secondary,
-        custom_id="back_to_other_features",
+        custom_id="id_channel_settings",
+        row=1
+    )
+    async def settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await IDChannelSettingsView(self.cog).show(interaction)
+        except Exception as e:
+            logger.error(f"Error opening ID channel settings: {e}")
+            print(f"Error opening ID channel settings: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} An error occurred opening settings.",
+                ephemeral=True
+            )
+
+    @discord.ui.button(
+        label="Back",
+        emoji=f"{theme.backIcon}",
+        style=discord.ButtonStyle.secondary,
+        custom_id="back_to_self_registration",
         row=1
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Navigate back to Self-Registration sub-menu."""
         try:
-            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-            if other_features_cog:
-                await other_features_cog.show_other_features_menu(interaction)
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_self_registration(interaction)
             else:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Other Features module not found.",
+                    f"{theme.deniedIcon} Menu module not found.",
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error in back_button: {e}")
+            print(f"Error in back_button: {e}")
             await interaction.response.send_message(
-                f"{theme.deniedIcon} An error occurred while returning to Other Features menu.",
+                f"{theme.deniedIcon} An error occurred while navigating back.",
                 ephemeral=True
             )
 
 async def setup(bot):
-    await bot.add_cog(IDChannel(bot)) 
+    await bot.add_cog(AllianceIDChannel(bot)) 

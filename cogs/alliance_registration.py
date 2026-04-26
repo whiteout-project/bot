@@ -1,13 +1,15 @@
+"""
+Alliance registration flow. Lets users link their game account to Discord.
+"""
 import discord
 from discord.ext import commands
-import hashlib
 import sqlite3
-import aiohttp
-import time
-import ssl
+import logging
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
-from .browser_headers import get_headers
+from .login_handler import LoginHandler
+
+logger = logging.getLogger('alliance')
 
 class RegisterSettingsView(discord.ui.View):
     def __init__(self, cog):
@@ -31,6 +33,7 @@ class RegisterSettingsView(discord.ui.View):
             conn.commit()
             conn.close()
         except Exception as e:
+            logger.error(f"Error updating register settings: {e}")
             print(f"Error updating register settings: {e}")
 
     @discord.ui.button(
@@ -61,14 +64,14 @@ class RegisterSettingsView(discord.ui.View):
         except Exception as _:
             await interaction.response.send_message(f"{theme.deniedIcon} An error occurred while disabling registration.", ephemeral=True)
 
-class Register(commands.Cog):
+class AllianceRegistration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         
-        self.conn_alliance = sqlite3.connect("db/alliance.sqlite")
+        self.conn_alliance = sqlite3.connect("db/alliance.sqlite", timeout=30.0, check_same_thread=False)
         self.c_alliance = self.conn_alliance.cursor()
-        
-        self.conn_users = sqlite3.connect("db/users.sqlite")
+
+        self.conn_users = sqlite3.connect("db/users.sqlite", timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
     
     def cog_unload(self):
@@ -118,6 +121,7 @@ class Register(commands.Cog):
             return bool(result[0]) if result else False
             
         except Exception as e:
+            logger.error(f"Error checking registration status: {e}")
             print(f"Error checking registration status: {e}")
             return False
         
@@ -131,28 +135,16 @@ class Register(commands.Cog):
         ][:25]
         
     async def fetch_user(self, fid: int):
-        URL = "https://wos-giftcode-api.centurygame.com/api/player"
-        HEADERS = get_headers('https://wos-giftcode-api.centurygame.com')
-        
-        ssl_context = ssl.create_default_context()
+        result = await LoginHandler().fetch_player_data(str(fid))
 
-        data_nosign = f"fid={fid}&time={time.time_ns()}"
-        sign = hashlib.md5((data_nosign + "tB87#kPtkxqOS2").encode()).hexdigest()
-        data = f"sign={sign}&{data_nosign}"
-
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15), trust_env=True) as session:
-            async with session.post(
-                url=URL,
-                data=data,
-                headers=HEADERS,
-                ssl=ssl_context
-            ) as response:
-                if response.status == 200:
-                    return await response.json()
-                elif response.status == 429:
-                    raise Exception("RATE_LIMITED")
-                else:
-                    raise Exception(f"Failed to fetch user data: {response.status}")
+        if result['status'] == 'success':
+            return {"msg": "success", "data": result['data']}
+        elif result['status'] == 'rate_limited':
+            raise Exception("RATE_LIMITED")
+        elif result['status'] == 'not_found':
+            return {"msg": "role not exist"}
+        else:
+            raise Exception(result.get('error_message', 'Failed to fetch user data'))
          
     @discord.app_commands.command(
         name="register",
@@ -211,6 +203,7 @@ class Register(commands.Cog):
                     ephemeral=True
                 )
             else:
+                logger.error(f"Error fetching user data for FID {fid}: {e}")
                 print(f"Error fetching user data for FID {fid}: {e}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Failed to fetch user data. Please try again later.",
@@ -233,4 +226,4 @@ class Register(commands.Cog):
         await interaction.response.send_message("Registration successful! You are now in the bot's database.", ephemeral=True)
         
 async def setup(bot):
-    await bot.add_cog(Register(bot))
+    await bot.add_cog(AllianceRegistration(bot))
