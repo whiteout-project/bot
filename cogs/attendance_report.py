@@ -123,7 +123,7 @@ class AttendanceReport(commands.Cog):
                 display_text = get_display(reshaped)
                 # Use LEFT-TO-RIGHT MARK to force LTR context
                 return f'\u200E{display_text}\u200E'
-            except:
+            except Exception:
                 return text
         return text
     
@@ -136,7 +136,7 @@ class AttendanceReport(commands.Cog):
                 return date_obj.strftime("%Y-%m-%d %H:%M UTC")
             else: # Already formatted or partial date
                 return date_str
-        except:
+        except Exception:
             # Fallback to original if parsing fails
             return date_str.split()[0] if date_str else "N/A"
 
@@ -826,7 +826,7 @@ class AttendanceReport(commands.Cog):
                 else:
                     try:
                         date_str = event_date.strftime("%Y-%m-%d")
-                    except:
+                    except Exception:
                         date_str = str(event_date)
                 title_text += f' | Date: {date_str}'
             
@@ -1003,7 +1003,7 @@ class AttendanceReport(commands.Cog):
                         else:
                             last_date_obj = last_date
                         date_str = last_date_obj.strftime("%m/%d")
-                    except:
+                    except Exception:
                         # Fallback for unparseable dates
                         if isinstance(last_date, str):
                             date_str = last_date.split('T')[0] if 'T' in last_date else last_date.split()[0] if ' ' in last_date else last_date
@@ -1158,7 +1158,7 @@ class AttendanceReport(commands.Cog):
                         result = cursor.fetchone()
                         if result:
                             session_id = result[0]
-                except:
+                except Exception:
                     pass
 
             # Build the report sections
@@ -1181,7 +1181,7 @@ class AttendanceReport(commands.Cog):
                     # Datetime object - format it
                     try:
                         date_str = event_date_value.strftime("%Y-%m-%d")
-                    except:
+                    except Exception:
                         date_str = str(event_date_value)
             report_sections.append(f"**Date:** {date_str}")
             report_sections.append(f"**Total Marked:** {len(records)} players")
@@ -1432,7 +1432,7 @@ class AttendanceReport(commands.Cog):
                         else:
                             try:
                                 date_display = date_value.strftime("%Y-%m-%d")
-                            except:
+                            except Exception:
                                 date_display = str(date_value)
                     else:
                         date_display = "Unknown"
