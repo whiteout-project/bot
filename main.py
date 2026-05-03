@@ -694,8 +694,7 @@ if __name__ == "__main__":
     if _proxy_url: _flags.append('--proxy')
     startup.header(_version, f"{sys.version_info.major}.{sys.version_info.minor}", _flags or None)
     if _proxy_url:
-        startup.info(f"Routing WOS API traffic through proxy: {_proxy_url}")
-        startup.info("Used for gift code redemption and player lookups.")
+        startup.info(f"Routing player traffic through proxy: {_proxy_url}")
 
     # Check for mutually exclusive flags
     mutually_exclusive_flags = ["--autoupdate", "--no-update", "--repair"]

@@ -225,7 +225,7 @@ def ready():
     """Display the final ready message and usage hint."""
     message = random.choice(_get_ready_messages())
     print(f"\n  {message}")
-    print(f"  Run /settings in Discord to configure the bot.")
+    print(f"   ↳ Run /settings in Discord to configure the bot.")
 
 
 def shutdown():

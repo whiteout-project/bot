@@ -4,6 +4,7 @@ Captcha solver using an ONNX neural network model for gift code redemption.
 import os
 import io
 import time
+import asyncio
 import logging
 import logging.handlers
 import json
@@ -169,6 +170,26 @@ class GiftCaptchaSolver:
             self.logger.error(f"Error preprocessing image: {e}")
             return None
 
+    def _run_inference_sync(self, image_bytes):
+        """Sync portion of solve_captcha: preprocess image + ONNX inference +
+        decode. Returns (predicted_text, avg_confidence) or None on preprocess
+        failure. Pulled out so async callers can off-load it to a thread and
+        keep the asyncio event loop free for Discord heartbeats."""
+        input_data = self._preprocess_image(image_bytes)
+        if input_data is None:
+            return None
+        input_name = self.onnx_session.get_inputs()[0].name
+        outputs = self.onnx_session.run(None, {input_name: input_data})
+        idx_to_char = self.model_metadata['idx_to_char']
+        predicted_text = ""
+        confidences = []
+        for pos in range(4):
+            char_probs = outputs[pos][0]
+            predicted_idx = np.argmax(char_probs)
+            confidences.append(float(char_probs[predicted_idx]))
+            predicted_text += idx_to_char[str(predicted_idx)]
+        return predicted_text, sum(confidences) / len(confidences)
+
     async def solve_captcha(self, image_bytes, fid=None, attempt=0):
         """
         Attempts to solve captcha using ONNX model.
@@ -198,34 +219,14 @@ class GiftCaptchaSolver:
             EXPECTED_CAPTCHA_LENGTH = 4
             VALID_CHARACTERS = set(self.model_metadata['chars'])
 
-            # Preprocess image
-            input_data = self._preprocess_image(image_bytes)
-            if input_data is None:
+            inference_result = await asyncio.to_thread(self._run_inference_sync, image_bytes)
+            if inference_result is None:
                 self.stats["failures"] += 1
                 self.run_stats["failures"] += 1
                 self.logger.error(f"[Solver] ID {fid}, Attempt {attempt+1}: Failed to preprocess image")
                 return None, False, "ONNX", 0.0, None
 
-            # Run inference
-            input_name = self.onnx_session.get_inputs()[0].name
-            outputs = self.onnx_session.run(None, {input_name: input_data})
-
-            # Decode predictions
-            idx_to_char = self.model_metadata['idx_to_char']
-            predicted_text = ""
-            confidences = []
-
-            for pos in range(4):  # 4 character positions
-                char_probs = outputs[pos][0]  # Get probabilities for this position
-                predicted_idx = np.argmax(char_probs)  # Get highest probability
-                confidence = float(char_probs[predicted_idx])  # Get confidence score
-                predicted_char = idx_to_char[str(predicted_idx)]
-                predicted_text += predicted_char
-                confidences.append(confidence)
-
-            # Calculate average confidence
-            avg_confidence = sum(confidences) / len(confidences)
-
+            predicted_text, avg_confidence = inference_result
             solve_duration = time.time() - start_time
             self.logger.info(f"[Solver] ID {fid}, Attempt {attempt+1}: ONNX raw result='{predicted_text}' (confidence: {avg_confidence:.3f}, {solve_duration:.3f}s)")
 

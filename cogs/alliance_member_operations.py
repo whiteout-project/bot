@@ -46,42 +46,299 @@ class _MemberAddProgress:
                 )
                 self.message = None
 
-class PaginationView(discord.ui.View):
-    def __init__(self, chunks: List[discord.Embed], author_id: int):
+_RTL_RANGES = [(0x0590, 0x08FF), (0xFB1D, 0xFDFF), (0xFE70, 0xFEFF)]
+
+
+def _has_rtl(text: str) -> bool:
+    return bool(text) and any(
+        any(lo <= ord(c) <= hi for lo, hi in _RTL_RANGES) for c in text
+    )
+
+
+def _isolate_rtl(text: str) -> str:
+    """Wrap RTL chars in FSI\u2026PDI so they don't reorder surrounding tokens."""
+    if not _has_rtl(text):
+        return text or ""
+    return f"\u2068{text}\u2069"
+
+
+def fix_rtl(text):
+    return _isolate_rtl(text)
+
+
+class MemberFilterModal(discord.ui.Modal):
+    def __init__(self, parent_view: "MemberListView"):
+        super().__init__(title="Filter Members")
+        self.parent_view = parent_view
+        self.name_input = discord.ui.TextInput(
+            label="Name contains",
+            default=parent_view.filter_name,
+            required=False,
+            max_length=100,
+        )
+        self.id_input = discord.ui.TextInput(
+            label="ID contains",
+            default=parent_view.filter_id,
+            required=False,
+            max_length=20,
+        )
+        self.state_input = discord.ui.TextInput(
+            label="State (exact match)",
+            default=parent_view.filter_state,
+            required=False,
+            max_length=10,
+        )
+        self.add_item(self.name_input)
+        self.add_item(self.id_input)
+        self.add_item(self.state_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.parent_view.filter_name = self.name_input.value.strip()
+        self.parent_view.filter_id = self.id_input.value.strip()
+        self.parent_view.filter_state = self.state_input.value.strip()
+        self.parent_view.current_page = 0
+        self.parent_view._build_components()
+        await interaction.response.edit_message(
+            embed=self.parent_view.build_embed(),
+            view=self.parent_view,
+        )
+
+
+class MemberListView(discord.ui.View):
+    PAGE_SIZE = 20
+    SORTS = [
+        ("FC \u2193",      lambda m: (-m['furnace_lv'], m['nickname'].casefold()), False),
+        ("FC \u2191",      lambda m: (m['furnace_lv'], m['nickname'].casefold()),  False),
+        ("Name A\u2192Z",  lambda m: m['nickname'].casefold(),                      False),
+        ("Name Z\u2192A",  lambda m: m['nickname'].casefold(),                      True),
+        ("ID \u2191",      lambda m: m['fid'],                                       False),
+        ("State \u2191",   lambda m: (m['kid'], -m['furnace_lv']),                  False),
+    ]
+
+    def __init__(self, members, alliance_id, alliance_name, cog, author_id):
         super().__init__(timeout=7200)
-        self.chunks = chunks
-        self.current_page = 0
-        self.message = None
+        self.all_members = [
+            {'fid': fid, 'nickname': nick or '', 'furnace_lv': fl or 0, 'kid': kid}
+            for fid, nick, fl, kid in members
+        ]
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.cog = cog
         self.author_id = author_id
-        self.update_buttons()
+        self.message = None
+        self.current_page = 0
+        self.sort_idx = 0
+        self.filter_name = ""
+        self.filter_id = ""
+        self.filter_state = ""
+        self._build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
-            await interaction.response.send_message("You cannot use these buttons.", ephemeral=True)
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the user who opened this view can use these controls.",
+                ephemeral=True,
+            )
             return False
         return True
 
-    @discord.ui.button(emoji=theme.importIcon, style=discord.ButtonStyle.blurple, disabled=True)
-    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_page_change(interaction, -1)
+    def _has_filter(self) -> bool:
+        return bool(self.filter_name or self.filter_id or self.filter_state)
 
-    @discord.ui.button(emoji=theme.exportIcon, style=discord.ButtonStyle.blurple)
-    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._handle_page_change(interaction, 1)
+    def _filtered(self):
+        out = self.all_members
+        if self.filter_name:
+            n = self.filter_name.casefold()
+            out = [m for m in out if n in m['nickname'].casefold()]
+        if self.filter_id:
+            out = [m for m in out if self.filter_id in str(m['fid'])]
+        if self.filter_state:
+            try:
+                target = int(self.filter_state)
+                out = [m for m in out if m['kid'] == target]
+            except ValueError:
+                pass
+        return out
 
-    async def _handle_page_change(self, interaction: discord.Interaction, change: int):
-        self.current_page = max(0, min(self.current_page + change, len(self.chunks) - 1))
-        self.update_buttons()
-        await self.update_page(interaction)
+    def _sorted_filtered(self):
+        label, key, reverse = self.SORTS[self.sort_idx]
+        return sorted(self._filtered(), key=key, reverse=reverse)
 
-    def update_buttons(self):
-        self.previous_page.disabled = self.current_page == 0
-        self.next_page.disabled = self.current_page == len(self.chunks) - 1
+    def _build_components(self):
+        self.clear_items()
+        items = self._sorted_filtered()
+        total_pages = max(1, (len(items) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        if self.current_page >= total_pages:
+            self.current_page = max(0, total_pages - 1)
 
-    async def update_page(self, interaction: discord.Interaction):
-        embed = self.chunks[self.current_page]
-        embed.set_footer(text=f"Page {self.current_page + 1}/{len(self.chunks)}")
-        await interaction.response.edit_message(embed=embed, view=self)
+        prev_btn = discord.ui.Button(
+            emoji=theme.prevIcon,
+            style=discord.ButtonStyle.secondary,
+            disabled=self.current_page == 0,
+            row=0,
+        )
+        prev_btn.callback = self._on_prev
+        self.add_item(prev_btn)
+
+        sort_btn = discord.ui.Button(
+            label=f"Sort: {self.SORTS[self.sort_idx][0]}",
+            style=discord.ButtonStyle.secondary,
+            row=0,
+        )
+        sort_btn.callback = self._on_sort
+        self.add_item(sort_btn)
+
+        next_btn = discord.ui.Button(
+            emoji=theme.nextIcon,
+            style=discord.ButtonStyle.secondary,
+            disabled=self.current_page >= total_pages - 1,
+            row=0,
+        )
+        next_btn.callback = self._on_next
+        self.add_item(next_btn)
+
+        filter_btn = discord.ui.Button(
+            label="Filter",
+            emoji=theme.searchIcon,
+            style=discord.ButtonStyle.primary,
+            row=1,
+        )
+        filter_btn.callback = self._on_filter
+        self.add_item(filter_btn)
+
+        if self._has_filter():
+            clear_btn = discord.ui.Button(
+                label="Clear Filter",
+                emoji=theme.deniedIcon,
+                style=discord.ButtonStyle.secondary,
+                row=1,
+            )
+            clear_btn.callback = self._on_clear
+            self.add_item(clear_btn)
+
+        export_btn = discord.ui.Button(
+            label="Export",
+            emoji=theme.exportIcon,
+            style=discord.ButtonStyle.success,
+            row=1,
+        )
+        export_btn.callback = self._on_export
+        self.add_item(export_btn)
+
+    def build_embed(self) -> discord.Embed:
+        items = self._sorted_filtered()
+        total = len(items)
+        total_pages = max(1, (total + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        start = self.current_page * self.PAGE_SIZE
+        page_items = items[start:start + self.PAGE_SIZE]
+
+        all_count = len(self.all_members)
+        if self.all_members:
+            max_fl = max(m['furnace_lv'] for m in self.all_members)
+            avg_fl = sum(m['furnace_lv'] for m in self.all_members) / all_count
+            max_label = self.cog.level_mapping.get(max_fl, str(max_fl))
+            avg_label = self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))
+        else:
+            max_label = avg_label = "-"
+
+        header = [
+            f"{theme.upperDivider}",
+            (f"{theme.chartIcon} **Total:** `{all_count}`  \u00B7  "
+             f"**Highest:** `{max_label}`  \u00B7  **Avg:** `{avg_label}`"),
+            f"{theme.listIcon} **Sort:** `{self.SORTS[self.sort_idx][0]}`",
+        ]
+        if self._has_filter():
+            parts = []
+            if self.filter_name:
+                parts.append(f"name~`{self.filter_name}`")
+            if self.filter_id:
+                parts.append(f"id~`{self.filter_id}`")
+            if self.filter_state:
+                parts.append(f"state=`{self.filter_state}`")
+            header.append(
+                f"{theme.searchIcon} **Filter:** {' \u00B7 '.join(parts)}  \u2192  `{total}` match"
+            )
+        header.append(f"{theme.lowerDivider}")
+
+        if not page_items:
+            body = f"\n{theme.deniedIcon} No members match the current filter."
+        else:
+            rows = []
+            for offset, m in enumerate(page_items, start=start + 1):
+                level = self.cog.level_mapping.get(m['furnace_lv'], str(m['furnace_lv']))
+                nick = _isolate_rtl(m['nickname']) or "(no name)"
+                rows.append(
+                    f"`{offset:>3}.` {theme.userIcon} **{nick}**\n"
+                    f"     `{level}` \u00B7 `ID {m['fid']}` \u00B7 `State {m['kid']}`"
+                )
+            body = "\n".join(rows)
+
+        embed = discord.Embed(
+            title=f"{theme.userIcon} {self.alliance_name} \u2014 Member List",
+            description="\n".join(header) + "\n" + body,
+            color=theme.emColor1,
+        )
+        embed.set_footer(text=f"Page {self.current_page + 1}/{total_pages}")
+        return embed
+
+    async def _refresh(self, interaction: discord.Interaction):
+        self._build_components()
+        await interaction.response.edit_message(
+            embed=self.build_embed(), view=self
+        )
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        if self.current_page > 0:
+            self.current_page -= 1
+        await self._refresh(interaction)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        items = self._sorted_filtered()
+        total_pages = max(1, (len(items) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+        if self.current_page < total_pages - 1:
+            self.current_page += 1
+        await self._refresh(interaction)
+
+    async def _on_sort(self, interaction: discord.Interaction):
+        self.sort_idx = (self.sort_idx + 1) % len(self.SORTS)
+        self.current_page = 0
+        await self._refresh(interaction)
+
+    async def _on_filter(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(MemberFilterModal(self))
+
+    async def _on_clear(self, interaction: discord.Interaction):
+        self.filter_name = self.filter_id = self.filter_state = ""
+        self.current_page = 0
+        await self._refresh(interaction)
+
+    async def _on_export(self, interaction: discord.Interaction):
+        items = self._sorted_filtered()
+        if not items:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Nothing to export \u2014 current filter matches no members.",
+                ephemeral=True,
+            )
+            return
+        column_embed = discord.Embed(
+            title=f"{theme.chartIcon} Select Export Columns",
+            description=(
+                f"**Alliance:** {self.alliance_name}\n"
+                f"**Members in export:** {len(items)}"
+                + (" (filtered view)" if self._has_filter() else "")
+                + "\n\nClick the buttons to toggle columns on/off.\n"
+                "All columns are selected by default."
+            ),
+            color=theme.emColor1,
+        )
+        column_view = ExportColumnSelectView(
+            self.alliance_id, self.alliance_name, self.cog,
+            include_alliance=False,
+            prefiltered_members=items,
+        )
+        await interaction.response.send_message(
+            embed=column_embed, view=column_view, ephemeral=True
+        )
 
     async def on_timeout(self) -> None:
         for item in self.children:
@@ -92,9 +349,6 @@ class PaginationView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
-
-def fix_rtl(text):
-    return f"\u202B{text}\u202C"
 
 class AllianceMemberOperations(commands.Cog):
     def __init__(self, bot):
@@ -581,73 +835,34 @@ class AllianceMemberOperations(commands.Cog):
                             cursor = users_db.cursor()
                             cursor.execute("""
                                 SELECT fid, nickname, furnace_lv, kid
-                                FROM users 
-                                WHERE alliance = ? 
-                                ORDER BY furnace_lv DESC, nickname
+                                FROM users
+                                WHERE alliance = ?
                             """, (alliance_id,))
                             members = cursor.fetchall()
-                        
+
                         if not members:
                             await interaction.response.send_message(
-                                f"{theme.deniedIcon} No members found in this alliance.", 
+                                f"{theme.deniedIcon} No members found in this alliance.",
                                 ephemeral=True
                             )
                             return
 
-                        max_fl = max(member[2] for member in members)
-                        avg_fl = sum(member[2] for member in members) / len(members)
-
-                        public_embed = discord.Embed(
-                            title=f"{theme.userIcon} {alliance_name} - Member List",
-                            description=(
-                                f"```ml\n"
-                                f"Alliance Statistics\n"
-                                f"══════════════════════════\n"
-                                f"{theme.chartIcon} Total Members    : {len(members)}\n"
-                                f"{theme.levelIcon} Highest Level    : {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                f"{theme.chartIcon} Average Level    : {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                                f"══════════════════════════\n"
-                                f"```\n"
-                                f"**Member List**\n"
-                                f"{theme.middleDivider}\n"
-                            ),
-                            color=theme.emColor1
+                        member_view = MemberListView(
+                            members, alliance_id, alliance_name,
+                            self.cog, interaction.user.id,
                         )
 
-                        members_per_page = 15
-                        member_chunks = [members[i:i + members_per_page] for i in range(0, len(members), members_per_page)]
-                        embeds = []
-
-                        for page, chunk in enumerate(member_chunks):
-                            embed = public_embed.copy()
-                            
-                            member_list = ""
-                            for idx, (fid, nickname, furnace_lv, kid) in enumerate(chunk, start=page * members_per_page + 1):
-                                level = self.cog.level_mapping.get(furnace_lv, str(furnace_lv))
-                                member_list += f"{theme.userIcon} {nickname}\n└ {theme.levelIcon} {level}\n└ {theme.fidIcon} ID: {fid}\n└ {theme.globeIcon} State: {kid}\n\n"
-
-                            embed.description += member_list
-                            
-                            if len(member_chunks) > 1:
-                                embed.set_footer(text=f"Page {page + 1}/{len(member_chunks)}")
-                            
-                            embeds.append(embed)
-
-                        pagination_view = PaginationView(embeds, interaction.user.id)
-                        
                         await interaction.response.edit_message(
                             content=f"{theme.verifiedIcon} Member list has been generated and posted below.",
                             embed=None,
-                            view=None
+                            view=None,
                         )
-                        
+
                         message = await interaction.channel.send(
-                            embed=embeds[0],
-                            view=pagination_view if len(embeds) > 1 else None
+                            embed=member_view.build_embed(),
+                            view=member_view,
                         )
-                        
-                        if pagination_view:
-                            pagination_view.message = message
+                        member_view.message = message
 
                     view.callback = select_callback
                     await button_interaction.response.send_message(
@@ -1629,8 +1844,9 @@ class AllianceMemberOperations(commands.Cog):
         if custom_id == "main_menu":
             await self.show_main_menu(interaction)
     
-    async def process_member_export(self, interaction: discord.Interaction, alliance_id, alliance_name: str, selected_columns: list, export_format: str):
-        """Process the member export with selected columns and format"""
+    async def process_member_export(self, interaction: discord.Interaction, alliance_id, alliance_name: str, selected_columns: list, export_format: str, prefiltered_members: list | None = None):
+        """Process the member export with selected columns and format.
+        When prefiltered_members is provided, uses it instead of querying DB."""
         try:
             # Update the message to show processing
             processing_embed = discord.Embed(
@@ -1639,13 +1855,20 @@ class AllianceMemberOperations(commands.Cog):
                 color=theme.emColor1
             )
             await interaction.response.edit_message(embed=processing_embed, view=None)
-            
+
             # Build the SQL query based on selected columns
             db_columns = [col[0] for col in selected_columns]
             headers = [col[1] for col in selected_columns]
-            
-            # Check if exporting all alliances
-            if alliance_id == "all":
+
+            if prefiltered_members is not None:
+                filtered_columns = [col for col in selected_columns if col[0] != 'alliance_name']
+                db_columns = [col[0] for col in filtered_columns]
+                headers = [col[1] for col in filtered_columns]
+                members = [
+                    tuple(m[col] for col in db_columns)
+                    for m in prefiltered_members
+                ]
+            elif alliance_id == "all":
                 # Need to join with alliance table to get alliance names
                 with sqlite3.connect('db/users.sqlite') as users_db:
                     # Attach the alliance database to get alliance names
@@ -2272,12 +2495,14 @@ class AllianceSelectViewWithAll(discord.ui.View):
         self.current_select = select
 
 class ExportColumnSelectView(discord.ui.View):
-    def __init__(self, alliance_id, alliance_name, cog, include_alliance=False):
+    def __init__(self, alliance_id, alliance_name, cog, include_alliance=False,
+                 prefiltered_members=None):
         super().__init__(timeout=300)
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
         self.cog = cog
         self.include_alliance = include_alliance
+        self.prefiltered_members = prefiltered_members
         
         # Track selected columns (all selected by default)
         self.selected_columns = {
@@ -2442,7 +2667,10 @@ class ExportColumnSelectView(discord.ui.View):
             color=theme.emColor1
         )
         
-        format_view = ExportFormatSelectView(self.alliance_id, self.alliance_name, columns, self.cog)
+        format_view = ExportFormatSelectView(
+            self.alliance_id, self.alliance_name, columns, self.cog,
+            prefiltered_members=self.prefiltered_members,
+        )
         await interaction.response.edit_message(embed=format_embed, view=format_view, content=None)
     
     async def cancel_button(self, interaction: discord.Interaction):
@@ -2453,13 +2681,15 @@ class ExportColumnSelectView(discord.ui.View):
         )
 
 class ExportFormatSelectView(discord.ui.View):
-    def __init__(self, alliance_id, alliance_name, selected_columns, cog):
+    def __init__(self, alliance_id, alliance_name, selected_columns, cog,
+                 prefiltered_members=None):
         super().__init__(timeout=300)
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
         self.selected_columns = selected_columns
         self.cog = cog
-    
+        self.prefiltered_members = prefiltered_members
+
     @discord.ui.button(label="CSV (Comma-separated)", emoji=theme.averageIcon, style=discord.ButtonStyle.primary, custom_id="csv")
     async def csv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.process_member_export(
@@ -2467,9 +2697,10 @@ class ExportFormatSelectView(discord.ui.View):
             self.alliance_id,
             self.alliance_name,
             self.selected_columns,
-            'csv'
+            'csv',
+            prefiltered_members=self.prefiltered_members,
         )
-    
+
     @discord.ui.button(label="TSV (Tab-separated)", emoji=theme.listIcon, style=discord.ButtonStyle.primary, custom_id="tsv")
     async def tsv_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.process_member_export(
@@ -2477,7 +2708,8 @@ class ExportFormatSelectView(discord.ui.View):
             self.alliance_id,
             self.alliance_name,
             self.selected_columns,
-            'tsv'
+            'tsv',
+            prefiltered_members=self.prefiltered_members,
         )
     
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, custom_id="back")
@@ -2512,7 +2744,10 @@ class ExportFormatSelectView(discord.ui.View):
                 "• **State** - State ID"
             )
         
-        column_view = ExportColumnSelectView(self.alliance_id, self.alliance_name, self.cog, include_alliance)
+        column_view = ExportColumnSelectView(
+            self.alliance_id, self.alliance_name, self.cog, include_alliance,
+            prefiltered_members=self.prefiltered_members,
+        )
         await interaction.response.edit_message(embed=column_embed, view=column_view)
     
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel")
