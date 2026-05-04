@@ -62,6 +62,14 @@ def _isolate_rtl(text: str) -> str:
     return f"\u2068{text}\u2069"
 
 
+def _ltr_line(text: str) -> str:
+    """Prepend LRM so the whole line stays left-to-right when it contains
+    RTL chars (FSI alone only protects neighbouring tokens, not the line)."""
+    if not text:
+        return text or ""
+    return "\u200e" + text if _has_rtl(text) else text
+
+
 def fix_rtl(text):
     return _isolate_rtl(text)
 
@@ -266,11 +274,11 @@ class MemberListView(discord.ui.View):
             rows = []
             for offset, m in enumerate(page_items, start=start + 1):
                 level = self.cog.level_mapping.get(m['furnace_lv'], str(m['furnace_lv']))
-                nick = _isolate_rtl(m['nickname']) or "(no name)"
-                rows.append(
-                    f"`{offset:>3}.` {theme.userIcon} **{nick}**\n"
-                    f"     `{level}` \u00B7 `ID {m['fid']}` \u00B7 `State {m['kid']}`"
-                )
+                raw_nick = m['nickname'] or "(no name)"
+                nick = _isolate_rtl(raw_nick)
+                line1 = _ltr_line(f"`{offset:>3}.` {theme.userIcon} **{nick}**")
+                line2 = f"     `{level}` \u00B7 `ID {m['fid']}` \u00B7 `State {m['kid']}`"
+                rows.append(f"{line1}\n{line2}")
             body = "\n".join(rows)
 
         embed = discord.Embed(
@@ -281,7 +289,7 @@ class MemberListView(discord.ui.View):
         embed.set_footer(text=f"Page {self.current_page + 1}/{total_pages}")
         return embed
 
-    async def _refresh(self, interaction: discord.Interaction):
+    async def _rerender(self, interaction: discord.Interaction):
         self._build_components()
         await interaction.response.edit_message(
             embed=self.build_embed(), view=self
@@ -290,19 +298,19 @@ class MemberListView(discord.ui.View):
     async def _on_prev(self, interaction: discord.Interaction):
         if self.current_page > 0:
             self.current_page -= 1
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_next(self, interaction: discord.Interaction):
         items = self._sorted_filtered()
         total_pages = max(1, (len(items) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
         if self.current_page < total_pages - 1:
             self.current_page += 1
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_sort(self, interaction: discord.Interaction):
         self.sort_idx = (self.sort_idx + 1) % len(self.SORTS)
         self.current_page = 0
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_filter(self, interaction: discord.Interaction):
         await interaction.response.send_modal(MemberFilterModal(self))
@@ -310,7 +318,7 @@ class MemberListView(discord.ui.View):
     async def _on_clear(self, interaction: discord.Interaction):
         self.filter_name = self.filter_id = self.filter_state = ""
         self.current_page = 0
-        await self._refresh(interaction)
+        await self._rerender(interaction)
 
     async def _on_export(self, interaction: discord.Interaction):
         items = self._sorted_filtered()

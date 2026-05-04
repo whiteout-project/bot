@@ -179,11 +179,12 @@ class MainMenu(commands.Cog):
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
                     f"{theme.fidIcon} **ID Channel**\n"
-                    f"└ Create and manage ID verification channels\n"
-                    f"└ Automatic ID verification system\n\n"
+                    f"└ Manage channels where users can enter their in-game ID"
+                    F" and the bot verifies and adds them to the alliance\n\n"
                     f"{theme.editListIcon} **Registration System**\n"
                     f"└ Enable/disable user self-registration\n"
-                    f"└ Users can /register to add themselves\n"
+                    f"└ Users can run /register to add themselves\n"
+                    f"└ Does not require reading all messages in a channel\n"
                     f"└ Global Admin only\n"
                     f"{theme.lowerDivider}"
                 ),
@@ -468,7 +469,7 @@ class AllianceManagementView(discord.ui.View):
     @discord.ui.button(
         label="Member Management",
         emoji=theme.membersIcon,
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.success,
         custom_id="member_management",
         row=1
     )
@@ -489,7 +490,7 @@ class AllianceManagementView(discord.ui.View):
     @discord.ui.button(
         label="Member History",
         emoji=theme.listIcon,
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="member_history",
         row=1
     )
@@ -510,7 +511,7 @@ class AllianceManagementView(discord.ui.View):
     @discord.ui.button(
         label="Sync Settings",
         emoji=theme.settingsIcon,
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="control_settings",
         row=2
     )
@@ -531,7 +532,7 @@ class AllianceManagementView(discord.ui.View):
     @discord.ui.button(
         label="Activity Log",
         emoji=theme.documentIcon,
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="log_system",
         row=2
     )
