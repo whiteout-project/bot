@@ -464,12 +464,18 @@ class CreateGiftCodeModal(discord.ui.Modal):
                 if hasattr(self.cog, 'api') and self.cog.api:
                     asyncio.create_task(self.cog.api.add_giftcode(code))
 
+                await self.cog._process_auto_use(code)
+
+                self.cog.cursor.execute("SELECT COUNT(*) FROM giftcodecontrol WHERE status = 1")
+                auto_count = self.cog.cursor.fetchone()[0]
+
                 final_embed.title = f"{theme.verifiedIcon} Gift Code Validated"
                 final_embed.description = (
                     f"**Gift Code Details**\n{theme.upperDivider}\n"
                     f"{theme.giftIcon} **Gift Code:** `{code}`\n"
                     f"{theme.verifiedIcon} **Status:** {validation_msg}\n"
                     f"{theme.editListIcon} **Action:** Added to database and sent to API\n"
+                    f"{theme.refreshIcon} **Auto-redemption:** {'Queued for ' + str(auto_count) + ' alliance(s)' if auto_count else 'Disabled'}\n"
                     f"{theme.lowerDivider}\n"
                 )
                 final_embed.color = theme.emColor3
