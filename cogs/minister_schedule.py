@@ -753,6 +753,7 @@ class MinisterSchedule(commands.Cog):
                 return None
 
     @discord.app_commands.command(name='minister_add', description='Book an appointment slot for a user.')
+    @app_commands.rename(fid='id')
     @app_commands.autocomplete(appointment_type=appointment_autocomplete, fid=fid_autocomplete, time=time_autocomplete)
     async def minister_add(self, interaction: discord.Interaction, appointment_type: str, fid: str, time: str):
         if not await self.is_admin(interaction.user.id):
@@ -950,6 +951,7 @@ class MinisterSchedule(commands.Cog):
             await interaction.followup.send(f"An unexpected error occurred while processing the request: {e}")
 
     @discord.app_commands.command(name='minister_remove', description='Cancel an appointment slot for a user.')
+    @app_commands.rename(fid='id')
     @app_commands.autocomplete(appointment_type=appointment_autocomplete, fid=registered_fid_autocomplete)
     async def minister_remove(self, interaction: discord.Interaction, appointment_type: str, fid: str):
         if not await self.is_admin(interaction.user.id):

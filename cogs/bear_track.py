@@ -38,9 +38,11 @@ except ImportError:
     RAPIDFUZZ_AVAILABLE = False
     logger.warning("rapidfuzz not installed — player-name resolution will fall back to manual entry only.")
 
-# RapidOCR setup
+from . import onnx_lifecycle
+
+# RapidOCR setup. Engines are lazy-loaded per language via onnx_lifecycle and
+# unloaded ~2 min after the last bear session finalises.
 OCR_AVAILABLE = False
-rapid_ocr = None
 
 # Above ~1800px ONNXRuntime hits 'bad allocation' on the 2nd-3rd image.
 MAX_OCR_DIM = 1600
@@ -50,17 +52,13 @@ DEFAULT_OCR_LANG = "en"
 if PIL_AVAILABLE:
     try:
         from rapidocr import RapidOCR, LangRec
-        # rapidocr ignores TQDM_DISABLE; force the tty check off.
         try:
             from rapidocr.utils.download_file import DownloadFile
             DownloadFile.check_is_atty = staticmethod(lambda: False)
         except Exception:
             pass
-        # Without `params`, rapidocr always loads the `ch` model.
-        rapid_ocr = RapidOCR(params={"Rec.lang_type": LangRec(DEFAULT_OCR_LANG)})
         OCR_AVAILABLE = True
-        logger.info(f"RapidOCR initialized successfully (default lang: {DEFAULT_OCR_LANG})")
-        print(f"[INFO] RapidOCR initialized for bear track OCR (default: {DEFAULT_OCR_LANG})")
+        logger.info("Bear track OCR ready (engines load on demand per language).")
     except ImportError:
         logger.warning("rapidocr not installed. OCR will be disabled.")
         print("[WARNING] rapidocr not installed. Bear track OCR disabled.")
@@ -358,7 +356,7 @@ OCR_LANGUAGES = [
     ("japan",       "Japanese"),
     ("korean",      "Korean"),
     ("chinese_cht", "Traditional Chinese"),
-    ("latin",       "Latin (extended — Vietnamese, Czech, etc.)"),
+    ("latin",       "Latin Extended"),
     ("arabic",      "Arabic"),
     ("cyrillic",    "Cyrillic (Russian, etc.)"),
     ("devanagari",  "Devanagari (Hindi, etc.)"),
@@ -490,38 +488,69 @@ def _reshape_for_chart(text) -> str:
         return text
 
 
-# Per-language RapidOCR cache. Each extra engine ≈ 30 MB resident.
-_ocr_engines = {}
+# Per-language LazyOnnxModel registry. Engines load on demand and unload after
+# the configured grace period (set in onnx_lifecycle).
+_OCR_MODELS: dict[str, "onnx_lifecycle.LazyOnnxModel"] = {}
+
+# Short labels shown in the Bot Health dashboard. Kept compact so they fit
+# in the narrow column-layout fields without wrapping.
+_OCR_LANG_DISPLAY = {
+    "en": "EN",
+    "ch": "CH",
+    "japan": "JA",
+    "korean": "KO",
+    "chinese_cht": "ZH-Hant",
+    "latin": "Latin",
+    "arabic": "AR",
+    "cyrillic": "CY",
+    "devanagari": "DV",
+}
+
+# Per-language footprint, measured empirically on Windows with onnxruntime.
+# `ram` is resident memory growth when the engine is loaded; `disk` is the
+# on-disk model size. Both are approximate.
+_OCR_LANG_FOOTPRINT_MB = {
+    "en":          {"ram": 35, "disk": 7},
+    "ch":          {"ram": 28, "disk": 15},
+    "japan":       {"ram": 26, "disk": 9},
+    "korean":      {"ram": 47, "disk": 23},
+    "chinese_cht": {"ram": 33, "disk": 11},
+    "latin":       {"ram": 27, "disk": 9},
+    "arabic":      {"ram": 31, "disk": 7},
+    "cyrillic":    {"ram": 20, "disk": 9},
+    "devanagari": {"ram": 30, "disk": 7},
+}
 
 
-def get_ocr_engine(lang: str):
-    """RapidOCR instance for `lang`, falling back to `rapid_ocr` when
-    unavailable / unknown / model load fails."""
+def get_ocr_model(lang: str):
+    """Return the LazyOnnxModel for `lang`, falling back to the default if the
+    code is unknown. Returns None when RapidOCR isn't available at all."""
     if not OCR_AVAILABLE:
         return None
-    if lang == DEFAULT_OCR_LANG or lang not in OCR_LANG_CODES:
-        return rapid_ocr
-    engine = _ocr_engines.get(lang)
-    if engine is not None:
-        return engine
-    try:
-        from rapidocr import RapidOCR, LangRec
-        # RapidOCR 3.x needs LangRec enum, not a string.
-        engine = RapidOCR(params={"Rec.lang_type": LangRec(lang)})
-        _ocr_engines[lang] = engine
-        logger.info(f"Bear OCR: loaded language-specific engine for {lang!r}")
-        return engine
-    except Exception as e:
-        logger.warning(f"Bear OCR: could not load engine for {lang!r} ({e}); using default")
-        return rapid_ocr
+    if lang not in OCR_LANG_CODES:
+        lang = DEFAULT_OCR_LANG
+    cached = _OCR_MODELS.get(lang)
+    if cached is not None:
+        return cached
+
+    label = _OCR_LANG_DISPLAY.get(lang, lang)
+
+    def _factory(lang_code=lang):
+        return RapidOCR(params={"Rec.lang_type": LangRec(lang_code)})
+
+    model = onnx_lifecycle.get_or_create(
+        name=f'bear_track:{lang}',
+        display_name=f'Bear Track ({label})',
+        factory=_factory,
+    )
+    _OCR_MODELS[lang] = model
+    return model
 
 
-def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG) -> str:
-    """OCR `image_bytes` → space-joined text, or "" on failure."""
-    if not OCR_AVAILABLE or not image_bytes:
-        return ""
-    engine = get_ocr_engine(lang)
-    if engine is None:
+def _ocr_image_with_engine(image_bytes: bytes, engine) -> str:
+    """Sync OCR call against an already-loaded engine. Returns space-joined
+    text or "". Pulled out so async callers can dispatch via to_thread."""
+    if engine is None or not image_bytes:
         return ""
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     if max(image.size) > MAX_OCR_DIM:
@@ -536,6 +565,26 @@ def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG) -> str:
                  if isinstance(item, (list, tuple)) and len(item) >= 2]
         return " ".join(texts) if texts else str(result)
     return str(result)
+
+
+async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session=None) -> str:
+    """OCR `image_bytes` → space-joined text, or "" on failure.
+
+    If `session` is given, the engine is acquired via the session (warm reuse
+    across multiple OCR calls in one bear session). Otherwise this falls back
+    to a one-shot acquire/release covered by the lifecycle grace period."""
+    if not OCR_AVAILABLE or not image_bytes:
+        return ""
+    model = get_ocr_model(lang)
+    if model is None:
+        return ""
+    if session is not None:
+        engine = await session._ensure_engine(lang)
+        if engine is None:
+            return ""
+        return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
+    async with model.use() as engine:
+        return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
 
 
 _SCRIPT_TAGS = (
@@ -1103,6 +1152,33 @@ class BearSession:
         self.current_image_total: int | None = None
         self.current_phase: str | None = None  # 'ocr' or 'fallback'
         self.current_lang: str | None = None
+        # OCR engines acquired by this session (released at finalize/cancel).
+        self._engine_handles: dict[str, "onnx_lifecycle.LazyOnnxModel"] = {}
+        self._engine_cache: dict[str, object] = {}
+
+    async def _ensure_engine(self, lang: str):
+        """Lazy per-session engine acquire. First call for `lang` loads the
+        model and pins it for the rest of the session; subsequent calls
+        return the cached engine."""
+        cached = self._engine_cache.get(lang)
+        if cached is not None:
+            return cached
+        model = get_ocr_model(lang)
+        if model is None:
+            return None
+        engine = await model.acquire()
+        self._engine_handles[lang] = model
+        self._engine_cache[lang] = engine
+        return engine
+
+    async def _release_all_engines(self):
+        for handle in self._engine_handles.values():
+            try:
+                await handle.release()
+            except Exception as e:
+                logger.warning(f"Bear OCR: engine release error: {e}")
+        self._engine_handles.clear()
+        self._engine_cache.clear()
 
     def cluster(self, result: ImageResult) -> EventGroup:
         for event in self.events:
@@ -1258,6 +1334,7 @@ class BearSession:
                     roster=self.roster,
                     alliance_id=self.alliance_id,
                     progress_callback=_phase_callback,
+                    session=self,
                 )
                 self.processed_images += 1
                 if result.ok:
@@ -1279,7 +1356,10 @@ class BearSession:
             self.finalized = True
             self.stop_timer()
             _active_sessions.pop((self.channel_id, self.user_id), None)
-        await self.cog._finalize_session(self, timed_out=timed_out)
+        try:
+            await self.cog._finalize_session(self, timed_out=timed_out)
+        finally:
+            await self._release_all_engines()
 
     async def cancel(self):
         async with self.lock:
@@ -1288,6 +1368,7 @@ class BearSession:
             self.finalized = True
             self.stop_timer()
             _active_sessions.pop((self.channel_id, self.user_id), None)
+        await self._release_all_engines()
         if self.progress_msg:
             embed = discord.Embed(
                 description=f"{theme.deniedIcon} Bear hunt collection cancelled.",
@@ -1609,6 +1690,12 @@ class BearTrack(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+        # Pre-register the default English engine so it's visible in the
+        # Health dashboard from boot, even before any bear screenshot runs.
+        # Other languages still register lazily on first use.
+        if OCR_AVAILABLE:
+            get_ocr_model(DEFAULT_OCR_LANG)
+
         # Persistent DB connections with WAL mode
         self.alliance_conn, self.alliance_cursor = self._open_db("db/alliance.sqlite")
         self.bear_conn, self.bear_cursor = self._open_db("db/bear_data.sqlite")
@@ -1637,6 +1724,28 @@ class BearTrack(commands.Cog):
                 )
 
         self.alliance_conn.commit()
+
+        # Pre-register engines for every language any alliance has configured
+        # (primary or fallback) so they all show up in the Bot Health dashboard
+        # from boot, not just after a screenshot has actually triggered them.
+        if OCR_AVAILABLE:
+            try:
+                self.alliance_cursor.execute(
+                    "SELECT bear_ocr_lang, bear_ocr_fallback_langs FROM alliancesettings"
+                )
+                configured = set()
+                for primary, fallbacks_raw in self.alliance_cursor.fetchall():
+                    if primary and primary in OCR_LANG_CODES:
+                        configured.add(primary)
+                    if fallbacks_raw:
+                        for f in fallbacks_raw.split(','):
+                            f = f.strip()
+                            if f in OCR_LANG_CODES:
+                                configured.add(f)
+                for lang in configured:
+                    get_ocr_model(lang)
+            except Exception as e:
+                logger.warning(f"Could not pre-register configured OCR languages: {e}")
 
         # DataSubmit helper with shared connections
         self.data_submit = DataSubmit(self.alliance_conn, self.bear_conn)
@@ -2005,15 +2114,18 @@ class BearTrack(commands.Cog):
                                         fallback_langs: list, *, filename: str = "",
                                         roster: list | None = None,
                                         alliance_id: int | None = None,
-                                        progress_callback=None) -> ImageResult:
+                                        progress_callback=None,
+                                        session=None) -> ImageResult:
         """OCR one screenshot (primary + fallbacks) → ImageResult.
-        `progress_callback(phase, lang)` is awaited per OCR phase."""
+        `progress_callback(phase, lang)` is awaited per OCR phase. When called
+        with `session`, OCR engines are reused across all calls for that
+        session; otherwise each call uses its own short acquire/release."""
         result = ImageResult()
         if progress_callback:
             await progress_callback('ocr', primary_lang)
         try:
             async with self._acquire_ocr_slot():
-                extracted_text = await asyncio.to_thread(ocr_bytes, image_bytes, primary_lang)
+                extracted_text = await ocr_bytes(image_bytes, primary_lang, session=session)
         except Exception as e:
             logger.error(f"Bear OCR error ({primary_lang}) on {filename}: {e}")
             return result
@@ -2059,7 +2171,7 @@ class BearTrack(commands.Cog):
                     await progress_callback('fallback', fb_lang)
                 try:
                     async with self._acquire_ocr_slot():
-                        fb_text = await asyncio.to_thread(ocr_bytes, image_bytes, fb_lang)
+                        fb_text = await ocr_bytes(image_bytes, fb_lang, session=session)
                 except Exception as e:
                     logger.warning(f"Bear OCR fallback {fb_lang} failed: {e}")
                     continue
@@ -2381,19 +2493,58 @@ class BearTrack(commands.Cog):
     # Main menu entry point
     # -------------------------------------------------------------------
 
+    def _needs_bear_setup_hint(self, user_id: int, guild_id: int) -> bool:
+        """True iff none of the user's accessible alliances has a bear channel
+        configured yet. Used to hide the 'new here?' hint once any in-scope
+        alliance is set up — see show_bear_track_menu."""
+        is_admin, is_global = PermissionManager.is_admin(user_id)
+        if not is_admin:
+            return False
+        try:
+            if is_global:
+                row = self.alliance_cursor.execute(
+                    "SELECT 1 FROM alliancesettings "
+                    "WHERE bear_score_channel IS NOT NULL LIMIT 1"
+                ).fetchone()
+                return row is None
+
+            alliance_ids, _ = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
+            if not alliance_ids:
+                return True
+            placeholders = ','.join('?' * len(alliance_ids))
+            row = self.alliance_cursor.execute(
+                f"SELECT 1 FROM alliancesettings "
+                f"WHERE alliance_id IN ({placeholders}) "
+                f"AND bear_score_channel IS NOT NULL LIMIT 1",
+                alliance_ids,
+            ).fetchone()
+            return row is None
+        except Exception as e:
+            logger.warning(f"Bear setup hint check failed: {e}")
+            return False
+
     async def show_bear_track_menu(self, interaction: discord.Interaction):
         """Display the bear damage tracking main menu."""
         try:
             view = BearMenuView(cog=self, original_user_id=interaction.user.id)
+
+            setup_hint = ""
+            if self._needs_bear_setup_hint(
+                interaction.user.id,
+                interaction.guild_id if interaction.guild else 0,
+            ):
+                setup_hint = (
+                    f"{theme.warnIcon} **New here?** Click **Bear Channel "
+                    f"Setup** below to pick a channel for an ally — until "
+                    f"that's done the bot won't process any screenshots.\n\n"
+                )
 
             embed = discord.Embed(
                 title=f"{theme.chartIcon} Bear Damage Tracking",
                 description=(
                     f"Track your alliance's bear hunt damage by uploading "
                     f"in-game screenshots — no manual data entry.\n\n"
-                    f"{theme.warnIcon} **New here?** Click **Bear Channel "
-                    f"Setup** below to pick a channel for an ally — until "
-                    f"that's done the bot won't process any screenshots.\n\n"
+                    f"{setup_hint}"
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
                     f"{theme.chartIcon} **View Bear Damage**\n"
@@ -4527,8 +4678,18 @@ class BearOcrLanguagesView(discord.ui.View):
         primary, fallbacks = self.cog.get_ocr_language_settings(self.alliance_id)
         autoprune = self.cog.get_ocr_autoprune(self.alliance_id)
 
+        def _cost_description(code: str) -> str:
+            fp = _OCR_LANG_FOOTPRINT_MB.get(code)
+            if not fp:
+                return None
+            return f"~{fp['ram']} MB RAM · ~{fp['disk']} MB disk"
+
         primary_opts = [
-            discord.SelectOption(label=label, value=code, default=(code == primary))
+            discord.SelectOption(
+                label=label, value=code,
+                description=_cost_description(code),
+                default=(code == primary),
+            )
             for code, label in OCR_LANGUAGES
         ]
         primary_select = discord.ui.Select(
@@ -4539,7 +4700,11 @@ class BearOcrLanguagesView(discord.ui.View):
         self.add_item(primary_select)
 
         fb_opts = [
-            discord.SelectOption(label=label, value=code, default=(code in fallbacks))
+            discord.SelectOption(
+                label=label, value=code,
+                description=_cost_description(code),
+                default=(code in fallbacks),
+            )
             for code, label in OCR_LANGUAGES if code != primary
         ]
         if fb_opts:
@@ -4552,7 +4717,8 @@ class BearOcrLanguagesView(discord.ui.View):
             self.add_item(fb_select)
 
         autoprune_btn = discord.ui.Button(
-            label=f"Auto-prune dead fallbacks: {'On' if autoprune else 'Off'}",
+            label=f"Auto-Prune: {'On' if autoprune else 'Off'}",
+            emoji=theme.cleanIcon,
             style=discord.ButtonStyle.success if autoprune else discord.ButtonStyle.secondary,
             row=2,
         )
@@ -4572,39 +4738,20 @@ class BearOcrLanguagesView(discord.ui.View):
         fb_labels = [OCR_LANG_LABEL.get(c, c) for c in fallbacks]
 
         description = (
-            f"Pick which OCR (Optical Character Recognition) models the bot "
-            f"uses to read player names off screenshots. Each model is "
-            f"trained on a specific script — Latin covers most Western "
-            f"languages, Cyrillic covers Russian and Slavic languages, etc.\n"
+            f"Pick which OCR models read player names off screenshots. Each "
+            f"model handles a specific script. Memory and disk cost per "
+            f"language are shown in the dropdowns.\n\n"
             f"{theme.upperDivider}\n"
-            f"**Primary** runs first on every screenshot.\n"
-            f"**Fallbacks** re-OCR the same screenshot for any row whose "
-            f"name came back unreadable, so alliances with mixed-script "
-            f"names (e.g. Latin + Arabic) can still resolve every player.\n"
-            f"{theme.lowerDivider}\n\n"
             f"**Primary:** {primary_label}\n"
+            f"└ Runs first on every screenshot.\n\n"
             f"**Fallbacks:** {', '.join(fb_labels) if fb_labels else '*(none)*'}\n"
+            f"└ Re-OCR rows the primary couldn't read (mixed-script alliances).\n\n"
+            f"{theme.cleanIcon} **Auto-Prune**\n"
+            f"└ Drops fallbacks from this alliance's list if they run "
+            f"{AUTOPRUNE_MIN_RUNS}+ times without filling any rows. Engine "
+            f"files stay on disk; other alliances are unaffected.\n"
+            f"{theme.lowerDivider}\n"
         )
-        if fb_labels:
-            description += (
-                f"\n{theme.warnIcon} Each fallback adds **~30 MB RAM** and "
-                f"**~10 MB disk** per language, and slows down processing. "
-                f"Only enable for the characters your alliance players names "
-                f"actually use.\n"
-            )
-        autoprune = self.cog.get_ocr_autoprune(self.alliance_id)
-        if autoprune:
-            description += (
-                f"\n{theme.verifiedIcon} **Auto-prune is on** — fallbacks "
-                f"that run {AUTOPRUNE_MIN_RUNS}+ times without ever filling "
-                f"a row are removed automatically after each hunt.\n"
-            )
-        else:
-            description += (
-                f"\n*Tip: turn on **Auto-prune** to let the bot remove "
-                f"fallbacks that aren't earning their RAM "
-                f"({AUTOPRUNE_MIN_RUNS}+ runs, 0 fills).*\n"
-            )
         description += self._build_effectiveness_section(primary, fallbacks)
         return discord.Embed(
             title=f"{theme.globeIcon} Character Recognition",
@@ -4658,11 +4805,7 @@ class BearOcrLanguagesView(discord.ui.View):
         if fallback_stats:
             if primary_stats:
                 lines.append("")  # visual separator
-            lines.append(
-                "**Fallback engines** *(only run when primary leaves rows "
-                "unmatched — `filled` counts rows the fallback improved "
-                "over the primary)*"
-            )
+            lines.append("**Fallback engines**")
             for s in fallback_stats:
                 lines.append(_fmt_row(s, is_fallback=True))
             stale = [s for s in fallback_stats

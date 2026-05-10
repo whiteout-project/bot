@@ -928,8 +928,9 @@ class GiftView(discord.ui.View):
             main_menu_cog = self.cog.bot.get_cog("MainMenu")
             if main_menu_cog:
                 await main_menu_cog.show_main_menu(interaction)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error returning to main menu: {e}")
+            print(f"Error returning to main menu: {e}")
 
 
 class SettingsMenuView(discord.ui.View):

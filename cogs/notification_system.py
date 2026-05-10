@@ -2887,36 +2887,63 @@ class SettingsView(discord.ui.View):
         self.cog = cog
         self.delete_enabled = delete_enabled
         self.default_delay = default_delay
-        # Use cog's connection instead of creating new one
         self.conn = cog.conn
         self.cursor = cog.cursor
+        self._build_components()
 
     def build_settings_embed(self):
-        """Build the settings embed with current values"""
-        embed = discord.Embed(
-            title=f"{theme.settingsIcon} Bear Trap Settings",
-            description="Configure global message deletion settings",
-            color=theme.emColor1
+        deletion_status = (
+            f"{theme.verifiedIcon} `enabled`" if self.delete_enabled
+            else f"{theme.deniedIcon} `disabled`"
+        )
+        return discord.Embed(
+            title=f"{theme.settingsIcon} Notification Settings",
+            description=(
+                f"Control what happens to notifications after they're posted.\n\n"
+                f"**Message Deletion**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.trashIcon} **Auto-Delete:** {deletion_status}\n"
+                f"└ Whether posted notifications are removed automatically\n\n"
+                f"{theme.timeIcon} **Delay:** `{self.default_delay} minutes`\n"
+                f"└ How long a notification stays visible before being deleted\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
         )
 
-        # Message Deletion section
-        deletion_status = f"{theme.verifiedIcon} Enabled" if self.delete_enabled else f"{theme.deniedIcon} Disabled"
-        embed.add_field(
-            name="📨 Message Deletion",
-            value=f"Status: {deletion_status}\nDefault Delay: {self.default_delay} minutes",
-            inline=False
+    def _build_components(self):
+        self.clear_items()
+
+        toggle_btn = discord.ui.Button(
+            label=f"Auto-Delete: {'On' if self.delete_enabled else 'Off'}",
+            emoji=f"{theme.trashIcon}",
+            style=discord.ButtonStyle.success if self.delete_enabled else discord.ButtonStyle.secondary,
+            row=0,
+        )
+        toggle_btn.callback = self._toggle_deletion
+        self.add_item(toggle_btn)
+
+        delay_btn = discord.ui.Button(
+            label="Set Delay", emoji=f"{theme.timeIcon}",
+            style=discord.ButtonStyle.secondary, row=0,
+        )
+        delay_btn.callback = self._set_delay
+        self.add_item(delay_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back", emoji=f"{theme.backIcon}",
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        back_btn.callback = self._back
+        self.add_item(back_btn)
+
+    async def _refresh(self, interaction: discord.Interaction):
+        self._build_components()
+        await safe_edit_message(
+            interaction, embed=self.build_settings_embed(), view=self, content=None
         )
 
-        embed.set_footer(text="Use the buttons below to modify settings")
-        return embed
-
-    @discord.ui.button(
-        label="Toggle Message Deletion",
-        emoji=f"{theme.trashIcon}",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def toggle_deletion(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _toggle_deletion(self, interaction: discord.Interaction):
         try:
             new_value = 0 if self.delete_enabled else 1
             self.cursor.execute("""
@@ -2925,35 +2952,26 @@ class SettingsView(discord.ui.View):
                 WHERE guild_id = ?
             """, (new_value, interaction.guild_id))
             self.conn.commit()
-
             self.delete_enabled = bool(new_value)
-
-            await interaction.response.edit_message(embed=self.build_settings_embed(), view=self)
-
+            await self._refresh(interaction)
         except Exception as e:
             logger.error(f"Error toggling deletion: {e}")
             print(f"Error toggling deletion: {e}")
             traceback.print_exc()
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating settings.",
-                ephemeral=True
+                ephemeral=True,
             )
 
-    @discord.ui.button(
-        label="Set Default Delay",
-        emoji=f"{theme.timeIcon}",
-        style=discord.ButtonStyle.primary,
-        row=0
-    )
-    async def set_default_delay(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _set_delay(self, interaction: discord.Interaction):
         try:
-            modal = discord.ui.Modal(title="Set Default Deletion Delay")
+            modal = discord.ui.Modal(title="Set Deletion Delay")
             delay_input = discord.ui.TextInput(
                 label="Delay in Minutes",
                 placeholder="Enter delay in minutes (e.g., 60)",
                 default=str(self.default_delay),
                 required=True,
-                max_length=5
+                max_length=5,
             )
             modal.add_item(delay_input)
 
@@ -2963,7 +2981,7 @@ class SettingsView(discord.ui.View):
                     if new_delay < 1:
                         await modal_interaction.response.send_message(
                             f"{theme.deniedIcon} Delay must be at least 1 minute.",
-                            ephemeral=True
+                            ephemeral=True,
                         )
                         return
 
@@ -2973,15 +2991,13 @@ class SettingsView(discord.ui.View):
                         WHERE guild_id = ?
                     """, (new_delay, modal_interaction.guild_id))
                     self.conn.commit()
-
                     self.default_delay = new_delay
-
-                    await modal_interaction.response.edit_message(embed=self.build_settings_embed(), view=self)
+                    await self._refresh(modal_interaction)
 
                 except ValueError:
                     await modal_interaction.response.send_message(
                         f"{theme.deniedIcon} Please enter a valid number.",
-                        ephemeral=True
+                        ephemeral=True,
                     )
                 except Exception as e:
                     logger.error(f"Error in modal callback: {e}")
@@ -2989,7 +3005,7 @@ class SettingsView(discord.ui.View):
                     traceback.print_exc()
                     await modal_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred while updating the delay.",
-                        ephemeral=True
+                        ephemeral=True,
                     )
 
             modal.on_submit = modal_callback
@@ -3001,8 +3017,11 @@ class SettingsView(discord.ui.View):
             traceback.print_exc()
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while opening the settings modal.",
-                ephemeral=True
+                ephemeral=True,
             )
+
+    async def _back(self, interaction: discord.Interaction):
+        await self.cog.show_notification_menu(interaction)
 
 class BearTrapView(discord.ui.View):
     def __init__(self, cog):
@@ -4037,13 +4056,13 @@ class BearTrapView(discord.ui.View):
                 """, (interaction.guild_id, delete_enabled, default_delay))
                 self.conn.commit()
 
-            # Create settings view
             settings_view = SettingsView(self.cog, delete_enabled, default_delay)
 
-            await interaction.response.send_message(
+            await safe_edit_message(
+                interaction,
                 embed=settings_view.build_settings_embed(),
                 view=settings_view,
-                ephemeral=True
+                content=None,
             )
         except Exception as e:
             logger.error(f"Error loading settings: {e}")

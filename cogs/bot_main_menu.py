@@ -5,6 +5,7 @@ Centralized menu system that handles all main menu logic and routing.
 import discord
 from discord.ext import commands
 import logging
+import sqlite3
 from .permission_handler import (
     PermissionManager, TIER_OWNER, TIER_GLOBAL, TIER_SERVER, TIER_ALLIANCE, TIER_NONE,
 )
@@ -95,38 +96,41 @@ class MainMenu(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    def build_main_menu_embed(self) -> discord.Embed:
+        """Single source of truth for the top-level Settings Menu embed."""
+        return discord.Embed(
+            title=f"{theme.settingsIcon} Settings Menu",
+            description=(
+                f"Welcome to the bot settings. Select a category to get started:\n\n"
+                f"**Menu Categories**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.allianceIcon} **Alliances**\n"
+                f"└ Manage alliances, members, and registration\n\n"
+                f"{theme.giftIcon} **Gift Codes**\n"
+                f"└ Manage gift codes and rewards\n\n"
+                f"{theme.bellIcon} **Notifications**\n"
+                f"└ Event notification system for Bear, KE, and more\n\n"
+                f"{theme.listIcon} **Attendance**\n"
+                f"└ Track and export event attendance\n\n"
+                f"{theme.chartIcon} **Bear Tracking**\n"
+                f"└ Track bear hunt damage and view statistics\n\n"
+                f"{theme.ministerIcon} **Minister Scheduling**\n"
+                f"└ Manage state minister appointments\n\n"
+                f"{theme.paletteIcon} **Themes**\n"
+                f"└ Customize bot icons and colors\n\n"
+                f"{theme.lockIcon} **Permissions**\n"
+                f"└ Manage bot administrators (Global Admin only)\n\n"
+                f"{theme.robotIcon} **Maintenance**\n"
+                f"└ Updates, backups, and support\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+
     async def show_main_menu(self, interaction: discord.Interaction):
         """Display the main settings menu - entry point for all navigation."""
         try:
-            embed = discord.Embed(
-                title=f"{theme.settingsIcon} Settings Menu",
-                description=(
-                    f"Welcome to the bot settings. Select a category to get started:\n\n"
-                    f"**Menu Categories**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.allianceIcon} **Alliance Management**\n"
-                    f"└ Manage alliances, members, and registration\n\n"
-                    f"{theme.giftIcon} **Gift Codes**\n"
-                    f"└ Manage gift codes and rewards\n\n"
-                    f"{theme.bellIcon} **Notifications**\n"
-                    f"└ Event notification system for Bear, KE, and more\n\n"
-                    f"{theme.listIcon} **Attendance**\n"
-                    f"└ Track and export event attendance\n\n"
-                    f"{theme.chartIcon} **Bear Tracking**\n"
-                    f"└ Track bear hunt damage and view statistics\n\n"
-                    f"{theme.ministerIcon} **Minister Scheduling**\n"
-                    f"└ Manage state minister appointments\n\n"
-                    f"{theme.paletteIcon} **Themes**\n"
-                    f"└ Customize bot icons and colors\n\n"
-                    f"{theme.lockIcon} **Permissions**\n"
-                    f"└ Manage bot administrators (Global Admin only)\n\n"
-                    f"{theme.robotIcon} **Maintenance**\n"
-                    f"└ Updates, backups, and support\n"
-                    f"{theme.lowerDivider}"
-                ),
-                color=theme.emColor1
-            )
-
+            embed = self.build_main_menu_embed()
             view = MainMenuView(self)
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
@@ -135,65 +139,213 @@ class MainMenu(commands.Cog):
             print(f"Error in show_main_menu: {e}")
 
     async def show_alliance_management(self, interaction: discord.Interaction):
-        """Display the Alliance Management sub-menu."""
+        """Entry to Alliances — pick an alliance to manage, or run a bulk
+        action across alliances (gated by tier)."""
         try:
-            embed = discord.Embed(
-                title=f"{theme.allianceIcon} Alliance Management",
-                description=(
-                    f"Manage your alliances and members:\n\n"
-                    f"**Available Operations**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.allianceIcon} **Alliance Setup**\n"
-                    f"└ Add, edit, delete, and view alliances\n\n"
-                    f"{theme.userIcon} **Self-Registration**\n"
-                    f"└ ID Channel and user registration settings\n\n"
-                    f"{theme.membersIcon} **Member Management**\n"
-                    f"└ Add, remove, transfer, and view members\n\n"
-                    f"{theme.listIcon} **Member History**\n"
-                    f"└ View furnace and nickname changes\n\n"
-                    f"{theme.settingsIcon} **Sync Settings**\n"
-                    f"└ Per-alliance sync messaging and transfer behavior\n\n"
-                    f"{theme.documentIcon} **Activity Log**\n"
-                    f"└ Per-alliance log channel for member changes\n"
-                    f"{theme.lowerDivider}"
-                ),
-                color=theme.emColor1
+            tier = PermissionManager.get_tier(interaction.user.id)
+            if tier == TIER_NONE:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} You don't have admin permissions.",
+                    ephemeral=True,
+                )
+                return
+
+            alliances, _ = PermissionManager.get_admin_alliances(
+                interaction.user.id, interaction.guild_id
             )
 
-            view = AllianceManagementView(self)
+            alliances_with_counts = []
+            for alliance_id, name in alliances:
+                with sqlite3.connect('db/users.sqlite') as users_db:
+                    cursor = users_db.cursor()
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM users WHERE alliance = ?",
+                        (alliance_id,),
+                    )
+                    count = cursor.fetchone()[0] or 0
+                alliances_with_counts.append((alliance_id, name, count))
+
+            tier_label = {
+                TIER_OWNER: "Bot Owner",
+                TIER_GLOBAL: "Global Admin",
+                TIER_SERVER: "Server Admin",
+                TIER_ALLIANCE: "Alliance Admin",
+            }.get(tier, "Admin")
+
+            # Quick stats for the overview section
+            visible_ids = [aid for aid, _, _ in alliances_with_counts]
+            total_members = sum(count for _, _, count in alliances_with_counts)
+            active_syncs = 0
+            if visible_ids:
+                placeholders = ",".join("?" * len(visible_ids))
+                with sqlite3.connect('db/alliance.sqlite') as adb:
+                    acur = adb.cursor()
+                    acur.execute(
+                        f"SELECT COUNT(*) FROM alliancesettings "
+                        f"WHERE alliance_id IN ({placeholders}) AND interval > 0",
+                        visible_ids,
+                    )
+                    active_syncs = acur.fetchone()[0] or 0
+            servers_visible = (
+                len(self.bot.guilds) if tier in (TIER_OWNER, TIER_GLOBAL) else 1
+            )
+
+            overview_lines = [
+                f"{_tier_icon(tier)} **Access:** `{tier_label}`",
+                f"{theme.allianceIcon} **Alliances:** `{len(alliances_with_counts)}`",
+                f"{theme.membersIcon} **Total Members:** `{total_members}`",
+                f"{theme.refreshIcon} **Active Syncs:** "
+                f"`{active_syncs}/{len(alliances_with_counts)}`",
+            ]
+            if tier in (TIER_OWNER, TIER_GLOBAL):
+                overview_lines.insert(
+                    1, f"{theme.globeIcon} **Servers:** `{servers_visible}`"
+                )
+
+            description = (
+                f"**Overview**\n"
+                f"{theme.upperDivider}\n"
+                + "\n".join(overview_lines) + "\n"
+                f"{theme.lowerDivider}\n\n"
+                f"Pick an alliance from the dropdown to manage members, history, "
+                f"ID channel, activity log, and sync — or use a bulk action below. "
+                f"Buttons greyed out are above your permission level.\n\n"
+                f"**Bulk Actions**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.addIcon} **Add Alliance**\n"
+                f"└ Register a new alliance\n\n"
+                f"{theme.transferIcon} **Transfer Members**\n"
+                f"└ Move members between alliances\n\n"
+                f"{theme.exportIcon} **Export Members**\n"
+                f"└ Export one alliance or all of them to CSV/TSV\n\n"
+                f"{theme.refreshIcon} **Sync All**\n"
+                f"└ Refresh all alliance data from the game API\n\n"
+                f"{theme.editListIcon} **Self-Registration**\n"
+                f"└ Manage the global Self-Registration system\n"
+                f"{theme.lowerDivider}"
+            )
+            if not alliances_with_counts:
+                description += (
+                    f"\n\n{theme.deniedIcon} No alliances are visible to you yet. "
+                    f"Use **Add Alliance** to create one."
+                )
+
+            embed = discord.Embed(
+                title=f"{theme.allianceIcon} Alliances",
+                description=description,
+                color=theme.emColor1,
+            )
+
+            view = AllianceManagementEntryView(self, alliances_with_counts, tier)
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
             logger.error(f"Error in show_alliance_management: {e}")
             print(f"Error in show_alliance_management: {e}")
 
-    async def show_self_registration(self, interaction: discord.Interaction):
-        """Display the Self-Registration sub-menu (ID Channel + Registration)."""
+    async def show_alliance_hub(self, interaction: discord.Interaction, alliance_id: int):
+        """Per-alliance hub — all per-alliance actions for one alliance."""
         try:
-            _, is_global = PermissionManager.is_admin(interaction.user.id)
+            with sqlite3.connect('db/alliance.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Alliance {alliance_id} not found.",
+                    ephemeral=True,
+                )
+                return
+            alliance_name = row[0]
+
+            with sqlite3.connect('db/users.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*), AVG(furnace_lv), MAX(furnace_lv) "
+                    "FROM users WHERE alliance = ?",
+                    (alliance_id,),
+                )
+                count, avg_fl, max_fl = cursor.fetchone()
+            count = count or 0
+
+            if count > 0:
+                avg_label = self._fc_label(int(avg_fl) if avg_fl else 0)
+                max_label = self._fc_label(int(max_fl) if max_fl else 0)
+                stats_line = (
+                    f"`{count}` member{'s' if count != 1 else ''} · "
+                    f"Highest `{max_label}` · Avg `{avg_label}`"
+                )
+            else:
+                stats_line = "_No members yet — use **Add Members** to get started_"
+
+            tier = PermissionManager.get_tier(interaction.user.id)
+            accessible, _ = PermissionManager.get_admin_alliances(
+                interaction.user.id, interaction.guild_id
+            )
+            alliances_with_counts = []
+            for aid, name in accessible:
+                with sqlite3.connect('db/users.sqlite') as udb:
+                    ucur = udb.cursor()
+                    ucur.execute(
+                        "SELECT COUNT(*) FROM users WHERE alliance = ?", (aid,)
+                    )
+                    a_count = ucur.fetchone()[0] or 0
+                alliances_with_counts.append((aid, name, a_count))
 
             embed = discord.Embed(
-                title=f"{theme.userIcon} Self-Registration",
+                title=f"{theme.allianceIcon} {alliance_name}",
                 description=(
-                    f"Configure user self-registration and ID verification:\n\n"
-                    f"**Available Operations**\n"
+                    f"**Overview**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.fidIcon} **ID Channel**\n"
-                    f"└ Manage channels where users can enter their in-game ID"
-                    F" and the bot verifies and adds them to the alliance\n\n"
-                    f"{theme.editListIcon} **Registration System**\n"
-                    f"└ Enable/disable user self-registration\n"
-                    f"└ Users can run /register to add themselves\n"
-                    f"└ Does not require reading all messages in a channel\n"
-                    f"└ Global Admin only\n"
+                    f"{theme.fidIcon} **ID:** `{alliance_id}`\n"
+                    f"{theme.membersIcon} {stats_line}\n"
+                    f"{theme.lowerDivider}\n\n"
+                    f"Pick an action below, or use the dropdown to switch "
+                    f"to a different alliance.\n\n"
+                    f"**Actions**\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.membersIcon} **Manage Members**\n"
+                    f"└ View, add, transfer, export and remove members\n\n"
+                    f"{theme.announceIcon} **Channel Setup**\n"
+                    f"└ Configure alliance channels: ID, Sync, Log\n\n"
+                    f"{theme.refreshIcon} **Sync Settings**\n"
+                    f"└ Sync interval, start time and other options\n\n"
+                    f"{theme.editListIcon} **Edit Name**\n"
+                    f"└ Rename this alliance\n\n"
+                    f"{theme.listIcon} **History**\n"
+                    f"└ Furnace level and nickname change history per member\n\n"
+                    f"{theme.trashIcon} **Delete Alliance**\n"
+                    f"└ Permanently remove this alliance and all related data\n"
                     f"{theme.lowerDivider}"
                 ),
-                color=theme.emColor1
+                color=theme.emColor1,
             )
 
-            view = SelfRegistrationView(self, is_global)
+            view = AllianceHubView(
+                self, alliance_id, alliance_name, tier, alliances_with_counts,
+            )
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
+        except Exception as e:
+            logger.error(f"Error in show_alliance_hub: {e}")
+            print(f"Error in show_alliance_hub: {e}")
+
+
+    def _fc_label(self, fl: int) -> str:
+        """Render a furnace_lv int as e.g. 'FC 8 - 2'. Falls back to the int."""
+        cog = self.bot.get_cog("AllianceMemberOperations")
+        if cog and hasattr(cog, 'level_mapping'):
+            return cog.level_mapping.get(fl, str(fl))
+        return str(fl)
+
+    async def show_self_registration(self, interaction: discord.Interaction):
+        """Unified Self-Registration menu — global toggle + ID channel scan settings."""
+        try:
+            view = SelfRegistrationView(self)
+            await view.show(interaction)
         except Exception as e:
             logger.error(f"Error in show_self_registration: {e}")
             print(f"Error in show_self_registration: {e}")
@@ -233,15 +385,15 @@ class MainMenu(commands.Cog):
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
                     f"{theme.refreshIcon} **Check for Updates**\n"
-                    f"└ Check for and manage bot updates (Global Admin only)\n\n"
+                    f"└ Check for and install bot updates (Global Admin only)\n\n"
                     f"{theme.archiveIcon} **Backup System**\n"
-                    f"└ Backup and restore database (Global Admin only)\n\n"
-                    f"{theme.cleanIcon} **DB Maintenance**\n"
-                    f"└ Database cleanup and optimization (Global Admin only)\n\n"
+                    f"└ Create / view / clean local + DM backups (Global Admin only)\n\n"
+                    f"{theme.heartIcon} **Bot Health**\n"
+                    f"└ API status, DB health, system info, restart, cleanup tools (Global Admin only)\n\n"
                     f"{theme.supportIcon} **Request Support**\n"
-                    f"└ Get help and support information\n\n"
+                    f"└ Open a support DM with logs attached\n\n"
                     f"{theme.infoIcon} **About Project**\n"
-                    f"└ View project information\n"
+                    f"└ View project info, links, and credits\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
@@ -267,7 +419,7 @@ class MainMenuView(discord.ui.View):
         self.cog = cog
 
     @discord.ui.button(
-        label="Alliance Management",
+        label="Alliances",
         emoji=theme.allianceIcon,
         style=discord.ButtonStyle.primary,
         custom_id="alliance_management",
@@ -424,141 +576,332 @@ class MainMenuView(discord.ui.View):
 
 
 # ============================================================================
-# Alliance Management View
+# Alliances View
 # ============================================================================
 
-class AllianceManagementView(discord.ui.View):
-    """Alliance Management sub-menu."""
+async def _route_to_cog(interaction: discord.Interaction, bot, cog_name: str,
+                        method_name: str, *args, fallback_method: str | None = None,
+                        missing_label: str | None = None):
+    """Try cog.method(*args); fall back to cog.fallback_method(interaction) if
+    the primary method doesn't exist yet (used during the staged hub rollout
+    so unconverted sub-cogs still work)."""
+    cog = bot.get_cog(cog_name)
+    if cog is None:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} {missing_label or cog_name} module not found.",
+            ephemeral=True,
+        )
+        return
+    method = getattr(cog, method_name, None)
+    if callable(method):
+        await method(interaction, *args)
+        return
+    if fallback_method:
+        fb = getattr(cog, fallback_method, None)
+        if callable(fb):
+            await fb(interaction)
+            return
+    await interaction.response.send_message(
+        f"{theme.deniedIcon} {missing_label or cog_name} entry point not found.",
+        ephemeral=True,
+    )
 
-    def __init__(self, cog):
-        super().__init__(timeout=None)
+
+class AllianceManagementEntryView(discord.ui.View):
+    """Entry view: pick an alliance to manage, or run a bulk action across
+    alliances. Bulk action buttons gate on tier (Owner/Global/Server can use
+    them all; Alliance tier can only use Transfer if they cover 2+ alliances)."""
+
+    def __init__(self, cog, alliances_with_counts, tier: str):
+        super().__init__(timeout=7200)
         self.cog = cog
+        self.alliances = alliances_with_counts  # [(alliance_id, name, count), ...]
+        self.tier = tier
+        self.page = 0
+        self.max_page = max(0, (len(alliances_with_counts) - 1) // 25)
+        self._build_select()
+        self._apply_permission_gates()
+
+    def _apply_permission_gates(self):
+        is_server_or_above = self.tier in (TIER_OWNER, TIER_GLOBAL, TIER_SERVER)
+        is_global_or_above = self.tier in (TIER_OWNER, TIER_GLOBAL)
+        can_transfer = is_server_or_above or len(self.alliances) >= 2
+
+        gates = {
+            "alliance_entry_add": is_server_or_above,
+            "alliance_entry_transfer": can_transfer,
+            "alliance_entry_export": is_server_or_above,
+            "alliance_entry_sync_all": is_server_or_above,
+            "alliance_entry_registration": is_global_or_above,
+        }
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                allowed = gates.get(getattr(child, "custom_id", None))
+                if allowed is False:
+                    child.disabled = True
+
+    def _build_select(self):
+        for item in self.children[:]:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+
+        if not self.alliances:
+            return
+
+        start = self.page * 25
+        end = min(start + 25, len(self.alliances))
+        page_items = self.alliances[start:end]
+
+        options = [
+            discord.SelectOption(
+                label=name[:50],
+                value=str(aid),
+                description=f"ID: {aid} · {count} member{'s' if count != 1 else ''}"[:100],
+                emoji=theme.allianceIcon,
+            )
+            for aid, name, count in page_items
+        ]
+        placeholder = f"{theme.allianceIcon} Pick an alliance to manage…"
+        if self.max_page > 0:
+            placeholder += f" (Page {self.page + 1}/{self.max_page + 1})"
+        select = discord.ui.Select(placeholder=placeholder, options=options, row=0)
+        select.callback = self._on_select
+        self.add_item(select)
+
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and getattr(item, 'custom_id', None) == "alliance_entry_prev":
+                item.disabled = self.page == 0
+            elif isinstance(item, discord.ui.Button) and getattr(item, 'custom_id', None) == "alliance_entry_next":
+                item.disabled = self.page >= self.max_page
+
+    async def _on_select(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select))
+        alliance_id = int(select.values[0])
+        await self.cog.show_alliance_hub(interaction, alliance_id)
 
     @discord.ui.button(
-        label="Alliance Setup",
-        emoji=theme.allianceIcon,
-        style=discord.ButtonStyle.primary,
-        custom_id="alliance_setup",
-        row=0
+        emoji=theme.prevIcon,
+        style=discord.ButtonStyle.secondary,
+        custom_id="alliance_entry_prev",
+        row=1,
     )
-    async def alliance_setup_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            alliance_cog = self.cog.bot.get_cog("Alliance")
-            if alliance_cog:
-                # Show alliance operations menu (add/edit/delete/view)
-                await alliance_cog.show_alliance_operations(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Alliance module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading Alliance Setup: {e}")
-            print(f"Error loading Alliance Setup: {e}")
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = max(0, self.page - 1)
+        self._build_select()
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(
+        emoji=theme.nextIcon,
+        style=discord.ButtonStyle.secondary,
+        custom_id="alliance_entry_next",
+        row=1,
+    )
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = min(self.max_page, self.page + 1)
+        self._build_select()
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(
+        label="Add Alliance",
+        emoji=theme.addIcon,
+        style=discord.ButtonStyle.success,
+        custom_id="alliance_entry_add",
+        row=2,
+    )
+    async def add_alliance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "Alliance",
+            "show_add_alliance_for",
+            fallback_method="show_alliance_operations",
+            missing_label="Alliance",
+        )
 
     @discord.ui.button(
         label="Self-Registration",
         emoji=theme.userIcon,
-        style=discord.ButtonStyle.primary,
-        custom_id="self_registration",
-        row=0
+        style=discord.ButtonStyle.success,
+        custom_id="alliance_entry_registration",
+        row=2,
     )
-    async def self_registration_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def registration(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_self_registration(interaction)
 
     @discord.ui.button(
-        label="Member Management",
-        emoji=theme.membersIcon,
-        style=discord.ButtonStyle.success,
-        custom_id="member_management",
-        row=1
+        label="Transfer Members",
+        emoji=theme.transferIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="alliance_entry_transfer",
+        row=2,
     )
-    async def member_management_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            member_ops_cog = self.cog.bot.get_cog("AllianceMemberOperations")
-            if member_ops_cog:
-                await member_ops_cog.handle_member_operations(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Member Management module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading Member Management: {e}")
-            print(f"Error loading Member Management: {e}")
+    async def transfer_members(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_transfer_members",
+            fallback_method="handle_member_operations",
+            missing_label="Member Management",
+        )
 
     @discord.ui.button(
-        label="Member History",
-        emoji=theme.listIcon,
-        style=discord.ButtonStyle.secondary,
-        custom_id="member_history",
-        row=1
+        label="Export Members",
+        emoji=theme.exportIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="alliance_entry_export",
+        row=3,
     )
-    async def member_history_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            history_cog = self.cog.bot.get_cog("AllianceHistory")
-            if history_cog:
-                await history_cog.show_alliance_history_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Alliance History module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading Member History: {e}")
-            print(f"Error loading Member History: {e}")
+    async def export_members(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_export_members",
+            fallback_method="handle_member_operations",
+            missing_label="Member Management",
+        )
 
     @discord.ui.button(
-        label="Sync Settings",
-        emoji=theme.settingsIcon,
-        style=discord.ButtonStyle.secondary,
-        custom_id="control_settings",
-        row=2
+        label="Sync All",
+        emoji=theme.refreshIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="alliance_entry_sync_all",
+        row=3,
     )
-    async def sync_settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            bot_ops = self.cog.bot.get_cog("BotOperations")
-            if bot_ops:
-                await bot_ops.show_control_settings_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Bot Operations module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading Sync Settings: {e}")
-            print(f"Error loading Sync Settings: {e}")
-
-    @discord.ui.button(
-        label="Activity Log",
-        emoji=theme.documentIcon,
-        style=discord.ButtonStyle.secondary,
-        custom_id="log_system",
-        row=2
-    )
-    async def activity_log_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            logs_cog = self.cog.bot.get_cog("AllianceLogs")
-            if logs_cog:
-                await logs_cog.show_log_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Alliance Logs module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading Activity Log: {e}")
-            print(f"Error loading Activity Log: {e}")
+    async def sync_all(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "Alliance",
+            "sync_all_alliances",
+            fallback_method="show_alliance_operations",
+            missing_label="Alliance",
+        )
 
     @discord.ui.button(
         label="Main Menu",
         emoji=theme.homeIcon,
         style=discord.ButtonStyle.secondary,
-        custom_id="main_menu_from_alliance",
-        row=3
+        custom_id="alliance_entry_main_menu",
+        row=3,
     )
-    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def main_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_main_menu(interaction)
+
+
+class AllianceHubView(discord.ui.View):
+    """Per-alliance hub. Lean layout:
+      row 0: alliance switch dropdown
+      row 1: Manage Members | History
+      row 2: Channel Setup | Sync Settings | Edit Name
+      row 3: Back | Delete Alliance
+    """
+
+    def __init__(self, cog, alliance_id: int, alliance_name: str,
+                 tier: str, alliances_with_counts: list):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.tier = tier
+        self.alliances = alliances_with_counts  # [(aid, name, count), ...]
+        self._build_select()
+
+    def _build_select(self):
+        # Drop any existing select first (for rebuilds)
+        for item in self.children[:]:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+
+        # Show only when there's something to switch TO
+        switchable = [a for a in self.alliances if a[0] != self.alliance_id]
+        if not switchable:
+            return
+
+        # Discord caps at 25 options; if there are more, show the first 25
+        # alphabetically (acceptable simplification — large guilds are rare).
+        options = [
+            discord.SelectOption(
+                label=name[:50],
+                value=str(aid),
+                description=f"ID: {aid} · {count} member{'s' if count != 1 else ''}"[:100],
+                emoji=theme.allianceIcon,
+            )
+            for aid, name, count in sorted(switchable, key=lambda a: a[1].lower())[:25]
+        ]
+        select = discord.ui.Select(
+            placeholder=f"{theme.refreshIcon} Switch alliance…",
+            options=options, row=0,
+        )
+        select.callback = self._on_switch
+        self.add_item(select)
+
+    async def _on_switch(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select))
+        await self.cog.show_alliance_hub(interaction, int(select.values[0]))
+
+    # ── Primary actions (row 1, green) ──
+
+    @discord.ui.button(label="Manage Members", emoji=theme.membersIcon,
+                       style=discord.ButtonStyle.success, row=1)
+    async def manage_members(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_manage_members_for", self.alliance_id,
+            fallback_method="handle_member_operations",
+            missing_label="Member Management",
+        )
+
+    @discord.ui.button(label="Channel Setup", emoji=theme.announceIcon,
+                       style=discord.ButtonStyle.success, row=1)
+    async def channel_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceChannels",
+            "show_channel_setup_for", self.alliance_id,
+            missing_label="Channel Setup",
+        )
+
+    # ── Secondary actions (row 2) ──
+
+    @discord.ui.button(label="Sync Settings", emoji=theme.refreshIcon,
+                       style=discord.ButtonStyle.primary, row=2)
+    async def sync_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "BotOperations",
+            "show_control_settings_for", self.alliance_id,
+            fallback_method="show_control_settings_menu",
+            missing_label="Bot Operations",
+        )
+
+    @discord.ui.button(label="Edit Name", emoji=theme.editListIcon,
+                       style=discord.ButtonStyle.primary, row=2)
+    async def edit_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "Alliance",
+            "show_edit_name_for", self.alliance_id,
+            fallback_method="show_alliance_operations",
+            missing_label="Alliance",
+        )
+
+    @discord.ui.button(label="History", emoji=theme.listIcon,
+                       style=discord.ButtonStyle.secondary, row=2)
+    async def history(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceHistory",
+            "show_history_for", self.alliance_id,
+            fallback_method="show_alliance_history_menu",
+            missing_label="Alliance History",
+        )
+
+    # ── Nav (row 3) ──
+
+    @discord.ui.button(label="Back", emoji=theme.backIcon,
+                       style=discord.ButtonStyle.secondary, row=3)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_alliance_management(interaction)
+
+    @discord.ui.button(label="Delete Alliance", emoji=theme.trashIcon,
+                       style=discord.ButtonStyle.danger, row=3)
+    async def delete_alliance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "Alliance",
+            "show_delete_alliance_for", self.alliance_id,
+            fallback_method="show_alliance_operations",
+            missing_label="Alliance",
+        )
 
 
 # ============================================================================
@@ -566,68 +909,221 @@ class AllianceManagementView(discord.ui.View):
 # ============================================================================
 
 class SelfRegistrationView(discord.ui.View):
-    """Self-Registration sub-menu (ID Channel + Registration)."""
+    """Unified Self-Registration menu. Surfaces global state + lets the admin
+    toggle the `/register` slash command and tweak how ID channels behave
+    (startup scan, scan limit, auto-delete timer)."""
 
-    def __init__(self, cog, is_global: bool = False):
-        super().__init__(timeout=None)
+    DEFAULT_SETTINGS = {
+        "scan_enabled": 1,
+        "scan_limit": 50,
+        "delete_after": 10,
+        "respond_to_invalid": 0,
+    }
+
+    def __init__(self, cog):
+        super().__init__(timeout=7200)
         self.cog = cog
-        self.is_global = is_global
 
-        # Disable Registration System button for non-global admins
-        for child in self.children:
-            if isinstance(child, discord.ui.Button) and child.label == "Registration System":
-                child.disabled = not is_global
+    def _get_settings(self, guild_id):
+        id_cog = self.cog.bot.get_cog("AllianceIDChannel")
+        if id_cog and guild_id is not None:
+            try:
+                return id_cog.get_guild_settings(guild_id)
+            except Exception:
+                pass
+        return dict(self.DEFAULT_SETTINGS)
 
-    @discord.ui.button(
-        label="ID Channel",
-        emoji=theme.fidIcon,
-        style=discord.ButtonStyle.primary,
-        custom_id="id_channel",
-        row=0
-    )
-    async def id_channel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            id_channel_cog = self.cog.bot.get_cog("AllianceIDChannel")
-            if id_channel_cog:
-                await id_channel_cog.show_id_channel_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} ID Channel module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading ID Channel menu: {e}")
-            print(f"Error loading ID Channel menu: {e}")
+    def _is_register_enabled(self) -> bool:
+        register_cog = self.cog.bot.get_cog("AllianceRegistration")
+        return bool(register_cog and register_cog.is_registration_enabled())
 
-    @discord.ui.button(
-        label="Registration System",
-        emoji=theme.editListIcon,
-        style=discord.ButtonStyle.primary,
-        custom_id="registration_system",
-        row=0
-    )
-    async def registration_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            register_cog = self.cog.bot.get_cog("AllianceRegistration")
-            if register_cog:
-                await register_cog.show_settings_menu(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Registration System module not found.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error loading Registration System menu: {e}")
-            print(f"Error loading Registration System menu: {e}")
+    def build_embed(self, interaction: discord.Interaction) -> discord.Embed:
+        register_enabled = self._is_register_enabled()
+        settings = self._get_settings(interaction.guild_id)
+        scan_enabled = bool(settings.get("scan_enabled", 1))
+        scan_limit = settings.get("scan_limit", 50)
+        delete_after = settings.get("delete_after")
+        respond_invalid = bool(settings.get("respond_to_invalid", 0))
+        delete_text = (
+            "Permanent (no auto-delete)" if delete_after is None
+            else f"{delete_after} seconds"
+        )
 
-    @discord.ui.button(
-        label="Back",
-        emoji=theme.backIcon,
-        style=discord.ButtonStyle.secondary,
-        custom_id="back_from_registration",
-        row=1
-    )
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        register_status = (
+            f"{theme.verifiedIcon} **Self-Registration:** `enabled`"
+            if register_enabled
+            else f"{theme.deniedIcon} **Self-Registration:** `disabled`"
+        )
+        scan_status = (
+            f"{theme.verifiedIcon} **Startup Scan:** `enabled`"
+            if scan_enabled
+            else f"{theme.deniedIcon} **Startup Scan:** `disabled`"
+        )
+        respond_status = (
+            f"{theme.verifiedIcon} **Reply to Invalid Posts:** `enabled`"
+            if respond_invalid
+            else f"{theme.deniedIcon} **Reply to Invalid Posts:** `disabled`"
+        )
+
+        return discord.Embed(
+            title=f"{theme.userIcon} Self-Registration",
+            description=(
+                f"Configure how players join their alliance through the bot.\n\n"
+                f"**Slash Command**\n"
+                f"{theme.upperDivider}\n"
+                f"{register_status}\n"
+                f"└ Players run `/register <id> <alliance>` to add themselves\n"
+                f"└ Doesn't require the bot to read messages in any channel\n"
+                f"{theme.lowerDivider}\n\n"
+                f"**ID Channel Behavior** _(applies to all configured ID channels)_\n"
+                f"{theme.upperDivider}\n"
+                f"{scan_status}\n"
+                f"└ Catch IDs posted while the bot was offline\n\n"
+                f"{respond_status}\n"
+                f"└ React + reply when someone posts non-numeric content\n"
+                f"└ Disable this to silently ignore chatter in misconfigured channels\n\n"
+                f"{theme.listIcon} **Scan Limit:** `{scan_limit}` messages per channel\n"
+                f"└ Max messages checked on each scan\n\n"
+                f"{theme.editListIcon} **Auto-Delete Replies:** `{delete_text}`\n"
+                f"└ How long bot replies (errors, warnings) stay visible\n"
+                f"{theme.lowerDivider}\n\n"
+                f"_Per-alliance ID channels are configured in_ "
+                f"**Alliances → _alliance_ → Channel Setup**."
+            ),
+            color=theme.emColor1,
+        )
+
+    def _add_toggle(self, label_prefix: str, emoji, enabled: bool, callback, row: int):
+        btn = discord.ui.Button(
+            label=f"{label_prefix}: {'On' if enabled else 'Off'}",
+            emoji=emoji,
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+            row=row,
+        )
+        btn.callback = callback
+        self.add_item(btn)
+
+    def _build_components(self, interaction: discord.Interaction):
+        self.clear_items()
+        register_enabled = self._is_register_enabled()
+        settings = self._get_settings(interaction.guild_id)
+        scan_enabled = bool(settings.get("scan_enabled", 1))
+        respond_invalid = bool(settings.get("respond_to_invalid", 0))
+
+        self._add_toggle("Self-Registration", theme.userIcon, register_enabled,
+                         self._toggle_register, row=0)
+        self._add_toggle("Startup Scan", theme.refreshIcon, scan_enabled,
+                         self._toggle_scan, row=0)
+        self._add_toggle("Reply to Invalid", theme.deniedIcon, respond_invalid,
+                         self._toggle_respond, row=0)
+
+        scan_limit_btn = discord.ui.Button(
+            label="Edit Scan Limit", emoji=theme.listIcon,
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        scan_limit_btn.callback = self._edit_scan_limit
+        self.add_item(scan_limit_btn)
+
+        delete_btn = discord.ui.Button(
+            label="Edit Auto-Delete", emoji=theme.editListIcon,
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        delete_btn.callback = self._edit_delete_after
+        self.add_item(delete_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=2,
+        )
+        back_btn.callback = self._back
+        self.add_item(back_btn)
+
+    async def show(self, interaction: discord.Interaction):
+        self._build_components(interaction)
+        await safe_edit_message(
+            interaction, embed=self.build_embed(interaction), view=self, content=None
+        )
+
+    async def _toggle_register(self, interaction: discord.Interaction):
+        register_cog = self.cog.bot.get_cog("AllianceRegistration")
+        if not register_cog:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Registration module not found.",
+                ephemeral=True,
+            )
+            return
+        register_cog.set_registration_enabled(not register_cog.is_registration_enabled())
+        await self.show(interaction)
+
+    async def _toggle_scan(self, interaction: discord.Interaction):
+        id_cog = self.cog.bot.get_cog("AllianceIDChannel")
+        if not id_cog:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} ID Channel module not found.",
+                ephemeral=True,
+            )
+            return
+        settings = self._get_settings(interaction.guild_id)
+        new_value = 0 if settings.get("scan_enabled", 1) else 1
+        id_cog.ensure_guild_settings(interaction.guild_id)
+        with sqlite3.connect('db/id_channel.sqlite') as db:
+            cursor = db.cursor()
+            cursor.execute(
+                "UPDATE id_channel_settings SET scan_enabled = ? WHERE guild_id = ?",
+                (new_value, interaction.guild_id),
+            )
+            db.commit()
+        await self.show(interaction)
+
+    async def _toggle_respond(self, interaction: discord.Interaction):
+        id_cog = self.cog.bot.get_cog("AllianceIDChannel")
+        if not id_cog:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} ID Channel module not found.",
+                ephemeral=True,
+            )
+            return
+        settings = self._get_settings(interaction.guild_id)
+        new_value = 0 if settings.get("respond_to_invalid", 0) else 1
+        id_cog.ensure_guild_settings(interaction.guild_id)
+        with sqlite3.connect('db/id_channel.sqlite') as db:
+            cursor = db.cursor()
+            cursor.execute(
+                "UPDATE id_channel_settings SET respond_to_invalid = ? WHERE guild_id = ?",
+                (new_value, interaction.guild_id),
+            )
+            db.commit()
+        await self.show(interaction)
+
+    async def _edit_scan_limit(self, interaction: discord.Interaction):
+        from .alliance_id_channel import ScanLimitModal
+        id_cog = self.cog.bot.get_cog("AllianceIDChannel")
+        if not id_cog:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} ID Channel module not found.", ephemeral=True
+            )
+            return
+        settings = self._get_settings(interaction.guild_id)
+        await interaction.response.send_modal(
+            ScanLimitModal(id_cog, settings.get("scan_limit", 50), refresh=self.show)
+        )
+
+    async def _edit_delete_after(self, interaction: discord.Interaction):
+        from .alliance_id_channel import DeleteAfterModal
+        id_cog = self.cog.bot.get_cog("AllianceIDChannel")
+        if not id_cog:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} ID Channel module not found.", ephemeral=True
+            )
+            return
+        settings = self._get_settings(interaction.guild_id)
+        delete_after = settings.get("delete_after")
+        current = delete_after if delete_after is not None else 0
+        await interaction.response.send_modal(
+            DeleteAfterModal(id_cog, current, refresh=self.show)
+        )
+
+    async def _back(self, interaction: discord.Interaction):
         await self.cog.show_alliance_management(interaction)
 
 
@@ -1393,7 +1889,7 @@ class MaintenanceView(discord.ui.View):
         # Disable Global Admin only buttons for non-global admins
         for child in self.children:
             if isinstance(child, discord.ui.Button):
-                if child.label in ["Check for Updates", "Backup System", "DB Maintenance"]:
+                if child.label in ["Check for Updates", "Backup System", "Bot Health"]:
                     child.disabled = not is_global
 
     @discord.ui.button(
@@ -1416,7 +1912,7 @@ class MaintenanceView(discord.ui.View):
     )
     async def backup_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            backup_cog = self.cog.bot.get_cog("BotBackup")
+            backup_cog = self.cog.bot.get_cog("BackupOperations")
             if backup_cog:
                 await backup_cog.show_backup_menu(interaction)
             else:
@@ -1460,7 +1956,9 @@ class MaintenanceView(discord.ui.View):
         try:
             support_cog = self.cog.bot.get_cog("SupportOperations")
             if support_cog:
-                await support_cog.show_support_menu(interaction)
+                # Skip the intermediate Support Operations submenu — show the
+                # support info directly. Gather Logs lives under Bot Health now.
+                await support_cog.show_support_info(interaction)
             else:
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Support Operations module not found.",
@@ -1473,13 +1971,13 @@ class MaintenanceView(discord.ui.View):
     @discord.ui.button(
         label="About Project",
         emoji=theme.infoIcon,
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="about_project",
         row=1
     )
     async def about_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            support_cog = self.cog.bot.get_cog("BotSupport")
+            support_cog = self.cog.bot.get_cog("SupportOperations")
             if support_cog:
                 await support_cog.show_about_menu(interaction)
             else:

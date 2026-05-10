@@ -184,6 +184,17 @@ async def handle_gift_redeem_process(cog, process):
 
     await _record_batch_start(cog, batch_id, alliance_id)
 
+    # Pin the captcha model resident for the whole alliance batch so individual
+    # solve_captcha() calls don't pay reload cost between players. The model
+    # unloads ~2 min after the last batch finishes (handled by onnx_lifecycle).
+    captcha_wrapper = (
+        cog.captcha_solver._model_wrapper
+        if cog.captcha_solver and getattr(cog.captcha_solver, '_model_wrapper', None)
+        else None
+    )
+    if captcha_wrapper is not None:
+        await captcha_wrapper.acquire()
+
     try:
         await use_giftcode_for_alliance(cog, alliance_id, giftcode)
     except PreemptedException:
@@ -193,6 +204,9 @@ async def handle_gift_redeem_process(cog, process):
         cog.logger.exception(f"Error in redemption for alliance {alliance_id}: {e}")
         await _record_batch_result(cog, batch_id, alliance_id, success=False)
         raise
+    finally:
+        if captcha_wrapper is not None:
+            await captcha_wrapper.release()
 
     await _record_batch_result(cog, batch_id, alliance_id, success=True)
 

@@ -46,6 +46,61 @@ class AllianceLogs(commands.Cog):
         except Exception:
             pass
 
+    async def show_activity_log_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Hub-context entry: show + manage the activity log channel for one alliance."""
+        try:
+            self.alliance_cursor.execute(
+                "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+            )
+            row = self.alliance_cursor.fetchone()
+            if not row:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Alliance not found.", ephemeral=True
+                )
+                return
+            alliance_name = row[0]
+
+            self.settings_cursor.execute(
+                "SELECT channel_id FROM alliance_logs WHERE alliance_id = ?",
+                (alliance_id,),
+            )
+            ch_row = self.settings_cursor.fetchone()
+            current_channel_id = ch_row[0] if ch_row else None
+            current_channel = (
+                interaction.guild.get_channel(int(current_channel_id))
+                if current_channel_id else None
+            )
+
+            if current_channel:
+                state_line = f"{theme.verifiedIcon} Current channel: {current_channel.mention}"
+            elif current_channel_id:
+                state_line = f"{theme.warnIcon} Configured channel `{current_channel_id}` is no longer accessible."
+            else:
+                state_line = f"{theme.deniedIcon} No activity log channel configured for this alliance."
+
+            embed = discord.Embed(
+                title=f"{theme.documentIcon} {alliance_name} — Activity Log",
+                description=(
+                    f"Member additions, removals, and other alliance changes are "
+                    f"posted to the configured channel.\n"
+                    f"{theme.upperDivider}\n"
+                    f"{state_line}\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1,
+            )
+            view = AllianceActivityLogView(self, alliance_id, alliance_name, bool(current_channel_id))
+            await safe_edit_message(interaction, embed=embed, view=view, content=None)
+
+        except Exception as e:
+            logger.error(f"Error in show_activity_log_for: {e}")
+            print(f"Error in show_activity_log_for: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while loading the activity log.",
+                    ephemeral=True,
+                )
+
     async def show_log_menu(self, interaction: discord.Interaction):
         """Display the log system menu - called by MainMenu cog."""
         try:
@@ -564,6 +619,111 @@ class AllianceLogs(commands.Cog):
                     f"{theme.deniedIcon} An error occurred while viewing log channels.",
                     ephemeral=True
                 )
+
+class AllianceActivityLogView(discord.ui.View):
+    """Per-alliance activity log management — alliance is already known."""
+
+    def __init__(self, cog, alliance_id: int, alliance_name: str, has_channel: bool):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.has_channel = has_channel
+
+        set_btn = discord.ui.Button(
+            label="Change Channel" if has_channel else "Set Channel",
+            emoji=f"{theme.editListIcon}",
+            style=discord.ButtonStyle.primary,
+            row=0,
+        )
+        set_btn.callback = self._on_set
+        self.add_item(set_btn)
+
+        if has_channel:
+            remove_btn = discord.ui.Button(
+                label="Remove Channel",
+                emoji=f"{theme.trashIcon}",
+                style=discord.ButtonStyle.danger,
+                row=0,
+            )
+            remove_btn.callback = self._on_remove
+            self.add_item(remove_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back to Hub",
+            emoji=f"{theme.backIcon}",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    async def _on_set(self, interaction: discord.Interaction):
+        cog = self.cog
+        alliance_id = self.alliance_id
+        alliance_name = self.alliance_name
+
+        class _ChannelSelect(discord.ui.ChannelSelect):
+            def __init__(self):
+                super().__init__(
+                    placeholder="Pick a channel for this alliance's activity log",
+                    channel_types=[discord.ChannelType.text],
+                )
+
+            async def callback(self, channel_interaction: discord.Interaction):
+                selected = self.values[0]
+                try:
+                    cog.settings_cursor.execute(
+                        "INSERT OR REPLACE INTO alliance_logs (alliance_id, channel_id) "
+                        "VALUES (?, ?)",
+                        (alliance_id, selected.id),
+                    )
+                    cog.settings_db.commit()
+                except Exception as e:
+                    logger.error(f"Activity log set error: {e}")
+                    print(f"Activity log set error: {e}")
+                    await channel_interaction.response.send_message(
+                        f"{theme.deniedIcon} Failed to set the log channel.",
+                        ephemeral=True,
+                    )
+                    return
+                await cog.show_activity_log_for(channel_interaction, alliance_id)
+
+        select_view = discord.ui.View(timeout=300)
+        select_view.add_item(_ChannelSelect())
+        select_embed = discord.Embed(
+            title=f"{theme.documentIcon} {alliance_name} — Pick Activity Log Channel",
+            description="Pick the text channel where alliance activity will be logged.",
+            color=theme.emColor1,
+        )
+        await interaction.response.edit_message(embed=select_embed, view=select_view)
+
+    async def _on_remove(self, interaction: discord.Interaction):
+        try:
+            self.cog.settings_cursor.execute(
+                "DELETE FROM alliance_logs WHERE alliance_id = ?",
+                (self.alliance_id,),
+            )
+            self.cog.settings_db.commit()
+        except Exception as e:
+            logger.error(f"Activity log remove error: {e}")
+            print(f"Activity log remove error: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Failed to remove the log channel.",
+                ephemeral=True,
+            )
+            return
+        await self.cog.show_activity_log_for(interaction, self.alliance_id)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu and hasattr(main_menu, "show_alliance_hub"):
+            await main_menu.show_alliance_hub(interaction, self.alliance_id)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Hub not available.", ephemeral=True
+            )
+
 
 async def setup(bot):
     await bot.add_cog(AllianceLogs(bot))

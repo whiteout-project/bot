@@ -4,6 +4,7 @@ Core bot operations. Admin management, alliance control messages, and bot settin
 import discord
 from discord.ext import commands
 import os
+import sys
 import sqlite3
 import asyncio
 import requests
@@ -12,6 +13,40 @@ from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
 
 logger = logging.getLogger('bot')
+
+
+class _UpdateAndRestartView(discord.ui.View):
+    """Single button on the Check-for-Updates ephemeral. Triggers a restart
+    that filters --no-update from the relaunch args so the startup updater
+    can install the pending release."""
+
+    def __init__(self, bot):
+        super().__init__(timeout=7200)
+        self.bot = bot
+
+    @discord.ui.button(
+        label="Update & Restart",
+        emoji=f"{theme.refreshIcon}",
+        style=discord.ButtonStyle.danger,
+    )
+    async def update_and_restart(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin or not is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only Global Admins can update the bot.",
+                ephemeral=True,
+            )
+            return
+        health_cog = self.bot.get_cog("BotHealth")
+        if not health_cog:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Bot Health module not found — cannot restart.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer()
+        await health_cog.perform_restart(interaction, allow_update=True)
+
 
 class BotOperations(commands.Cog):
     def __init__(self, bot, conn):
@@ -179,34 +214,6 @@ class BotOperations(commands.Cog):
                         "An error occurred while processing your request.",
                         ephemeral=True
                     )
-        elif custom_id == "transfer_old_database":
-            try:
-                is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
-
-                if not is_admin or not is_global:
-                    await interaction.response.send_message(
-                        f"{theme.deniedIcon} Only global administrators can use this command.",
-                        ephemeral=True
-                    )
-                    return
-
-                database_cog = self.bot.get_cog('DatabaseTransfer')
-                if database_cog:
-                    await database_cog.transfer_old_database(interaction)
-                else:
-                    await interaction.response.send_message(
-                        f"{theme.deniedIcon} Database transfer module not loaded.", 
-                        ephemeral=True
-                    )
-
-            except Exception as e:
-                print(f"Transfer old database error: {e}")
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(
-                        f"{theme.deniedIcon} An error occurred while transferring the database.",
-                        ephemeral=True
-                    )
-
         elif custom_id == "check_updates":
             try:
                 is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
@@ -226,11 +233,6 @@ class BotOperations(commands.Cog):
                         ephemeral=True
                     )
                     return
-
-                main_embed = discord.Embed(
-                    title=f"{theme.refreshIcon} Bot Update Status",
-                    color=theme.emColor1 if not updates_needed else discord.Color.yellow()
-                )
 
                 main_embed = discord.Embed(
                     title=f"{theme.refreshIcon} Bot Update Status",
@@ -267,14 +269,24 @@ class BotOperations(commands.Cog):
                             inline=False
                         )
 
+                    # Windows hosts don't auto-restart — flag it so the admin
+                    # knows manual intervention will be needed after the update.
+                    update_help = (
+                        f"Click **Update & Restart** below to install the "
+                        f"update now. The bot will reconnect automatically."
+                    )
+                    if sys.platform == 'win32' and not os.path.exists('/.dockerenv'):
+                        update_help = (
+                            f"Click **Update & Restart** below to install the "
+                            f"update now.\n\n{theme.warnIcon} **Windows host "
+                            f"detected.** The bot will stop after downloading "
+                            f"the update — someone with host access needs to "
+                            f"start it again with `python main.py` for the "
+                            f"update to finish installing."
+                        )
                     main_embed.add_field(
                         name="How to Update",
-                        value=(
-                            f"To update to the new version:\n"
-                            f"{theme.refreshIcon} **Restart the bot** (main.py)\n"
-                            f"{theme.verifiedIcon} Accept the update when prompted\n\n"
-                            f"The bot will automatically download and install the update."
-                        ),
+                        value=update_help,
                         inline=False
                     )
                 else:
@@ -285,9 +297,11 @@ class BotOperations(commands.Cog):
                     )
                     main_embed.description = "Your bot is running the latest version!"
 
+                view = _UpdateAndRestartView(self.bot) if updates_needed else None
                 await interaction.response.send_message(
                     embed=main_embed,
-                    ephemeral=True
+                    view=view,
+                    ephemeral=True,
                 )
 
             except Exception as e:
@@ -343,7 +357,7 @@ class BotOperations(commands.Cog):
             return None, None, [], False
     
     async def show_control_settings_menu(self, interaction: discord.Interaction):
-        """Show the per-alliance Sync Settings menu."""
+        """Show the per-alliance Sync Settings menu (with alliance picker)."""
         try:
             if interaction.guild is None:
                 await interaction.response.send_message(f"{theme.deniedIcon} This command must be used in a server.", ephemeral=True)
@@ -369,14 +383,56 @@ class BotOperations(commands.Cog):
                     ephemeral=True
                 )
 
+    async def show_control_settings_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Hub-context entry: open Sync Settings for a known alliance (no picker)."""
+        try:
+            with sqlite3.connect('db/alliance.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Alliance not found.", ephemeral=True
+                )
+                return
+            alliance_name = row[0]
+
+            view = SyncSettingsView(
+                self.c_alliance, self.alliance_db,
+                [(alliance_id, alliance_name)], interaction,
+                locked_alliance_id=alliance_id,
+                return_to_hub=True,
+            )
+            view.selected_alliance = alliance_id
+            await view.update_view(interaction)
+
+        except Exception as e:
+            print(f"Error in show_control_settings_for: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while showing sync settings.",
+                    ephemeral=True
+                )
+
 
 class SyncSettingsView(discord.ui.View):
-    def __init__(self, alliance_cursor, alliance_db, alliances, initial_interaction):
-        super().__init__(timeout=300)
+    MIN_INTERVAL_MINUTES = 30
+    MAX_INTERVAL_MINUTES = 1440  # 24h
+
+    def __init__(self, alliance_cursor, alliance_db, alliances, initial_interaction,
+                 *, locked_alliance_id: int | None = None, return_to_hub: bool = False):
+        super().__init__(timeout=7200)
         self.alliance_cursor = alliance_cursor
         self.alliance_db = alliance_db
         self.alliances = alliances
-        self.selected_alliance = None
+        self.locked_alliance_id = locked_alliance_id
+        self.return_to_hub = return_to_hub
+        self.selected_alliance = locked_alliance_id
+        self.interval = 0
+        self.start_time = None
         self.auto_remove = False
         self.notify_on_transfer = False
         self.keep_control_log = False
@@ -386,27 +442,46 @@ class SyncSettingsView(discord.ui.View):
     def setup_components(self):
         self.clear_items()
 
-        self.alliance_select = discord.ui.Select(
-            placeholder="Select an alliance..." if not self.selected_alliance else f"Selected: {next((name for aid, name in self.alliances if aid == self.selected_alliance), 'Unknown')[:50]}",
-            options=[
-                discord.SelectOption(
-                    label=f"{name[:50]}",
-                    value=str(alliance_id),
-                    description=f"Alliance ID: {alliance_id}",
-                    default=(alliance_id == self.selected_alliance) if self.selected_alliance else False
-                ) for alliance_id, name in self.alliances[:25]
-            ],
-            row=0
-        )
-        self.alliance_select.callback = self.alliance_selected
-        self.add_item(self.alliance_select)
+        if self.locked_alliance_id is None:
+            self.alliance_select = discord.ui.Select(
+                placeholder="Select an alliance..." if not self.selected_alliance else f"Selected: {next((name for aid, name in self.alliances if aid == self.selected_alliance), 'Unknown')[:50]}",
+                options=[
+                    discord.SelectOption(
+                        label=f"{name[:50]}",
+                        value=str(alliance_id),
+                        description=f"Alliance ID: {alliance_id}",
+                        default=(alliance_id == self.selected_alliance) if self.selected_alliance else False
+                    ) for alliance_id, name in self.alliances[:25]
+                ],
+                row=0
+            )
+            self.alliance_select.callback = self.alliance_selected
+            self.add_item(self.alliance_select)
 
         if self.selected_alliance:
+            self.edit_interval_button = discord.ui.Button(
+                label="Edit Interval",
+                style=discord.ButtonStyle.primary,
+                emoji=f"{theme.refreshIcon}",
+                row=1,
+            )
+            self.edit_interval_button.callback = self.open_interval_modal
+            self.add_item(self.edit_interval_button)
+
+            self.edit_start_button = discord.ui.Button(
+                label="Edit Start Time",
+                style=discord.ButtonStyle.primary,
+                emoji=f"{theme.pinIcon}",
+                row=1,
+            )
+            self.edit_start_button.callback = self.open_start_time_modal
+            self.add_item(self.edit_start_button)
+
             self.show_msg_button = discord.ui.Button(
                 label=f"{'Hide' if self.show_sync_message else 'Show'} Sync Messages",
                 style=discord.ButtonStyle.danger if self.show_sync_message else discord.ButtonStyle.success,
                 emoji=f"{theme.messageIcon}",
-                row=1,
+                row=2,
             )
             self.show_msg_button.callback = self.toggle_show_sync_message
             self.add_item(self.show_msg_button)
@@ -415,7 +490,7 @@ class SyncSettingsView(discord.ui.View):
                 label=f"{'Disable' if self.keep_control_log else 'Enable'} Keep Sync Log",
                 style=discord.ButtonStyle.secondary,
                 emoji=f"{theme.listIcon}",
-                row=1,
+                row=2,
                 disabled=not self.show_sync_message,
             )
             self.keep_log_button.callback = self.toggle_keep_control_log
@@ -425,26 +500,26 @@ class SyncSettingsView(discord.ui.View):
                 label=f"{'Disable' if self.auto_remove else 'Enable'} Auto-Removal",
                 style=discord.ButtonStyle.danger if self.auto_remove else discord.ButtonStyle.success,
                 emoji=f"{theme.refreshIcon}",
-                row=2,
+                row=3,
             )
             self.auto_remove_button.callback = self.toggle_auto_removal
             self.add_item(self.auto_remove_button)
 
-            if self.auto_remove:
-                self.notify_button = discord.ui.Button(
-                    label=f"{'Disable' if self.notify_on_transfer else 'Enable'} Notifications",
-                    style=discord.ButtonStyle.secondary,
-                    emoji=f"{theme.bellIcon}" if not self.notify_on_transfer else f"{theme.muteIcon}",
-                    row=2,
-                )
-                self.notify_button.callback = self.toggle_notifications
-                self.add_item(self.notify_button)
+            self.notify_button = discord.ui.Button(
+                label=f"{'Disable' if self.notify_on_transfer else 'Enable'} Notifications",
+                style=discord.ButtonStyle.secondary,
+                emoji=f"{theme.bellIcon}" if not self.notify_on_transfer else f"{theme.muteIcon}",
+                row=3,
+                disabled=not self.auto_remove,
+            )
+            self.notify_button.callback = self.toggle_notifications
+            self.add_item(self.notify_button)
 
         self.back_button = discord.ui.Button(
-            label="Back",
+            label="Back to Hub" if self.return_to_hub else "Back",
             style=discord.ButtonStyle.secondary,
             emoji=f"{theme.backIcon}",
-            row=3
+            row=4,
         )
         self.back_button.callback = self.back_to_bot_operations
         self.add_item(self.back_button)
@@ -453,7 +528,8 @@ class SyncSettingsView(discord.ui.View):
         if self.selected_alliance:
             alliance_name = next((name for aid, name in self.alliances if aid == self.selected_alliance), "Unknown")
             self.alliance_cursor.execute("""
-                SELECT auto_remove_on_transfer, notify_on_transfer, keep_control_log, show_sync_message
+                SELECT auto_remove_on_transfer, notify_on_transfer, keep_control_log,
+                       show_sync_message, interval, start_time
                 FROM alliancesettings
                 WHERE alliance_id = ?
             """, (self.selected_alliance,))
@@ -462,6 +538,8 @@ class SyncSettingsView(discord.ui.View):
             self.notify_on_transfer = bool(result[1]) if result and len(result) > 1 and result[1] is not None else False
             self.keep_control_log = bool(result[2]) if result and len(result) > 2 and result[2] is not None else False
             self.show_sync_message = bool(result[3]) if result and len(result) > 3 and result[3] is not None else True
+            self.interval = int(result[4]) if result and len(result) > 4 and result[4] is not None else 0
+            self.start_time = result[5] if result and len(result) > 5 and result[5] else None
 
             show_emoji = theme.verifiedIcon if self.show_sync_message else theme.deniedIcon
             log_emoji = theme.verifiedIcon if self.keep_control_log else theme.trashIcon
@@ -473,17 +551,30 @@ class SyncSettingsView(discord.ui.View):
                 if self.keep_control_log
                 else "Delete the message after sync finishes"
             )
+            log_suffix = "" if self.show_sync_message else " _(turn on Show progress first)_"
+            notify_suffix = "" if self.auto_remove else " _(turn on Auto-Removal first)_"
+
+            interval_display = (
+                f"`{self.interval} min`" if self.interval > 0 else "`disabled`"
+            )
+            start_time_display = (
+                f"`{self.start_time} UTC`" if self.start_time
+                else "_(starts on bot startup)_"
+            )
 
             embed = discord.Embed(
                 title=f"{theme.settingsIcon} Sync Settings · {alliance_name}",
                 description=(
                     f"{theme.upperDivider}\n"
+                    f"**Schedule**\n"
+                    f"{theme.refreshIcon} Sync Interval: {interval_display}\n"
+                    f"{theme.pinIcon} Start Time: {start_time_display}\n\n"
                     f"**Sync Channel Messages**\n"
                     f"{show_emoji} Show progress message during sync\n"
-                    f"{log_emoji} {log_line}\n\n"
+                    f"{log_emoji} {log_line}{log_suffix}\n\n"
                     f"**State Transfer**\n"
                     f"{status_emoji} Auto-remove members who transfer states\n"
-                    f"{notify_emoji} Notify admin when an auto-removal happens\n"
+                    f"{notify_emoji} Notify admin when an auto-removal happens{notify_suffix}\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
@@ -615,17 +706,26 @@ class SyncSettingsView(discord.ui.View):
                 ephemeral=True,
             )
 
+    async def open_interval_modal(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(SyncIntervalModal(self, self.interval))
+
+    async def open_start_time_modal(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(StartTimeModal(self, self.start_time))
+
     async def back_to_bot_operations(self, interaction: discord.Interaction):
-        """Return to the Alliance Management sub-menu."""
+        """Return to the Alliance Hub when locked, otherwise the Alliances menu."""
         try:
             main_menu = interaction.client.get_cog("MainMenu")
-            if main_menu:
-                await main_menu.show_alliance_management(interaction)
-            else:
+            if not main_menu:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Unable to return to the Alliance Management menu.",
-                    ephemeral=True
+                    f"{theme.deniedIcon} Unable to return to the Alliances menu.",
+                    ephemeral=True,
                 )
+                return
+            if self.return_to_hub and self.locked_alliance_id is not None:
+                await main_menu.show_alliance_hub(interaction, self.locked_alliance_id)
+            else:
+                await main_menu.show_alliance_management(interaction)
         except Exception as e:
             logger.error(f"Error in back_to_bot_operations: {e}")
             print(f"Error in back_to_bot_operations: {e}")
@@ -635,5 +735,93 @@ class SyncSettingsView(discord.ui.View):
                     ephemeral=True
                 )
 
+class SyncIntervalModal(discord.ui.Modal):
+    """Numeric sync interval input. Validates min/max/0-as-disabled."""
+
+    def __init__(self, parent_view: SyncSettingsView, current_interval: int):
+        super().__init__(title="Edit Sync Interval")
+        self.parent_view = parent_view
+        self.input = discord.ui.TextInput(
+            label=f"Interval ({SyncSettingsView.MIN_INTERVAL_MINUTES}-"
+                  f"{SyncSettingsView.MAX_INTERVAL_MINUTES} min, or 0 to disable)",
+            placeholder=f"e.g. 60",
+            default=str(current_interval),
+            required=True,
+            max_length=4,
+        )
+        self.add_item(self.input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.input.value.strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Interval must be a whole number.", ephemeral=True
+            )
+            return
+        if value < 0:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Interval cannot be negative.", ephemeral=True
+            )
+            return
+        if value != 0 and (
+            value < SyncSettingsView.MIN_INTERVAL_MINUTES
+            or value > SyncSettingsView.MAX_INTERVAL_MINUTES
+        ):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Interval must be **0** (disabled) or between "
+                f"**{SyncSettingsView.MIN_INTERVAL_MINUTES}** and "
+                f"**{SyncSettingsView.MAX_INTERVAL_MINUTES}** minutes. "
+                f"This minimum prevents the queue from piling up if a sync takes "
+                f"longer than the interval.",
+                ephemeral=True,
+            )
+            return
+        self.parent_view.alliance_cursor.execute(
+            "UPDATE alliancesettings SET interval = ? WHERE alliance_id = ?",
+            (value, self.parent_view.selected_alliance),
+        )
+        self.parent_view.alliance_db.commit()
+        await self.parent_view.update_view(interaction)
+
+
+class StartTimeModal(discord.ui.Modal):
+    """HH:MM (UTC) start time input for the sync schedule. Empty clears it."""
+
+    def __init__(self, parent_view: SyncSettingsView, current_start_time):
+        super().__init__(title="Edit Sync Start Time (UTC)")
+        self.parent_view = parent_view
+        self.input = discord.ui.TextInput(
+            label="Start Time (HH:MM UTC)",
+            placeholder="14:00 — leave empty to clear",
+            default=current_start_time or "",
+            required=False,
+            max_length=5,
+        )
+        self.add_item(self.input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = self.input.value.strip()
+        if not raw:
+            new_value = None
+        else:
+            import re
+            if not re.match(r'^([01]?\d|2[0-3]):([0-5]\d)$', raw):
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Invalid time format. Use HH:MM (e.g. `14:00`).",
+                    ephemeral=True,
+                )
+                return
+            h, m = raw.split(':')
+            new_value = f"{int(h):02d}:{int(m):02d}"
+        self.parent_view.alliance_cursor.execute(
+            "UPDATE alliancesettings SET start_time = ? WHERE alliance_id = ?",
+            (new_value, self.parent_view.selected_alliance),
+        )
+        self.parent_view.alliance_db.commit()
+        await self.parent_view.update_view(interaction)
+
+
 async def setup(bot):
-    await bot.add_cog(BotOperations(bot, sqlite3.connect('db/settings.sqlite'))) 
+    await bot.add_cog(BotOperations(bot, sqlite3.connect('db/settings.sqlite')))

@@ -60,21 +60,46 @@ class AllianceIDChannel(commands.Cog):
                      guild_id INTEGER PRIMARY KEY,
                      scan_enabled INTEGER DEFAULT 1,
                      scan_limit INTEGER DEFAULT 50,
-                     delete_after INTEGER DEFAULT 10
+                     delete_after INTEGER DEFAULT 10,
+                     respond_to_invalid INTEGER DEFAULT 0
                  )''')
+
+        # Migrate older installs: add columns introduced after the table existed.
+        c.execute("PRAGMA table_info(id_channel_settings)")
+        existing_cols = {row[1] for row in c.fetchall()}
+        if "delete_after" not in existing_cols:
+            c.execute("ALTER TABLE id_channel_settings ADD COLUMN delete_after INTEGER DEFAULT 10")
+        if "scan_limit" not in existing_cols:
+            c.execute("ALTER TABLE id_channel_settings ADD COLUMN scan_limit INTEGER DEFAULT 50")
+        if "scan_enabled" not in existing_cols:
+            c.execute("ALTER TABLE id_channel_settings ADD COLUMN scan_enabled INTEGER DEFAULT 1")
+        if "respond_to_invalid" not in existing_cols:
+            c.execute("ALTER TABLE id_channel_settings ADD COLUMN respond_to_invalid INTEGER DEFAULT 0")
 
         conn.commit()
         conn.close()
 
     def get_guild_settings(self, guild_id):
+        defaults = {
+            'guild_id': guild_id,
+            'scan_enabled': 1,
+            'scan_limit': 50,
+            'delete_after': 10,
+            'respond_to_invalid': 0,
+        }
         with sqlite3.connect('db/id_channel.sqlite') as db:
             db.row_factory = sqlite3.Row
             cursor = db.cursor()
             cursor.execute("SELECT * FROM id_channel_settings WHERE guild_id = ?", (guild_id,))
             row = cursor.fetchone()
-            if row:
-                return dict(row)
-        return {'guild_id': guild_id, 'scan_enabled': 1, 'scan_limit': 50, 'delete_after': 10}
+        if row is None:
+            return defaults
+        # Merge with defaults so callers never KeyError if the schema is stale
+        # (e.g. an admin's running install didn't yet pick up the ALTER TABLE
+        # migration in setup_database).
+        result = dict(defaults)
+        result.update(dict(row))
+        return result
 
     def ensure_guild_settings(self, guild_id):
         with sqlite3.connect('db/id_channel.sqlite') as db:
@@ -83,6 +108,13 @@ class AllianceIDChannel(commands.Cog):
             db.commit()
 
     async def warn_invalid_format(self, message):
+        # Default off: silently ignore non-numeric posts in ID channels unless
+        # the admin has opted in. Avoids embarrassing X-emoji spam if a busy
+        # general channel was accidentally configured as an ID channel.
+        settings = self.get_guild_settings(message.guild.id)
+        if not settings.get('respond_to_invalid', 0):
+            return
+
         channel_id = message.channel.id
         now = time.time()
         last_warning = self.invalid_format_warnings.get(channel_id, 0)
@@ -91,7 +123,6 @@ class AllianceIDChannel(commands.Cog):
             return
 
         self.invalid_format_warnings[channel_id] = now
-        settings = self.get_guild_settings(message.guild.id)
         await message.add_reaction(theme.deniedIcon)
         await message.reply("Please enter a valid numeric ID.", delete_after=settings['delete_after'])
 
@@ -222,18 +253,33 @@ class AllianceIDChannel(commands.Cog):
                         await message.add_reaction(theme.warnIcon)
                         await message.reply(f"This ID ({fid}) is already registered in this alliance!", delete_after=delete_after)
                         return
-                    else:
-                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                            alliance_cursor = alliance_db.cursor()
-                            alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (existing_alliance[0],))
-                            alliance_name = alliance_cursor.fetchone()
 
+                    with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                        alliance_cursor = alliance_db.cursor()
+                        alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (existing_alliance[0],))
+                        alliance_name = alliance_cursor.fetchone()
+
+                    if alliance_name:
                         await message.add_reaction(theme.warnIcon)
                         await message.reply(
-                            f"This ID ({fid}) is already registered in another alliance: `{alliance_name[0] if alliance_name else 'Unknown Alliance'}`",
+                            f"This ID ({fid}) is already registered in another alliance: `{alliance_name[0]}`",
                             delete_after=delete_after
                         )
                         return
+
+                    # Orphan: alliance was deleted from alliance_list. Drop stale row and let registration proceed.
+                    cursor.execute(
+                        "DELETE FROM users WHERE fid = ? AND alliance = ?",
+                        (fid, existing_alliance[0]),
+                    )
+                    users_db.commit()
+                    logger.info(
+                        f"Self-healed orphan ID {fid} from deleted alliance "
+                        f"{existing_alliance[0]}; allowing registration into alliance {alliance_id}"
+                    )
+                    print(
+                        f"[ID-CHANNEL] Self-healed orphan ID {fid} from deleted alliance {existing_alliance[0]}"
+                    )
 
             result = await LoginHandler().fetch_player_data(str(fid))
 
@@ -382,6 +428,67 @@ class AllianceIDChannel(commands.Cog):
             else:
                 print(f"Error in check_channels_loop: {e}")
 
+    async def show_id_channel_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Hub-context entry: show + manage the ID channel for one alliance."""
+        try:
+            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                cursor = alliance_db.cursor()
+                cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Alliance not found.", ephemeral=True
+                )
+                return
+            alliance_name = row[0]
+
+            with sqlite3.connect('db/id_channel.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute(
+                    "SELECT channel_id FROM id_channels "
+                    "WHERE guild_id = ? AND alliance_id = ?",
+                    (interaction.guild_id, alliance_id),
+                )
+                ch_row = cursor.fetchone()
+            current_channel_id = ch_row[0] if ch_row else None
+            current_channel = (
+                interaction.guild.get_channel(current_channel_id)
+                if current_channel_id else None
+            )
+
+            if current_channel:
+                state_line = f"{theme.verifiedIcon} Current channel: {current_channel.mention}"
+            elif current_channel_id:
+                state_line = f"{theme.warnIcon} Configured channel `{current_channel_id}` is no longer accessible."
+            else:
+                state_line = f"{theme.deniedIcon} No ID channel configured for this alliance."
+
+            embed = discord.Embed(
+                title=f"{theme.fidIcon} {alliance_name} — ID Channel",
+                description=(
+                    f"Players can post their in-game ID in this channel and the "
+                    f"bot will verify and add them to the alliance.\n"
+                    f"{theme.upperDivider}\n"
+                    f"{state_line}\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1,
+            )
+            view = AllianceIDChannelView(self, alliance_id, alliance_name, bool(current_channel_id))
+            await safe_edit_message(interaction, embed=embed, view=view, content=None)
+
+        except Exception as e:
+            logger.error(f"Error in show_id_channel_for: {e}")
+            print(f"Error in show_id_channel_for: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while loading the ID channel.",
+                    ephemeral=True,
+                )
+
     async def show_id_channel_menu(self, interaction: discord.Interaction):
         try:
             is_admin, _ = PermissionManager.is_admin(interaction.user.id)
@@ -422,9 +529,10 @@ class AllianceIDChannel(commands.Cog):
                 )
 
 class ScanLimitModal(discord.ui.Modal):
-    def __init__(self, cog, current_value):
+    def __init__(self, cog, current_value, refresh=None):
         super().__init__(title="Set Scan Message Limit")
         self.cog = cog
+        self.refresh = refresh  # async callable(interaction) — overrides default refresh
         self.limit_input = discord.ui.TextInput(
             label="Max messages to scan per channel (1-200)",
             placeholder="50",
@@ -451,7 +559,10 @@ class ScanLimitModal(discord.ui.Modal):
                               (value, interaction.guild_id))
                 db.commit()
 
-            await IDChannelSettingsView(self.cog).show(interaction)
+            if self.refresh is not None:
+                await self.refresh(interaction)
+            else:
+                await IDChannelSettingsView(self.cog).show(interaction)
         except ValueError:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Please enter a valid number.",
@@ -460,12 +571,13 @@ class ScanLimitModal(discord.ui.Modal):
 
 
 class DeleteAfterModal(discord.ui.Modal):
-    def __init__(self, cog, current_value):
+    def __init__(self, cog, current_value, refresh=None):
         super().__init__(title="Set Auto-Delete Timer")
         self.cog = cog
+        self.refresh = refresh  # async callable(interaction) — overrides default refresh
         self.timer_input = discord.ui.TextInput(
-            label="Seconds before bot replies auto-delete (0-300)",
-            placeholder="10",
+            label="Auto-delete delay in seconds (0-300)",
+            placeholder="10 — set 0 to keep replies forever",
             default=str(current_value),
             required=True,
             max_length=3
@@ -492,7 +604,10 @@ class DeleteAfterModal(discord.ui.Modal):
                               (db_value, interaction.guild_id))
                 db.commit()
 
-            await IDChannelSettingsView(self.cog).show(interaction)
+            if self.refresh is not None:
+                await self.refresh(interaction)
+            else:
+                await IDChannelSettingsView(self.cog).show(interaction)
         except ValueError:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Please enter a valid number.",
@@ -562,6 +677,142 @@ class IDChannelSettingsView(discord.ui.View):
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_id_channel_menu(interaction)
+
+
+class AllianceIDChannelView(discord.ui.View):
+    """Per-alliance ID Channel management — alliance is already known."""
+
+    def __init__(self, cog, alliance_id: int, alliance_name: str, has_channel: bool):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.has_channel = has_channel
+
+        set_btn = discord.ui.Button(
+            label="Change Channel" if has_channel else "Set Channel",
+            emoji=f"{theme.editListIcon}",
+            style=discord.ButtonStyle.primary,
+            row=0,
+        )
+        set_btn.callback = self._on_set
+        self.add_item(set_btn)
+
+        if has_channel:
+            remove_btn = discord.ui.Button(
+                label="Remove Channel",
+                emoji=f"{theme.trashIcon}",
+                style=discord.ButtonStyle.danger,
+                row=0,
+            )
+            remove_btn.callback = self._on_remove
+            self.add_item(remove_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back to Hub",
+            emoji=f"{theme.backIcon}",
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    async def _on_set(self, interaction: discord.Interaction):
+        cog = self.cog
+        alliance_id = self.alliance_id
+        alliance_name = self.alliance_name
+
+        class _ChannelSelect(discord.ui.ChannelSelect):
+            def __init__(self):
+                super().__init__(
+                    placeholder="Pick the channel to use as the ID channel",
+                    channel_types=[discord.ChannelType.text],
+                )
+
+            async def callback(self, channel_interaction: discord.Interaction):
+                selected_channel = self.values[0]
+                try:
+                    with sqlite3.connect('db/id_channel.sqlite') as db:
+                        cursor = db.cursor()
+                        cursor.execute(
+                            "DELETE FROM id_channels WHERE guild_id = ? AND alliance_id = ?",
+                            (channel_interaction.guild_id, alliance_id),
+                        )
+                        cursor.execute(
+                            "INSERT INTO id_channels "
+                            "(guild_id, alliance_id, channel_id, created_at, created_by) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                channel_interaction.guild_id,
+                                alliance_id,
+                                selected_channel.id,
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                channel_interaction.user.id,
+                            ),
+                        )
+                        db.commit()
+                    await cog.log_action(
+                        "CREATE_CHANNEL",
+                        channel_interaction.user.id,
+                        channel_interaction.guild_id,
+                        {
+                            "alliance_id": alliance_id,
+                            "channel_id": selected_channel.id,
+                            "channel_name": selected_channel.name,
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"ID channel set error: {e}")
+                    print(f"ID channel set error: {e}")
+                    await channel_interaction.response.send_message(
+                        f"{theme.deniedIcon} Failed to set the ID channel.",
+                        ephemeral=True,
+                    )
+                    return
+                await cog.show_id_channel_for(channel_interaction, alliance_id)
+
+        select_view = discord.ui.View(timeout=300)
+        select_view.add_item(_ChannelSelect())
+        select_embed = discord.Embed(
+            title=f"{theme.fidIcon} {alliance_name} — Pick ID Channel",
+            description="Pick the text channel members will post their IDs in.",
+            color=theme.emColor1,
+        )
+        await interaction.response.edit_message(embed=select_embed, view=select_view)
+
+    async def _on_remove(self, interaction: discord.Interaction):
+        try:
+            with sqlite3.connect('db/id_channel.sqlite') as db:
+                cursor = db.cursor()
+                cursor.execute(
+                    "DELETE FROM id_channels WHERE guild_id = ? AND alliance_id = ?",
+                    (interaction.guild_id, self.alliance_id),
+                )
+                db.commit()
+            await self.cog.log_action(
+                "DELETE_CHANNEL",
+                interaction.user.id,
+                interaction.guild_id,
+                {"alliance_id": self.alliance_id},
+            )
+        except Exception as e:
+            logger.error(f"ID channel remove error: {e}")
+            print(f"ID channel remove error: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Failed to remove the ID channel.",
+                ephemeral=True,
+            )
+            return
+        await self.cog.show_id_channel_for(interaction, self.alliance_id)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu and hasattr(main_menu, "show_alliance_hub"):
+            await main_menu.show_alliance_hub(interaction, self.alliance_id)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Hub not available.", ephemeral=True
+            )
 
 
 class IDChannelView(discord.ui.View):

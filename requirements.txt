@@ -13,6 +13,6 @@ rapidocr>=3.6.0
 rapidfuzz>=3.14.0
 matplotlib>=3.10.5
 arabic-reshaper>=3.0.0
-python-bidi>=0.6.7
+python-bidi==0.6.7
 pillow>=10.4.0
 numpy>=2.4.0

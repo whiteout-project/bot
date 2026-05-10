@@ -34,31 +34,6 @@ class SupportOperations(commands.Cog):
             if main_menu_cog:
                 await main_menu_cog.show_maintenance(interaction)
 
-    async def show_support_menu(self, interaction: discord.Interaction):
-        support_menu_embed = discord.Embed(
-            title=f"{theme.targetIcon} Support Operations",
-            description=(
-                f"Get help, learn about the project, or gather diagnostic information.\n\n"
-                f"**Available Operations**\n"
-                f"{theme.upperDivider}\n"
-                f"{theme.editListIcon} **Request Support**\n"
-                f"└ Get links to help resources and community\n\n"
-                f"{theme.infoIcon} **About Project**\n"
-                f"└ Learn about this open source project\n\n"
-                f"{theme.documentIcon} **Gather Logs**\n"
-                f"└ Download recent logs for troubleshooting\n"
-                f"{theme.lowerDivider}"
-            ),
-            color=theme.emColor1
-        )
-
-        view = SupportView(self)
-
-        try:
-            await interaction.response.edit_message(embed=support_menu_embed, view=view)
-        except discord.errors.InteractionResponded:
-            await interaction.message.edit(embed=support_menu_embed, view=view)
-
     async def show_about_menu(self, interaction: discord.Interaction):
         """Display the About Project information."""
         about_embed = discord.Embed(
@@ -118,18 +93,10 @@ class SupportOperations(commands.Cog):
             color=theme.emColor1
         )
 
-        try:
-            await interaction.response.send_message(embed=support_embed, ephemeral=True)
-            try:
-                await interaction.user.send(embed=support_embed)
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} Could not send DM because your DMs are closed!",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error sending support info: {e}")
-            print(f"Error sending support info: {e}")
+        await safe_edit_message(
+            interaction, embed=support_embed,
+            view=_BackToMaintenanceView(self), content=None
+        )
 
     async def gather_support_logs(self, interaction: discord.Interaction):
         """Gather recent logs and bot info into a zip file"""
@@ -202,7 +169,7 @@ class SupportOperations(commands.Cog):
                 )
                 await interaction.followup.send(
                     f"{theme.verifiedIcon} Support logs sent to your DMs! ({zip_size_mb:.2f} MB, {logs_added} log files)",
-                    ephemeral=True
+                    ephemeral=True,
                 )
             except discord.Forbidden:
                 # DMs closed, send in channel as ephemeral
@@ -212,7 +179,7 @@ class SupportOperations(commands.Cog):
                     f"{theme.documentIcon} **Support Logs** ({zip_size_mb:.2f} MB, {logs_added} log files)\n\n"
                     f"Could not send via DM. Download this file and share it when requesting support.",
                     file=file,
-                    ephemeral=True
+                    ephemeral=True,
                 )
 
         except Exception as e:
@@ -220,7 +187,7 @@ class SupportOperations(commands.Cog):
             print(f"Error gathering support logs: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Failed to gather support logs: {e}",
-                ephemeral=True
+                ephemeral=True,
             )
 
     def _generate_bot_info(self) -> str:
@@ -302,94 +269,29 @@ class SupportOperations(commands.Cog):
         return "\n".join(lines)
 
 
-class SupportView(discord.ui.View):
+class _BackToMaintenanceView(discord.ui.View):
+    """Request Support page nav: lets the admin gather a log bundle for support
+    before heading back to Maintenance."""
+
     def __init__(self, cog):
         super().__init__(timeout=7200)
         self.cog = cog
 
-    @discord.ui.button(
-        label="Request Support",
-        emoji=f"{theme.editListIcon}",
-        style=discord.ButtonStyle.primary,
-        custom_id="request_support",
-        row=0
-    )
-    async def support_request_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_support_info(interaction)
-
-    @discord.ui.button(
-        label="About Project",
-        emoji=f"{theme.infoIcon}",
-        style=discord.ButtonStyle.primary,
-        custom_id="about_project",
-        row=0
-    )
-    async def about_project_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        about_embed = discord.Embed(
-            title=f"{theme.infoIcon} About Whiteout Project",
-            description=(
-                f"**Open Source Bot**\n"
-                f"{theme.upperDivider}\n"
-                f"This is an open source Discord bot for Whiteout Survival.\n"
-                f"The project is community-driven and freely available for everyone.\n"
-                f"**Repository:** [GitHub](https://github.com/whiteout-project/bot)\n"
-                f"**Community:** [Discord](https://discord.gg/apYByj6K2m)\n\n"
-                f"**Features**\n"
-                f"{theme.middleDivider}\n"
-                f"• Alliance member management\n"
-                f"• Gift code operations\n"
-                f"• Automated member tracking\n"
-                f"• Bear trap notifications\n"
-                f"• ID channel verification\n"
-                f"• and more...\n\n"
-                f"**Contributing**\n"
-                f"{theme.middleDivider}\n"
-                f"Contributions are welcome! Please check our GitHub repository "
-                f"to report issues, suggest features, or submit pull requests."
-            ),
-            color=discord.Color.green()
-        )
-
-        about_embed.set_footer(text=f"Made with {theme.heartIcon} by the WOSLand Bot Team.")
-
-        try:
-            await interaction.response.send_message(embed=about_embed, ephemeral=True)
-            try:
-                await interaction.user.send(embed=about_embed)
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} Could not send DM because your DMs are closed!",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error sending project info: {e}")
-            print(f"Error sending project info: {e}")
-
-    @discord.ui.button(
-        label="Gather Logs",
-        emoji=f"{theme.documentIcon}",
-        style=discord.ButtonStyle.primary,
-        custom_id="gather_logs",
-        row=0
-    )
-    async def gather_logs_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Gather Logs", emoji=f"{theme.documentIcon}",
+                       style=discord.ButtonStyle.primary)
+    async def gather_logs(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.gather_support_logs(interaction)
 
-    @discord.ui.button(
-        label="Back",
-        emoji=f"{theme.backIcon}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="back_to_maintenance",
-        row=1
-    )
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Navigate back to Maintenance sub-menu."""
-        main_menu_cog = self.cog.bot.get_cog("MainMenu")
-        if main_menu_cog:
-            try:
-                await main_menu_cog.show_maintenance(interaction)
-            except discord.errors.InteractionResponded:
-                await main_menu_cog.show_maintenance(interaction)
+    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu:
+            await main_menu.show_maintenance(interaction)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Main Menu module not found.", ephemeral=True
+            )
 
 
 async def setup(bot):

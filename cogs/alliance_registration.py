@@ -5,101 +5,53 @@ import discord
 from discord.ext import commands
 import sqlite3
 import logging
-from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
 from .login_handler import LoginHandler
 
 logger = logging.getLogger('alliance')
 
-class RegisterSettingsView(discord.ui.View):
-    def __init__(self, cog):
-        super().__init__(timeout=None)
-        self.cog = cog
-        
-    def change_settings(self, enabled: bool):
-        try:
-            conn = sqlite3.connect("db/settings.sqlite")
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='register_settings'")
-            table_exists = cursor.fetchone()
-            
-            if not table_exists:
-                cursor.execute("CREATE TABLE register_settings (enabled BOOLEAN)")
-                cursor.execute("INSERT INTO register_settings VALUES (?)", (enabled,))
-            else:
-                cursor.execute("UPDATE register_settings SET enabled = ? WHERE rowid = 1", (enabled,))
-            
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Error updating register settings: {e}")
-            print(f"Error updating register settings: {e}")
-
-    @discord.ui.button(
-        label="Enable",
-        emoji=f"{theme.verifiedIcon}",
-        style=discord.ButtonStyle.success,
-        custom_id="enable_register",
-        row=0
-    )
-    async def enable_register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            self.change_settings(True)
-            await interaction.response.send_message(f"{theme.verifiedIcon} Registration has been enabled.", ephemeral=True)
-        except Exception as _:
-            await interaction.response.send_message(f"{theme.deniedIcon} An error occurred while enabling registration.", ephemeral=True)
-            
-    @discord.ui.button(
-        label="Disable",
-        emoji=f"{theme.deniedIcon}",
-        style=discord.ButtonStyle.danger,
-        custom_id="disable_register",
-        row=0
-    )
-    async def disable_register_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            self.change_settings(False)
-            await interaction.response.send_message(f"{theme.deniedIcon} Registration has been disabled.", ephemeral=True)
-        except Exception as _:
-            await interaction.response.send_message(f"{theme.deniedIcon} An error occurred while disabling registration.", ephemeral=True)
 
 class AllianceRegistration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        
+
         self.conn_alliance = sqlite3.connect("db/alliance.sqlite", timeout=30.0, check_same_thread=False)
         self.c_alliance = self.conn_alliance.cursor()
 
         self.conn_users = sqlite3.connect("db/users.sqlite", timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
-    
+
     def cog_unload(self):
         self.conn_alliance.close()
         self.conn_users.close()
 
-    async def show_settings_menu(self, interaction: discord.Interaction):
-        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
-        if not is_admin or not is_global:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} You do not have permission to access this command.",
-                ephemeral=True
-            )
-            return
-
-        view = RegisterSettingsView(self)
-        
-        await interaction.response.send_message(
-            "Choose an option to enable or disable the registration system:",
-            view=view,
-            ephemeral=True
-        )
-        
     def is_already_in_users(self, fid: int) -> bool:
         """Check if a user with the given fid is already registered."""
         self.c_users.execute("SELECT 1 FROM users WHERE fid = ?", (fid,))
         return self.c_users.fetchone() is not None
         
+    def set_registration_enabled(self, enabled: bool) -> None:
+        """Persist the global self-registration toggle to settings.sqlite."""
+        try:
+            with sqlite3.connect("db/settings.sqlite") as conn:
+                cursor = conn.cursor()
+                cursor.execute("CREATE TABLE IF NOT EXISTS register_settings (enabled BOOLEAN)")
+                cursor.execute("SELECT COUNT(*) FROM register_settings")
+                exists = cursor.fetchone()[0] > 0
+                if exists:
+                    cursor.execute(
+                        "UPDATE register_settings SET enabled = ? WHERE rowid = 1",
+                        (enabled,),
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO register_settings VALUES (?)", (enabled,)
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating register settings: {e}")
+            print(f"Error updating register settings: {e}")
+
     def is_registration_enabled(self) -> bool:
         """Check if registration is enabled in the settings database."""
         try:
@@ -154,6 +106,7 @@ class AllianceRegistration(commands.Cog):
         fid="Your In-Game ID",
         alliance="Your Alliance Name"
     )
+    @discord.app_commands.rename(fid="id")
     @discord.app_commands.autocomplete(alliance=alliance_autocomplete)
     async def register(self, interaction: discord.Interaction, fid: int, alliance: int):
         if not self.is_registration_enabled():
@@ -203,8 +156,8 @@ class AllianceRegistration(commands.Cog):
                     ephemeral=True
                 )
             else:
-                logger.error(f"Error fetching user data for FID {fid}: {e}")
-                print(f"Error fetching user data for FID {fid}: {e}")
+                logger.error(f"Error fetching user data for ID {fid}: {e}")
+                print(f"Error fetching user data for ID {fid}: {e}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Failed to fetch user data. Please try again later.",
                     ephemeral=True

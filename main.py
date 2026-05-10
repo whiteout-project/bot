@@ -187,116 +187,58 @@ def calculate_file_hash(filepath):
     except Exception:
         return None
 
-def uninstall_packages(packages, reason=""):
-    """Generic function to uninstall a list of packages"""
-    if not packages:
-        return
-    
-    print(f"Found {len(packages)} packages to remove{reason}: {', '.join(packages)}")
-    debug_mode = "--verbose" in sys.argv or "--debug" in sys.argv
-    
-    for package in packages:
-        try:
-            cmd = [sys.executable, "-m", "pip", "uninstall", "-y", package]
-            
-            if debug_mode:
-                subprocess.check_call(cmd, timeout=300)
-            else:
-                subprocess.check_call(cmd, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            pass  # Silent removal
-        except subprocess.CalledProcessError:
-            pass  # Silent, package might be needed by others
-        except Exception:
-            pass  # Silent removal failure
-
-def get_packages_to_remove():
-    """Get all packages that should be removed (from requirements comparison + legacy)"""
-    packages_to_remove = set()
-    
-    # Check requirements.old vs requirements.txt (if they exist)
-    if os.path.exists("requirements.old") and os.path.exists("requirements.txt"):
-        try:
-            old_packages = set()
-            new_packages = set()
-            
-            # Parse old requirements
-            with open("requirements.old", "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
-                        old_packages.add(pkg_name.strip().lower())
-            
-            # Parse new requirements
-            with open("requirements.txt", "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        pkg_name = line.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
-                        new_packages.add(pkg_name.strip().lower())
-            
-            packages_to_remove.update(old_packages - new_packages)
-        except Exception as e:
-            pass  # Silent error comparing requirements
-    
-    # Always check for legacy packages that are still installed
-    for package in LEGACY_PACKAGES_TO_REMOVE:
-        if is_package_installed(package):
-            packages_to_remove.add(package.lower())
-    
-    return list(packages_to_remove)
-
 def cleanup_removed_packages():
-    """Main cleanup function - removes obsolete packages"""
-    packages = get_packages_to_remove()
-    
-    if packages:
-        reason = " from requirements" if os.path.exists("requirements.old") else " (legacy packages)"
-        uninstall_packages(packages, reason)
-    
-    # Clean up requirements.old
-    if os.path.exists("requirements.old"):
-        safe_remove("requirements.old", is_dir=False)
+    """Uninstall packages that were in requirements.old but not in the new
+    requirements.txt, then drop requirements.old. Called by the update flow
+    after a successful pip install of the new requirements."""
+    if not (os.path.exists("requirements.old") and os.path.exists("requirements.txt")):
+        if os.path.exists("requirements.old"):
+            safe_remove("requirements.old", is_dir=False)
+        return
 
-# Potential leftovers from older bot versions
-LEGACY_PACKAGES_TO_REMOVE = [
-    "ddddocr",
-    "easyocr",
-    "torch",
-    "torchvision",
-    "torchaudio",
-]
+    def _read_pkgs(path):
+        result = set()
+        try:
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        name = line.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
+                        result.add(name.strip().lower())
+        except Exception:
+            pass
+        return result
+
+    removed = _read_pkgs("requirements.old") - _read_pkgs("requirements.txt")
+    if removed:
+        debug = "--verbose" in sys.argv or "--debug" in sys.argv
+        print(f"Found {len(removed)} packages to remove from requirements: {', '.join(removed)}")
+        for package in removed:
+            cmd = [sys.executable, "-m", "pip", "uninstall", "-y", package]
+            if break_system_packages_arg():
+                cmd.append("--break-system-packages")
+            try:
+                if debug:
+                    subprocess.check_call(cmd, timeout=300)
+                else:
+                    subprocess.check_call(cmd, timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+    safe_remove("requirements.old", is_dir=False)
+
+# v1.2.0 upgrade-path safeguard: if requirements.txt mentions any of these,
+# it's stale and the bootstrap will re-download a fresh one before installing.
+_OBSOLETE_REQUIREMENTS_MARKERS = ("ddddocr", "easyocr", "torch", "torchvision", "torchaudio")
 
 def has_obsolete_requirements():
-    """
-    Check if requirements.txt contains obsolete packages from older versions.
-    Required to fix bug with v1.2.0 upgrade logic that deleted new requirements.txt.
-    """
+    """True if requirements.txt mentions packages from older bot versions."""
     if not os.path.exists("requirements.txt"):
         return False
-    
     try:
         with open("requirements.txt", "r") as f:
             content = f.read().lower()
-            
-        for package in LEGACY_PACKAGES_TO_REMOVE:
-            if package.lower() in content:
-                return True
-        
-        return False
-    except Exception:
-        return False
-
-def is_package_installed(package_name):
-    """Check if a package is installed"""
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "show", package_name],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        return result.returncode == 0
+        return any(marker in content for marker in _OBSOLETE_REQUIREMENTS_MARKERS)
     except Exception:
         return False
 
@@ -604,34 +546,6 @@ def check_vcredist():
     except Exception:
         return True  # If we can't check, we hope it's fine
 
-def startup_cleanup():
-    """Perform all cleanup tasks on startup - directories, files, and legacy packages."""
-    v1_path = "V1oldbot"
-    if os.path.exists(v1_path):
-        safe_remove(v1_path)
-
-    v2_path = "V2Old"
-    if os.path.exists(v2_path):
-        safe_remove(v2_path)
-
-    pictures_path = "pictures"
-    if os.path.exists(pictures_path):
-        safe_remove(pictures_path)
-
-    txt_path = "autoupdateinfo.txt"
-    if os.path.exists(txt_path):
-        safe_remove(txt_path)
-    
-    # Check for legacy packages to remove on startup
-    legacy_packages = []
-    for package in LEGACY_PACKAGES_TO_REMOVE:
-        if is_package_installed(package):
-            legacy_packages.append(package.lower())
-    
-    if legacy_packages:
-        uninstall_packages(legacy_packages, " (legacy packages)")
-
-startup_cleanup()
 check_vcredist()
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -1204,7 +1118,7 @@ if __name__ == "__main__":
     startup.phase_ok("Database ready")
 
     async def load_cogs():
-        cogs = ["pimp_my_bot", "process_queue", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track", "attendance_ocr"]
+        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
 
         failed_cogs = []
 

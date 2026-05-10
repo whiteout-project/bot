@@ -34,7 +34,8 @@ class WCommand(commands.Cog):
         if hasattr(self, 'conn'):
             self.conn.close()
 
-    @discord.app_commands.command(name='w', description='Fetches user info using fid.')
+    @discord.app_commands.command(name='w', description='Fetches user info using ID.')
+    @discord.app_commands.rename(fid='id')
     async def w(self, interaction: discord.Interaction, fid: str):
         await self.fetch_user_info(interaction, fid)
 
@@ -134,7 +135,7 @@ class WCommand(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
-            logger.error(f"Error fetching user info for FID {fid}: {e}")
+            logger.error(f"Error fetching user info for ID {fid}: {e}")
             print(f"An error occurred: {e}")
             await interaction.followup.send("An error occurred while fetching user info.")
 

@@ -25,6 +25,8 @@ except ImportError:
     Image = None
     ONNX_AVAILABLE = False
 
+from . import onnx_lifecycle
+
 class GiftCaptchaSolver:
     def __init__(self, save_images=0):
         """
@@ -35,9 +37,9 @@ class GiftCaptchaSolver:
                                Controlled via --save-captcha CLI arg.
         """
         self.save_images_mode = save_images
-        self.onnx_session = None
         self.model_metadata = None
         self.is_initialized = False
+        self._model_wrapper: onnx_lifecycle.LazyOnnxModel | None = None
 
         # Use centralized gift logger
         self.logger = logging.getLogger('gift')
@@ -82,57 +84,46 @@ class GiftCaptchaSolver:
         return "\n".join(report)
 
     def _initialize_onnx_model(self):
-        """Initialize the ONNX model and load metadata."""
+        """Verify model files exist and load metadata. Defers actual session
+        creation until the first solve_captcha() call so memory is only used
+        during gift code redemption."""
         if not ONNX_AVAILABLE:
             self.logger.error("ONNX Runtime or required libraries not found. Captcha solving disabled.")
             self.is_initialized = False
             return
 
         try:
-            # Look for model files in the models directory
             bot_dir = os.path.dirname(os.path.dirname(__file__))
             models_dir = os.path.join(bot_dir, 'models')
             model_path = os.path.join(models_dir, 'captcha_model.onnx')
             metadata_path = os.path.join(models_dir, 'captcha_model_metadata.json')
-            
-            self.logger.info(f"Looking for ONNX model at: {model_path}")
-            self.logger.info(f"Looking for metadata at: {metadata_path}")
-            
+
             if not os.path.exists(model_path):
                 self.logger.error(f"ONNX model file not found at {model_path}")
                 self.is_initialized = False
                 return
-                
             if not os.path.exists(metadata_path):
                 self.logger.error(f"Model metadata file not found at {metadata_path}")
                 self.is_initialized = False
                 return
 
-            self.logger.info("Loading ONNX model...")
-            self.onnx_session = ort.InferenceSession(model_path)
-            
-            self.logger.info("Loading model metadata...")
             with open(metadata_path, 'r') as f:
                 self.model_metadata = json.load(f)
-            
-            self.logger.info("Performing test inference...")
-            # Create a dummy image matching the expected input shape
-            height, width = self.model_metadata['input_shape'][1:3]
-            dummy_img = np.random.rand(1, 1, height, width).astype(np.float32)
-            
-            input_name = self.onnx_session.get_inputs()[0].name
-            outputs = self.onnx_session.run(None, {input_name: dummy_img})
-            
-            if len(outputs) == 4:  # Should have 4 outputs for 4 character positions
-                self.logger.info(f"ONNX model test successful. Model ready for captcha solving.")
-                self.is_initialized = True
-            else:
-                self.logger.error(f"ONNX model test failed. Expected 4 outputs, got {len(outputs)}")
-                self.is_initialized = False
-                
+
+            # Pinned: captcha drives the bot's primary feature (gift code
+            # redemption) and is small enough (~22 MB) that the memory savings
+            # don't justify cold-start cost on every periodic-validation cycle.
+            self._model_wrapper = onnx_lifecycle.get_or_create(
+                name='captcha',
+                display_name='Gift Captcha',
+                factory=lambda: ort.InferenceSession(model_path),
+                pinned=True,
+            )
+            self.is_initialized = True
+            self.logger.info("Captcha solver ready (model will load on first use).")
+
         except Exception as e:
-            self.logger.exception(f"Failed during ONNX model initialization: {e}")
-            self.onnx_session = None
+            self.logger.exception(f"Failed during captcha solver initialization: {e}")
             self.model_metadata = None
             self.is_initialized = False
     
@@ -170,7 +161,7 @@ class GiftCaptchaSolver:
             self.logger.error(f"Error preprocessing image: {e}")
             return None
 
-    def _run_inference_sync(self, image_bytes):
+    def _run_inference_sync(self, image_bytes, session):
         """Sync portion of solve_captcha: preprocess image + ONNX inference +
         decode. Returns (predicted_text, avg_confidence) or None on preprocess
         failure. Pulled out so async callers can off-load it to a thread and
@@ -178,8 +169,8 @@ class GiftCaptchaSolver:
         input_data = self._preprocess_image(image_bytes)
         if input_data is None:
             return None
-        input_name = self.onnx_session.get_inputs()[0].name
-        outputs = self.onnx_session.run(None, {input_name: input_data})
+        input_name = session.get_inputs()[0].name
+        outputs = session.run(None, {input_name: input_data})
         idx_to_char = self.model_metadata['idx_to_char']
         predicted_text = ""
         confidences = []
@@ -207,7 +198,7 @@ class GiftCaptchaSolver:
                    - confidence (float): Average confidence score of all positions.
                    - image_path (None): No longer provides a path from solver.
         """
-        if not self.is_initialized or not self.onnx_session or not self.model_metadata:
+        if not self.is_initialized or not self._model_wrapper or not self.model_metadata:
             self.logger.error(f"ONNX model not initialized. Cannot solve captcha for ID {fid}.")
             return None, False, "ONNX", 0.0, None
 
@@ -219,7 +210,10 @@ class GiftCaptchaSolver:
             EXPECTED_CAPTCHA_LENGTH = 4
             VALID_CHARACTERS = set(self.model_metadata['chars'])
 
-            inference_result = await asyncio.to_thread(self._run_inference_sync, image_bytes)
+            async with self._model_wrapper.use() as session:
+                inference_result = await asyncio.to_thread(
+                    self._run_inference_sync, image_bytes, session
+                )
             if inference_result is None:
                 self.stats["failures"] += 1
                 self.run_stats["failures"] += 1

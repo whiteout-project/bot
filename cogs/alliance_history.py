@@ -13,6 +13,196 @@ from .pimp_my_bot import theme
 
 logger = logging.getLogger('alliance')
 
+
+async def _open_post_to_channel_picker(interaction: discord.Interaction, embed: discord.Embed):
+    """Show an ephemeral channel picker. On selection, post `embed` to that
+    channel publicly with a 'Requested by ...' footer."""
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} This action requires a server context.",
+            ephemeral=True,
+        )
+        return
+    channels = list(interaction.guild.text_channels)
+    if not channels:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} No text channels available.", ephemeral=True
+        )
+        return
+
+    requester = interaction.user
+    view = _PostToChannelPickerView(channels, embed, requester)
+    await interaction.response.send_message(
+        embed=discord.Embed(
+            title=f"{theme.announceIcon} Post History to Channel",
+            description=(
+                f"Pick a channel to post the history embed to. "
+                f"It'll be visible to everyone in that channel and tagged with "
+                f"_Requested by {requester.mention}_."
+            ),
+            color=theme.emColor1,
+        ),
+        view=view,
+        ephemeral=True,
+    )
+
+
+class _SingleHistoryResultView(discord.ui.View):
+    """Wraps a single-member history embed with Back + Post to Channel."""
+
+    def __init__(self, cog, alliance_id, history_type: str, embed: discord.Embed):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliance_id = alliance_id
+        self.history_type = history_type  # "furnace" or "nickname"
+        self.embed = embed
+
+    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
+                       style=discord.ButtonStyle.secondary, row=0)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.alliance_id is None:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} No history context to return to.", ephemeral=True
+            )
+            return
+        if self.history_type == "furnace":
+            await self.cog.show_member_list_furnace(interaction, self.alliance_id)
+        else:
+            await self.cog.show_member_list_nickname(interaction, self.alliance_id)
+
+    @discord.ui.button(label="Post to Channel", emoji=f"{theme.announceIcon}",
+                       style=discord.ButtonStyle.primary, row=0)
+    async def post_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _open_post_to_channel_picker(interaction, self.embed)
+
+
+class _PostToChannelPickerView(discord.ui.View):
+    """Paginated channel picker for the History 'Post to Channel' button."""
+
+    PAGE_SIZE = 25
+
+    def __init__(self, channels, embed_to_post, requester):
+        super().__init__(timeout=7200)
+        self.channels = list(channels)
+        self.embed_to_post = embed_to_post
+        self.requester = requester
+        self.page = 0
+        self.total_pages = max(
+            1, (len(self.channels) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+        )
+        self._build()
+
+    def _build(self):
+        self.clear_items()
+        start = self.page * self.PAGE_SIZE
+        page_channels = self.channels[start:start + self.PAGE_SIZE]
+        options = [
+            discord.SelectOption(
+                label=f"#{c.name}"[:100],
+                value=str(c.id),
+                description=f"ID: {c.id}",
+                emoji=theme.announceIcon,
+            )
+            for c in page_channels
+        ]
+        select = discord.ui.Select(
+            placeholder=f"Select channel ({self.page + 1}/{self.total_pages})",
+            options=options, row=0,
+        )
+        select.callback = self._on_pick
+        self.add_item(select)
+
+        if self.total_pages > 1:
+            prev_btn = discord.ui.Button(
+                emoji=theme.prevIcon, style=discord.ButtonStyle.secondary,
+                disabled=self.page == 0, row=1,
+            )
+            prev_btn.callback = self._on_prev
+            self.add_item(prev_btn)
+            next_btn = discord.ui.Button(
+                emoji=theme.nextIcon, style=discord.ButtonStyle.secondary,
+                disabled=self.page >= self.total_pages - 1, row=1,
+            )
+            next_btn.callback = self._on_next
+            self.add_item(next_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="Cancel", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _on_pick(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select))
+        channel_id = int(select.values[0])
+        channel = interaction.guild.get_channel(channel_id) if interaction.guild else None
+        if channel is None:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title=f"{theme.deniedIcon} Channel not found",
+                    description="The selected channel is no longer accessible.",
+                    color=theme.emColor2,
+                ),
+                view=None,
+            )
+            return
+        try:
+            embed_copy = self.embed_to_post.copy()
+            embed_copy.set_footer(text=f"Requested by {self.requester.display_name}")
+            await channel.send(embed=embed_copy)
+        except discord.Forbidden:
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title=f"{theme.deniedIcon} Cannot post in {channel.mention}",
+                    description="The bot doesn't have permission to send messages there.",
+                    color=theme.emColor2,
+                ),
+                view=None,
+            )
+            return
+        except Exception as e:
+            logger.error(f"Post-to-channel failed: {e}")
+            print(f"Post-to-channel failed: {e}")
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title=f"{theme.deniedIcon} Failed to post",
+                    description=f"Error: {e}",
+                    color=theme.emColor2,
+                ),
+                view=None,
+            )
+            return
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"{theme.verifiedIcon} Posted",
+                description=f"History embed sent to {channel.mention}.",
+                color=theme.emColor3,
+            ),
+            view=None,
+        )
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        self._build()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self.total_pages - 1, self.page + 1)
+        self._build()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_cancel(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title=f"{theme.deniedIcon} Cancelled",
+                description="Nothing was posted.",
+                color=theme.emColor4,
+            ),
+            view=None,
+        )
+
+
 class AllianceHistory(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -88,14 +278,14 @@ class AllianceHistory(commands.Cog):
     async def show_furnace_history(self, interaction: discord.Interaction, fid: int):
         try:
             self.cursor.execute("""
-                SELECT old_furnace_lv, new_furnace_lv, change_date 
-                FROM furnace_changes 
-                WHERE fid = ? 
+                SELECT old_furnace_lv, new_furnace_lv, change_date
+                FROM furnace_changes
+                WHERE fid = ?
                 ORDER BY change_date DESC
             """, (fid,))
-            
+
             changes = self.cursor.fetchall()
-            
+
             if not changes:
                 await interaction.followup.send(
                     "No furnace changes found for this player.",
@@ -105,10 +295,14 @@ class AllianceHistory(commands.Cog):
 
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
-                cursor.execute("SELECT nickname, furnace_lv FROM users WHERE fid = ?", (fid,))
+                cursor.execute(
+                    "SELECT nickname, furnace_lv, alliance FROM users WHERE fid = ?",
+                    (fid,),
+                )
                 user_info = cursor.fetchone()
                 nickname = user_info[0] if user_info else "Unknown"
                 current_level = user_info[1] if user_info else 0
+                alliance_id = user_info[2] if user_info else None
 
             embed = discord.Embed(
                 title=f"{theme.levelIcon} Furnace Level History",
@@ -130,7 +324,11 @@ class AllianceHistory(commands.Cog):
                     inline=False
                 )
 
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(
+                embed=embed,
+                view=_SingleHistoryResultView(self, alliance_id, "furnace", embed),
+                ephemeral=True,
+            )
 
         except Exception as e:
             logger.error(f"Error in show_furnace_history: {e}")
@@ -160,10 +358,14 @@ class AllianceHistory(commands.Cog):
 
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
-                cursor.execute("SELECT nickname, furnace_lv FROM users WHERE fid = ?", (fid,))
+                cursor.execute(
+                    "SELECT nickname, furnace_lv, alliance FROM users WHERE fid = ?",
+                    (fid,),
+                )
                 user_info = cursor.fetchone()
                 nickname = user_info[0] if user_info else "Unknown"
                 current_level = user_info[1] if user_info else 0
+                alliance_id = user_info[2] if user_info else None
 
             embed = discord.Embed(
                 title=f"{theme.editListIcon} Nickname History",
@@ -183,7 +385,11 @@ class AllianceHistory(commands.Cog):
                     inline=False
                 )
 
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(
+                embed=embed,
+                view=_SingleHistoryResultView(self, alliance_id, "nickname", embed),
+                ephemeral=True,
+            )
 
         except Exception as e:
             logger.error(f"Error in show_nickname_history: {e}")
@@ -192,6 +398,91 @@ class AllianceHistory(commands.Cog):
                 f"{theme.deniedIcon} An error occurred while displaying the nickname history.",
                 ephemeral=True
             )
+
+    async def show_member_list_furnace(self, interaction: discord.Interaction, alliance_id: int):
+        """Show the member list for furnace-history selection (skip alliance picker)."""
+        try:
+            with sqlite3.connect('db/users.sqlite') as users_db:
+                cursor = users_db.cursor()
+                cursor.execute(
+                    "SELECT fid, nickname, furnace_lv FROM users "
+                    "WHERE alliance = ? ORDER BY furnace_lv DESC, nickname",
+                    (alliance_id,),
+                )
+                members = cursor.fetchall()
+
+            if not members:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} No members found in this alliance.",
+                    ephemeral=True,
+                )
+                return
+
+            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                cursor = alliance_db.cursor()
+                cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                alliance_name = cursor.fetchone()[0]
+
+            view = MemberListView(self, members, alliance_name, alliance_id=alliance_id)
+            embed = discord.Embed(
+                title=f"{theme.levelIcon} {alliance_name} - Member List",
+                description=(
+                    f"Select a member to view furnace history:\n"
+                    f"{theme.upperDivider}\n"
+                    f"Total Members: {len(members)}\n"
+                    f"Current Page: 1/{view.total_pages}\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1,
+            )
+            await interaction.response.edit_message(embed=embed, view=view)
+
+        except Exception as e:
+            logger.error(f"Error in show_member_list_furnace: {e}")
+            print(f"Error in show_member_list_furnace: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while showing the member list.",
+                    ephemeral=True,
+                )
+
+    async def show_history_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Hub-context entry: pick history type for a known alliance (skip alliance picker)."""
+        try:
+            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                cursor = alliance_db.cursor()
+                cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                row = cursor.fetchone()
+            alliance_name = row[0] if row else f"Alliance {alliance_id}"
+
+            embed = discord.Embed(
+                title=f"{theme.listIcon} {alliance_name} — Member History",
+                description=(
+                    f"Pick which history to view:\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.stoveIcon} **Furnace Changes** — track FC level changes over time\n"
+                    f"{theme.editListIcon} **Nickname Changes** — see when members renamed\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1,
+            )
+            view = HistoryTypeView(self, alliance_id)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+        except Exception as e:
+            logger.error(f"Error in show_history_for: {e}")
+            print(f"Error in show_history_for: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while opening member history.",
+                    ephemeral=True,
+                )
 
     async def show_member_list_nickname(self, interaction: discord.Interaction, alliance_id: int):
         try:
@@ -229,8 +520,8 @@ class AllianceHistory(commands.Cog):
                 color=theme.emColor1
             )
 
-            view = MemberListViewNickname(self, members, alliance_name)
-            
+            view = MemberListViewNickname(self, members, alliance_name, alliance_id=alliance_id)
+
             await interaction.response.edit_message(
                 embed=embed,
                 view=view
@@ -283,9 +574,14 @@ class AllianceHistory(commands.Cog):
                 return
 
             chunks = [changes[i:i + 25] for i in range(0, len(changes), 25)]
-            
-            view = RecentChangesView(chunks, members, self.level_mapping, alliance_name, human_readable_time)
-            await interaction.followup.send(embed=view.get_embed(), view=view)
+
+            view = RecentChangesView(
+                chunks, members, self.level_mapping, alliance_name, human_readable_time,
+                cog=self, alliance_id=alliance_id,
+            )
+            await interaction.followup.send(
+                embed=view.get_embed(), view=view, ephemeral=True
+            )
 
         except Exception as e:
             logger.error(f"Error in show_recent_changes: {e}")
@@ -334,9 +630,14 @@ class AllianceHistory(commands.Cog):
                 return
 
             chunks = [changes[i:i + 25] for i in range(0, len(changes), 25)]
-            
-            view = RecentNicknameChangesView(chunks, members, alliance_name, human_readable_time)
-            await interaction.followup.send(embed=view.get_embed(), view=view)
+
+            view = RecentNicknameChangesView(
+                chunks, members, alliance_name, human_readable_time,
+                cog=self, alliance_id=alliance_id,
+            )
+            await interaction.followup.send(
+                embed=view.get_embed(), view=view, ephemeral=True
+            )
 
         except Exception as e:
             logger.error(f"Error in show_recent_nickname_changes: {e}")
@@ -345,6 +646,36 @@ class AllianceHistory(commands.Cog):
                 f"{theme.deniedIcon} An error occurred while showing recent changes.",
                 ephemeral=True
             )
+
+class HistoryTypeView(discord.ui.View):
+    """Hub-context history-type picker — alliance is already known."""
+
+    def __init__(self, cog, alliance_id: int):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.alliance_id = alliance_id
+
+    @discord.ui.button(label="Furnace Changes", emoji=f"{theme.stoveIcon}",
+                       style=discord.ButtonStyle.primary, row=0)
+    async def furnace(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_member_list_furnace(interaction, self.alliance_id)
+
+    @discord.ui.button(label="Nickname Changes", emoji=f"{theme.editListIcon}",
+                       style=discord.ButtonStyle.primary, row=0)
+    async def nickname(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_member_list_nickname(interaction, self.alliance_id)
+
+    @discord.ui.button(label="Back to Hub", emoji=f"{theme.backIcon}",
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu and hasattr(main_menu, "show_alliance_hub"):
+            await main_menu.show_alliance_hub(interaction, self.alliance_id)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Hub not available.", ephemeral=True
+            )
+
 
 class HistoryView(discord.ui.View):
     def __init__(self, cog):
@@ -574,10 +905,10 @@ class HistoryView(discord.ui.View):
         row=1
     )
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.show_main_menu(interaction)
+        await self.back_to_alliance_management(interaction)
 
-    async def show_main_menu(self, interaction: discord.Interaction):
-        """Navigate back to Alliance Management sub-menu."""
+    async def back_to_alliance_management(self, interaction: discord.Interaction):
+        """Navigate back to the Alliances menu."""
         try:
             main_menu_cog = self.cog.bot.get_cog("MainMenu")
             if main_menu_cog:
@@ -652,11 +983,12 @@ class HistoryView(discord.ui.View):
             )
 
 class MemberListView(discord.ui.View):
-    def __init__(self, cog, members, alliance_name):
+    def __init__(self, cog, members, alliance_name, alliance_id=None):
         super().__init__(timeout=7200)
         self.cog = cog
         self.members = members
         self.alliance_name = alliance_name
+        self.alliance_id = alliance_id
         self.current_page = 0
         self.total_pages = (len(members) + 24) // 25
         self.update_view()
@@ -764,6 +1096,19 @@ class MemberListView(discord.ui.View):
         )
         search_button.callback = self.search_callback
         self.add_item(search_button)
+
+        if self.alliance_id is not None:
+            back_button = discord.ui.Button(
+                label="Back",
+                emoji=f"{theme.backIcon}",
+                style=discord.ButtonStyle.secondary,
+                row=3,
+            )
+            back_button.callback = self._back_callback
+            self.add_item(back_button)
+
+    async def _back_callback(self, interaction: discord.Interaction):
+        await self.cog.show_history_for(interaction, self.alliance_id)
 
     async def last_hour_callback(self, interaction: discord.Interaction):
         try:
@@ -883,18 +1228,19 @@ class FurnaceHistoryIDSearchModal(discord.ui.Modal, title="Search by ID"):
                 )
 
 class MemberListViewNickname(discord.ui.View):
-    def __init__(self, cog, members, alliance_name):
+    def __init__(self, cog, members, alliance_name, alliance_id=None):
         super().__init__(timeout=7200)
         self.cog = cog
         self.members = members
         self.alliance_name = alliance_name
+        self.alliance_id = alliance_id
         self.current_page = 0
         self.total_pages = (len(members) + 24) // 25
         self.update_view()
 
     def update_view(self):
         self.clear_items()
-        
+
         start_idx = self.current_page * 25
         end_idx = min(start_idx + 25, len(self.members))
         current_members = self.members[start_idx:end_idx]
@@ -995,6 +1341,19 @@ class MemberListViewNickname(discord.ui.View):
         )
         search_button.callback = self.search_callback
         self.add_item(search_button)
+
+        if self.alliance_id is not None:
+            back_button = discord.ui.Button(
+                label="Back",
+                emoji=f"{theme.backIcon}",
+                style=discord.ButtonStyle.secondary,
+                row=3,
+            )
+            back_button.callback = self._back_callback
+            self.add_item(back_button)
+
+    async def _back_callback(self, interaction: discord.Interaction):
+        await self.cog.show_history_for(interaction, self.alliance_id)
 
     async def last_hour_callback(self, interaction: discord.Interaction):
         try:
@@ -1164,16 +1523,27 @@ class CustomTimeModal(discord.ui.Modal, title="Custom Time Range"):
             )
 
 class RecentChangesView(discord.ui.View):
-    def __init__(self, chunks, members, level_mapping, alliance_name, time):
+    def __init__(self, chunks, members, level_mapping, alliance_name, time,
+                 cog=None, alliance_id=None):
         super().__init__(timeout=7200)
         self.chunks = chunks
         self.members = members
         self.level_mapping = level_mapping
         self.alliance_name = alliance_name
         self.time = time
+        self.cog = cog
+        self.alliance_id = alliance_id
         self.current_page = 0
         self.total_pages = len(chunks)
-        
+
+        # Hide Back/Post buttons when caller didn't provide context
+        if alliance_id is None or cog is None:
+            for child in list(self.children):
+                if isinstance(child, discord.ui.Button) and getattr(child, "custom_id", None) in (
+                    "history_back", "history_post"
+                ):
+                    self.remove_item(child)
+
         self.update_buttons()
 
     def get_embed(self):
@@ -1219,16 +1589,38 @@ class RecentChangesView(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
+    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
+                       style=discord.ButtonStyle.secondary, custom_id="history_back", row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.cog and self.alliance_id is not None:
+            await self.cog.show_member_list_furnace(interaction, self.alliance_id)
+
+    @discord.ui.button(label="Post to Channel", emoji=f"{theme.announceIcon}",
+                       style=discord.ButtonStyle.primary, custom_id="history_post", row=1)
+    async def post_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _open_post_to_channel_picker(interaction, self.get_embed())
+
+
 class RecentNicknameChangesView(discord.ui.View):
-    def __init__(self, chunks, members, alliance_name, time):
+    def __init__(self, chunks, members, alliance_name, time,
+                 cog=None, alliance_id=None):
         super().__init__(timeout=7200)
         self.chunks = chunks
         self.members = members
         self.alliance_name = alliance_name
         self.time = time
+        self.cog = cog
+        self.alliance_id = alliance_id
         self.current_page = 0
         self.total_pages = len(chunks)
-        
+
+        if alliance_id is None or cog is None:
+            for child in list(self.children):
+                if isinstance(child, discord.ui.Button) and getattr(child, "custom_id", None) in (
+                    "history_back_nick", "history_post_nick"
+                ):
+                    self.remove_item(child)
+
         self.update_buttons()
 
     def get_embed(self):
@@ -1271,6 +1663,20 @@ class RecentNicknameChangesView(discord.ui.View):
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
+                       style=discord.ButtonStyle.secondary,
+                       custom_id="history_back_nick", row=1)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.cog and self.alliance_id is not None:
+            await self.cog.show_member_list_nickname(interaction, self.alliance_id)
+
+    @discord.ui.button(label="Post to Channel", emoji=f"{theme.announceIcon}",
+                       style=discord.ButtonStyle.primary,
+                       custom_id="history_post_nick", row=1)
+    async def post_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _open_post_to_channel_picker(interaction, self.get_embed())
+
 
 class CustomTimeModalNickname(discord.ui.Modal, title="Custom Time Range"):
     def __init__(self, cog, alliance_name):
