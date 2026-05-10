@@ -5,14 +5,9 @@ gift_settings, gift_views, and gift_operationsapi for the heavy lifting.
 """
 
 import discord
-from discord.ext import commands, tasks
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-import hashlib
-import json
-from datetime import datetime
+from discord.ext import commands
 import sqlite3
+from discord.ext import tasks
 import asyncio
 import re
 import os
@@ -469,498 +464,104 @@ class GiftOperations(commands.Cog):
         return await gift_redemption.fetch_captcha(self, player_id, session)
 
     async def use_giftcode_for_alliance(self, alliance_id, giftcode):
-        MEMBER_PROCESS_DELAY = 1.0
-        API_RATE_LIMIT_COOLDOWN = 60.0
-        CAPTCHA_CYCLE_COOLDOWN = 60.0
-        MAX_RETRY_CYCLES = 10
+        return await gift_redemption.use_giftcode_for_alliance(self, alliance_id, giftcode)
 
-        self.logger.info(f"\nGiftOps: Starting use_giftcode_for_alliance for Alliance {alliance_id}, Code {giftcode}")
+    async def cleanup_old_invalid_codes(self):
+        return await gift_redemption.cleanup_old_invalid_codes(self)
 
-        try:
-            # Initialize error tracking for summary
-            error_summary = {}
-            
-            # Initial Setup (Get channel, alliance name)
-            self.alliance_cursor.execute("SELECT channel_id FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
-            channel_result = self.alliance_cursor.fetchone()
-            self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-            name_result = self.alliance_cursor.fetchone()
+    async def _process_auto_use(self, giftcode):
+        return await gift_redemption._process_auto_use(self, giftcode)
 
-            if not channel_result or not name_result:
-                self.logger.error(f"GiftOps: Could not find channel or name for alliance {alliance_id}.")
-                return False
-            
-            channel_id, alliance_name = channel_result[0], name_result[0]
-            channel = self.bot.get_channel(channel_id)
+    async def add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction):
+        return await gift_redemption.add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction)
 
-            if not channel:
-                self.logger.error(f"GiftOps: Bot cannot access channel {channel_id} for alliance {alliance_name}.")
-                return False
+    async def get_queue_status(self):
+        return await gift_redemption.get_queue_status(self)
 
-            # Check if OCR is enabled
-            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings_row = self.settings_cursor.fetchone()
-            ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
-            
-            if not (ocr_enabled == 1 and self.captcha_solver):
-                error_embed = discord.Embed(
-                    title=f"{theme.deniedIcon} OCR/Captcha Solver Disabled",
-                    description=(
-                        f"**Gift Code:** `{giftcode}`\n"
-                        f"**Alliance:** `{alliance_name}`\n\n"
-                        f"{theme.warnIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
-                        f"Please enable it first using the settings command."
-                    ),
-                    color=theme.emColor2
-                )
-                await channel.send(embed=error_embed)
-                self.logger.info(f"GiftOps: Skipping alliance {alliance_id} - OCR disabled or solver not ready")
-                return False
+    async def validate_gift_codes(self, interaction):
+        return await gift_redemption.validate_gift_codes(self, interaction)
 
-            # Check if this code has been validated before
-            self.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
-            master_code_status_row = self.cursor.fetchone()
-            master_code_status = master_code_status_row[0] if master_code_status_row else None
-            final_invalid_reason_for_embed = None
+    async def handle_success(self, message, giftcode):
+        from .gift_views import handle_success as _handle
+        return await _handle(self, message, giftcode)
 
-            if master_code_status == 'invalid':
-                self.logger.info(f"GiftOps: Code {giftcode} is already marked as 'invalid' in the database.")
-                final_invalid_reason_for_embed = "Code previously marked as invalid"
-            else:
-                # If not marked 'invalid' in master table, check with test ID if status is 'pending' or for other cached issues
-                test_fid = self.get_test_fid()
-                self.cursor.execute("SELECT status FROM user_giftcodes WHERE fid = ? AND giftcode = ?", (test_fid, giftcode))
-                validation_fid_status_row = self.cursor.fetchone()
+    async def handle_already_received(self, message, giftcode):
+        from .gift_views import handle_already_received as _handle
+        return await _handle(self, message, giftcode)
 
-                if validation_fid_status_row:
-                    fid_status = validation_fid_status_row[0]
-                    if fid_status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
-                        self.logger.info(f"GiftOps: Code {giftcode} known to be invalid via test ID (status: {fid_status}). Marking invalid.")
-                        self.mark_code_invalid(giftcode)
-                        if hasattr(self, 'api') and self.api:
-                            asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
-                        
-                        reason_map_fid = {
-                            "TIME_ERROR": "Code has expired (TIME_ERROR)",
-                            "CDK_NOT_FOUND": "Code not found or incorrect (CDK_NOT_FOUND)",
-                            "USAGE_LIMIT": "Usage limit reached (USAGE_LIMIT)"
-                        }
-                        final_invalid_reason_for_embed = reason_map_fid.get(fid_status, f"Code invalid ({fid_status})")
+    # ── Delegation to gift_channels ───────────────────────────────────
 
-            if final_invalid_reason_for_embed:
-                error_embed = discord.Embed(
-                    title=f"{theme.deniedIcon} Gift Code Invalid",
-                    description=(
-                        f"**Gift Code Details**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.giftIcon} **Gift Code:** `{giftcode}`\n"
-                        f"{theme.allianceIcon} **Alliance:** `{alliance_name}`\n"
-                        f"{theme.deniedIcon} **Status:** {final_invalid_reason_for_embed}\n"
-                        f"{theme.editListIcon} **Action:** Code status is 'invalid' in database\n"
-                        f"{theme.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                        f"{theme.lowerDivider}\n"
-                    ),
-                    color=theme.emColor2
-                )
-                await channel.send(embed=error_embed)
-                return False
+    async def setup_gift_channel(self, interaction):
+        return await gift_channels.setup_gift_channel(self, interaction)
 
-            # Get Members
-            with sqlite3.connect('db/users.sqlite') as users_conn:
-                users_cursor = users_conn.cursor()
-                users_cursor.execute("SELECT fid, nickname FROM users WHERE alliance = ?", (str(alliance_id),))
-                members = users_cursor.fetchall()
-            if not members:
-                self.logger.info(f"GiftOps: No members found for alliance {alliance_id} ({alliance_name}).")
-                return False
+    async def manage_channel_settings(self, interaction):
+        return await gift_channels.manage_channel_settings(self, interaction)
 
-            total_members = len(members)
-            self.logger.info(f"GiftOps: Found {total_members} members for {alliance_name}.")
+    async def delete_gift_channel(self, interaction):
+        return await gift_channels.delete_gift_channel(self, interaction)
 
-            # Initialize State
-            processed_count = 0
-            success_count = 0
-            received_count = 0
-            failed_count = 0
-            successful_users = []
-            already_used_users = []
-            failed_users_dict = {}
+    async def delete_gift_channel_for_alliance(self, interaction, alliance_id):
+        return await gift_channels.delete_gift_channel_for_alliance(self, interaction, alliance_id)
 
-            retry_queue = []
-            active_members_to_process = []
-            
-            # Batch Processing
-            batch_results = []
-            batch_size = 10
+    async def channel_history_scan(self, interaction):
+        return await gift_channels.channel_history_scan(self, interaction)
 
-            # Check Cache & Populate Initial List
-            member_ids = [m[0] for m in members]
-            cached_member_statuses = self.batch_get_user_giftcode_status(giftcode, member_ids)
+    # ── Delegation to gift_settings ───────────────────────────────────
 
-            for fid, nickname in members:
-                if fid in cached_member_statuses:
-                    status = cached_member_statuses[fid]
-                    if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
-                        received_count += 1
-                        already_used_users.append(nickname)
-                    processed_count += 1
-                else:
-                    active_members_to_process.append((fid, nickname, 0))
-            self.logger.info(f"GiftOps: Pre-processed {len(cached_member_statuses)} members from cache. {len(active_members_to_process)} remaining.")
+    async def verify_test_fid(self, fid):
+        return await gift_settings.verify_test_fid(self, fid)
 
-            # Progress Embed
-            embed = discord.Embed(title=f"{theme.giftIcon} Gift Code Redemption: {giftcode}", color=theme.emColor1)
-            def update_embed_description(include_errors=False):
-                base_description = (
-                    f"**Status for Alliance:** `{alliance_name}`\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.membersIcon} **Total Members:** `{total_members}`\n"
-                    f"{theme.verifiedIcon} **Success:** `{success_count}`\n"
-                    f"{theme.infoIcon} **Already Redeemed:** `{received_count}`\n"
-                    f"{theme.refreshIcon} **Retrying:** `{len(retry_queue)}`\n"
-                    f"{theme.deniedIcon} **Failed:** `{failed_count}`\n"
-                    f"{theme.hourglassIcon} **Processed:** `{processed_count}/{total_members}`\n"
-                    f"{theme.lowerDivider}\n"
-                )
-                
-                if include_errors and failed_count > 0:
-                    non_success_errors = {k: v for k, v in error_summary.items() if k != "SUCCESS"}
-                    if non_success_errors:
-                        # Define user-friendly messages for each error type
-                        error_descriptions = {
-                            "TOO_POOR_SPEND_MORE": f"{theme.warnIcon} **" + "{count}" + "** members failed to spend enough to reach VIP12.",
-                            "TOO_SMALL_SPEND_MORE": f"{theme.warnIcon} **" + "{count}" + "** members failed due to insufficient furnace level.",
-                            "TIMEOUT_RETRY": f"{theme.timeIcon} **" + "{count}" + "** members were staring into the void, until the void finally timed out on them.",
-                            "LOGIN_EXPIRED_MID_PROCESS": f"{theme.lockIcon} **" + "{count}" + "** members login failed mid-process. How'd that even happen?",
-                            "LOGIN_FAILED": f"{theme.lockIcon} **" + "{count}" + "** members failed due to login issues. Try logging it off and on again!",
-                            "CAPTCHA_SOLVING_FAILED": f"{theme.robotIcon} **" + "{count}" + "** members lost the battle against CAPTCHA. You sure those weren't just bots?",
-                            "CAPTCHA_SOLVER_ERROR": f"{theme.settingsIcon} **" + "{count}" + "** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
-                            "OCR_DISABLED": f"{theme.deniedIcon} **" + "{count}" + "** members failed since OCR is disabled. Try turning it on first!",
-                            "SIGN_ERROR": f"{theme.lockIcon} **" + "{count}" + "** members failed due to a signature error. Something went wrong.",
-                            "ERROR": f"{theme.deniedIcon} **" + "{count}" + "** members failed due to a general error. Might want to check the logs.",
-                            "UNKNOWN_API_RESPONSE": f"{theme.infoIcon} **" + "{count}" + "** members failed with an unknown API response. Say what?",
-                            "CONNECTION_ERROR": f"{theme.globeIcon} **" + "{count}" + "** members failed due to bot connection issues. Did the admin trip over the cable again?"
-                        }
-                        
-                        base_description += "\n**Error Breakdown:**\n"
-                        
-                        # Build message for each error type
-                        for error_type, count in sorted(non_success_errors.items(), key=lambda x: x[1], reverse=True):
-                            if error_type in error_descriptions:
-                                base_description += error_descriptions[error_type].format(count=count) + "\n"
-                            else:
-                                # Handle any unexpected error types
-                                base_description += f"❗ **{count}** members failed with status: {error_type}\n"
-                
-                return base_description
-            embed.description = update_embed_description()
-            try: status_message = await channel.send(embed=embed)
-            except Exception as e: self.logger.exception(f"GiftOps: Error sending initial status embed: {e}"); return False
+    async def update_test_fid(self, new_fid):
+        return await gift_settings.update_test_fid(self, new_fid)
 
-            # Main Processing Loop
-            last_embed_update = time.time()
-            code_is_invalid = False
+    def get_test_fid(self):
+        return gift_settings.get_test_fid(self)
 
-            while active_members_to_process or retry_queue:
-                if code_is_invalid:
-                    self.logger.info(f"GiftOps: Code {giftcode} detected as invalid, stopping redemption.")
-                    break
-                    
-                current_time = time.time()
+    async def get_validation_fid(self):
+        return await gift_settings.get_validation_fid(self)
 
-                # Dequeue Ready Retries
-                ready_to_retry = []
-                remaining_in_queue = []
-                for item in retry_queue:
-                    if current_time >= item[3]:
-                        ready_to_retry.append(item[:3])
-                    else:
-                        remaining_in_queue.append(item)
-                retry_queue = remaining_in_queue
-                active_members_to_process.extend(ready_to_retry)
+    async def show_ocr_settings(self, interaction):
+        return await gift_settings.show_ocr_settings(self, interaction)
 
-                if not active_members_to_process:
-                    if retry_queue:
-                        next_retry_ts = min(item[3] for item in retry_queue)
-                        wait_time = max(0.1, next_retry_ts - current_time)
-                        await asyncio.sleep(wait_time)
-                    else:
-                        break
-                    continue
+    async def update_ocr_settings(self, interaction, enabled=None):
+        return await gift_settings.update_ocr_settings(self, interaction, enabled)
 
-                # Process One Member
-                fid, nickname, current_cycle_count = active_members_to_process.pop(0)
+    async def show_redemption_priority(self, interaction):
+        return await gift_settings.show_redemption_priority(self, interaction)
 
-                self.logger.info(f"GiftOps: Processing ID {fid} ({nickname}), Cycle {current_cycle_count + 1}/{MAX_RETRY_CYCLES}")
+    async def setup_giftcode_auto(self, interaction):
+        return await gift_settings.setup_giftcode_auto(self, interaction)
 
-                response_status = "ERROR"
-                try:
-                    await asyncio.sleep(random.uniform(MEMBER_PROCESS_DELAY * 0.7, MEMBER_PROCESS_DELAY * 1.3))
-                    response_status = await self.claim_giftcode_rewards_wos(fid, giftcode)
-                except Exception as claim_err:
-                    self.logger.exception(f"GiftOps: Unexpected error during claim for {fid}: {claim_err}")
-                    response_status = "ERROR"
+    # ── Delegation to gift_views ──────────────────────────────────────
 
-                # Check if code is invalid
-                if response_status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
-                    code_is_invalid = True
-                    self.logger.info(f"GiftOps: Code {giftcode} became invalid (status: {response_status}) while processing {fid}. Marking as invalid in DB.")
-                    
-                    # Mark as invalid
-                    self.mark_code_invalid(giftcode)
-                    
-                    if hasattr(self, 'api') and self.api:
-                        asyncio.create_task(self.api.remove_giftcode(giftcode, from_validation=True))
+    async def create_gift_code(self, interaction):
+        from .gift_views import create_gift_code as _create
+        return await _create(self, interaction)
 
-                    reason_map_runtime = {
-                        "TIME_ERROR": "Code has expired (TIME_ERROR)",
-                        "CDK_NOT_FOUND": "Code not found or incorrect (CDK_NOT_FOUND)",
-                        "USAGE_LIMIT": "Usage limit reached (USAGE_LIMIT)"
-                    }
-                    status_reason_runtime = reason_map_runtime.get(response_status, f"Code invalid ({response_status})")
-                    
-                    embed.title = f"{theme.deniedIcon} Gift Code Invalid: {giftcode}" 
-                    embed.color = discord.Color.red()
-                    embed.description = (
-                        f"**Gift Code Redemption Halted**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.giftIcon} **Gift Code:** `{giftcode}`\n"
-                        f"{theme.allianceIcon} **Alliance:** `{alliance_name}`\n"
-                        f"{theme.deniedIcon} **Reason:** {status_reason_runtime}\n"
-                        f"{theme.editListIcon} **Action:** Code marked as invalid in database. Remaining members for this alliance will not be processed.\n"
-                        f"{theme.chartIcon} **Processed before halt:** {processed_count}/{total_members}\n"
-                        f"{theme.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                        f"{theme.lowerDivider}\n"
-                    )
-                    embed.clear_fields()
+    async def list_gift_codes(self, interaction):
+        from .gift_views import list_gift_codes as _list
+        return await _list(self, interaction)
 
-                    try:
-                        await status_message.edit(embed=embed)
-                    except Exception as embed_edit_err:
-                        self.logger.warning(f"GiftOps: Failed to update progress embed to show code invalidation: {embed_edit_err}")
-                    
-                    if fid not in failed_users_dict:
-                        processed_count +=1 
-                        failed_count +=1
-                        failed_users_dict[fid] = (nickname, f"Led to code invalidation ({response_status})", current_cycle_count + 1)
-                    continue
-                
-                if response_status == "SIGN_ERROR":
-                    self.logger.error(f"GiftOps: Sign error detected (likely wrong encrypt key). Stopping redemption for alliance {alliance_id}.")
-                    
-                    embed.title = f"{theme.settingsIcon} Sign Error: {giftcode}"
-                    embed.color = discord.Color.red()
-                    embed.description = (
-                        f"**Bot Configuration Error**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.giftIcon} **Gift Code:** `{giftcode}`\n"
-                        f"{theme.allianceIcon} **Alliance:** `{alliance_name}`\n"
-                        f"{theme.settingsIcon} **Reason:** Sign Error (check bot config/encrypt key)\n"
-                        f"{theme.editListIcon} **Action:** Redemption stopped. Check bot configuration.\n"
-                        f"{theme.chartIcon} **Processed before halt:** {processed_count}/{total_members}\n"
-                        f"{theme.timeIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                        f"{theme.lowerDivider}\n"
-                    )
-                    embed.clear_fields()
-                    
-                    try:
-                        await status_message.edit(embed=embed)
-                    except Exception as embed_edit_err:
-                        self.logger.warning(f"GiftOps: Failed to update progress embed for sign error: {embed_edit_err}")
+    async def delete_gift_code(self, interaction):
+        from .gift_views import delete_gift_code as _delete
+        return await _delete(self, interaction)
 
-                    break
+    async def show_settings_menu(self, interaction):
+        from .gift_views import show_settings_menu as _show
+        return await _show(self, interaction)
 
-                # Handle Response
-                mark_processed = False
-                add_to_failed = False
-                queue_for_retry = False
-                retry_delay = 0
+    async def get_admin_info(self, user_id):
+        from .gift_views import get_admin_info as _info
+        return await _info(self, user_id)
 
-                if response_status == "SUCCESS":
-                    success_count += 1
-                    successful_users.append(nickname)
-                    batch_results.append((fid, giftcode, response_status))
-                    mark_processed = True
-                elif response_status in ["RECEIVED", "SAME TYPE EXCHANGE"]:
-                    received_count += 1
-                    already_used_users.append(nickname)
-                    batch_results.append((fid, giftcode, response_status))
-                    mark_processed = True
-                elif response_status == "OCR_DISABLED":
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = "OCR Disabled"
-                    error_summary["OCR_DISABLED"] = error_summary.get("OCR_DISABLED", 0) + 1
-                elif response_status in ["SOLVER_ERROR", "CAPTCHA_FETCH_ERROR"]:
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = f"Solver Error ({response_status})"
-                    error_summary["CAPTCHA_SOLVER_ERROR"] = error_summary.get("CAPTCHA_SOLVER_ERROR", 0) + 1
-                elif response_status in ["LOGIN_FAILED", "LOGIN_EXPIRED_MID_PROCESS", "ERROR", "UNKNOWN_API_RESPONSE"]:
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = f"Processing Error ({response_status})"
-                    error_summary[response_status] = error_summary.get(response_status, 0) + 1
-                elif response_status == "TIMEOUT_RETRY":
-                    queue_for_retry = True
-                    retry_delay = API_RATE_LIMIT_COOLDOWN
-                    fail_reason = "API Rate Limited"
-                    if current_cycle_count + 1 >= MAX_RETRY_CYCLES: # Track as error if this is the final attempt
-                        error_summary["TIMEOUT_RETRY"] = error_summary.get("TIMEOUT_RETRY", 0) + 1
-                elif response_status == "TOO_POOR_SPEND_MORE":
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = "VIP level too low"
-                    error_summary["TOO_POOR_SPEND_MORE"] = error_summary.get("TOO_POOR_SPEND_MORE", 0) + 1
-                elif response_status == "TOO_SMALL_SPEND_MORE":
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = "Furnace level too low"
-                    error_summary["TOO_SMALL_SPEND_MORE"] = error_summary.get("TOO_SMALL_SPEND_MORE", 0) + 1
-                elif response_status == "CAPTCHA_TOO_FREQUENT":
-                    # Queue for retry with rate limit delay (60s max)
-                    queue_for_retry = True
-                    retry_delay = 60.0
-                    fail_reason = "Captcha API rate limited (too frequent)"
-                    self.logger.info(f"GiftOps: ID {fid} hit CAPTCHA_TOO_FREQUENT. Queuing for retry in {retry_delay:.1f}s.")
-                    if current_cycle_count + 1 >= MAX_RETRY_CYCLES:
-                        error_summary["CAPTCHA_TOO_FREQUENT"] = error_summary.get("CAPTCHA_TOO_FREQUENT", 0) + 1
-                elif response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"]:
-                    if current_cycle_count + 1 < MAX_RETRY_CYCLES:
-                        queue_for_retry = True
-                        retry_delay = CAPTCHA_CYCLE_COOLDOWN
-                        fail_reason = "Captcha Cycle Failed"
-                        self.logger.info(f"GiftOps: ID {fid} failed captcha cycle {current_cycle_count + 1}. Queuing for retry cycle {current_cycle_count + 2} in {retry_delay}s.")
-                    else:
-                        add_to_failed = True
-                        mark_processed = True
-                        fail_reason = f"Failed after {MAX_RETRY_CYCLES} captcha cycles (Last Status: {response_status})"
-                        self.logger.info(f"GiftOps: Max ({MAX_RETRY_CYCLES}) retry cycles reached for ID {fid}. Marking as failed.")
-                        # Track based on error type
-                        if response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED"]:
-                            error_summary["CAPTCHA_SOLVING_FAILED"] = error_summary.get("CAPTCHA_SOLVING_FAILED", 0) + 1
-                        else:  # OCR_FAILED_ATTEMPT
-                            error_summary["CAPTCHA_SOLVER_ERROR"] = error_summary.get("CAPTCHA_SOLVER_ERROR", 0) + 1
-                else:
-                    add_to_failed = True
-                    mark_processed = True
-                    fail_reason = f"Unhandled status: {response_status}"
-                    error_summary[response_status] = error_summary.get(response_status, 0) + 1
+    async def get_alliance_names(self, user_id, is_global=False):
+        from .gift_views import get_alliance_names as _names
+        return await _names(self, user_id, is_global)
 
-                # Update State Based on Outcome
-                if mark_processed:
-                    processed_count += 1
-                    if add_to_failed:
-                        failed_count += 1
-                        cycle_failed_on = current_cycle_count + 1 if response_status not in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] or (current_cycle_count + 1 >= MAX_RETRY_CYCLES) else MAX_RETRY_CYCLES
-                        failed_users_dict[fid] = (nickname, fail_reason, cycle_failed_on)
-                
-                if queue_for_retry:
-                    retry_after_ts = time.time() + retry_delay
-                    cycle_for_next_retry = current_cycle_count + 1 if response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] else current_cycle_count
-                    retry_queue.append((fid, nickname, cycle_for_next_retry, retry_after_ts))
-                
-                # Batch process results when reaching batch size
-                if len(batch_results) >= batch_size:
-                    self.batch_process_alliance_results(batch_results)
-                    batch_results = []
+    async def get_available_alliances(self, interaction):
+        from .gift_views import get_available_alliances as _alliances
+        return await _alliances(self, interaction)
 
-                # Update Embed Periodically
-                current_time = time.time()
-                if current_time - last_embed_update > 5 and not code_is_invalid:
-                    embed.description = update_embed_description()
-                    try:
-                        await status_message.edit(embed=embed)
-                        last_embed_update = current_time
-                    except Exception as embed_edit_err:
-                        self.logger.warning(f"GiftOps: WARN - Failed to edit progress embed: {embed_edit_err}")
-
-            # Final Embed Update
-            if not code_is_invalid:
-                self.logger.info(f"GiftOps: Alliance {alliance_id} processing loop finished. Preparing final update.")
-                final_title = f"{theme.giftIcon} Gift Code Process Complete: {giftcode}"
-                final_color = discord.Color.green() if failed_count == 0 and total_members > 0 else \
-                              discord.Color.orange() if success_count > 0 or received_count > 0 else \
-                              discord.Color.red()
-                if total_members == 0:
-                    final_title = f"{theme.infoIcon} No Members to Process for Code: {giftcode}"
-                    final_color = discord.Color.light_grey()
-
-                embed.title = final_title
-                embed.color = final_color
-                embed.description = update_embed_description(include_errors=True)
-
-                try:
-                    await status_message.edit(embed=embed)
-                    self.logger.info(f"GiftOps: Successfully edited final status embed for alliance {alliance_id}.")
-                except discord.NotFound:
-                    self.logger.warning(f"GiftOps: WARN - Failed to edit final progress embed for alliance {alliance_id}: Original message not found.")
-                except discord.Forbidden:
-                    self.logger.warning(f"GiftOps: WARN - Failed to edit final progress embed for alliance {alliance_id}: Missing permissions.")
-                except Exception as final_embed_err:
-                    self.logger.exception(f"GiftOps: WARN - Failed to edit final progress embed for alliance {alliance_id}: {final_embed_err}")
-
-            summary_lines = [
-                "\n",
-                "--- Redemption Summary Start ---",
-                f"Alliance: {alliance_name} ({alliance_id})",
-                f"Gift Code: {giftcode}",
-            ]
-            try:
-                master_status_log = self.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,)).fetchone()
-                summary_lines.append(f"Master Code Status at Log Time: {master_status_log[0] if master_status_log else 'NOT_FOUND_IN_DB'}")
-            except Exception as e_log:
-                summary_lines.append(f"Master Code Status at Log Time: Error fetching - {e_log}")
-
-            summary_lines.extend([
-                f"Run Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                "------------------------",
-                f"Total Members: {total_members}",
-                f"Successful: {success_count}",
-                f"Already Redeemed: {received_count}",
-                f"Failed: {failed_count}",
-                "------------------------",
-            ])
-
-            if successful_users:
-                summary_lines.append(f"\nSuccessful Users ({len(successful_users)}):")
-                summary_lines.extend(successful_users)
-
-            if already_used_users:
-                summary_lines.append(f"\nAlready Redeemed Users ({len(already_used_users)}):")
-                summary_lines.extend(already_used_users)
-
-            final_failed_log_details = []
-            if code_is_invalid and retry_queue:
-                 for f_fid, f_nick, f_cycle, _ in retry_queue:
-                     if f_fid not in failed_users_dict:
-                         final_failed_log_details.append(f"- {f_nick} ({f_fid}): Halted in retry (Next Cycle: {f_cycle})")
-            
-            for fid_failed, (nick_failed, reason_failed, cycles_attempted) in failed_users_dict.items():
-                final_failed_log_details.append(f"- {nick_failed} ({fid_failed}): {reason_failed} (Cycles Attempted: {cycles_attempted})")
-            
-            if final_failed_log_details:
-                summary_lines.append(f"\nFailed Users ({len(final_failed_log_details)}):")
-                summary_lines.extend(final_failed_log_details)
-
-            summary_lines.append("--- Redemption Summary End ---\n")
-            summary_log_message = "\n".join(summary_lines)
-            self.logger.info(summary_log_message)
-            
-            # Process any remaining batch results
-            if batch_results:
-                self.batch_process_alliance_results(batch_results)
-                batch_results = []
-            
-            return True
-        
-        except Exception as e:
-            self.logger.exception(f"GiftOps: UNEXPECTED ERROR in use_giftcode_for_alliance for {alliance_id}/{giftcode}: {str(e)}")
-            self.logger.exception(f"Traceback: {traceback.format_exc()}")
-            try:
-                if 'channel' in locals() and channel: await channel.send(f"{theme.warnIcon} An unexpected error occurred processing `{giftcode}` for {alliance_name}.")
-            except Exception: pass
-            return False
 
 async def setup(bot):
     await bot.add_cog(GiftOperations(bot))
