@@ -705,7 +705,7 @@ class GiftCodeAPI:
                 try:
                     gift_operations = self.bot.get_cog('GiftOperations')
                     if gift_operations:
-                        status = await gift_operations.claim_giftcode_rewards_wos(test_fid, code)
+                        status = await gift_operations.claim_giftcode_rewards_wos(test_fid, code, skip_cache=True)
                         
                         if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                             exists_in_api = await self.check_giftcode(code)

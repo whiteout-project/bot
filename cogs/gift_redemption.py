@@ -472,8 +472,9 @@ async def validate_gift_code_immediately(cog, giftcode, source="unknown"):
                 cog.logger.info(f"Gift code '{giftcode}' already validated")
                 return True, "Code already validated"
 
-        # Perform validation using the selected ID
-        status = await claim_giftcode_rewards_wos(cog, validation_fid, giftcode)
+        # Perform validation using the selected ID — skip the cache so we
+        # actually probe the live API (the whole point of validating).
+        status = await claim_giftcode_rewards_wos(cog, validation_fid, giftcode, skip_cache=True)
 
         # Handle validation results
         if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"]:
@@ -820,7 +821,14 @@ async def attempt_gift_code_with_api(cog, player_id, giftcode, session):
     return "MAX_CAPTCHA_ATTEMPTS_REACHED", None, None, None
 
 
-async def claim_giftcode_rewards_wos(cog, player_id, giftcode):
+async def claim_giftcode_rewards_wos(cog, player_id, giftcode, *, skip_cache: bool = False):
+    """Redeem `giftcode` for `player_id` via the WOS Gift Code API.
+
+    By default we short-circuit on a cached prior result so we don't
+    re-redeem the same code for the same FID. Validation flows
+    (periodic_validation_loop, validate_gift_codes, etc.) must pass
+    `skip_cache=True` — they intentionally re-hit the live API to detect
+    codes that have expired since the last redemption."""
 
     giftcode = cog.clean_gift_code(giftcode)
     process_start_time = time.time()
@@ -831,15 +839,17 @@ async def claim_giftcode_rewards_wos(cog, player_id, giftcode):
     session = None
 
     try:
-        # Cache Check
-        test_fid = cog.get_test_fid()
-        if player_id != test_fid:
-            cog.cursor.execute("SELECT status FROM user_giftcodes WHERE fid = ? AND giftcode = ?", (player_id, giftcode))
-            existing_record = cog.cursor.fetchone()
-            if existing_record:
-                if existing_record[0] in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
-                    cog.logger.info(f"CACHE HIT - User {player_id} code '{giftcode}' status: {existing_record[0]}")
-                    return existing_record[0]
+        # Cache Check — skipped for validation flows so they probe the live API
+        if not skip_cache:
+            test_fid = cog.get_test_fid()
+            if player_id != test_fid:
+                cog.cursor.execute("SELECT status FROM user_giftcodes WHERE fid = ? AND giftcode = ?", (player_id, giftcode))
+                existing_record = cog.cursor.fetchone()
+                if existing_record:
+                    if existing_record[0] in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
+                        status = existing_record[0]
+                        cog.logger.info(f"CACHE HIT - User {player_id} code '{giftcode}' status: {status}")
+                        return status
 
         # Check if OCR Enabled and Solver Ready
         cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
@@ -1322,8 +1332,9 @@ async def periodic_validation_loop_body(cog):
                 try:
                     cog.logger.info(f"GiftOps: Periodically validating code '{giftcode}' (current status: {current_status})")
 
-                    # Check the code with test ID
-                    status = await claim_giftcode_rewards_wos(cog, test_fid, giftcode)
+                    # Check the code with test ID — skip cache so a previously
+                    # redeemed code still gets probed against the live API.
+                    status = await claim_giftcode_rewards_wos(cog, test_fid, giftcode, skip_cache=True)
                     codes_checked += 1
 
                     if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]: # Code is now invalid
@@ -1509,7 +1520,7 @@ async def validate_gift_codes(cog):
 
             cog.logger.info(f"[validate_gift_codes] Validating code: {giftcode} (current DB status: {current_db_status})")
             test_fid = cog.get_test_fid()
-            status = await claim_giftcode_rewards_wos(cog, test_fid, giftcode)
+            status = await claim_giftcode_rewards_wos(cog, test_fid, giftcode, skip_cache=True)
 
             if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                 cog.logger.info(f"[validate_gift_codes] Code {giftcode} found to be invalid with status: {status}. Updating DB.")

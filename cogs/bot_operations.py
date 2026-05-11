@@ -478,8 +478,8 @@ class SyncSettingsView(discord.ui.View):
             self.add_item(self.edit_start_button)
 
             self.show_msg_button = discord.ui.Button(
-                label=f"{'Hide' if self.show_sync_message else 'Show'} Sync Messages",
-                style=discord.ButtonStyle.danger if self.show_sync_message else discord.ButtonStyle.success,
+                label=f"Sync Messages: {'On' if self.show_sync_message else 'Off'}",
+                style=discord.ButtonStyle.success if self.show_sync_message else discord.ButtonStyle.secondary,
                 emoji=f"{theme.messageIcon}",
                 row=2,
             )
@@ -487,8 +487,8 @@ class SyncSettingsView(discord.ui.View):
             self.add_item(self.show_msg_button)
 
             self.keep_log_button = discord.ui.Button(
-                label=f"{'Disable' if self.keep_control_log else 'Enable'} Keep Sync Log",
-                style=discord.ButtonStyle.secondary,
+                label=f"Keep Sync Log: {'On' if self.keep_control_log else 'Off'}",
+                style=discord.ButtonStyle.success if self.keep_control_log else discord.ButtonStyle.secondary,
                 emoji=f"{theme.listIcon}",
                 row=2,
                 disabled=not self.show_sync_message,
@@ -497,8 +497,8 @@ class SyncSettingsView(discord.ui.View):
             self.add_item(self.keep_log_button)
 
             self.auto_remove_button = discord.ui.Button(
-                label=f"{'Disable' if self.auto_remove else 'Enable'} Auto-Removal",
-                style=discord.ButtonStyle.danger if self.auto_remove else discord.ButtonStyle.success,
+                label=f"Auto-Removal: {'On' if self.auto_remove else 'Off'}",
+                style=discord.ButtonStyle.success if self.auto_remove else discord.ButtonStyle.secondary,
                 emoji=f"{theme.refreshIcon}",
                 row=3,
             )
@@ -506,9 +506,9 @@ class SyncSettingsView(discord.ui.View):
             self.add_item(self.auto_remove_button)
 
             self.notify_button = discord.ui.Button(
-                label=f"{'Disable' if self.notify_on_transfer else 'Enable'} Notifications",
-                style=discord.ButtonStyle.secondary,
-                emoji=f"{theme.bellIcon}" if not self.notify_on_transfer else f"{theme.muteIcon}",
+                label=f"Notifications: {'On' if self.notify_on_transfer else 'Off'}",
+                style=discord.ButtonStyle.success if self.notify_on_transfer else discord.ButtonStyle.secondary,
+                emoji=f"{theme.bellIcon}",
                 row=3,
                 disabled=not self.auto_remove,
             )

@@ -454,8 +454,8 @@ class GiftOperations(commands.Cog):
     async def attempt_gift_code_with_api(self, player_id, giftcode, session):
         return await gift_redemption.attempt_gift_code_with_api(self, player_id, giftcode, session)
 
-    async def claim_giftcode_rewards_wos(self, player_id, giftcode):
-        return await gift_redemption.claim_giftcode_rewards_wos(self, player_id, giftcode)
+    async def claim_giftcode_rewards_wos(self, player_id, giftcode, *, skip_cache: bool = False):
+        return await gift_redemption.claim_giftcode_rewards_wos(self, player_id, giftcode, skip_cache=skip_cache)
 
     async def scan_historical_messages(self, channel, alliance_id):
         return await gift_redemption.scan_historical_messages(self, channel, alliance_id)

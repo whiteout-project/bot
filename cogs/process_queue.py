@@ -207,6 +207,28 @@ class ProcessQueue(commands.Cog):
         """, (action,))
         return [self._row_to_dict(row) for row in self.cursor.fetchall()]
 
+    def get_position(self, process_id: int) -> Optional[int]:
+        """Return the 1-based queue position of `process_id` (1 = next to run,
+        counting any active jobs as position 1). Returns None if the process
+        is no longer in the queue (already completed/cancelled)."""
+        self.cursor.execute(
+            "SELECT priority, status FROM process_queue WHERE id = ?",
+            (process_id,),
+        )
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+        priority, status = row
+        if status not in ('queued', 'active'):
+            return None
+        self.cursor.execute("""
+            SELECT COUNT(*) FROM process_queue
+            WHERE status IN ('queued','active')
+              AND (priority < ? OR (priority = ? AND id < ?))
+        """, (priority, priority, process_id))
+        ahead = self.cursor.fetchone()[0] or 0
+        return ahead + 1
+
     def has_queued_or_active(self, action: str, alliance_id: Optional[int] = None) -> bool:
         if alliance_id is None:
             self.cursor.execute(

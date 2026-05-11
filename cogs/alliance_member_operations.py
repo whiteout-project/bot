@@ -2148,6 +2148,23 @@ class AllianceMemberOperations(commands.Cog):
             'interaction': interaction,
         })
 
+        # If anything is ahead of us, surface queue position + DM-fallback note
+        # so the admin knows it's normal for the embed to sit idle for a while.
+        try:
+            pos = process_queue.get_position(process_id)
+            if pos and pos > 1:
+                qs = self._get_queue_size()
+                embed.description = (
+                    f"Processing {member_count} members for **{alliance_name}**...\n\n"
+                    f"{theme.listIcon} **Queue position:** {pos} of {qs}\n"
+                    f"{theme.warnIcon} If processing takes longer than ~14 minutes "
+                    f"(Discord ephemeral expiry), the final result will be DM'd to you.\n\n"
+                    f"**Progress:** `0/{member_count}`"
+                )
+                await interaction.edit_original_response(embed=embed)
+        except Exception:
+            pass  # non-fatal — the operation still runs
+
     async def _process_add_user(self, message: Optional[discord.Message], alliance_id: str, alliance_name: str,
                                 ids: str, invoker_id: Optional[int], invoker_name: str,
                                 process_id: Optional[int] = None,
@@ -2509,19 +2526,27 @@ class AllianceMemberOperations(commands.Cog):
                     alliance_log_result = cursor.fetchone()
                     
                     if alliance_log_result and alliance_log_result[0]:
+                        added_ids = [str(fid) for fid, _ in added_users]
+                        failed_ids = [str(fid) for fid in error_users]
+                        existing_ids = [str(fid) for fid, _ in already_exists_users]
+                        description = (
+                            f"**Alliance:** {alliance_name}\n"
+                            f"**Administrator:** {invoker_name} (`{invoker_id}`)\n"
+                            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                            f"**Results:**\n"
+                            f"{theme.verifiedIcon} Successfully Added: {added_count}\n"
+                            f"{theme.deniedIcon} Failed: {error_count}\n"
+                            f"{theme.warnIcon} Already Exists: {already_exists_count}\n"
+                        )
+                        if added_ids:
+                            description += f"\n**Added IDs:**\n```\n{', '.join(added_ids)}\n```"
+                        if failed_ids:
+                            description += f"\n**Failed IDs:**\n```\n{', '.join(failed_ids)}\n```"
+                        if existing_ids:
+                            description += f"\n**Already Existing IDs:**\n```\n{', '.join(existing_ids)}\n```"
                         log_embed = discord.Embed(
                             title=f"{theme.userIcon} Members Added to Alliance",
-                            description=(
-                                f"**Alliance:** {alliance_name}\n"
-                                f"**Administrator:** {invoker_name} (`{invoker_id}`)\n"
-                                f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                f"**Results:**\n"
-                                f"{theme.verifiedIcon} Successfully Added: {added_count}\n"
-                                f"{theme.deniedIcon} Failed: {error_count}\n"
-                                f"{theme.warnIcon} Already Exists: {already_exists_count}\n\n"
-                                "**Added IDs:**\n"
-                                f"```\n{', '.join(ids_list)}\n```"
-                            ),
+                            description=description,
                             color=theme.emColor3
                         )
 
@@ -2561,7 +2586,7 @@ class AllianceMemberOperations(commands.Cog):
         processing_time = (end_time - start_time).total_seconds()
 
         qs = self._get_queue_size()
-        queue_info = f"{theme.listIcon} **Operations still in queue:** {qs}" if qs > 0 else ""
+        queue_info = f"\n{theme.listIcon} **Operations still in queue:** {qs}" if qs > 0 else ""
 
         embed.title = f"{theme.verifiedIcon} User Addition Completed"
         embed.description = (
