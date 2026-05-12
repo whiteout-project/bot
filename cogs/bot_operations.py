@@ -420,7 +420,7 @@ class BotOperations(commands.Cog):
 
 class SyncSettingsView(discord.ui.View):
     MIN_INTERVAL_MINUTES = 30
-    MAX_INTERVAL_MINUTES = 1440  # 24h
+    MAX_INTERVAL_MINUTES = 43200  # 30 days — covers weekly/biweekly/monthly cadences
 
     def __init__(self, alliance_cursor, alliance_db, alliances, initial_interaction,
                  *, locked_alliance_id: int | None = None, return_to_hub: bool = False):
@@ -742,12 +742,11 @@ class SyncIntervalModal(discord.ui.Modal):
         super().__init__(title="Edit Sync Interval")
         self.parent_view = parent_view
         self.input = discord.ui.TextInput(
-            label=f"Interval ({SyncSettingsView.MIN_INTERVAL_MINUTES}-"
-                  f"{SyncSettingsView.MAX_INTERVAL_MINUTES} min, or 0 to disable)",
-            placeholder=f"e.g. 60",
+            label="Interval in minutes (0 = off, 30 = min)",
+            placeholder="60 = hourly · 1440 = daily · 10080 = weekly",
             default=str(current_interval),
             required=True,
-            max_length=4,
+            max_length=5,
         )
         self.add_item(self.input)
 
@@ -771,10 +770,10 @@ class SyncIntervalModal(discord.ui.Modal):
         ):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Interval must be **0** (disabled) or between "
-                f"**{SyncSettingsView.MIN_INTERVAL_MINUTES}** and "
-                f"**{SyncSettingsView.MAX_INTERVAL_MINUTES}** minutes. "
-                f"This minimum prevents the queue from piling up if a sync takes "
-                f"longer than the interval.",
+                f"**{SyncSettingsView.MIN_INTERVAL_MINUTES} minutes** "
+                f"and **{SyncSettingsView.MAX_INTERVAL_MINUTES} minutes** "
+                f"(30 days). For longer cadences, set the interval to **0** "
+                f"and run sync manually when needed.",
                 ephemeral=True,
             )
             return

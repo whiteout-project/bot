@@ -17,13 +17,13 @@ logger = logging.getLogger('alliance')
 def _alliance_sync_in_flight(process_queue, alliance_id: int) -> bool:
     """True if any sync work for this alliance is queued or running.
 
-    Checks both 'alliance_sync' (scheduled periodic syncs) and 'alliance_control'
+    Checks both 'alliance_sync' (scheduled periodic syncs) and 'alliance_sync_manual'
     (manual syncs via UI). Used to skip duplicate enqueues so the queue can't
     pile up when interval < sync duration or admins click Sync All repeatedly.
     """
     return (
         process_queue.has_queued_or_active("alliance_sync", alliance_id=alliance_id)
-        or process_queue.has_queued_or_active("alliance_control", alliance_id=alliance_id)
+        or process_queue.has_queued_or_active("alliance_sync_manual", alliance_id=alliance_id)
     )
 
 
@@ -298,7 +298,7 @@ class Alliance(commands.Cog):
         await self.add_alliance(interaction)
 
     async def sync_all_alliances(self, interaction: discord.Interaction):
-        """Enqueue an alliance_control sync for every alliance the admin can access."""
+        """Enqueue an alliance_sync_manual for every alliance the admin can access."""
         try:
             allowed_alliance_ids, is_global = PermissionManager.get_admin_alliance_ids(
                 interaction.user.id, interaction.guild_id
@@ -401,7 +401,7 @@ class Alliance(commands.Cog):
                         continue
 
                     process_id = process_queue.enqueue(
-                        action="alliance_control",
+                        action="alliance_sync_manual",
                         priority=ALLIANCE_CONTROL,
                         alliance_id=alliance_id,
                         details={
@@ -725,7 +725,7 @@ class Alliance(commands.Cog):
                                             continue
 
                                         process_id = process_queue.enqueue(
-                                            action='alliance_control',
+                                            action='alliance_sync_manual',
                                             priority=ALLIANCE_CONTROL,
                                             alliance_id=alliance_id,
                                             details={
@@ -806,7 +806,7 @@ class Alliance(commands.Cog):
                                     return
 
                                 process_id = process_queue.enqueue(
-                                    action='alliance_control',
+                                    action='alliance_sync_manual',
                                     priority=ALLIANCE_CONTROL,
                                     alliance_id=alliance_id,
                                     details={

@@ -932,14 +932,14 @@ class HistoryView(discord.ui.View):
                     ephemeral=True
                 )
 
-    async def last_hour_callback(self, interaction: discord.Interaction):
+    async def last_week_callback(self, interaction: discord.Interaction):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "1h"))
+            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "7d"))
         except Exception as e:
-            logger.error(f"Error in last_hour_callback: {e}")
-            print(f"Error in last_hour_callback: {e}")
+            logger.error(f"Error in last_week_callback: {e}")
+            print(f"Error in last_week_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1034,18 +1034,8 @@ class MemberListView(discord.ui.View):
         select.callback = member_callback
         self.add_item(select)
 
-        last_hour_button = discord.ui.Button(
-            label="Last Hour Changes",
-            emoji=f"{theme.timeIcon}",
-            style=discord.ButtonStyle.primary,
-            custom_id="last_hour",
-            row=1
-        )
-        last_hour_button.callback = self.last_hour_callback
-        self.add_item(last_hour_button)
-
         last_day_button = discord.ui.Button(
-            label="Last 24h Changes",
+            label="Last 24 Hours",
             emoji=f"{theme.calendarIcon}",
             style=discord.ButtonStyle.primary,
             custom_id="last_day",
@@ -1054,8 +1044,18 @@ class MemberListView(discord.ui.View):
         last_day_button.callback = self.last_day_callback
         self.add_item(last_day_button)
 
+        last_week_button = discord.ui.Button(
+            label="Last 7 Days",
+            emoji=f"{theme.calendarIcon}",
+            style=discord.ButtonStyle.primary,
+            custom_id="last_week",
+            row=1
+        )
+        last_week_button.callback = self.last_week_callback
+        self.add_item(last_week_button)
+
         custom_time_button = discord.ui.Button(
-            label="Custom Time",
+            label="Custom",
             emoji=f"{theme.settingsIcon}",
             style=discord.ButtonStyle.primary,
             custom_id="custom_time",
@@ -1110,14 +1110,14 @@ class MemberListView(discord.ui.View):
     async def _back_callback(self, interaction: discord.Interaction):
         await self.cog.show_history_for(interaction, self.alliance_id)
 
-    async def last_hour_callback(self, interaction: discord.Interaction):
+    async def last_week_callback(self, interaction: discord.Interaction):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "1h"))
+            await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "7d"))
         except Exception as e:
-            logger.error(f"Error in last_hour_callback: {e}")
-            print(f"Error in last_hour_callback: {e}")
+            logger.error(f"Error in last_week_callback: {e}")
+            print(f"Error in last_week_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1279,18 +1279,8 @@ class MemberListViewNickname(discord.ui.View):
         select.callback = member_callback
         self.add_item(select)
 
-        last_hour_button = discord.ui.Button(
-            label="Last Hour Changes",
-            emoji=f"{theme.timeIcon}",
-            style=discord.ButtonStyle.primary,
-            custom_id="last_hour_nick",
-            row=1
-        )
-        last_hour_button.callback = self.last_hour_callback
-        self.add_item(last_hour_button)
-
         last_day_button = discord.ui.Button(
-            label="Last 24h Changes",
+            label="Last 24 Hours",
             emoji=f"{theme.calendarIcon}",
             style=discord.ButtonStyle.primary,
             custom_id="last_day_nick",
@@ -1299,8 +1289,18 @@ class MemberListViewNickname(discord.ui.View):
         last_day_button.callback = self.last_day_callback
         self.add_item(last_day_button)
 
+        last_week_button = discord.ui.Button(
+            label="Last 7 Days",
+            emoji=f"{theme.calendarIcon}",
+            style=discord.ButtonStyle.primary,
+            custom_id="last_week_nick",
+            row=1
+        )
+        last_week_button.callback = self.last_week_callback
+        self.add_item(last_week_button)
+
         custom_time_button = discord.ui.Button(
-            label="Custom Time",
+            label="Custom",
             emoji=f"{theme.settingsIcon}",
             style=discord.ButtonStyle.primary,
             custom_id="custom_time_nick",
@@ -1355,14 +1355,14 @@ class MemberListViewNickname(discord.ui.View):
     async def _back_callback(self, interaction: discord.Interaction):
         await self.cog.show_history_for(interaction, self.alliance_id)
 
-    async def last_hour_callback(self, interaction: discord.Interaction):
+    async def last_week_callback(self, interaction: discord.Interaction):
         try:
             if not interaction.response.is_done():
                 await interaction.response.defer()
-            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "1h"))
+            await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "7d"))
         except Exception as e:
-            logger.error(f"Error in last_hour_callback: {e}")
-            print(f"Error in last_hour_callback: {e}")
+            logger.error(f"Error in last_week_callback: {e}")
+            print(f"Error in last_week_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1536,12 +1536,10 @@ class RecentChangesView(discord.ui.View):
         self.current_page = 0
         self.total_pages = len(chunks)
 
-        # Hide Back/Post buttons when caller didn't provide context
+        # Hide Post button when caller didn't provide context
         if alliance_id is None or cog is None:
             for child in list(self.children):
-                if isinstance(child, discord.ui.Button) and getattr(child, "custom_id", None) in (
-                    "history_back", "history_post"
-                ):
+                if isinstance(child, discord.ui.Button) and getattr(child, "custom_id", None) == "history_post":
                     self.remove_item(child)
 
         self.update_buttons()
@@ -1589,12 +1587,6 @@ class RecentChangesView(discord.ui.View):
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
-    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
-                       style=discord.ButtonStyle.secondary, custom_id="history_back", row=1)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.cog and self.alliance_id is not None:
-            await self.cog.show_member_list_furnace(interaction, self.alliance_id)
-
     @discord.ui.button(label="Post to Channel", emoji=f"{theme.announceIcon}",
                        style=discord.ButtonStyle.primary, custom_id="history_post", row=1)
     async def post_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1616,9 +1608,7 @@ class RecentNicknameChangesView(discord.ui.View):
 
         if alliance_id is None or cog is None:
             for child in list(self.children):
-                if isinstance(child, discord.ui.Button) and getattr(child, "custom_id", None) in (
-                    "history_back_nick", "history_post_nick"
-                ):
+                if isinstance(child, discord.ui.Button) and getattr(child, "custom_id", None) == "history_post_nick":
                     self.remove_item(child)
 
         self.update_buttons()
@@ -1663,13 +1653,6 @@ class RecentNicknameChangesView(discord.ui.View):
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
-
-    @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
-                       style=discord.ButtonStyle.secondary,
-                       custom_id="history_back_nick", row=1)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.cog and self.alliance_id is not None:
-            await self.cog.show_member_list_nickname(interaction, self.alliance_id)
 
     @discord.ui.button(label="Post to Channel", emoji=f"{theme.announceIcon}",
                        style=discord.ButtonStyle.primary,

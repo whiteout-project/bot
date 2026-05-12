@@ -1179,6 +1179,22 @@ class AdminManagerView(discord.ui.View):
         embed = discord.Embed(
             title=f"{theme.lockIcon} Permissions",
             description=(
+                f"Permissions system allows you to configure access levels for admins. "
+                f"Higher tiers can do everything lower tiers can. Use the dropdowns "
+                f"below to add a new admin or open an existing one to change their tier, "
+                f"scope, or remove them.\n\n"
+                f"**Tiers**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.crownIcon} **Bot Owner** — recovery anchor; only one; "
+                f"changed via Transfer Owner\n"
+                f"{theme.medalIcon} **Global Admin** — admin management + every "
+                f"alliance on all servers\n"
+                f"{theme.shieldIcon} **Server Admin** — manages all alliances "
+                f"on their Discord server\n"
+                f"{theme.pinIcon} **Alliance Admin** — limited to the specific "
+                f"alliance(s) they're assigned to\n"
+                f"{theme.lowerDivider}\n\n"
+                f"**Current state**\n"
                 f"{theme.upperDivider}\n"
                 f"**Bot Owner:** {owner_line}\n"
                 f"**Total admins:** {len(self.admins)} "
@@ -1285,13 +1301,7 @@ class AdminManagerView(discord.ui.View):
             self.add_item(page_lbl)
             self.add_item(next_btn)
 
-        # Row 4: Refresh + Back.
-        refresh_btn = discord.ui.Button(
-            label="Refresh", style=discord.ButtonStyle.secondary,
-            emoji=theme.refreshIcon, row=4,
-        )
-        refresh_btn.callback = self._on_refresh
-        self.add_item(refresh_btn)
+        # Row 4: Back.
         back_btn = discord.ui.Button(
             label="Back", style=discord.ButtonStyle.secondary,
             emoji=theme.backIcon, row=4,
@@ -1355,12 +1365,6 @@ class AdminManagerView(discord.ui.View):
         if self.page < self._total_pages() - 1:
             self.page += 1
         self._build()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def _on_refresh(self, interaction):
-        if not await check_interaction_user(interaction, self.viewer_id):
-            return
-        await self.refresh_data(self.cog.bot)
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def _on_back(self, interaction):

@@ -102,6 +102,21 @@ class AllianceSync(commands.Cog):
                     f"All alliances will default to ON."
                 )
 
+        # Clamp legacy sub-30-min sync intervals to 30 min. `interval = 0` (disabled) is preserved.
+        try:
+            self.cursor_alliance.execute(
+                "UPDATE alliancesettings SET interval = 30 "
+                "WHERE interval IS NOT NULL AND interval > 0 AND interval < 30"
+            )
+            clamped = self.cursor_alliance.rowcount
+            if clamped:
+                self.logger.info(
+                    f"AllianceSync: clamped {clamped} alliance(s) with sub-30-min "
+                    f"sync intervals up to 30 minutes."
+                )
+        except Exception as e:
+            self.logger.warning(f"AllianceSync: interval clamp failed (non-fatal): {e}")
+
         self.conn_alliance.commit()
 
         # Create invalid_id_tracker table for 3-strike removal system
@@ -884,8 +899,8 @@ class AllianceSync(commands.Cog):
             print(f"[ERROR] Fatal error in schedule_alliance_check for alliance {alliance_id}: {e}")
             traceback.print_exc()
 
-    async def handle_alliance_control_process(self, process):
-        """ProcessQueue handler for alliance_control actions (manual user-triggered checks)."""
+    async def handle_alliance_sync_manual_process(self, process):
+        """ProcessQueue handler for alliance_sync_manual actions (manual user-triggered syncs)."""
         details = process.get('details', {})
         alliance_id = process.get('alliance_id')
         channel_id = details.get('channel_id')
@@ -894,12 +909,12 @@ class AllianceSync(commands.Cog):
         batch_info = details.get('batch_info')
 
         if not alliance_id or not channel_id:
-            self.logger.error(f"alliance_control process {process['id']} missing alliance_id or channel_id")
+            self.logger.error(f"alliance_sync_manual process {process['id']} missing alliance_id or channel_id")
             return
 
         channel = self.bot.get_channel(channel_id)
         if not channel:
-            self.logger.error(f"alliance_control process {process['id']}: channel {channel_id} not found")
+            self.logger.error(f"alliance_sync_manual process {process['id']}: channel {channel_id} not found")
             return
 
         # Look up live runtime context (interaction_message) — None if missing or after restart
@@ -966,9 +981,9 @@ class AllianceSync(commands.Cog):
             # Register handlers with the ProcessQueue cog
             process_queue_cog = self.bot.get_cog('ProcessQueue')
             if process_queue_cog:
-                process_queue_cog.register_handler('alliance_control', self.handle_alliance_control_process)
+                process_queue_cog.register_handler('alliance_sync_manual', self.handle_alliance_sync_manual_process)
                 process_queue_cog.register_handler('alliance_sync', self.handle_alliance_sync_process)
-                self.logger.info("AllianceSync: Registered alliance_control and alliance_sync handlers with ProcessQueue")
+                self.logger.info("AllianceSync: Registered alliance_sync_manual and alliance_sync handlers with ProcessQueue")
             else:
                 self.logger.error("AllianceSync: ProcessQueue cog not found, alliance operations will not work")
 
@@ -1015,7 +1030,7 @@ class AllianceSync(commands.Cog):
                         self.logger.warning(f"Channel not found for alliance {alliance_id}")
 
                 if scheduled_alliances:
-                    msg = f"Scheduled controls for {len(scheduled_alliances)} alliance(s): {', '.join(scheduled_alliances)}"
+                    msg = f"Scheduled syncs for {len(scheduled_alliances)} alliance(s): {', '.join(scheduled_alliances)}"
                     print(f"[SYNC] {msg}")
                     self.logger.info(msg)
 
