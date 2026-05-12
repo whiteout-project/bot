@@ -1,6 +1,10 @@
+"""
+Attendance report generator. Produces charts and summaries using matplotlib.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
+import logging
 from datetime import datetime
 import re
 import csv
@@ -9,6 +13,8 @@ from io import BytesIO
 import os
 from .attendance import SessionSelectView
 from .pimp_my_bot import theme
+
+logger = logging.getLogger('bot')
 
 try:
     import matplotlib.pyplot as plt
@@ -211,6 +217,7 @@ class AttendanceReport(commands.Cog):
                 db.commit()
                 return True
         except Exception as e:
+            logger.error(f"Error setting sort preference: {e}")
             print(f"Error setting sort preference: {e}")
             return False
 
@@ -533,6 +540,7 @@ class AttendanceReport(commands.Cog):
                 ephemeral=True
             )
         except Exception as e:
+            logger.error(f"Error posting report to channel: {e}")
             print(f"Error posting report to channel: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while posting the report.",
@@ -595,6 +603,7 @@ class AttendanceReport(commands.Cog):
                     )
                     
         except Exception as e:
+            logger.error(f"Error in process_export: {e}")
             print(f"Error in process_export: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while generating the export.",
@@ -623,6 +632,7 @@ class AttendanceReport(commands.Cog):
                 await self.show_text_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
                 
         except Exception as e:
+            logger.error(f"Error showing attendance report: {e}")
             print(f"Error showing attendance report: {e}")
             import traceback
             traceback.print_exc()
@@ -972,6 +982,7 @@ class AttendanceReport(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view, attachments=[file])
 
         except Exception as e:
+            logger.error(f"Matplotlib error: {e}")
             print(f"Matplotlib error: {e}")
             # Fallback to text report
             await self.show_text_report(interaction, alliance_id, session_name, is_preview, selected_players, session_id, marking_view)
@@ -1031,6 +1042,7 @@ class AttendanceReport(commands.Cog):
                         # This is the first event of this type
                         return "First Event"
         except Exception as e:
+            logger.error(f"Error fetching last attendance: {e}")
             print(f"Error fetching last attendance: {e}")
             return "N/A"
 
@@ -1385,6 +1397,7 @@ class AttendanceReport(commands.Cog):
                     await interaction.followup.send(embed=embed, ephemeral=False)
 
         except Exception as e:
+            logger.error(f"Error showing text attendance report: {e}")
             print(f"Error showing text attendance report: {e}")
             # Try to respond appropriately based on interaction state
             error_content = f"{theme.deniedIcon} An error occurred while generating attendance report."
@@ -1483,6 +1496,7 @@ class AttendanceReport(commands.Cog):
 
                             await back_interaction.response.edit_message(embed=select_embed, view=view)
                         except Exception as e:
+                            logger.error(f"Error going back to alliance selection: {e}")
                             print(f"Error going back to alliance selection: {e}")
                             await attendance_cog.show_attendance_menu(back_interaction)
                 
@@ -1520,6 +1534,7 @@ class AttendanceReport(commands.Cog):
                 await interaction.response.edit_message(embed=embed, view=view, attachments=[])
     
         except Exception as e:
+            logger.error(f"Error showing session selection: {e}")
             print(f"Error showing session selection: {e}")
             if interaction.response.is_done():
                 await interaction.edit_original_response(

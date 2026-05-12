@@ -1,15 +1,16 @@
+"""
+Minister scheduling menu. UI for managing state minister appointments and rotations.
+"""
 import discord
 from discord.ext import commands
 import sqlite3
-import time
-import hashlib
-import aiohttp
-from aiohttp_socks import ProxyConnector
+import logging
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
-from .browser_headers import get_headers
+from .pimp_my_bot import theme, safe_edit_message
+from .login_handler import LoginHandler
 
-SECRET = 'tB87#kPtkxqOS2'
+logger = logging.getLogger('bot')
+
 
 class UserFilterModal(discord.ui.Modal, title="Filter Users"):
     def __init__(self, parent_view):
@@ -219,10 +220,7 @@ class FilteredUserSelectView(discord.ui.View):
             color=theme.emColor1
         )
         
-        try:
-            await interaction.response.edit_message(embed=embed, view=self)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=self)
+        await safe_edit_message(interaction, embed=embed, view=self)
 
 class ClearConfirmationView(discord.ui.View):
     def __init__(self, bot, cog, activity_name, is_global_admin, alliance_ids):
@@ -490,20 +488,20 @@ class MinisterChannelView(discord.ui.View):
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_settings_menu(interaction)
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}", row=2)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Main Menu", style=discord.ButtonStyle.secondary, emoji=f"{theme.homeIcon}", row=2)
+    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            other_features_cog = self.cog.bot.get_cog("OtherFeatures")
-            if other_features_cog:
-                await other_features_cog.show_other_features_menu(interaction)
+            main_menu_cog = self.cog.bot.get_cog("MainMenu")
+            if main_menu_cog:
+                await main_menu_cog.show_main_menu(interaction)
             else:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Other Features module not found.",
+                    f"{theme.deniedIcon} Main Menu module not found.",
                     ephemeral=True
                 )
         except Exception as e:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} An error occurred while returning to Other Features menu: {e}",
+                f"{theme.deniedIcon} An error occurred while returning to Main Menu: {e}",
                 ephemeral=True
             )
 
@@ -757,31 +755,32 @@ class TimeSelect(discord.ui.Select):
 class MinisterMenu(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.users_conn = sqlite3.connect('db/users.sqlite')
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
-        self.alliance_conn = sqlite3.connect('db/alliance.sqlite')
+        self.alliance_conn = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
         self.alliance_cursor = self.alliance_conn.cursor()
-        self.svs_conn = sqlite3.connect("db/svs.sqlite")
+        self.svs_conn = sqlite3.connect("db/svs.sqlite", timeout=30.0, check_same_thread=False)
         self.svs_cursor = self.svs_conn.cursor()
         self.original_interaction = None
 
-    async def fetch_user_data(self, fid, proxy=None):
-        url = 'https://wos-giftcode-api.centurygame.com/api/player'
-        headers = get_headers('https://wos-giftcode-api.centurygame.com')
-        current_time = int(time.time() * 1000)
-        form = f"fid={fid}&time={current_time}"
-        sign = hashlib.md5((form + SECRET).encode('utf-8')).hexdigest()
-        form = f"sign={sign}&{form}"
-
+    def cog_unload(self):
+        """Close database connections when cog is unloaded."""
         try:
-            connector = ProxyConnector.from_url(proxy) if proxy else None
-            async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=15), trust_env=True) as session:
-                async with session.post(url, headers=headers, data=form, ssl=False) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        return response.status
-        except Exception as e:
+            self.users_conn.close()
+            self.alliance_conn.close()
+            self.svs_conn.close()
+        except Exception:
+            pass
+
+    async def fetch_user_data(self, fid, proxy=None):
+        result = await LoginHandler().fetch_player_data(str(fid), use_proxy=proxy)
+        if result['status'] == 'success':
+            return {"data": result['data']}
+        elif result['status'] == 'rate_limited':
+            return 429
+        elif result['status'] == 'not_found':
+            return {"data": None}
+        else:
             return None
 
     async def is_admin(self, user_id: int) -> bool:
@@ -833,11 +832,7 @@ class MinisterMenu(commands.Cog):
         )
 
         view = MinisterChannelView(self.bot, self, is_global)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            pass
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def show_channel_setup_menu(self, interaction: discord.Interaction):
         embed = discord.Embed(
@@ -861,12 +856,8 @@ class MinisterMenu(commands.Cog):
         )
 
         view = ChannelConfigurationView(self.bot, self)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
-    
     async def get_channel_status_display(self) -> tuple[str, discord.Color]:
         """
         Generate channel status display for main menu.
@@ -879,7 +870,7 @@ class MinisterMenu(commands.Cog):
         # Get the log guild to check channels
         try:
             log_guild = await minister_schedule_cog.get_log_guild(None)
-        except:
+        except Exception:
             log_guild = None
 
         # Define channels to check
@@ -1054,7 +1045,7 @@ class MinisterMenu(commands.Cog):
         
         try:
             await interaction.edit_original_response(embed=embed, view=view)
-        except:
+        except Exception:
             await interaction.followup.send(embed=embed, view=view)
     
     async def update_minister_names(self, interaction: discord.Interaction, activity_name: str):
@@ -1157,10 +1148,7 @@ class MinisterMenu(commands.Cog):
         
         view = ClearConfirmationView(self.bot, self, activity_name, is_global_admin, alliance_ids)
         
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def show_time_selection(self, interaction: discord.Interaction, activity_name: str, fid: str, current_time: str = None):
         # Get current slot mode
@@ -1206,11 +1194,7 @@ class MinisterMenu(commands.Cog):
         )
 
         view = TimeSelectView(self.bot, self, activity_name, fid, available_times, current_time)
-
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def complete_booking(self, interaction: discord.Interaction, activity_name: str, fid: str, selected_time: str):
         try:
@@ -1344,7 +1328,7 @@ class MinisterMenu(commands.Cog):
             try:
                 error_msg = f"{theme.deniedIcon} Error booking appointment: {e}"
                 await interaction.followup.send(error_msg, ephemeral=True)
-            except:
+            except Exception:
                 print(f"Failed to show error message for booking: {e}")
 
     async def update_channel_message(self, activity_name: str):
@@ -1461,7 +1445,7 @@ class MinisterMenu(commands.Cog):
             try:
                 error_msg = f"{theme.deniedIcon} Error clearing reservation: {e}"
                 await interaction.followup.send(error_msg, ephemeral=True)
-            except:
+            except Exception:
                 print(f"Failed to show error message for clearing reservation: {e}")
     
     async def show_clear_channels_selection(self, interaction: discord.Interaction):
@@ -1568,7 +1552,7 @@ class MinisterMenu(commands.Cog):
                         try:
                             message = await channel.fetch_message(message_id)
                             await message.delete()
-                        except:
+                        except Exception:
                             pass  # Message might already be deleted
                     
                     # Delete the message reference
@@ -1617,12 +1601,8 @@ class MinisterMenu(commands.Cog):
         )
 
         view = MinisterSettingsView(self.bot, self, is_global)
+        await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
-        try:
-            await interaction.response.edit_message(content=None, embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(content=None, embed=embed, view=view)
-    
     async def show_activity_selection_for_update(self, interaction: discord.Interaction):
         """Show activity selection for updating names"""
         embed = discord.Embed(
@@ -1632,12 +1612,8 @@ class MinisterMenu(commands.Cog):
         )
         
         view = ActivitySelectView(self.bot, self, "update_names")
-        
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
-    
+        await safe_edit_message(interaction, embed=embed, view=view)
+
     async def show_activity_selection_for_clear(self, interaction: discord.Interaction):
         """Show activity selection for clearing reservations"""
 
@@ -1662,11 +1638,7 @@ class MinisterMenu(commands.Cog):
         )
         
         view = ActivitySelectView(self.bot, self, "clear_reservations")
-        
-        try:
-            await interaction.response.edit_message(embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view)
 
     async def show_time_slot_mode_menu(self, interaction: discord.Interaction):
         """Show time slot mode selection menu"""
@@ -1727,11 +1699,7 @@ class MinisterMenu(commands.Cog):
 
         back_button.callback = back_callback
         view.add_item(back_button)
-
-        try:
-            await interaction.response.edit_message(content=None, embed=embed, view=view)
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(content=None, embed=embed, view=view)
+        await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
     async def migrate_time_slots(self, interaction: discord.Interaction, old_mode: int, new_mode: int):
         """Migrate all reservations from old mode to new mode"""
@@ -1909,19 +1877,7 @@ class MinisterMenu(commands.Cog):
 
         back_button.callback = back_callback
         view.add_item(back_button)
-
-        try:
-            await interaction.response.edit_message(
-                content=None,
-                embed=embed,
-                view=view
-            )
-        except discord.InteractionResponded:
-            await interaction.edit_original_response(
-                content=None,
-                embed=embed,
-                view=view
-            )
+        await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
 async def setup(bot):
     await bot.add_cog(MinisterMenu(bot))

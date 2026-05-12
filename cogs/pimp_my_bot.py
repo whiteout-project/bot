@@ -1,6 +1,5 @@
 """
-Theme management system for bot customization.
-Provides icons, colors, and dividers that can be customized via themes.
+Theme system singleton. Provides icons, colors, and dividers for bot-wide customization.
 """
 import discord
 from discord.ext import commands
@@ -15,7 +14,7 @@ import aiohttp
 import logging
 from typing import Tuple
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('bot')
 from .permission_handler import PermissionManager
 
 # Database path constant
@@ -82,7 +81,9 @@ ICON_CATEGORIES = {
         "robotIcon", "supportIcon", "chatIcon", "boltIcon", "testIcon",
         "cleanIcon", "paletteIcon", "starIcon", "heartIcon", "messageIcon",
         "shutdownZzzIcon", "shutdownDoorIcon", "shutdownHandIcon", "shutdownMoonIcon",
-        "shutdownPlugIcon", "shutdownStopIcon", "shutdownClapperIcon", "shutdownSparkleIcon"
+        "shutdownPlugIcon", "shutdownStopIcon", "shutdownClapperIcon", "shutdownSparkleIcon",
+        "startupGiftIcon", "startupBoxingIcon", "startupRocketIcon", "startupLockIcon",
+        "startupFireIcon", "startupSwordsIcon", "startupIceIcon", "startupCashIcon"
     ]
 }
 
@@ -123,6 +124,10 @@ DEFAULT_ICON_VALUES = {
     'shutdownZzzIcon': '💤', 'shutdownDoorIcon': '🚪', 'shutdownHandIcon': '👋',
     'shutdownMoonIcon': '🌙', 'shutdownPlugIcon': '🔌', 'shutdownStopIcon': '🛑',
     'shutdownClapperIcon': '🎬', 'shutdownSparkleIcon': '✨',
+    # Startup icons
+    'startupGiftIcon': '🎁', 'startupBoxingIcon': '🥊', 'startupRocketIcon': '🚀',
+    'startupLockIcon': '🔒', 'startupFireIcon': '🔥', 'startupSwordsIcon': '⚔️',
+    'startupIceIcon': '🧊', 'startupCashIcon': '💸',
     # Misc icons
     'medalIcon': '🎖️', 'checkIcon': '☑️', 'circleIcon': '⚪',
     'userIcon': '👤', 'trashIcon': '🗑️', 'refreshIcon': '🔄', 'levelIcon': '🔢',
@@ -149,6 +154,28 @@ async def check_interaction_user(interaction: discord.Interaction, expected_user
         )
         return False
     return True
+
+
+async def safe_edit_message(interaction: discord.Interaction, embed: discord.Embed = None,
+                            view: discord.ui.View = None, content: str = None):
+    """
+    Safely edit an interaction message, handling all response states.
+    Use this instead of manually checking interaction.response.is_done().
+
+    Args:
+        interaction: The Discord interaction
+        embed: Optional embed to display
+        view: Optional view with components
+        content: Optional text content (use None to clear existing content)
+    """
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.edit_message(embed=embed, view=view, content=content)
+        else:
+            await interaction.edit_original_response(embed=embed, view=view, content=content)
+    except discord.InteractionResponded:
+        await interaction.edit_original_response(embed=embed, view=view, content=content)
+
 
 def build_divider(start, pattern, end, length, max_length=99):
     """Build a divider string with exact character length.
@@ -321,6 +348,9 @@ class ThemeManager:
                     shutdownZzzIcon TEXT, shutdownDoorIcon TEXT, shutdownHandIcon TEXT,
                     shutdownMoonIcon TEXT, shutdownPlugIcon TEXT, shutdownStopIcon TEXT,
                     shutdownClapperIcon TEXT, shutdownSparkleIcon TEXT,
+                    startupGiftIcon TEXT, startupBoxingIcon TEXT, startupRocketIcon TEXT,
+                    startupLockIcon TEXT, startupFireIcon TEXT, startupSwordsIcon TEXT,
+                    startupIceIcon TEXT, startupCashIcon TEXT,
                     medalIcon TEXT, checkIcon TEXT, circleIcon TEXT,
                     userIcon TEXT, trashIcon TEXT, refreshIcon TEXT, levelIcon TEXT,
                     lockIcon TEXT, cleanIcon TEXT, archiveIcon TEXT, upIcon TEXT, downIcon TEXT,
@@ -363,6 +393,25 @@ class ThemeManager:
                 if col_name not in existing_columns:
                     cursor.execute(f"ALTER TABLE pimpsettings ADD COLUMN {col_name} INTEGER DEFAULT 0")
 
+            # Migration: Add startup icon columns if they don't exist
+            startup_icons = [
+                'startupGiftIcon', 'startupBoxingIcon', 'startupRocketIcon',
+                'startupLockIcon', 'startupFireIcon', 'startupSwordsIcon',
+                'startupIceIcon', 'startupCashIcon'
+            ]
+            for col_name in startup_icons:
+                if col_name not in existing_columns:
+                    cursor.execute(f"ALTER TABLE pimpsettings ADD COLUMN {col_name} TEXT")
+
+            # Backfill NULL icon columns with defaults for all existing themes
+            for icon_name, default_value in DEFAULT_ICON_VALUES.items():
+                if icon_name in existing_columns or icon_name in startup_icons:
+                    cursor.execute(
+                        f"UPDATE pimpsettings SET {icon_name} = ? WHERE {icon_name} IS NULL",
+                        (default_value,)
+                    )
+            conn.commit()
+
             # Check if default theme exists
             cursor.execute("SELECT COUNT(*) FROM pimpsettings WHERE themeName='default'")
             if cursor.fetchone()[0] == 0:
@@ -396,6 +445,9 @@ class ThemeManager:
                         shutdownZzzIcon, shutdownDoorIcon, shutdownHandIcon,
                         shutdownMoonIcon, shutdownPlugIcon, shutdownStopIcon,
                         shutdownClapperIcon, shutdownSparkleIcon,
+                        startupGiftIcon, startupBoxingIcon, startupRocketIcon,
+                        startupLockIcon, startupFireIcon, startupSwordsIcon,
+                        startupIceIcon, startupCashIcon,
                         medalIcon, checkIcon, circleIcon,
                         userIcon, trashIcon, refreshIcon, levelIcon,
                         lockIcon, cleanIcon, archiveIcon, upIcon, downIcon,
@@ -436,6 +488,9 @@ class ThemeManager:
                         '💤', '🚪', '👋',
                         '🌙', '🔌', '🛑',
                         '🎬', '✨',
+                        '🎁', '🥊', '🚀',
+                        '🔒', '🔥', '⚔️',
+                        '🧊', '💸',
                         '🎖️', '☑️', '⚪',
                         '👤', '🗑️', '🔄', '🔢',
                         '🔐', '🧹', '🗃️', '⬆️', '⬇️',
@@ -495,7 +550,7 @@ class ThemeManager:
         """Apply theme data from database row dictionary."""
         # Apply icons using the ICON_NAMES constant
         for icon_name in ICON_NAMES:
-            value = theme_dict.get(icon_name) or DEFAULT_EMOJI
+            value = theme_dict.get(icon_name) or DEFAULT_ICON_VALUES.get(icon_name) or DEFAULT_EMOJI
             setattr(self, icon_name, value)
 
         # Apply divider settings using the shared build_divider function
@@ -872,7 +927,7 @@ class ThemeMenuView(discord.ui.View):
             label="Main Menu",
             emoji=theme.homeIcon or None,
             style=discord.ButtonStyle.secondary,
-            custom_id="back_to_settings",
+            custom_id="back_from_themes",
             row=3
         )
         back_btn.callback = self.back_to_settings
@@ -963,6 +1018,8 @@ class ThemeMenuView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error activating theme: {e}")
+            print(f"Error activating theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error activating theme: {e}",
                 ephemeral=True
@@ -999,6 +1056,8 @@ class ThemeMenuView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error setting server theme: {e}")
+            print(f"Error setting server theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error setting server theme: {e}",
                 ephemeral=True
@@ -1028,6 +1087,8 @@ class ThemeMenuView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
 
         except Exception as e:
+            logger.error(f"Error clearing server theme: {e}")
+            print(f"Error clearing server theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error clearing server theme: {e}",
                 ephemeral=True
@@ -1119,6 +1180,8 @@ class ThemeMenuView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error sharing theme: {e}")
+            print(f"Error sharing theme: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} Error sharing theme: {e}",
                 ephemeral=True
@@ -1230,7 +1293,7 @@ class ThemeMenuView(discord.ui.View):
                 "To import a theme, send a message in this channel with:\n\n"
                 "1. A `.json` theme file attached\n"
                 "2. The bot will process it within 2 minutes\n\n"
-                f"{theme.infoIcon} **Tip:** Use `/theme import_file:` for direct import."
+                f"{theme.infoIcon} **Tip:** Use `/pimp import file:` for direct import."
             ),
             color=theme.emColor1
         )
@@ -1251,9 +1314,9 @@ class ThemeMenuView(discord.ui.View):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
 
-        alliance_cog = interaction.client.get_cog("Alliance")
-        if alliance_cog:
-            await alliance_cog.show_main_menu(interaction)
+        main_menu_cog = interaction.client.get_cog("MainMenu")
+        if main_menu_cog:
+            await main_menu_cog.show_main_menu(interaction)
         else:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Could not return to settings menu.",
@@ -1328,6 +1391,8 @@ class DeleteThemeConfirmView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self.menu_view)
 
         except Exception as e:
+            logger.error(f"Error deleting theme: {e}")
+            print(f"Error deleting theme: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Error deleting theme: {e}",
                 ephemeral=True
@@ -2185,6 +2250,8 @@ class Theme(commands.Cog):
         except aiohttp.ClientError as e:
             return {"success": False, "error": f"Connection error: {e}"}
         except Exception as e:
+            logger.error(f"Error fetching emoji from URL: {e}")
+            print(f"Error fetching emoji from URL: {e}")
             return {"success": False, "error": str(e)}
 
     async def _process_emoji_update(self, emoji_name, new_url, themename, view_update_callback=None):
@@ -2612,7 +2679,10 @@ class Theme(commands.Cog):
             'globeIcon': '1f30d', 'wizardIcon': '1f9d9', 'muteIcon': '1f515',
             'shutdownZzzIcon': '1f4a4', 'shutdownDoorIcon': '1f6aa', 'shutdownHandIcon': '1f44b',
             'shutdownMoonIcon': '1f319', 'shutdownPlugIcon': '1f50c', 'shutdownStopIcon': '1f6d1',
-            'shutdownClapperIcon': '1f3ac', 'shutdownSparkleIcon': '2728'
+            'shutdownClapperIcon': '1f3ac', 'shutdownSparkleIcon': '2728',
+            'startupGiftIcon': '1f381', 'startupBoxingIcon': '1f94a', 'startupRocketIcon': '1f680',
+            'startupLockIcon': '1f512', 'startupFireIcon': '1f525', 'startupSwordsIcon': '2694',
+            'startupIceIcon': '1f9ca', 'startupCashIcon': '1f4b8'
         }
 
         cdn_base = "https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/72x72/"
@@ -2854,6 +2924,8 @@ class Theme(commands.Cog):
             await interaction.followup.send(embed=embed)
 
         except Exception as e:
+            logger.error(f"Error activating theme (slash command): {e}")
+            print(f"Error activating theme (slash command): {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error activating theme: {e}")
 
     async def export_theme(self, interaction: discord.Interaction, themename: str):
@@ -2915,6 +2987,8 @@ class Theme(commands.Cog):
             await interaction.followup.send(embed=embed, file=file)
 
         except Exception as e:
+            logger.error(f"Error exporting theme (slash command): {e}")
+            print(f"Error exporting theme (slash command): {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error exporting theme: {e}")
 
     async def import_theme(self, interaction: discord.Interaction, import_file: discord.Attachment):

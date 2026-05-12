@@ -1,3 +1,6 @@
+"""
+Gift code distribution API client. Syncs codes with the shared gift-code-api service.
+"""
 import json
 import aiohttp
 import asyncio
@@ -10,7 +13,7 @@ import ssl
 import logging
 from .pimp_my_bot import theme
 
-logger = logging.getLogger("gift_operationsapi")
+logger = logging.getLogger('gift')
 
 class GiftCodeAPI:
     def __init__(self, bot):
@@ -34,14 +37,16 @@ class GiftCodeAPI:
         if hasattr(bot, 'conn'):
             self.conn = bot.conn
             self.cursor = self.conn.cursor()
+            self._owns_conn = False
         else:
-            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0)
+            self.conn = sqlite3.connect('db/giftcode.sqlite', timeout=30.0, check_same_thread=False)
             self.cursor = self.conn.cursor()
-            
-        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0)
+            self._owns_conn = True
+
+        self.settings_conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
         self.settings_cursor = self.settings_conn.cursor()
-        
-        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0)
+
+        self.users_conn = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.users_cursor = self.users_conn.cursor()
         
         # Configure SQLite for better concurrent access, avoid DB locks
@@ -55,9 +60,9 @@ class GiftCodeAPI:
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
         
-        self.logger = logging.getLogger("gift_operationsapi")
-        
-        asyncio.create_task(self.start_api_check())
+        self.logger = logging.getLogger('gift')
+
+        self._api_check_task = asyncio.create_task(self.start_api_check())
 
     async def _execute_with_retry(self, operation, *args, max_retries=3, delay=0.1):
         """Execute a database operation with retry logic for handling locks."""
@@ -109,13 +114,17 @@ class GiftCodeAPI:
         except Exception as e:
             self.logger.exception(f"Fatal error in API check loop: {e}")
 
-    def __del__(self):
-        """Clean up database connections."""
+    def cog_unload(self):
+        """Clean up database connections and the API check task when unloaded."""
+        task = getattr(self, '_api_check_task', None)
+        if task is not None and not task.done():
+            task.cancel()
         try:
-            self.conn.close()
+            if getattr(self, '_owns_conn', True):
+                self.conn.close()
             self.settings_conn.close()
             self.users_conn.close()
-        except:
+        except Exception:
             pass
     
     async def _wait_for_rate_limit(self):
@@ -418,14 +427,14 @@ class GiftCodeAPI:
                                                 gift_operations = self.bot.get_cog('GiftOperations')
                                                 if gift_operations:
                                                     self.logger.info(f"Queueing auto-distribution for code {code} to {len(auto_alliances)} alliances")
+                                                    from . import gift_redemption
                                                     for alliance in auto_alliances:
-                                                        try:  # Use the queue system
-                                                            await gift_operations.add_to_validation_queue(
+                                                        try:
+                                                            await gift_redemption.enqueue_redemption(
+                                                                gift_operations,
                                                                 giftcode=code,
-                                                                source='api-auto',
-                                                                operation_type='redemption',
                                                                 alliance_id=alliance[0],
-                                                                interaction=None
+                                                                source='api-auto',
                                                             )
                                                         except Exception as e:
                                                             self.logger.exception(f"Error queueing auto-distribution for code {code} to alliance {alliance[0]}: {e}")
@@ -696,7 +705,7 @@ class GiftCodeAPI:
                 try:
                     gift_operations = self.bot.get_cog('GiftOperations')
                     if gift_operations:
-                        status = await gift_operations.claim_giftcode_rewards_wos(test_fid, code)
+                        status = await gift_operations.claim_giftcode_rewards_wos(test_fid, code, skip_cache=True)
                         
                         if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
                             exists_in_api = await self.check_giftcode(code)

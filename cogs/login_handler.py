@@ -1,14 +1,18 @@
+"""
+Centralized login and player data handler. Manages dual-API access and rate limiting.
+"""
 import aiohttp
 import asyncio
 import hashlib
 import time
 import ssl
-import os
-from datetime import datetime
+import logging
 from typing import Optional, List, Dict, Callable
 
 from .pimp_my_bot import theme
 from .browser_headers import get_headers
+
+logger = logging.getLogger('bot')
 
 class LoginHandler:
     """
@@ -49,22 +53,10 @@ class LoginHandler:
         
         # Alliance operation locks to prevent conflicts
         self.alliance_locks = {}
-        
-        # Centralized operation queue
-        self.operation_queue = asyncio.Queue()
-        self.operation_lock = asyncio.Lock()
-        self.current_operation = None
-        self.queue_processor_task = None
-        
+
         # SSL context (reusable)
         self.ssl_context = self._create_ssl_context()
-        
-        # Logging
-        self.log_directory = 'log'
-        if not os.path.exists(self.log_directory):
-            os.makedirs(self.log_directory)
-        self.log_file = os.path.join(self.log_directory, 'login_handler.txt')
-        
+
         # Mark as initialized
         self._initialized = True
     
@@ -74,15 +66,7 @@ class LoginHandler:
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
         return ssl_context
-    
-    def log_message(self, message: str):
-        """Log a message with timestamp"""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        log_entry = f"[{timestamp}] {message}\n"
-        
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(log_entry)
-    
+
     def get_alliance_lock(self, alliance_id: str) -> asyncio.Lock:
         """Get or create alliance-specific lock"""
         if alliance_id not in self.alliance_locks:
@@ -115,9 +99,8 @@ class LoginHandler:
                 async with session.post(self.api1_url, headers=headers, data=form, timeout=5) as response:
                     # API is available if we get 200 (success) or 429 (rate limit)
                     api_status["api1_available"] = response.status in [200, 429]
-                    self.log_message(f"API1 availability check: Status {response.status}")
             except Exception as e:
-                self.log_message(f"API1 availability check failed: {str(e)}")
+                logger.error(f"API1 availability check failed: {e}")
                 api_status["api1_available"] = False
             
             # Test API 2
@@ -130,9 +113,8 @@ class LoginHandler:
 
                 async with session.post(self.api2_url, headers=headers, data=form, timeout=5) as response:
                     api_status["api2_available"] = response.status in [200, 429]
-                    self.log_message(f"API2 availability check: Status {response.status}")
             except Exception as e:
-                self.log_message(f"API2 availability check failed: {str(e)}")
+                logger.error(f"API2 availability check failed: {e}")
                 api_status["api2_available"] = False
         
         # Update configuration based on availability
@@ -322,12 +304,13 @@ class LoginHandler:
                         }
                         
         except Exception as e:
-            self.log_message(f"Error fetching player data for ID {fid}: {str(e)}")
+            err_desc = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.error(f"Error fetching player data for ID {fid}: {err_desc}")
             return {
                 'status': 'error',
                 'data': None,
                 'api_used': api_num,
-                'error_message': str(e)
+                'error_message': err_desc,
             }
     
     async def fetch_player_batch(self, fids: List[str], progress_callback: Optional[Callable] = None, 
@@ -426,83 +409,3 @@ class LoginHandler:
                              (self.rate_limit_per_api - len(self.api1_requests if 1 in self.available_apis else self.api2_requests))
         }
     
-    async def start_queue_processor(self):
-        """Start the queue processor if not already running"""
-        if not self.queue_processor_task or self.queue_processor_task.done():
-            self.queue_processor_task = asyncio.create_task(self._process_operation_queue())
-            self.log_message("Queue processor started")
-    
-    async def queue_operation(self, operation_info: Dict) -> int:
-        """
-        Queue an operation and return its position
-        operation_info should contain:
-        - type: 'member_addition' | 'alliance_control' | 'gift_code' etc
-        - callback: async function to execute
-        - description: string description
-        - alliance_id: optional alliance ID for locking
-        - interaction: discord interaction for status updates
-        """
-        # Mark if this operation will be queued (not the first)
-        current_size = self.operation_queue.qsize()
-        operation_info['was_queued'] = current_size > 0
-        
-        await self.operation_queue.put(operation_info)
-        queue_size = self.operation_queue.qsize()
-        self.log_message(f"Operation queued: {operation_info['description']} (Position: {queue_size})")
-        
-        # Start processor if not running
-        await self.start_queue_processor()
-        
-        return queue_size
-    
-    async def _process_operation_queue(self):
-        """Process queued operations one at a time"""
-        self.log_message("Queue processor starting...")
-        
-        while True:
-            try:
-                # Wait for an operation
-                operation = await self.operation_queue.get()
-                self.current_operation = operation
-                
-                self.log_message(f"Processing operation: {operation['description']}")
-                
-                try:
-                    # Use alliance lock if specified
-                    if operation.get('alliance_id'):
-                        async with self.get_alliance_lock(str(operation['alliance_id'])):
-                            await operation['callback']()
-                    else:
-                        await operation['callback']()
-                    
-                    self.log_message(f"Operation completed: {operation['description']}")
-                    
-                except Exception as e:
-                    self.log_message(f"Operation failed: {operation['description']} - Error: {str(e)}")
-                    # Send error message if interaction is available
-                    if operation.get('interaction'):
-                        try:
-                            await operation['interaction'].followup.send(
-                                f"{theme.deniedIcon} Operation failed: {str(e)}", ephemeral=True
-                            )
-                        except:
-                            pass
-                
-                finally:
-                    self.current_operation = None
-                    self.operation_queue.task_done()
-                
-            except asyncio.CancelledError:
-                self.log_message("Queue processor cancelled")
-                break
-            except Exception as e:
-                self.log_message(f"Queue processor error: {str(e)}")
-                await asyncio.sleep(1)  # Prevent tight loop on error
-    
-    def get_queue_info(self) -> Dict:
-        """Get current queue status"""
-        return {
-            'queue_size': self.operation_queue.qsize(),
-            'current_operation': self.current_operation,
-            'is_processing': self.current_operation is not None
-        }
