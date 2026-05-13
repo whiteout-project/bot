@@ -4,13 +4,14 @@ Core bot operations. Admin management, alliance control messages, and bot settin
 import discord
 from discord.ext import commands
 import os
+import re
 import sys
 import sqlite3
 import asyncio
 import requests
 import logging
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, safe_edit_message
 
 logger = logging.getLogger('bot')
 
@@ -98,6 +99,19 @@ class BotOperations(commands.Cog):
                     "ALTER TABLE admin ADD COLUMN is_owner INTEGER DEFAULT 0"
                 )
 
+            # Single-row table storing the bot's Discord activity status.
+            self.settings_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bot_presence (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    activity_type TEXT NOT NULL DEFAULT 'playing',
+                    activity_text TEXT NOT NULL DEFAULT 'Whiteout Survival',
+                    activity_url TEXT
+                )
+            """)
+            self.settings_cursor.execute(
+                "INSERT OR IGNORE INTO bot_presence (id) VALUES (1)"
+            )
+
             self.settings_db.commit()
             self._backfill_owner_if_needed()
 
@@ -146,6 +160,73 @@ class BotOperations(commands.Cog):
             self.alliance_db.close()
         except Exception:
             pass
+
+    # ── Bot Presence (activity status) ──────────────────────────────────
+
+    def get_bot_presence(self) -> dict:
+        """Read the persisted bot presence settings."""
+        self.settings_cursor.execute(
+            "SELECT activity_type, activity_text, activity_url FROM bot_presence WHERE id = 1"
+        )
+        row = self.settings_cursor.fetchone()
+        if not row:
+            return {'activity_type': 'playing', 'activity_text': 'Whiteout Survival', 'activity_url': None}
+        return {'activity_type': row[0], 'activity_text': row[1], 'activity_url': row[2]}
+
+    async def set_bot_presence(self, *, activity_type: str = None,
+                                activity_text: str = None,
+                                activity_url: str = None) -> None:
+        """Persist + apply a presence change. Pass only the fields you want to
+        update; the rest stay at their current values."""
+        current = self.get_bot_presence()
+        new_type = activity_type if activity_type is not None else current['activity_type']
+        new_text = activity_text if activity_text is not None else current['activity_text']
+        new_url = activity_url if activity_url is not None else current['activity_url']
+
+        self.settings_cursor.execute(
+            "UPDATE bot_presence SET activity_type = ?, activity_text = ?, activity_url = ? WHERE id = 1",
+            (new_type, new_text, new_url),
+        )
+        self.settings_db.commit()
+        await self._apply_presence(new_type, new_text, new_url)
+
+    async def _apply_presence(self, activity_type: str, activity_text: str,
+                              activity_url: str | None) -> None:
+        """Push the given presence to Discord via change_presence."""
+        try:
+            if activity_type == 'streaming' and activity_url:
+                activity = discord.Streaming(name=activity_text, url=activity_url)
+            else:
+                # Streaming-without-URL silently falls back to Playing
+                # (Discord would drop it anyway without a valid URL).
+                lookup = 'playing' if activity_type == 'streaming' else activity_type
+                api_type = getattr(discord.ActivityType, lookup, discord.ActivityType.playing)
+                activity = discord.Activity(type=api_type, name=activity_text)
+            await self.bot.change_presence(activity=activity)
+        except Exception as e:
+            logger.warning(f"Failed to apply bot presence: {e}")
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Apply the persisted presence after the bot connects."""
+        p = self.get_bot_presence()
+        await self._apply_presence(p['activity_type'], p['activity_text'], p['activity_url'])
+
+    async def show_bot_presence(self, interaction: discord.Interaction):
+        """Open the Bot Presence settings view. Global Admin only."""
+        _, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only Global Admins can change the bot's presence.",
+                ephemeral=True,
+            )
+            return
+        view = BotPresenceView(self)
+        try:
+            await safe_edit_message(interaction, embed=view.build_embed(), view=view, content=None)
+        except Exception as e:
+            logger.error(f"Error showing bot presence: {e}")
+            print(f"Error showing bot presence: {e}")
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
@@ -820,6 +901,160 @@ class StartTimeModal(discord.ui.Modal):
         )
         self.parent_view.alliance_db.commit()
         await self.parent_view.update_view(interaction)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Bot Presence (activity status) views
+# ────────────────────────────────────────────────────────────────────────
+
+# (code, label-shown-in-embed, dropdown-emoji). Discord rejects Custom
+# activity type for bots; Streaming needs a valid Twitch/YouTube URL.
+_PRESENCE_TYPES: list[tuple[str, str, str]] = [
+    ('playing',   'Playing',      '🎮'),
+    ('streaming', 'Streaming',    '🔴'),
+    ('listening', 'Listening to', '🎧'),
+    ('watching',  'Watching',     '👁️'),
+    ('competing', 'Competing in', '🏆'),
+]
+_PRESENCE_VERB = {code: label for code, label, _ in _PRESENCE_TYPES}
+
+_STREAM_URL_RE = re.compile(
+    r'^https?://(?:www\.)?(?:twitch\.tv|youtube\.com)/.+',
+    re.IGNORECASE,
+)
+
+
+class BotPresenceView(discord.ui.View):
+    """Lets a Global admin pick the bot's activity type + edit its text/URL."""
+
+    def __init__(self, cog: 'BotOperations'):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self._build_components()
+
+    def build_embed(self) -> discord.Embed:
+        p = self.cog.get_bot_presence()
+        verb = _PRESENCE_VERB.get(p['activity_type'], 'Playing')
+        current = f"{verb} **{p['activity_text']}**"
+        if p['activity_type'] == 'streaming' and p['activity_url']:
+            current += f"\n└ {p['activity_url']}"
+        return discord.Embed(
+            title=f"{theme.robotIcon} Bot Presence",
+            description=(
+                f"Set the activity status shown next to the bot's name in "
+                f"Discord. Picking a type from the dropdown applies immediately.\n\n"
+                f"{theme.upperDivider}\n"
+                f"**Currently:** {current}\n"
+                f"{theme.lowerDivider}\n"
+                f"_Streaming requires a valid Twitch or YouTube URL — without "
+                f"it, Discord shows the activity as Playing._"
+            ),
+            color=theme.emColor1,
+        )
+
+    def _build_components(self):
+        self.clear_items()
+        current_type = self.cog.get_bot_presence()['activity_type']
+
+        select = discord.ui.Select(
+            placeholder="Activity type",
+            options=[
+                discord.SelectOption(
+                    label=label, value=code, emoji=emoji,
+                    default=(code == current_type),
+                )
+                for code, label, emoji in _PRESENCE_TYPES
+            ],
+            row=0,
+        )
+        select.callback = self._on_type_change
+        self.add_item(select)
+
+        edit_btn = discord.ui.Button(
+            label="Edit Text" + (" / URL" if current_type == 'streaming' else ''),
+            emoji=theme.editListIcon,
+            style=discord.ButtonStyle.primary, row=1,
+        )
+        edit_btn.callback = self._open_text_modal
+        self.add_item(edit_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    async def _refresh(self, interaction: discord.Interaction):
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_type_change(self, interaction: discord.Interaction):
+        new_type = interaction.data['values'][0]
+        await self.cog.set_bot_presence(activity_type=new_type)
+        await self._refresh(interaction)
+
+    async def _open_text_modal(self, interaction: discord.Interaction):
+        p = self.cog.get_bot_presence()
+        modal = BotPresenceTextModal(
+            self, current_text=p['activity_text'],
+            current_url=p['activity_url'] or '',
+            is_streaming=(p['activity_type'] == 'streaming'),
+        )
+        await interaction.response.send_modal(modal)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu:
+            await main_menu.show_maintenance(interaction)
+
+
+class BotPresenceTextModal(discord.ui.Modal):
+    """Text (and URL when streaming) editor for the bot's activity status."""
+
+    def __init__(self, parent_view: BotPresenceView, *,
+                 current_text: str, current_url: str, is_streaming: bool):
+        super().__init__(title="Edit Bot Presence")
+        self.parent_view = parent_view
+        self.is_streaming = is_streaming
+
+        self.text_input = discord.ui.TextInput(
+            label="Activity text",
+            placeholder="e.g. Whiteout Survival",
+            default=current_text, required=True,
+            min_length=1, max_length=128,
+        )
+        self.add_item(self.text_input)
+
+        if is_streaming:
+            self.url_input = discord.ui.TextInput(
+                label="Stream URL (Twitch or YouTube)",
+                placeholder="https://twitch.tv/yourchannel",
+                default=current_url, required=True,
+                max_length=512,
+            )
+            self.add_item(self.url_input)
+        else:
+            self.url_input = None
+
+    async def on_submit(self, interaction: discord.Interaction):
+        text = self.text_input.value.strip()
+        url = self.url_input.value.strip() if self.url_input else None
+
+        if self.is_streaming:
+            if not _STREAM_URL_RE.match(url or ''):
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Stream URL must be a Twitch or YouTube link "
+                    f"(e.g. `https://twitch.tv/yourchannel`).",
+                    ephemeral=True,
+                )
+                return
+
+        await self.parent_view.cog.set_bot_presence(activity_text=text, activity_url=url)
+        self.parent_view._build_components()
+        await interaction.response.edit_message(
+            embed=self.parent_view.build_embed(), view=self.parent_view
+        )
 
 
 async def setup(bot):

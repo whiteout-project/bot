@@ -390,6 +390,8 @@ class MainMenu(commands.Cog):
                     f"└ Create / view / clean local + DM backups (Global Admin only)\n\n"
                     f"{theme.heartIcon} **Bot Health**\n"
                     f"└ API status, DB health, system info, restart, cleanup tools (Global Admin only)\n\n"
+                    f"{theme.robotIcon} **Bot Presence**\n"
+                    f"└ Set the bot's Discord activity status (Global Admin only)\n\n"
                     f"{theme.supportIcon} **Request Support**\n"
                     f"└ Open a support DM with logs attached\n\n"
                     f"{theme.infoIcon} **About Project**\n"
@@ -1893,7 +1895,7 @@ class MaintenanceView(discord.ui.View):
         # Disable Global Admin only buttons for non-global admins
         for child in self.children:
             if isinstance(child, discord.ui.Button):
-                if child.label in ["Check for Updates", "Backup System", "Bot Health"]:
+                if child.label in ["Check for Updates", "Backup System", "Bot Health", "Bot Presence"]:
                     child.disabled = not is_global
 
     @discord.ui.button(
@@ -1948,6 +1950,27 @@ class MaintenanceView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error loading Bot Health: {e}")
             print(f"Error loading Bot Health: {e}")
+
+    @discord.ui.button(
+        label="Bot Presence",
+        emoji=theme.robotIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="bot_presence",
+        row=1
+    )
+    async def presence_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            bot_ops = self.cog.bot.get_cog("BotOperations")
+            if bot_ops:
+                await bot_ops.show_bot_presence(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Bot Operations module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Error loading Bot Presence: {e}")
+            print(f"Error loading Bot Presence: {e}")
 
     @discord.ui.button(
         label="Request Support",
