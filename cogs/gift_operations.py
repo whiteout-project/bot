@@ -192,9 +192,9 @@ class GiftOperations(commands.Cog):
             self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
             result = self.settings_cursor.fetchone()
             if not result:
-                self.settings_cursor.execute("INSERT INTO test_fid_settings (test_fid) VALUES (?)", ("244886619",))
+                self.settings_cursor.execute("INSERT INTO test_fid_settings (test_fid) VALUES (?)", ("45379845",))
                 self.settings_conn.commit()
-                self.logger.info("Initialized default test ID (244886619) in database")
+                self.logger.info("Initialized default test ID (45379845) in database")
         except Exception as e:
             self.logger.exception(f"Error setting up test ID table: {e}")
 

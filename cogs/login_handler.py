@@ -73,7 +73,7 @@ class LoginHandler:
             self.alliance_locks[alliance_id] = asyncio.Lock()
         return self.alliance_locks[alliance_id]
     
-    async def check_apis_availability(self, test_fid: str = "46765089") -> Dict[str, bool]:
+    async def check_apis_availability(self, test_fid: str = "45379845") -> Dict[str, bool]:
         """
         Check which login APIs are available
         Returns: dict with api1_available, api2_available
@@ -240,24 +240,21 @@ class LoginHandler:
         sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
         form = f"sign={sign}&{form}"
         headers = get_headers(api_url.rsplit('/api/', 1)[0])
-        
+
         try:
-            # Use proxy if provided and main request fails
             if use_proxy:
                 from aiohttp_socks import ProxyConnector
                 connector = ProxyConnector.from_url(use_proxy, ssl=self.ssl_context)
             else:
                 connector = aiohttp.TCPConnector(ssl=self.ssl_context)
-            
+
             async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
                 async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                    # Record the API request
                     self._record_api_request(api_num)
-                    
+
                     if response.status == 200:
                         data = await response.json()
-                        
-                        # Check if we have valid data
+
                         if data.get('data'):
                             return {
                                 'status': 'success',
@@ -265,8 +262,7 @@ class LoginHandler:
                                 'api_used': api_num,
                                 'error_message': None
                             }
-                        
-                        # Check if this is a "player not found" error (40004 or 40001 with "role not exist")
+
                         elif data.get('err_code') == 40004 or (data.get('err_code') == 40001 and 'role not exist' in str(data.get('msg', '')).lower()):
                             return {
                                 'status': 'not_found',
@@ -275,8 +271,7 @@ class LoginHandler:
                                 'error_message': 'Player does not exist (role not exist)',
                                 'err_code': data.get('err_code')
                             }
-                        
-                        # Other cases where data is empty but not error 40004
+
                         else:
                             err_code = data.get('err_code', 'unknown')
                             err_msg = data.get('msg', 'Unknown error')
@@ -288,7 +283,6 @@ class LoginHandler:
                                 'err_code': err_code
                             }
                     elif response.status == 429:
-                        # This shouldn't happen with our rate limiting, but handle it
                         return {
                             'status': 'rate_limited',
                             'data': None,
@@ -302,7 +296,7 @@ class LoginHandler:
                             'api_used': api_num,
                             'error_message': f'HTTP {response.status}'
                         }
-                        
+
         except Exception as e:
             err_desc = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
             logger.error(f"Error fetching player data for ID {fid}: {err_desc}")
@@ -312,7 +306,7 @@ class LoginHandler:
                 'api_used': api_num,
                 'error_message': err_desc,
             }
-    
+
     async def fetch_player_batch(self, fids: List[str], progress_callback: Optional[Callable] = None, 
                                alliance_id: Optional[str] = None) -> List[Dict]:
         """

@@ -687,7 +687,7 @@ class GiftCodeAPI:
                 self.logger.info("No codes to validate")
                 return
             
-            test_fid = "244886619" # Default fallback
+            test_fid = "45379845" # Default fallback
             try:
                 gift_operations = self.bot.get_cog('GiftOperations')
                 if gift_operations and hasattr(gift_operations, 'get_test_fid'):

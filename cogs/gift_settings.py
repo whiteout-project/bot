@@ -112,15 +112,15 @@ def get_test_fid(cog):
     Get the current test ID from the database.
 
     Returns:
-        str: The current test ID, or the default "244886619" if not found
+        str: The current test ID, or the default "45379845" if not found
     """
     try:
         cog.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
         result = cog.settings_cursor.fetchone()
-        return result[0] if result else "244886619"
+        return result[0] if result else "45379845"
     except Exception as e:
         cog.logger.exception(f"Error getting test ID: {e}")
-        return "244886619"
+        return "45379845"
 
 
 async def get_validation_fid(cog):
@@ -129,7 +129,7 @@ async def get_validation_fid(cog):
     Hierarchy:
     1. Configured test ID (if valid)
     2. Random alliance member ID (if no test ID)
-    3. Relo default ID (244886619) as fallback
+    3. default test ID (45379845) as fallback
 
     Returns:
         tuple: (fid, source) where source is 'test_fid', 'alliance_member', or 'default'
@@ -142,7 +142,7 @@ async def get_validation_fid(cog):
         cog.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
         result = cog.settings_cursor.fetchone()
 
-        if result and result[0] != "244886619":
+        if result and result[0] != "45379845":
             # Test ID is configured, verify it's valid
             is_valid, _ = await verify_test_fid(cog, test_fid)
             if is_valid:
@@ -166,12 +166,12 @@ async def get_validation_fid(cog):
                 return fid, 'alliance_member'
 
         # Third try: Fall back to default ID
-        cog.logger.info("No alliance members found, using default ID for validation: 244886619")
-        return "244886619", 'default'
+        cog.logger.info("No alliance members found, using default ID for validation: 45379845")
+        return "45379845", 'default'
 
     except Exception as e:
         cog.logger.exception(f"Error in get_validation_fid: {e}")
-        return "244886619", 'default'
+        return "45379845", 'default'
 
 
 async def show_ocr_settings(cog, interaction: discord.Interaction):
@@ -713,13 +713,13 @@ class TestIDModal(discord.ui.Modal, title="Change Test ID"):
         try:
             self.cog.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
             result = self.cog.settings_cursor.fetchone()
-            current_fid = result[0] if result else "244886619"
+            current_fid = result[0] if result else "45379845"
         except Exception:
-            current_fid = "244886619"
+            current_fid = "45379845"
 
         self.test_fid = discord.ui.TextInput(
             label="Enter New Player ID",
-            placeholder="Example: 244886619",
+            placeholder="Example: 45379845",
             default=current_fid,
             required=True,
             min_length=1,

@@ -46,7 +46,6 @@ def _get_ready_messages():
             f"{theme.startupBoxingIcon} Ready to rumble like Discord isn't rate limiting us again!",
             f"{theme.startupRocketIcon} Systems nominal. Ethics optional. Proceeding anyway.",
             f"{theme.startupLockIcon} Locked and loaded. Confidence high, accuracy pending.",
-            f"{theme.startupFireIcon} Furnace is lit; gift codes are legit. A haiku, just for you.",
             f"{theme.startupSwordsIcon} Standing by for duty and looking busy, Chief. That's half the job.",
             f"{theme.startupIceIcon} Warmed up and ready to suppress any errors like they never happened.",
             f"{theme.startupCashIcon} Morally bankrupt, but rich in redeemable codes. Let's do this!",
@@ -57,7 +56,6 @@ def _get_ready_messages():
             "🥊 Ready to rumble like Discord isn't rate limiting us again!",
             "🚀 Systems nominal. Ethics optional. Proceeding anyway.",
             "🔒 Locked and loaded. Confidence high, accuracy pending.",
-            "🔥 Furnace is lit; gift codes are legit. A haiku, just for you.",
             "⚔️ Standing by for duty and looking busy, Chief. That's half the job.",
             "🧊 Warmed up and ready to suppress any errors like they never happened.",
             "💸 Morally bankrupt, but rich in redeemable codes. Let's do this!",
@@ -208,7 +206,7 @@ def info(message):
         icon = theme.chatIcon
     except Exception:
         icon = '💬'
-    print(f"  {icon} {message}")
+    print(f"\n  {icon} {message}")
 
 
 def warn(message):

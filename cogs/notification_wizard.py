@@ -79,7 +79,7 @@ class NotificationWizard(commands.Cog):
                 "*Welcome, oh seeker of convenient event notifications.*\n\n"
                 "**You shall not pass without reading the following instructions carefully!**\n\n"
                 "I'll help you set up notifications for all common alliance events and more in a channel of your choice, "
-                "so that your members never forget another event. It works just like magic! ✨\n\n"
+                f"so that your members never forget another event. It works just like magic! {theme.wizardIcon}\n\n"
                 "**Important:**\n"
                 "- Make sure you've created a channel where you want the notifications to appear.\n"
                 "- If you want to use a separate role for alerts, set that up in advance too.\n"
@@ -423,7 +423,7 @@ class CommonSettingsHubView(discord.ui.View):
                 f"{theme.announceIcon} **Mention:** {mention_status}{mention_desc}\n\n"
                 "**Optional Settings:**\n"
                 f"{theme.timeIcon} **Notification Times:** {notif_status}{notif_desc}\n"
-                f"🌍 **Timezone:** {timezone_status}\n\n"
+                f"{theme.globeIcon} **Timezone:** {timezone_status}\n\n"
                 "Click the buttons below to configure each setting.\n"
                 "When ready, click **Continue** to select events."
             ),
@@ -448,7 +448,7 @@ class CommonSettingsHubView(discord.ui.View):
 
         mention_button = discord.ui.Button(
             label="Set Mention",
-            emoji=f"{theme.chatIcon}",
+            emoji=f"{theme.announceIcon}",
             style=discord.ButtonStyle.success if self.session.mention_type else discord.ButtonStyle.danger,
             row=0
         )
@@ -565,7 +565,7 @@ class WizardMentionSelectView(discord.ui.View):
     async def show(self, interaction: discord.Interaction):
         """Display mention selection"""
         embed = discord.Embed(
-            title="💬 Select Mention Type",
+            title=f"{theme.announceIcon} Select Mention Type",
             description=(
                 "Choose how to mention users:\n\n"
                 "1️⃣ @everyone\n"
@@ -1906,7 +1906,7 @@ class MercenaryBossesConfigView(discord.ui.View):
         """Save boss times and proceed"""
         if not self.boss_times:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} Please add at least one mercenary boss!",
+                f"{theme.deniedIcon} Please add at least one boss!",
                 ephemeral=True
             )
             return
@@ -2784,7 +2784,7 @@ class WizardPreviewView(discord.ui.View):
                     event_lines.append(f"• {icon} {event_type} - disabled")
 
             embed.add_field(
-                name="📋 Events",
+                name=f"{theme.listIcon} Events",
                 value="\n".join(event_lines) if event_lines else "No events configured",
                 inline=False
             )
