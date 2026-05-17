@@ -465,6 +465,32 @@ class AttendanceView(discord.ui.View):
             await interaction.response.edit_message(embed=error_embed, view=None)
 
     @discord.ui.button(
+        label="Screenshot Upload",
+        emoji=theme.importIcon,
+        style=discord.ButtonStyle.success,
+        custom_id="screenshot_upload",
+        row=1
+    )
+    async def screenshot_upload_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            ocr_cog = self.cog.bot.get_cog("AttendanceOCR")
+            if ocr_cog is None:
+                error_embed = self.cog._create_error_embed(
+                    f"{theme.deniedIcon} Error",
+                    "Screenshot Upload module not loaded."
+                )
+                await interaction.response.edit_message(embed=error_embed, view=None)
+                return
+            await ocr_cog.show_channel_setup_menu(interaction)
+        except Exception as e:
+            logger.error(f"Error loading Screenshot Upload menu: {e}")
+            error_embed = self.cog._create_error_embed(
+                f"{theme.deniedIcon} Error",
+                "An error occurred while loading Screenshot Upload."
+            )
+            await interaction.response.edit_message(embed=error_embed, view=None)
+
+    @discord.ui.button(
         label="Settings",
         emoji=theme.settingsIcon,
         style=discord.ButtonStyle.secondary,
@@ -475,10 +501,10 @@ class AttendanceView(discord.ui.View):
         try:
             # Check if user has admin permissions
             admin_result = await self.cog._check_admin_permissions(interaction.user.id)
-            
+
             if not admin_result:
                 error_embed = self.cog._create_error_embed(
-                    f"{theme.deniedIcon} Access Denied", 
+                    f"{theme.deniedIcon} Access Denied",
                     "You do not have permission to access settings."
                 )
                 await interaction.response.edit_message(embed=error_embed, view=None)
@@ -505,7 +531,7 @@ class AttendanceView(discord.ui.View):
 
         except Exception as e:
             error_embed = self.cog._create_error_embed(
-                f"{theme.deniedIcon} Error", 
+                f"{theme.deniedIcon} Error",
                 "An error occurred while loading settings."
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
@@ -514,7 +540,7 @@ class AttendanceView(discord.ui.View):
         label="Main Menu", emoji=f"{theme.homeIcon}",
         style=discord.ButtonStyle.secondary,
         custom_id="back_to_main_menu",
-        row=1
+        row=2
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
@@ -2234,6 +2260,107 @@ class Attendance(commands.Cog):
                     cursor.execute("ALTER TABLE attendance_records ADD COLUMN event_subtype TEXT DEFAULT NULL")
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_subtype ON attendance_records(event_subtype)")
 
+                try:
+                    cursor.execute("SELECT was_walk_in FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN was_walk_in INTEGER DEFAULT 0")
+
+                try:
+                    cursor.execute("SELECT alliance_rank FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN alliance_rank INTEGER")
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        event_date TEXT,
+                        event_date_confidence TEXT,
+                        event_subtype TEXT,
+                        alliance_id INTEGER NOT NULL,
+                        awaiting_result INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        closed_at TEXT
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_alliance "
+                               "ON attendance_sessions(alliance_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_open "
+                               "ON attendance_sessions(awaiting_result, event_type, event_date)")
+                # Matches the OCR session-matching lookups (_find_open_session /
+                # _find_closed_session / _would_be_absent_count) which filter on
+                # alliance + event_type + awaiting_result together.
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_lookup "
+                               "ON attendance_sessions(alliance_id, event_type, awaiting_result, event_date)")
+
+                # Scoreboard cards from result mails: each row = one alliance card.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_session_scoreboard (
+                        session_id TEXT NOT NULL,
+                        rank INTEGER NOT NULL,
+                        legion TEXT,
+                        tag TEXT,
+                        name TEXT,
+                        score INTEGER,
+                        is_own_alliance INTEGER DEFAULT 0,
+                        PRIMARY KEY (session_id, rank)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_scoreboard_session "
+                               "ON attendance_session_scoreboard(session_id)")
+
+                # Battle stats from result mails (Total Fuel Used, etc.).
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_session_stats (
+                        session_id TEXT NOT NULL,
+                        stat_key TEXT NOT NULL,
+                        stat_value INTEGER,
+                        PRIMARY KEY (session_id, stat_key)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_stats_session "
+                               "ON attendance_session_stats(session_id)")
+
+                # MVPs per stat — one row per (session, stat). mvp_fid is the
+                # roster fid when fuzzy match succeeds, NULL otherwise.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_session_mvps (
+                        session_id TEXT NOT NULL,
+                        stat_key TEXT NOT NULL,
+                        mvp_name TEXT,
+                        mvp_value INTEGER,
+                        mvp_fid TEXT,
+                        PRIMARY KEY (session_id, stat_key)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_mvps_session "
+                               "ON attendance_session_mvps(session_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_mvps_fid "
+                               "ON attendance_session_mvps(mvp_fid)")
+
+                # alliance_rank column on attendance_sessions (the alliance's own
+                # standing in the event, separate from rows in the scoreboard).
+                try:
+                    cursor.execute("SELECT alliance_rank FROM attendance_sessions LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN alliance_rank INTEGER")
+
+                # event_time column on attendance_sessions (HH:MM UTC; the
+                # specific time slot the event ran at, separate from event_date).
+                try:
+                    cursor.execute("SELECT event_time FROM attendance_sessions LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN event_time TEXT")
+
+                # origin column: NULL for legacy manually-marked sessions,
+                # 'ocr' for sessions created via Screenshot Upload. The legacy
+                # Mark Attendance UI redirects 'ocr' sessions to re-upload
+                # instead of trying to edit fields it doesn't understand.
+                try:
+                    cursor.execute("SELECT origin FROM attendance_sessions LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN origin TEXT")
+
                 # Create user preferences table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS user_preferences (
@@ -2273,9 +2400,14 @@ class Attendance(commands.Cog):
                 f"**Available Operations**\n"
                 f"{theme.upperDivider}\n"
                 f"{theme.editListIcon} **Mark Attendance**\n"
-                f"└ Create or modify attendance records\n\n"
+                f"└ Create or modify attendance records manually\n\n"
                 f"{theme.eyesIcon} **View Attendance**\n"
                 f"└ View attendance records and export reports\n\n"
+                f"{theme.importIcon} **Screenshot Upload**\n"
+                f"└ Configure channels where you can upload screenshots\n"
+                f"└ The bot reads them and extracts attendance records\n"
+                f"└ Record and save each event in a separate session\n"
+                f"└ Can also be used to extract player power rankings\n\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Configure attendance preferences\n"
                 f"{theme.lowerDivider}"
@@ -2467,14 +2599,50 @@ class Attendance(commands.Cog):
             if is_edit and session_id:
                 with sqlite3.connect('db/attendance.sqlite') as db:
                     cursor = db.cursor()
+                    # OCR-created sessions hold rich data (scoreboard, stats,
+                    # MVPs, registered/walk-in flags) the legacy Mark UI can't
+                    # represent. Redirect admins back to the upload channel.
+                    cursor.execute(
+                        "SELECT origin FROM attendance_sessions WHERE session_id = ?",
+                        (session_id,)
+                    )
+                    origin_row = cursor.fetchone()
+                    if origin_row and origin_row[0] == 'ocr':
+                        notice = discord.Embed(
+                            title=f"{theme.warnIcon} Edit via Screenshot Upload",
+                            description=(
+                                f"This event was captured via **Screenshot Upload** "
+                                f"and includes data the legacy editor can't fully "
+                                f"represent (scoreboards, stats, MVPs, walk-ins).\n\n"
+                                f"To edit it, **re-upload any screenshot from the same "
+                                f"event/legion/date** in your Screenshot Upload channel "
+                                f"— the bot will reopen this session in the review UI."
+                            ),
+                            color=theme.emColor2,
+                        )
+                        back_view = self._create_back_view(
+                            lambda i: self.show_session_selection_for_marking(i, alliance_id)
+                        )
+                        if interaction.response.is_done():
+                            await interaction.edit_original_response(embed=notice, view=back_view)
+                        else:
+                            await interaction.response.edit_message(embed=notice, view=back_view)
+                        return
+
                     cursor.execute("""
                         SELECT player_id, status, points, event_type, event_date
                         FROM attendance_records
                         WHERE session_id = ?
                     """, (session_id,))
-                    
+
                     for record in cursor.fetchall():
-                        attendance_records[int(record[0])] = {
+                        try:
+                            pid = int(record[0])
+                        except (TypeError, ValueError):
+                            # Defensive: synthetic placeholder strings from any
+                            # legacy data — skip them so the view doesn't crash.
+                            continue
+                        attendance_records[pid] = {
                             'status': record[1],
                             'points': record[2]
                         }

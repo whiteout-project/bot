@@ -99,8 +99,14 @@ class AttendanceReport(commands.Cog):
         self.bot = bot
 
     def _get_status_emoji(self, status):
-        """Helper to get status emoji"""
-        return {"present": f"{theme.verifiedIcon}", "absent": f"{theme.deniedIcon}", "not_recorded": "⚪"}.get(status, "❓")
+        """Helper to get status emoji. 'registered' is the transient pre-result
+        state used by OCR sessions before their result mail is uploaded."""
+        return {
+            "present": f"{theme.verifiedIcon}",
+            "absent": f"{theme.deniedIcon}",
+            "not_recorded": "⚪",
+            "registered": f"{theme.timeIcon}",
+        }.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -824,51 +830,55 @@ class AttendanceReport(commands.Cog):
             fig_width = 10 if is_preview else 13
             
             fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-            ax.axis('off')
-            
-            # Format title with event type and date
-            title_text = f'Attendance Report - {alliance_name} | {session_name}'
-            if event_type:
-                title_text += f' [{event_type}]'
-            if event_date:
-                if isinstance(event_date, str):
-                    date_str = event_date.split('T')[0] if 'T' in event_date else event_date.split()[0]
-                else:
-                    try:
-                        date_str = event_date.strftime("%Y-%m-%d")
-                    except Exception:
-                        date_str = str(event_date)
-                title_text += f' | Date: {date_str}'
-            
-            ax.text(0.5, 0.98, title_text, 
-                   transform=ax.transAxes, fontsize=16 if not is_preview else 14, color=table_color, 
-                   ha='center', va='top', weight='bold')
-            
-            # Create table with adjusted position to avoid title overlap
-            table = ax.table(
-                cellText=table_data,
-                colLabels=headers,
-                cellLoc='left',
-                loc='upper center',
-                bbox=[0, -0.05, 1, 0.90],  # Move down and reduce height to avoid title
-                colColours=[table_color]*len(headers)
-            )
-            table.auto_set_font_size(False)
-            table.set_fontsize(12)
-            table.scale(1, 1.5)
-            
-            # Set larger width for columns - only for full report
-            if not is_preview:
-                nrows = len(table_data) + 1
-                for row in range(nrows):
-                    cell = table[(row, 2)]
-                    cell.set_width(0.35)
-                    cell = table[(row, 4)]
-                    cell.set_width(0.25)
+            # Close in finally so an error mid-render (table build / savefig)
+            # never leaks the figure — matplotlib figures are process-global.
+            try:
+                ax.axis('off')
 
-            img_buffer = BytesIO()
-            plt.savefig(img_buffer, format='png', bbox_inches='tight')
-            plt.close(fig)
+                # Format title with event type and date
+                title_text = f'Attendance Report - {alliance_name} | {session_name}'
+                if event_type:
+                    title_text += f' [{event_type}]'
+                if event_date:
+                    if isinstance(event_date, str):
+                        date_str = event_date.split('T')[0] if 'T' in event_date else event_date.split()[0]
+                    else:
+                        try:
+                            date_str = event_date.strftime("%Y-%m-%d")
+                        except Exception:
+                            date_str = str(event_date)
+                    title_text += f' | Date: {date_str}'
+
+                ax.text(0.5, 0.98, title_text,
+                       transform=ax.transAxes, fontsize=16 if not is_preview else 14, color=table_color,
+                       ha='center', va='top', weight='bold')
+
+                # Create table with adjusted position to avoid title overlap
+                table = ax.table(
+                    cellText=table_data,
+                    colLabels=headers,
+                    cellLoc='left',
+                    loc='upper center',
+                    bbox=[0, -0.05, 1, 0.90],  # Move down and reduce height to avoid title
+                    colColours=[table_color]*len(headers)
+                )
+                table.auto_set_font_size(False)
+                table.set_fontsize(12)
+                table.scale(1, 1.5)
+
+                # Set larger width for columns - only for full report
+                if not is_preview:
+                    nrows = len(table_data) + 1
+                    for row in range(nrows):
+                        cell = table[(row, 2)]
+                        cell.set_width(0.35)
+                        cell = table[(row, 4)]
+                        cell.set_width(0.25)
+
+                img_buffer = BytesIO()
+                plt.savefig(img_buffer, format='png', bbox_inches='tight')
+            finally:
+                plt.close(fig)
             img_buffer.seek(0)
 
             file = discord.File(img_buffer, filename="attendance_report.png")

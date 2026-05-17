@@ -1078,15 +1078,71 @@ if __name__ == "__main__":
             conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_process_queue_status_priority
                 ON process_queue(status, priority, id)""")
 
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS ocr_channel_settings (
+                channel_id INTEGER PRIMARY KEY,
+                alliance_id INTEGER NOT NULL,
+                post_info_message INTEGER DEFAULT 1,
+                pin_info_message INTEGER DEFAULT 1,
+                info_message_id INTEGER,
+                auto_delete_screenshots INTEGER DEFAULT 1
+            )""")
+            try:
+                conn_settings.execute("SELECT auto_delete_screenshots FROM ocr_channel_settings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_settings.execute(
+                    "ALTER TABLE ocr_channel_settings ADD COLUMN auto_delete_screenshots INTEGER DEFAULT 1"
+                )
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS ocr_channel_event_keywords (
+                channel_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                PRIMARY KEY (channel_id, event_type, keyword)
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_ocr_keywords_channel
+                ON ocr_channel_event_keywords(channel_id)""")
+
+            # Explicit "event enabled on this channel" registry, decoupled
+            # from keywords so an admin can enable an event with zero keywords
+            # and let the fingerprint regex classify it on its own.
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS ocr_channel_enabled_events (
+                channel_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                PRIMARY KEY (channel_id, event_type)
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_ocr_enabled_channel
+                ON ocr_channel_enabled_events(channel_id)""")
+            # One-time backfill: every (channel, event) that already has keywords
+            # is now also marked explicitly enabled. Idempotent.
+            conn_settings.execute("""INSERT OR IGNORE INTO ocr_channel_enabled_events
+                (channel_id, event_type)
+                SELECT DISTINCT channel_id, event_type FROM ocr_channel_event_keywords""")
+
         with connections["conn_users"] as conn_users:
             conn_users.execute("""CREATE TABLE IF NOT EXISTS users (
-                fid INTEGER PRIMARY KEY, 
-                nickname TEXT, 
-                furnace_lv INTEGER DEFAULT 0, 
-                kid INTEGER, 
-                stove_lv_content TEXT, 
+                fid INTEGER PRIMARY KEY,
+                nickname TEXT,
+                furnace_lv INTEGER DEFAULT 0,
+                kid INTEGER,
+                stove_lv_content TEXT,
                 alliance TEXT
             )""")
+            _users_columns_to_add = [
+                ("power",                   "INTEGER"),
+                ("power_updated_at",        "TEXT"),
+                ("combat_power",            "INTEGER"),
+                ("combat_power_updated_at", "TEXT"),
+                ("discord_id",              "INTEGER"),
+                ("discord_server_id",       "INTEGER"),
+                ("discord_id_updated_at",   "TEXT"),
+            ]
+            for _col, _typ in _users_columns_to_add:
+                try:
+                    conn_users.execute(f"SELECT {_col} FROM users LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn_users.execute(f"ALTER TABLE users ADD COLUMN {_col} {_typ}")
+            conn_users.execute(
+                "CREATE INDEX IF NOT EXISTS idx_users_discord_id ON users(discord_id)"
+            )
 
         with connections["conn_giftcode"] as conn_giftcode:
             conn_giftcode.execute("""CREATE TABLE IF NOT EXISTS gift_codes (
@@ -1104,13 +1160,22 @@ if __name__ == "__main__":
 
         with connections["conn_alliance"] as conn_alliance:
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliancesettings (
-                alliance_id INTEGER PRIMARY KEY, 
-                channel_id INTEGER, 
+                alliance_id INTEGER PRIMARY KEY,
+                channel_id INTEGER,
                 interval INTEGER
             )""")
-            
+
+            # Per-alliance gate for who can upload screenshots in the
+            # Screenshot Upload channels (0 = anyone, 1 = bot admins only).
+            try:
+                conn_alliance.execute("SELECT ocr_upload_admin_only FROM alliancesettings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_alliance.execute(
+                    "ALTER TABLE alliancesettings ADD COLUMN ocr_upload_admin_only INTEGER DEFAULT 0"
+                )
+
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
-                alliance_id INTEGER PRIMARY KEY, 
+                alliance_id INTEGER PRIMARY KEY,
                 name TEXT
             )""")
 
@@ -1118,7 +1183,7 @@ if __name__ == "__main__":
     startup.phase_ok("Database ready")
 
     async def load_cogs():
-        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
+        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance_sync", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "attendance_ocr", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
 
         failed_cogs = []
 

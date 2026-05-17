@@ -587,6 +587,48 @@ async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session
         return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
 
 
+def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
+    """Sync OCR call that preserves bounding boxes. Returns [(text, box), ...]
+    where box is a list of 4 [x, y] corner coords. Empty list on failure or
+    when the engine returned an unrecognised result format."""
+    if engine is None or not image_bytes:
+        return []
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    if max(image.size) > MAX_OCR_DIM:
+        image.thumbnail((MAX_OCR_DIM, MAX_OCR_DIM), Image.LANCZOS)
+    result = engine(np.array(image))
+    if not result:
+        return []
+    # Newer RapidOCR returns an object with .txts and .boxes parallel lists.
+    if hasattr(result, 'txts') and hasattr(result, 'boxes') and result.txts:
+        return list(zip([str(t) for t in result.txts], list(result.boxes)))
+    # Older iterable API: (box, text) or (box, text, score) per item.
+    if hasattr(result, '__iter__'):
+        out = []
+        for item in result:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                out.append((str(item[1]), item[0]))
+        return out
+    return []
+
+
+async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
+                               *, session=None) -> list:
+    """OCR returning [(text, box), ...]. Box is 4 corner coords. Empty list on failure."""
+    if not OCR_AVAILABLE or not image_bytes:
+        return []
+    model = get_ocr_model(lang)
+    if model is None:
+        return []
+    if session is not None:
+        engine = await session._ensure_engine(lang)
+        if engine is None:
+            return []
+        return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+    async with model.use() as engine:
+        return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+
+
 _SCRIPT_TAGS = (
     ('LATIN',       'latin'),
     ('ARABIC',      'arabic'),
@@ -5088,6 +5130,23 @@ class BearChannelSelect(discord.ui.ChannelSelect):
         try:
             selected_channel = self.values[0]
             channel_id = selected_channel.id
+
+            # Reservation check: refuse if this channel already serves another
+            # alliance for Bear or Screenshot Upload.
+            from .attendance_ocr_setup import (
+                find_conflicting_channel_owner, format_channel_conflict,
+            )
+            conflict = find_conflicting_channel_owner(
+                channel_id, self.parent_view.alliance_id
+            )
+            if conflict is not None:
+                await interaction.response.edit_message(
+                    content=f"{theme.deniedIcon} " + format_channel_conflict(
+                        conflict, selected_channel.mention
+                    ),
+                    view=None,
+                )
+                return
 
             self.parent_view.cog.update_bear_setting(
                 self.parent_view.alliance_id,

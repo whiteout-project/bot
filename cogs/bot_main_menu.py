@@ -886,6 +886,15 @@ class AllianceHubView(discord.ui.View):
             missing_label="Alliance History",
         )
 
+    @discord.ui.button(label="Power Rankings", emoji=theme.chartIcon,
+                       style=discord.ButtonStyle.secondary, row=2)
+    async def power_rankings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_power_rankings_for", self.alliance_id,
+            missing_label="Alliance Members",
+        )
+
     # ── Nav (row 3) ──
 
     @discord.ui.button(label="Back", emoji=theme.backIcon,

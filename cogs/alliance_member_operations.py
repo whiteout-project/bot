@@ -842,6 +842,34 @@ class AllianceMemberOperations(commands.Cog):
         """Open the Add Members modal for a known alliance (no picker step)."""
         await interaction.response.send_modal(AddMemberModal(alliance_id))
 
+    async def show_power_rankings_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Show the alliance roster sorted by Power (highest first) with last-updated timestamps."""
+        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+            row = alliance_db.execute(
+                "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+            ).fetchone()
+        if not row:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Alliance not found.", ephemeral=True
+            )
+            return
+        alliance_name = row[0]
+
+        with sqlite3.connect('db/users.sqlite') as users_db:
+            members = users_db.execute(
+                "SELECT fid, nickname, power, power_updated_at, "
+                "combat_power, combat_power_updated_at "
+                "FROM users WHERE alliance = ?",
+                (alliance_id,),
+            ).fetchall()
+
+        view = AlliancePowerRankingsView(
+            members, alliance_id, alliance_name, self, interaction.user.id,
+        )
+        await safe_edit_message(
+            interaction, embed=view.build_embed(), view=view, content=None,
+        )
+
     async def show_view_members_for(self, interaction: discord.Interaction, alliance_id: int):
         """Build the Member List directly for a known alliance (no picker step).
         Posts the list publicly in the channel and replaces the source ephemeral
@@ -3934,6 +3962,134 @@ class DeleteAllConfirmView(discord.ui.View):
             color=theme.emColor4
         )
         await interaction.response.edit_message(embed=cancel_embed, view=None)
+
+class AlliancePowerRankingsView(discord.ui.View):
+    """Paginated power-rankings view for one alliance. Sorted desc by power, with last-updated <t:R> stamps."""
+
+    PAGE_SIZE = 20
+
+    def __init__(self, members, alliance_id: int, alliance_name: str,
+                 cog, user_id: int):
+        super().__init__(timeout=7200)
+        self.members = sorted(
+            members,
+            key=lambda m: (m[2] if m[2] is not None else -1),
+            reverse=True,
+        )
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.cog = cog
+        self.user_id = user_id
+        self.current_page = 0
+        self._build_components()
+
+    def _total_pages(self) -> int:
+        if not self.members:
+            return 1
+        return (len(self.members) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+
+    def _build_components(self):
+        self.clear_items()
+        total = self._total_pages()
+
+        prev_btn = discord.ui.Button(
+            label="Prev", emoji=theme.prevIcon,
+            style=discord.ButtonStyle.secondary,
+            disabled=self.current_page == 0, row=0,
+        )
+        prev_btn.callback = self._prev
+        self.add_item(prev_btn)
+
+        page_btn = discord.ui.Button(
+            label=f"{self.current_page + 1} / {total}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True, row=0,
+        )
+        self.add_item(page_btn)
+
+        next_btn = discord.ui.Button(
+            label="Next", emoji=theme.nextIcon,
+            style=discord.ButtonStyle.secondary,
+            disabled=self.current_page >= total - 1, row=0,
+        )
+        next_btn.callback = self._next
+        self.add_item(next_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        back_btn.callback = self._back
+        self.add_item(back_btn)
+
+    @staticmethod
+    def _format_power(power) -> str:
+        if power is None:
+            return "—"
+        try:
+            return f"{int(power):,}"
+        except (TypeError, ValueError):
+            return "—"
+
+    @staticmethod
+    def _relative(ts_iso) -> str:
+        if not ts_iso:
+            return ""
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+            return f" · <t:{int(dt.timestamp())}:R>"
+        except (TypeError, ValueError):
+            return ""
+
+    def build_embed(self) -> discord.Embed:
+        start = self.current_page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        page = self.members[start:end]
+
+        lines = [f"{theme.upperDivider}"]
+        if not page:
+            lines.append(f"{theme.warnIcon} No members in this alliance yet.")
+        else:
+            for idx, (fid, nickname, power, power_at, _cp, _cp_at) in enumerate(page, start=start + 1):
+                power_text = self._format_power(power)
+                age = self._relative(power_at)
+                lines.append(
+                    f"`{idx:>3}` **{nickname or '?'}** — {power_text}{age}"
+                )
+        lines.append(f"{theme.lowerDivider}")
+        return discord.Embed(
+            title=f"{theme.allianceIcon} {self.alliance_name} — Power Rankings",
+            description="\n".join(lines),
+            color=theme.emColor1,
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the user who opened this menu can use it.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _prev(self, interaction: discord.Interaction):
+        if self.current_page > 0:
+            self.current_page -= 1
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        if self.current_page < self._total_pages() - 1:
+            self.current_page += 1
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _back(self, interaction: discord.Interaction):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu and hasattr(main_menu, "show_alliance_hub"):
+            await main_menu.show_alliance_hub(interaction, self.alliance_id)
+
 
 async def setup(bot):
     await bot.add_cog(AllianceMemberOperations(bot))

@@ -1,0 +1,1773 @@
+"""OCR session classes for every attendance event: event registry, base session, and per-event parsers."""
+from __future__ import annotations
+import asyncio
+import difflib
+import logging
+import re
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
+
+import discord
+
+from .pimp_my_bot import theme
+
+logger = logging.getLogger("alliance")
+
+DEFAULT_TIMEOUT_SECONDS = 180
+
+
+# ── event registry ────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class EventTypeConfig:
+    """Per-event-type config with per-kind fingerprint regexes for distinguishing
+    registration vs result screenshots within the same event."""
+    key: str
+    label: str
+    default_keywords: tuple[str, ...]
+    fingerprint_re_by_kind: dict[str, re.Pattern]
+    event_weekday: Optional[int] = None
+    legion_required: bool = False
+
+
+# Shared anchors for foundry/canyon registration mails — anchored on event name later.
+_REGISTRATION_MARKERS = (
+    r"(?:selected\s+as\s+a?\s*combatant"
+    r"|Legionnaires?\s+of\s+your\s+Legion"
+    r"|Combatants:\s*\d+\s*/\s*\d+"
+    r"|Please\s+get\s+ready\s+to\s+enter)"
+)
+
+
+EVENT_TYPES: dict[str, EventTypeConfig] = {
+    "foundry_battle": EventTypeConfig(
+        key="foundry_battle",
+        label="Foundry Battle",
+        default_keywords=("Foundry Battle", "Foundry"),
+        fingerprint_re_by_kind={
+            "registration": re.compile(
+                _REGISTRATION_MARKERS + r".*?Foundry",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            "result": re.compile(
+                r"(?:Personal\s+Arsenal\s+Points|Imperial\s+Foundry\s+Control)",
+                re.IGNORECASE,
+            ),
+        },
+        event_weekday=6,
+        legion_required=True,
+    ),
+    "canyon_clash": EventTypeConfig(
+        key="canyon_clash",
+        label="Canyon Clash",
+        default_keywords=("Canyon Clash", "Canyon"),
+        fingerprint_re_by_kind={
+            "registration": re.compile(
+                _REGISTRATION_MARKERS + r".*?Canyon",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            # Result-anchors avoid bare "Canyon Clash" which also appears in registration mails.
+            "result": re.compile(
+                r"(?:Total\s+Fuel\s+Used"
+                r"|Personal\s+Point\s+Ranking"
+                r"|ranked\s+No\.?\s*\d+\s+in\s+\[Canyon)",
+                re.IGNORECASE,
+            ),
+        },
+        event_weekday=5,
+        legion_required=True,
+    ),
+    "power_rankings": EventTypeConfig(
+        key="power_rankings",
+        label="Power Rankings",
+        default_keywords=("Power Rankings",),
+        fingerprint_re_by_kind={
+            "result": re.compile(r"(?:Alliance\s+Ranking|Power\s+Rankings)", re.IGNORECASE),
+        },
+    ),
+    "alliance_showdown": EventTypeConfig(
+        key="alliance_showdown",
+        label="Alliance Showdown",
+        default_keywords=("Alliance Showdown",),
+        fingerprint_re_by_kind={
+            "result": re.compile(r"Alliance\s+Showdown", re.IGNORECASE),
+        },
+    ),
+}
+
+
+def classify_by_keywords(ocr_text: str, allowed: dict[str, list[str]]) -> Optional[str]:
+    text_lower = ocr_text.lower()
+    for event_type, keywords in allowed.items():
+        for kw in keywords:
+            if kw.lower() in text_lower:
+                return event_type
+    return None
+
+
+def fingerprint_match(event_type: str, ocr_text: str, kind: Optional[str] = None) -> bool:
+    """True if the event's fingerprint regex matches; `kind` narrows to one kind."""
+    cfg = EVENT_TYPES.get(event_type)
+    if cfg is None:
+        return False
+    if kind is not None:
+        regex = cfg.fingerprint_re_by_kind.get(kind)
+        return regex is not None and regex.search(ocr_text) is not None
+    return any(rx.search(ocr_text) for rx in cfg.fingerprint_re_by_kind.values())
+
+
+def detect_kind(event_type: str, ocr_text: str) -> Optional[str]:
+    """Which kind (registration/result/...) the OCR matches, or None for a scroll page."""
+    cfg = EVENT_TYPES.get(event_type)
+    if cfg is None:
+        return None
+    for kind, regex in cfg.fingerprint_re_by_kind.items():
+        if regex.search(ocr_text):
+            return kind
+    return None
+
+
+def classify_event(ocr_text: str, enabled_events: list[str],
+                   keywords_by_event: dict[str, list[str]] | None = None
+                   ) -> Optional[tuple[str, str]]:
+    """Fingerprint-first classifier returning `(event_type, kind)` or None.
+
+    Keywords (when configured for an event) act as an optional prefilter; the
+    fingerprint regex makes the final decision.
+    """
+    if not ocr_text or not enabled_events:
+        return None
+    text_lower = ocr_text.lower()
+    kw_map = keywords_by_event or {}
+    for event_type in enabled_events:
+        cfg = EVENT_TYPES.get(event_type)
+        if cfg is None:
+            continue
+        keywords = kw_map.get(event_type, [])
+        if keywords and not any(kw.lower() in text_lower for kw in keywords):
+            continue
+        for kind, regex in cfg.fingerprint_re_by_kind.items():
+            if regex.search(ocr_text):
+                return (event_type, kind)
+    return None
+
+
+def resolve_event_date(mail_date_local: date, event_type: str) -> tuple[date, str]:
+    cfg = EVENT_TYPES.get(event_type)
+    if cfg is None or cfg.event_weekday is None:
+        return mail_date_local, "exact"
+    delta = (mail_date_local.weekday() - cfg.event_weekday) % 7
+    if delta == 0:
+        return mail_date_local, "exact"
+    if delta == 1:
+        return mail_date_local - timedelta(days=1), "adjusted"
+    if delta == 6:
+        return mail_date_local + timedelta(days=1), "adjusted"
+    return mail_date_local, "mismatch"
+
+
+_HEADER_DATE_RE = re.compile(r"(?<!\d)(\d{4})[-./](\d{2})[-./](\d{2})(?!\d{3})")
+_LEGION_RE = re.compile(r"\[?\s*Legion\s+(\d)\s*\]?", re.IGNORECASE)
+_SCOREBOARD_ID_RE = re.compile(r"#(\d{1,5})")
+_SCOREBOARD_NAME_RE = re.compile(r"\[([^\]]{1,8})\]\s*([^\d\[\n]{1,40}?)(?=\s*(?:\[|#|\d{1,3}(?:,\d{3})+|\d{4,}|Stats|MVP|Legion|$))")
+
+# Stat labels we extract from the result mail's stats panel. Order matters for
+# zipping with MVP names when OCR flattens the two columns into one line.
+_RESULT_STAT_KEYS: tuple[tuple[str, str], ...] = (
+    ("fuel_used",        r"Total\s+Fuel\s+Used"),
+    ("squads_defeated",  r"Enemy\s+Squads\s+Defeated"),
+    ("buildings",        r"Occupied\s+Buildings"),
+    ("speedups",         r"Total\s+Battle\s+Speedups?\s+Used"),
+    ("march_i",          r"Total\s+March\s+Accelerator\s+I\s+Used"),
+    ("march_ii",         r"Total\s+March\s+Accelerator\s+II\s+Used"),
+    ("retreats",         r"Total\s+Retreats"),
+    ("advances",         r"Total\s+Advances"),
+)
+
+_STAT_LABELS: dict[str, str] = {
+    "fuel_used":       "Fuel Used",
+    "squads_defeated": "Squads Defeated",
+    "buildings":       "Buildings",
+    "speedups":        "Speedups",
+    "march_i":         "March I",
+    "march_ii":        "March II",
+    "retreats":        "Retreats",
+    "advances":        "Advances",
+}
+
+# Allowed event-time slots (UTC). Mirrors notification_event_types.EVENT_CONFIG.
+EVENT_TIME_SLOTS: dict[str, tuple[str, ...]] = {
+    "foundry_battle":  ("02:00", "12:00", "14:00", "19:00"),
+    "canyon_clash":    ("02:00", "12:00", "14:00", "19:00", "21:00"),
+}
+
+
+def _parse_compact_int(token: str) -> Optional[int]:
+    """Convert various number formats to int. Returns None on failure.
+
+    Supports:
+      - Compact suffix: '19.9M', '3.7K', '1.0B' (dot is the decimal separator)
+      - Comma thousands: '1,234', '12,345,678'
+      - EU dot thousands: '1.234' = 1234, '12.345.678' = 12345678
+      - Bare integer: '430', '999999'
+
+    The EU thousands case is identified by every dot being followed by
+    exactly 3 digits (with a non-digit or end-of-string after the group),
+    distinguishing it from a true decimal like '1.5' which is rejected.
+    """
+    token = token.strip()
+
+    # Compact suffix branch — dot is the decimal separator.
+    m = re.match(r"^(\d+(?:\.\d+)?)([KkMmBb])$", token.replace(",", ""))
+    if m:
+        val = float(m.group(1))
+        mult = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[m.group(2).lower()]
+        return int(val * mult)
+
+    # No suffix. Strip comma always; strip dot only when it's followed by
+    # exactly 3 digits (then a non-digit or end) — that's EU thousands format.
+    stripped = re.sub(r"\.(?=\d{3}(?:\D|$))", "", token).replace(",", "")
+    return int(stripped) if stripped.isdigit() else None
+
+
+def extract_header_date(ocr_text: str) -> Optional[date]:
+    m = _HEADER_DATE_RE.search(ocr_text)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def extract_legion(ocr_text: str) -> Optional[str]:
+    m = _LEGION_RE.search(ocr_text)
+    return f"Legion {m.group(1)}" if m else None
+
+
+# ── result-mail extras: scoreboard, stats, MVPs ───────────────────────────
+
+def _clean_scoreboard_name(raw: str, tag: str) -> str:
+    """Clean a name captured between `[TAG]` markers in the result-mail OCR.
+
+    OCR linearises the screenshot text by reading order, so when an
+    alliance name wraps to a second visual line (e.g. 'BestRoyalFami|ly'),
+    the wrap fragment ('ly') often lands far from its origin and gets
+    attached to the wrong alliance card. This cleaner removes the obvious
+    noise without trying to repair the truncation (that would need
+    bounding-box data from the OCR engine):
+
+    1. Strip a leading duplicate of the bracketed tag. For '[LMN]LMN ly'
+       the raw is 'LMN ly' — drop the redundant leading 'LMN'.
+    2. Drop trailing short lowercase wrap-fragments. For 'bluCATs ance'
+       (orphaned 'ance' from 'WarriorsAlliance'), drop 'ance' → 'bluCATs'.
+    3. If nothing useful is left, fall back to the tag itself so the
+       embed at least shows `[LMN]LMN` instead of `[LMN]` alone.
+    """
+    name = raw.strip(" ,.")
+    if tag and name.upper().startswith(tag.upper()):
+        rest = name[len(tag):]
+        if rest == "" or not rest[0].isalnum():
+            name = rest.strip(" ,.")
+
+    parts = name.split()
+    while parts and parts[-1].isalpha() and parts[-1].islower() and len(parts[-1]) <= 4:
+        parts.pop()
+    name = " ".join(parts)
+
+    if len(name) < 3:
+        return tag
+    return name
+
+
+def _parse_alliance_scoreboard(text: str) -> list[dict]:
+    """Extract the 3-alliance scoreboard from a result mail header.
+
+    OCR emits the cards column-wise: N alliance IDs, then N legion labels,
+    then N tag/name chunks, then N scores. Pairs them positionally and
+    tolerates missing legion / messy names — only the alliance ID and the
+    score are load-bearing.
+    """
+    # Slice between "battle details" and "Stats" so we don't pick up player rows.
+    lower = text.lower()
+    start = 0
+    for marker in ("battle details", "achieving the", "victory"):
+        idx = lower.find(marker)
+        if idx != -1:
+            start = max(start, idx + len(marker))
+    end = len(text)
+    for marker in ("Stats", "Legion Tally", "Personal Point Ranking", "Personal Arsenal"):
+        idx = text.find(marker, start)
+        if idx != -1:
+            end = min(end, idx)
+    segment = text[start:end]
+
+    ids = [int(m.group(1)) for m in _SCOREBOARD_ID_RE.finditer(segment)]
+    if not ids:
+        return []
+
+    legions = re.findall(r"Legion\s+(\d)", segment)
+    tag_matches = list(re.finditer(r"\[([^\]]{1,8})\]", segment))
+
+    # Names: text between each tag's closing `]` and the next `[` / digit run.
+    names: list[str] = []
+    for i, m in enumerate(tag_matches):
+        name_start = m.end()
+        name_end = tag_matches[i + 1].start() if i + 1 < len(tag_matches) else len(segment)
+        # Stop at the first big digit run — those are the scores.
+        digit_match = re.search(r"\d{3,}", segment[name_start:name_end])
+        if digit_match:
+            name_end = name_start + digit_match.start()
+        raw_name = segment[name_start:name_end].strip(" ,.")
+        names.append(_clean_scoreboard_name(raw_name, tag=m.group(1)))
+
+    scores = [int(m.group(0).replace(",", ""))
+              for m in re.finditer(r"\d{1,3}(?:,\d{3})+|\d{4,}", segment)]
+
+    n = min(len(ids), len(scores)) if scores else 0
+    rows = []
+    for i in range(n):
+        rows.append({
+            "rank": ids[i],
+            "legion": f"Legion {legions[i]}" if i < len(legions) else None,
+            "tag": tag_matches[i].group(1) if i < len(tag_matches) else None,
+            "name": names[i] if i < len(names) else None,
+            "score": scores[i],
+        })
+    rows.sort(key=lambda r: -(r["score"] or 0))
+    return rows
+
+
+_SCORE_TOKEN_RE = re.compile(r"^\d{1,3}(?:,\d{3})+$|^\d{4,}$")
+_RANK_TOKEN_RE = re.compile(r"^#(\d{1,5})$")
+_LEGION_TOKEN_RE = re.compile(r"^Legion\s+(\d)$", re.IGNORECASE)
+_TAG_TOKEN_RE = re.compile(r"\[([^\]]{1,8})\]")
+
+
+def _box_centroid(box) -> Optional[tuple[float, float]]:
+    """Centroid of a 4-corner bounding box. Returns None for malformed input."""
+    try:
+        xs = [pt[0] for pt in box]
+        ys = [pt[1] for pt in box]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+    except (TypeError, IndexError, ZeroDivisionError):
+        return None
+
+
+_LEGION_TAG_RE = re.compile(r"^Legion\s*\d", re.IGNORECASE)
+
+# Tokens that appear in the Stats/MVP/footer regions below the scoreboard
+# cards and must never be glued onto an alliance name.
+_NON_NAME_KEYWORDS = (
+    "total fuel", "enemy squads", "occupied buildings", "battle speedups",
+    "march accelerator", "total retreats", "total advances",
+    "personal point ranking", "personal arsenal", "battle details",
+    "achievement", "rewards", "delete", "stats", "mvp",
+    "congratulations", "of your alliance ranked",
+)
+
+
+def _is_non_name_text(text: str) -> bool:
+    lower = text.lower()
+    return any(kw in lower for kw in _NON_NAME_KEYWORDS)
+
+
+def _parse_alliance_scoreboard_spatial(blocks: list) -> list[dict]:
+    """Box-aware scoreboard parser. Groups OCR text chunks by alliance card
+    (clustered around each `[TAG]` anchor's x-position), then bounds each
+    card vertically by its score so the Stats/MVP/footer text below the
+    scoreboard cards never leaks into a name.
+    """
+    if not blocks:
+        return []
+    enriched = []
+    for text, box in blocks:
+        c = _box_centroid(box)
+        if c is None:
+            continue
+        enriched.append({"text": text.strip(), "cx": c[0], "cy": c[1]})
+    if not enriched:
+        return []
+
+    # Real alliance tags only — skip [Legion N] which appears in mail body text.
+    anchors = []
+    for b in enriched:
+        m = _TAG_TOKEN_RE.search(b["text"])
+        if not m:
+            continue
+        tag = m.group(1).strip()
+        if _LEGION_TAG_RE.match(tag):
+            continue
+        anchors.append({**b, "tag": tag})
+    if not anchors:
+        return []
+    anchors.sort(key=lambda a: a["cx"])
+
+    DEFAULT_HALF = 150.0
+    rows = []
+    for i, anchor in enumerate(anchors):
+        half_left = (anchor["cx"] - anchors[i - 1]["cx"]) / 2 if i > 0 else DEFAULT_HALF
+        half_right = (anchors[i + 1]["cx"] - anchor["cx"]) / 2 if i + 1 < len(anchors) else DEFAULT_HALF
+        col_min, col_max = anchor["cx"] - half_left, anchor["cx"] + half_right
+
+        # Pass 1: find this card's score — the topmost formatted number
+        # below the tag in this column. Acts as the bottom edge of the card.
+        score = None
+        score_cy = None
+        for b in enriched:
+            if not (col_min <= b["cx"] <= col_max):
+                continue
+            if _SCORE_TOKEN_RE.match(b["text"]) and b["cy"] > anchor["cy"]:
+                if score_cy is None or b["cy"] < score_cy:
+                    score = int(b["text"].replace(",", ""))
+                    score_cy = b["cy"]
+        # Without a score this isn't a real scoreboard card — drop it.
+        if score is None:
+            continue
+
+        rank = legion = None
+        name_parts: list[tuple[float, str]] = []
+        for b in enriched:
+            if not (col_min <= b["cx"] <= col_max):
+                continue
+            t = b["text"]
+            if (m := _RANK_TOKEN_RE.match(t)) and b["cy"] < anchor["cy"]:
+                rank = int(m.group(1))
+                continue
+            if (m := _LEGION_TOKEN_RE.match(t)) and b["cy"] < anchor["cy"]:
+                legion = f"Legion {m.group(1)}"
+                continue
+            # Name fragments must sit strictly between the tag and the score.
+            if not (anchor["cy"] - 5 <= b["cy"] < score_cy):
+                continue
+            if _SCORE_TOKEN_RE.match(t):
+                continue
+            if _is_non_name_text(t):
+                continue
+            stripped = _TAG_TOKEN_RE.sub("", t).strip(" .,")
+            if stripped:
+                name_parts.append((b["cy"], stripped))
+
+        # Top-to-bottom; mid-word wraps (both ends lowercase) join without
+        # a space, word-boundary wraps join with one.
+        name_parts.sort()
+        name = ""
+        for j, (_, part) in enumerate(name_parts):
+            if j == 0:
+                name = part
+            elif name and name[-1].islower() and part[0].islower():
+                name += part
+            else:
+                name += " " + part
+
+        rows.append({
+            "rank": rank, "legion": legion, "tag": anchor["tag"],
+            "name": name or anchor["tag"], "score": score,
+        })
+    # `rank` is the alliance number (#449, #312, etc.) — a permanent
+    # identifier, not the event placement. Placement is by score desc.
+    rows.sort(key=lambda r: -(r["score"] or 0))
+    return rows
+
+
+def _parse_stats_panel(text: str) -> dict[str, int]:
+    """Extract stat_key → int for each known stat label in the result mail."""
+    stats: dict[str, int] = {}
+    for key, pattern in _RESULT_STAT_KEYS:
+        m = re.search(pattern + r"\s*:?\s*([\d.,]+[KkMmBb]?)", text)
+        if not m:
+            continue
+        parsed = _parse_compact_int(m.group(1))
+        if parsed is not None:
+            stats[key] = parsed
+    return stats
+
+
+def _parse_mvps(text: str) -> list[dict]:
+    """Extract MVP entries paired to each stat. Returns list of {stat_key, name, value}.
+
+    Strategy: identify the spans the stat labels (and their values) occupy,
+    then find every `<name>: <value>` pair OUTSIDE those spans. Pair each
+    stat with the nearest non-overlapping pair within ±150 chars.
+    """
+    # 1) Mark stat-label spans (label + its own value) so we don't capture
+    #    sub-tokens of "Total Fuel Used: 19.9M" as an MVP name.
+    stat_spans: list[tuple[int, int, str]] = []
+    for key, pattern in _RESULT_STAT_KEYS:
+        full_re = re.compile(pattern + r"\s*:?\s*[\d.,]+[KkMmBb]?", re.IGNORECASE)
+        for m in full_re.finditer(text):
+            stat_spans.append((m.start(), m.end(), key))
+
+    def _overlaps_stat_span(start: int, end: int) -> bool:
+        return any(s_start < end and start < s_end for s_start, s_end, _ in stat_spans)
+
+    # 2) Find every plausible "<name>: <value>" pair that's OUTSIDE every stat span.
+    name_value_re = re.compile(r"([A-Za-z_][\w\-' ]{1,30}?)\s*:\s*([\d.,]+[KkMmBb]?)")
+    candidates: list[tuple[int, int, str, str]] = []
+    for m in name_value_re.finditer(text):
+        if _overlaps_stat_span(m.start(), m.end()):
+            continue
+        candidates.append((m.start(), m.end(), m.group(1).strip(), m.group(2).strip()))
+
+    # 3) Pair each stat with the nearest non-overlapping MVP candidate.
+    mvps: list[dict] = []
+    used_candidate_idxs: set[int] = set()
+    for stat_start, stat_end, stat_key in stat_spans:
+        anchor = (stat_start + stat_end) // 2
+        best_idx = None
+        best_dist = 10**9
+        for idx, (c_start, c_end, _name, _value) in enumerate(candidates):
+            if idx in used_candidate_idxs:
+                continue
+            mid = (c_start + c_end) // 2
+            dist = abs(mid - anchor)
+            if dist < best_dist and dist <= 150:
+                best_dist = dist
+                best_idx = idx
+        if best_idx is None:
+            continue
+        _, _, name, value = candidates[best_idx]
+        parsed = _parse_compact_int(value)
+        if parsed is None:
+            continue
+        used_candidate_idxs.add(best_idx)
+        # Tidy the name: strip stray punctuation.
+        name = re.sub(r"[^\w\s\-\']", "", name).strip()
+        if not name:
+            continue
+        mvps.append({"stat_key": stat_key, "name": name, "value": parsed})
+    return mvps
+
+
+# ── OCR + roster helpers ──────────────────────────────────────────────────
+
+# Three formats we accept per OCR'd number token. Compact-suffix MUST come
+# first so '12.345M' isn't greedily eaten by the dot-as-thousand-separator
+# branch (which would yield 12345 instead of 12_345_000).
+_FORMATTED_NUMBER_RE = re.compile(
+    r"\d+(?:\.\d+)?[KkMmBb]\b"        # 807.3M, 1.0B, 3K
+    r"|\d{1,3}(?:[,\.]\d{3})+"        # 1,234,567 or 1.234.567 (EU thousands)
+    r"|\d{4,}"                          # bare 12345
+)
+_RANK_PREFIX_RE = re.compile(r"^\s*(\d{1,4})\b")
+
+_PARSE_STOPWORDS = frozenset({
+    "mail", "delete", "ranking", "rankings", "personal", "arsenal",
+    "points", "point", "alliance", "showdown", "combatants", "substitutes",
+    "page", "expires", "rewards", "stats", "mvp", "of", "your", "the", "in",
+    "chief", "power", "ko", "contribution", "claimed", "no",
+})
+
+# Section markers that mark the start of the player-row data. The parser
+# slices the OCR text at the LAST occurrence of any marker so the trailing
+# header noise (column labels, blurb text) is discarded.
+_SECTION_MARKERS = (
+    "Personal Arsenal Points",
+    "Personal Point Ranking",
+    "Combatants",
+    "Chief Power",
+    "Power Rankings",
+    "Ranking",
+)
+
+# Markers that signal the end of player-row data — anything after gets
+# trimmed off so the mail-expiry timestamp ("Expires in 2026-06-14...")
+# doesn't get parsed as a phantom player row with value 2026.
+_END_MARKERS = (
+    "Expires in",
+    "Battle Overview",
+    "Master Bonus",
+    "Expert Bonus",
+)
+
+
+def _trim_to_data_section(text: str) -> str:
+    """Trim start to the rightmost section marker and end to the earliest
+    end marker. If no markers match, leave the corresponding boundary alone."""
+    text_lower = text.lower()
+    best_start = 0
+    for marker in _SECTION_MARKERS:
+        idx = text_lower.rfind(marker.lower())
+        if idx != -1:
+            end_of_marker = idx + len(marker)
+            if end_of_marker > best_start:
+                best_start = end_of_marker
+    # End trim: first end-marker AFTER the start trim wins.
+    best_end = len(text)
+    for marker in _END_MARKERS:
+        idx = text_lower.find(marker.lower(), best_start)
+        if idx != -1 and idx < best_end:
+            best_end = idx
+    return text[best_start:best_end]
+
+
+async def ocr_attachment(attachment: discord.Attachment) -> str:
+    from . import bear_track
+    data = await attachment.read()
+    return await bear_track.ocr_bytes(data, lang=bear_track.DEFAULT_OCR_LANG)
+
+
+async def ocr_attachment_with_boxes(attachment: discord.Attachment) -> list:
+    """Like `ocr_attachment` but returns [(text, box), ...] preserving spatial info."""
+    from . import bear_track
+    data = await attachment.read()
+    return await bear_track.ocr_bytes_with_boxes(data, lang=bear_track.DEFAULT_OCR_LANG)
+
+
+def find_formatted_numbers(text: str) -> list[tuple[int, int, int]]:
+    out = []
+    for m in _FORMATTED_NUMBER_RE.finditer(text):
+        value = _parse_compact_int(m.group(0))
+        if value is not None:
+            out.append((m.start(), m.end(), value))
+    return out
+
+
+def _parse_player_value_rows(text: str) -> list[dict]:
+    """Walk through every number in the OCR text; the chunk before each number
+    contains the player's name (possibly preceded by a rank digit or rank
+    sticker). OCR usually flattens screenshots to a single line, so this is
+    position-based, not line-based. The text is first trimmed to the data
+    section to skip header / column-label junk.
+    """
+    rows = []
+    text = _trim_to_data_section(text)
+    prev_end = 0
+    for start, end, value in find_formatted_numbers(text):
+        chunk = text[prev_end:start].strip()
+        prev_end = end
+        # Trailing rank digit (e.g., "AlejoCAT 5" → "AlejoCAT")
+        chunk = re.sub(r"\s+\d{1,3}\s*$", "", chunk)
+        # Strip alliance-rank sticker tokens like "R4"
+        chunk = re.sub(r"\bR\d+\b", "", chunk)
+        # Detach trailing punctuation from header words ("Points:" → "Points")
+        chunk = re.sub(r"[:;,.!?]+", " ", chunk)
+        tokens = [
+            t for t in chunk.split()
+            if t.lower() not in _PARSE_STOPWORDS
+            and any(c.isalpha() for c in t)
+            and len(t) >= 2
+        ]
+        if not tokens:
+            continue
+        # Last 1-3 tokens form the name (most game names are 1-2 words).
+        name = " ".join(tokens[-3:]).strip()
+        if len(name) < 2:
+            continue
+        rows.append({"name": name, "value": value})
+    return rows
+
+
+def _dedup_into(target: list[dict], new_row: dict) -> None:
+    """Append new_row to target with smart dedup. When values match and the
+    OCR'd names share a substring (one contains the other after normalization),
+    treat as the same player and keep whichever name is shorter — partial
+    cross-page captures like '48Z lII Moly' get replaced by the cleaner 'Moly'.
+    """
+    new_name_norm = _normalize_for_match(new_row.get("name") or "")
+    new_val = new_row.get("value")
+    for i, r in enumerate(target):
+        if r.get("value") != new_val:
+            continue
+        existing_norm = _normalize_for_match(r.get("name") or "")
+        if not new_name_norm or not existing_norm:
+            continue
+        if (new_name_norm == existing_norm
+                or new_name_norm in existing_norm
+                or existing_norm in new_name_norm):
+            if len(new_row["name"]) < len(r["name"]):
+                target[i] = new_row
+            return
+    target.append(new_row)
+
+
+def load_alliance_roster(alliance_id: int) -> list[tuple[int, str]]:
+    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+        rows = conn.execute(
+            "SELECT fid, nickname FROM users WHERE alliance = ?",
+            (str(alliance_id),),
+        ).fetchall()
+    return [(int(fid), nick or "") for fid, nick in rows if fid]
+
+
+def _normalize_for_match(s: str) -> str:
+    """Lowercase + strip whitespace + drop non-alphanumeric noise (OCR
+    decorative chars, emoji, punctuation). Keeps letters/digits from any
+    script (Latin, Arabic, CJK)."""
+    return re.sub(r"[^\w]", "", s, flags=re.UNICODE).casefold()
+
+
+def _score_status(score: float) -> Optional[str]:
+    """Convert a similarity score (0.0-1.0) to a status tier label.
+    Returns None if below the review threshold (not a viable candidate)."""
+    if score >= 0.95:
+        return "auto"
+    if score >= 0.80:
+        return "likely"
+    if score >= 0.65:
+        return "review"
+    return None
+
+
+def _pair_similarity(detected_norm: str, nick_norm: str) -> float:
+    """Score one detected-vs-roster pair, both already normalised.
+    Returns 1.0 for exact match, then substring-containment boost, else
+    SequenceMatcher ratio.
+    """
+    if detected_norm == nick_norm:
+        return 1.0
+    if nick_norm in detected_norm or detected_norm in nick_norm:
+        shorter_len = min(len(nick_norm), len(detected_norm))
+        longer_len = max(len(nick_norm), len(detected_norm))
+        return max(0.85, shorter_len / longer_len)
+    return difflib.SequenceMatcher(None, detected_norm, nick_norm).ratio()
+
+
+def fuzzy_match_candidates(detected: str, roster: list[tuple[int, str]],
+                           *, limit: int = 5) -> list[tuple[int, str, float, str]]:
+    """Top-N fuzzy matches as `[(fid, nickname, score, status), ...]` sorted by
+    score descending. Used by callers that need to dedup multiple rows
+    competing for the same roster fid — they pool all candidates and greedily
+    assign by score so each fid lands on its best-matching row, with losers
+    falling back to their next-best candidate (or unmatched).
+
+    Only viable candidates (≥ review threshold) are returned. Empty list
+    means no roster entry was close enough.
+    """
+    if not detected:
+        return []
+    detected_norm = _normalize_for_match(detected)
+    if not detected_norm:
+        return []
+
+    scored: list[tuple[int, str, float, str]] = []
+    for fid, nick in roster:
+        nick_norm = _normalize_for_match(nick)
+        if not nick_norm:
+            continue
+        score = _pair_similarity(detected_norm, nick_norm)
+        status = _score_status(score)
+        if status is None:
+            continue
+        scored.append((fid, nick, score, status))
+    scored.sort(key=lambda c: -c[2])
+    return scored[:limit]
+
+
+def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]]) -> list[dict]:
+    """Greedy global fid assignment across multiple rows competing for
+    the same roster entries.
+
+    Each input row must have `name` and `value` keys. Returns enriched rows
+    with `fid` / `nickname` / `status` / `candidates` added. Higher-value
+    rows get priority on ties so the bigger contributor lands the matched
+    fid; losing rows fall back to their next-best unassigned candidate or
+    become unmatched (status='no_match', fid=None).
+
+    Handles the duplicate-name case: two rows named 'Trololololol' with a
+    roster containing two players of that name get assigned to TWO distinct
+    fids. Mirrors bear_track's `_resolve_unique_assignments`.
+    """
+    nick_by_fid = {f: n for f, n in roster}
+    enriched: list[dict] = []
+    for raw in raw_rows:
+        cands = fuzzy_match_candidates(raw["name"], roster)
+        enriched.append({
+            **raw,
+            "candidates": cands,
+            "fid": None,
+            "nickname": None,
+            "status": "no_match",
+        })
+
+    # Higher-value row wins ties.
+    row_priority = {
+        idx: rank for rank, idx in enumerate(
+            sorted(range(len(enriched)),
+                   key=lambda i: -int(enriched[i].get("value") or 0))
+        )
+    }
+    pool = [
+        (score, row_priority[row_idx], row_idx, fid, nick, status)
+        for row_idx, row in enumerate(enriched)
+        for fid, nick, score, status in row["candidates"]
+    ]
+    pool.sort(key=lambda c: (-c[0], c[1]))
+
+    assigned_fids: set[int] = set()
+    for _score, _prio, row_idx, fid, nick, status in pool:
+        row = enriched[row_idx]
+        if row["fid"] is not None or fid in assigned_fids:
+            continue
+        row["fid"] = fid
+        row["nickname"] = nick_by_fid.get(fid, nick)
+        row["status"] = status
+        assigned_fids.add(fid)
+    return enriched
+
+
+def fuzzy_match_name(detected: str, roster: list[tuple[int, str]]) -> tuple[Optional[int], str]:
+    """Single-best fuzzy match against the alliance roster.
+
+    Convenience wrapper around `fuzzy_match_candidates` for callers that
+    don't need multi-candidate dedup. Returns `(fid, status)` where status
+    is 'auto' / 'likely' / 'review' / 'no_match' / 'no_name'.
+
+    Uses SequenceMatcher (Ratcliff-Obershelp) rather than character-set
+    overlap — the latter scores 'AlejoCAT' vs 'Caramelo' at 0.75 because
+    the letter sets overlap heavily, even though the strings are obviously
+    different. Normalisation strips OCR decorative chars so a nickname
+    like 'Trololololol' matches even when OCR captured it as
+    '0g$Trololololol8e'.
+    """
+    if not detected:
+        return None, "no_name"
+    if not _normalize_for_match(detected):
+        return None, "no_name"
+    candidates = fuzzy_match_candidates(detected, roster, limit=1)
+    if not candidates:
+        return None, "no_match"
+    fid, _nick, _score, status = candidates[0]
+    return fid, status
+
+
+def update_users_power(fid: int, power: int, ts_iso: str) -> None:
+    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+        conn.execute(
+            "UPDATE users SET power = ?, power_updated_at = ? WHERE fid = ?",
+            (power, ts_iso, fid),
+        )
+        conn.commit()
+
+
+def update_users_combat_power(fid: int, combat_power: int, ts_iso: str) -> None:
+    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+        conn.execute(
+            "UPDATE users SET combat_power = ?, combat_power_updated_at = ? WHERE fid = ?",
+            (combat_power, ts_iso, fid),
+        )
+        conn.commit()
+
+
+# ── attendance session DB helpers ─────────────────────────────────────────
+
+_ATT_DB = "db/attendance.sqlite"
+
+
+def _record_session(*, session_id, event_type, event_date, date_confidence,
+                    event_subtype, alliance_id, awaiting_result=1):
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        conn.execute(
+            "INSERT INTO attendance_sessions "
+            "(session_id, event_type, event_date, event_date_confidence, "
+            " event_subtype, alliance_id, awaiting_result, origin) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'ocr')",
+            (session_id, event_type,
+             event_date.isoformat() if event_date else None,
+             date_confidence, event_subtype, alliance_id, awaiting_result),
+        )
+        conn.commit()
+
+
+def _find_closed_session(*, event_type, event_date, event_subtype, alliance_id) -> Optional[str]:
+    """Return the session_id of an already-closed session matching this event,
+    or None. Lets re-uploads of a finished event reopen its review."""
+    if event_date is None:
+        return None
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        row = conn.execute(
+            "SELECT session_id FROM attendance_sessions "
+            "WHERE event_type = ? AND alliance_id = ? AND awaiting_result = 0 "
+            "AND COALESCE(event_subtype, '') = COALESCE(?, '') "
+            "AND ABS(julianday(event_date) - julianday(?)) <= 1 "
+            "ORDER BY ABS(julianday(event_date) - julianday(?)) LIMIT 1",
+            (event_type, alliance_id, event_subtype,
+             event_date.isoformat(), event_date.isoformat()),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _find_open_session(*, event_type, event_date, event_subtype, alliance_id) -> Optional[str]:
+    """Return the session_id of an OPEN session matching this event, or None.
+    Used at review time so a result upload visually picks up the registered
+    roster from the matching open registration session. Mirrors the match
+    semantics of `_find_or_create_session` but read-only."""
+    if event_date is None:
+        return None
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        row = conn.execute(
+            "SELECT session_id FROM attendance_sessions "
+            "WHERE event_type = ? AND alliance_id = ? AND awaiting_result = 1 "
+            "AND COALESCE(event_subtype, '') = COALESCE(?, '') "
+            "AND ABS(julianday(event_date) - julianday(?)) <= 3 "
+            "ORDER BY ABS(julianday(event_date) - julianday(?)) LIMIT 1",
+            (event_type, alliance_id, event_subtype,
+             event_date.isoformat(), event_date.isoformat()),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _load_existing_session_data(session_id: str) -> dict:
+    """Read everything previously stored for a session: header, scoreboard,
+    stats, MVPs, player rows. Returns a dict matching the fields a
+    `_PointsSession` would populate from a fresh OCR pass.
+    """
+    out: dict = {
+        "alliance_rank": None,
+        "event_time": None,
+        "event_date": None,
+        "event_subtype": None,
+        "alliance_scores": [],
+        "stats": {},
+        "mvps": [],
+        "rows": [],                # status='present'
+        "registered_rows": [],     # status='registered' — pre-event combatants
+    }
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        hdr = conn.execute(
+            "SELECT alliance_rank, event_time, event_date, event_subtype "
+            "FROM attendance_sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if hdr is None:
+            return out
+        out["alliance_rank"] = hdr[0]
+        out["event_time"] = hdr[1]
+        if hdr[2]:
+            try:
+                out["event_date"] = date.fromisoformat(hdr[2])
+            except ValueError:
+                out["event_date"] = None
+        out["event_subtype"] = hdr[3]
+
+        out["alliance_scores"] = [
+            {"rank": r[0], "legion": r[1], "tag": r[2],
+             "name": r[3], "score": r[4]}
+            for r in conn.execute(
+                "SELECT rank, legion, tag, name, score FROM attendance_session_scoreboard "
+                "WHERE session_id = ? ORDER BY rank",
+                (session_id,),
+            ).fetchall()
+        ]
+
+        out["stats"] = {
+            k: v for k, v in conn.execute(
+                "SELECT stat_key, stat_value FROM attendance_session_stats "
+                "WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        }
+
+        out["mvps"] = [
+            {"stat_key": r[0], "name": r[1], "value": r[2],
+             "fid_str": r[3]}  # carry forward for fidelity; usually re-resolved at submit
+            for r in conn.execute(
+                "SELECT stat_key, mvp_name, mvp_value, mvp_fid FROM attendance_session_mvps "
+                "WHERE session_id = ? ORDER BY stat_key",
+                (session_id,),
+            ).fetchall()
+        ]
+
+        out["rows"] = [
+            {"fid": int(r[0]) if r[0] and str(r[0]).lstrip("-").isdigit() else None,
+             "name": r[1], "value": int(r[2]) if r[2] is not None else 0}
+            for r in conn.execute(
+                "SELECT player_id, player_name, points FROM attendance_records "
+                "WHERE session_id = ? AND status = 'present' ORDER BY points DESC",
+                (session_id,),
+            ).fetchall()
+        ]
+        out["registered_rows"] = [
+            {"fid": int(r[0]) if r[0] and str(r[0]).lstrip("-").isdigit() else None,
+             "name": r[1], "value": int(r[2]) if r[2] is not None else 0}
+            for r in conn.execute(
+                "SELECT player_id, player_name, points FROM attendance_records "
+                "WHERE session_id = ? AND status = 'registered' ORDER BY points DESC",
+                (session_id,),
+            ).fetchall()
+        ]
+    return out
+
+
+def _find_or_create_session(*, event_type, event_date, event_subtype, alliance_id,
+                            date_confidence):
+    if event_date is None:
+        sid = str(uuid.uuid4())
+        _record_session(
+            session_id=sid, event_type=event_type, event_date=event_date,
+            date_confidence=date_confidence, event_subtype=event_subtype,
+            alliance_id=alliance_id,
+        )
+        return sid
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        row = conn.execute(
+            "SELECT session_id FROM attendance_sessions "
+            "WHERE event_type = ? AND alliance_id = ? AND awaiting_result = 1 "
+            "AND COALESCE(event_subtype, '') = COALESCE(?, '') "
+            "AND ABS(julianday(event_date) - julianday(?)) <= 2 "
+            "ORDER BY ABS(julianday(event_date) - julianday(?)) LIMIT 1",
+            (event_type, alliance_id, event_subtype,
+             event_date.isoformat(), event_date.isoformat()),
+        ).fetchone()
+    if row:
+        return row[0]
+    sid = str(uuid.uuid4())
+    _record_session(
+        session_id=sid, event_type=event_type, event_date=event_date,
+        date_confidence=date_confidence, event_subtype=event_subtype,
+        alliance_id=alliance_id,
+    )
+    return sid
+
+
+def _ocr_session_label(event_date, event_subtype) -> str:
+    """Friendly prefix shown in the legacy Attendance UI's session list. The
+    legacy UI appends ` [event_type]` after this, so we deliberately omit the
+    event_type to avoid the duplicated `canyon_clash 2026-05-16 [canyon_clash]`."""
+    bits = []
+    if event_subtype:
+        bits.append(event_subtype)
+    if event_date:
+        bits.append(event_date.isoformat() if hasattr(event_date, "isoformat") else str(event_date))
+    return " · ".join(bits) if bits else "Screenshot Upload"
+
+
+def _record_attendance_row(*, session_id, event_type, event_date, event_subtype,
+                           alliance_id, fid, name, status, points,
+                           alliance_rank=None):
+    session_name = _ocr_session_label(event_date, event_subtype)
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO attendance_records "
+            "(session_id, session_name, event_type, event_date, player_id, player_name, "
+            " alliance_id, alliance_name, status, points, event_subtype, alliance_rank) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_id, session_name, event_type,
+             event_date.isoformat() if event_date else None,
+             str(fid), name, str(alliance_id), "", status, points,
+             event_subtype, alliance_rank),
+        )
+        conn.commit()
+
+
+def _upsert_attendance_row(*, session_id, event_type, event_date, event_subtype,
+                           alliance_id, fid, name, status, points):
+    session_name = _ocr_session_label(event_date, event_subtype)
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM attendance_records WHERE session_id = ? AND player_id = ?",
+            (session_id, str(fid)),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE attendance_records SET status = ?, points = ?, "
+                "player_name = ?, event_subtype = COALESCE(event_subtype, ?) "
+                "WHERE session_id = ? AND player_id = ?",
+                (status, points, name, event_subtype, session_id, str(fid)),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO attendance_records "
+                "(session_id, session_name, event_type, event_date, player_id, player_name, "
+                " alliance_id, alliance_name, status, points, event_subtype, was_walk_in) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (session_id, session_name, event_type,
+                 event_date.isoformat() if event_date else None,
+                 str(fid), name, str(alliance_id), "", status, points,
+                 event_subtype, 1),
+            )
+        conn.commit()
+
+
+def _mark_registered_as_absent(session_id: str, except_fids: set[int]) -> list[dict]:
+    no_shows = []
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        rows = conn.execute(
+            "SELECT player_id, player_name FROM attendance_records "
+            "WHERE session_id = ? AND status = 'registered'",
+            (session_id,),
+        ).fetchall()
+        for pid, pname in rows:
+            try:
+                fid = int(pid)
+            except (TypeError, ValueError):
+                continue
+            if fid in except_fids:
+                continue
+            no_shows.append({"fid": fid, "name": pname})
+            conn.execute(
+                "UPDATE attendance_records SET status = 'absent' "
+                "WHERE session_id = ? AND player_id = ?",
+                (session_id, pid),
+            )
+        conn.commit()
+    return no_shows
+
+
+def _close_session(session_id: str) -> None:
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        conn.execute(
+            "UPDATE attendance_sessions SET awaiting_result = 0, "
+            "closed_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+            (session_id,),
+        )
+        conn.commit()
+
+
+def _unmatched_id_floor(session_id: str) -> int:
+    """Most-negative existing player_id for this session, or 0 if none. Callers
+    decrement from this to allocate a fresh per-session placeholder id."""
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        row = conn.execute(
+            "SELECT MIN(CAST(player_id AS INTEGER)) FROM attendance_records "
+            "WHERE session_id = ? AND CAST(player_id AS INTEGER) < 0",
+            (session_id,),
+        ).fetchone()
+    return row[0] if row and row[0] is not None else 0
+
+
+# ── base session class ────────────────────────────────────────────────────
+
+class OcrUploadSession:
+    """Generic OCR upload session: collects screenshots, runs subclass-provided parsing/review."""
+
+    event_label = "OCR Upload"
+
+    def __init__(self, *, cog, channel: discord.TextChannel, uploader_id: int,
+                 event_type: str, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS):
+        self.cog = cog
+        self.channel = channel
+        self.uploader_id = uploader_id
+        self.event_type = event_type
+        self.timeout_seconds = timeout_seconds
+
+        self.image_attachments: list[discord.Attachment] = []
+        self.progress_message: Optional[discord.Message] = None
+        self.cancelled = False
+        self.finalized = False
+        self._timer_task: Optional[asyncio.Task] = None
+        self._lock = asyncio.Lock()
+        # Progress counters mirror bear_track so the embed can show "image X of Y"
+        # while parsing — total bumps before the lock so concurrent uploads
+        # immediately update the visible total instead of after the current batch.
+        self.known_total_images = 0
+        self.processed_images = 0
+        self.current_image_idx: Optional[int] = None
+
+    async def start(self, attachments: list[discord.Attachment]):
+        self.progress_message = await self.channel.send(
+            embed=self.build_progress_embed(),
+            view=_ProgressView(self),
+        )
+        await self.add_attachments(attachments)
+        self.restart_timer()
+
+    async def add_attachments(self, attachments: list[discord.Attachment]):
+        self.known_total_images += len(attachments)
+        if self.progress_message is not None:
+            await self.render_progress()
+        async with self._lock:
+            self.image_attachments.extend(attachments)
+            await self._process_attachments(attachments)
+            self.restart_timer()
+            self.current_image_idx = None
+            await self.render_progress()
+
+    async def finalize(self, *, timed_out: bool = False):
+        if self.finalized or self.cancelled:
+            return
+        self.finalized = True
+        self.stop_timer()
+        try:
+            await self.render_review(timed_out=timed_out)
+        except Exception:
+            logger.exception("OcrUploadSession: failed to render review")
+
+    async def cancel(self, *, by_user: bool = False):
+        if self.finalized or self.cancelled:
+            return
+        self.cancelled = True
+        self.stop_timer()
+        if self.progress_message:
+            try:
+                await self.progress_message.edit(
+                    embed=discord.Embed(
+                        title=f"{theme.deniedIcon} Upload cancelled",
+                        description="Session cancelled by user." if by_user else "Session timed out with no images.",
+                        color=theme.emColor2,
+                    ),
+                    view=None,
+                )
+            except Exception:
+                pass
+
+    def restart_timer(self):
+        self.stop_timer()
+        self._timer_task = asyncio.create_task(self._timer_run())
+
+    def stop_timer(self):
+        if self._timer_task and not self._timer_task.done():
+            self._timer_task.cancel()
+        self._timer_task = None
+
+    async def _timer_run(self):
+        try:
+            await asyncio.sleep(self.timeout_seconds)
+            if not self.finalized and not self.cancelled:
+                await self.finalize(timed_out=True)
+        except asyncio.CancelledError:
+            pass
+
+    async def render_progress(self):
+        if self.progress_message is None:
+            return
+        try:
+            await self.progress_message.edit(
+                embed=self.build_progress_embed(),
+                view=_ProgressView(self),
+            )
+        except discord.NotFound:
+            self.progress_message = None
+
+    def build_progress_embed(self) -> discord.Embed:
+        label = EVENT_TYPES[self.event_type].label if self.event_type in EVENT_TYPES else self.event_type
+        if self.current_image_idx is not None and self.known_total_images:
+            progress_line = (
+                f"**{theme.importIcon} Processing image:** "
+                f"`{self.current_image_idx} of {self.known_total_images}`\n"
+            )
+        else:
+            done = min(self.processed_images, self.known_total_images)
+            progress_line = (
+                f"**{theme.importIcon} Images processed:** "
+                f"`{done} of {self.known_total_images}`\n"
+            )
+        return discord.Embed(
+            title=f"{theme.documentIcon} Screenshot Upload — {label}",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"**{theme.userIcon} Uploader:** <@{self.uploader_id}>\n"
+                f"{progress_line}"
+                f"{self.extra_progress_lines()}"
+                f"{theme.lowerDivider}\n"
+            ),
+            color=theme.emColor1,
+        )
+
+    def extra_progress_lines(self) -> str:
+        return ""
+
+    async def _process_attachments(self, attachments: list[discord.Attachment]):
+        raise NotImplementedError
+
+    async def render_review(self, *, timed_out: bool):
+        raise NotImplementedError
+
+
+class _ProgressView(discord.ui.View):
+    def __init__(self, session: OcrUploadSession):
+        # Long timeout so the Done Uploading button stays clickable while
+        # the admin reads through the parsed counts before deciding.
+        super().__init__(timeout=7200)
+        self.session = session
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.session.uploader_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the uploader can finalize this session.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Done Uploading", style=discord.ButtonStyle.success,
+                       emoji=f"{theme.verifiedIcon}")
+    async def done(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await interaction.response.defer()
+        await self.session.finalize(timed_out=False)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger,
+                       emoji=f"{theme.deniedIcon}")
+    async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button):
+        await interaction.response.defer()
+        await self.session.cancel(by_user=True)
+
+    async def on_timeout(self):
+        """Collapse a stuck progress message into a small expiry notice
+        instead of leaving a long counts-list with dead buttons."""
+        sess = self.session
+        if sess.finalized or sess.cancelled or sess.progress_message is None:
+            return
+        try:
+            await sess.progress_message.edit(
+                embed=discord.Embed(
+                    title=f"{theme.warnIcon} Upload session expired",
+                    description=(
+                        "No activity for a while, so this upload was "
+                        "discarded. **Upload the screenshots again** to "
+                        "start a new session."
+                    ),
+                    color=theme.emColor2,
+                ),
+                view=None,
+            )
+        except (discord.NotFound, discord.HTTPException):
+            pass
+        sess.cog.end_session(sess.channel.id, sess.uploader_id)
+
+
+# ── shared review/summary embed ───────────────────────────────────────────
+
+async def _send_summary(session, title, *, matched, unmatched, value_label,
+                        absent=None, extra_lines=None):
+    lines = []
+    if extra_lines:
+        lines.extend(extra_lines)
+    if absent is not None:
+        lines.append(f"**{theme.deniedIcon} Marked Absent:** `{len(absent)}`")
+    if matched:
+        lines.append(f"\n**{theme.membersIcon} Players ({value_label}):**")
+        for r in matched[:15]:
+            display = r.get("matched_nickname") or r.get("name") or "?"
+            lines.append(f"  {theme.verifiedIcon} `{display}` — {r['value']:,}")
+        if len(matched) > 15:
+            lines.append(f"  • …and {len(matched) - 15} more")
+    if unmatched:
+        lines.append(f"\n**{theme.warnIcon} Unmatched names:**")
+        for r in unmatched[:5]:
+            lines.append(f"  • `{r['name']}` — {r['value']:,}")
+        if len(unmatched) > 5:
+            lines.append(f"  • …and {len(unmatched) - 5} more")
+    if absent and absent[:5]:
+        lines.append(f"\n**{theme.deniedIcon} Absent (no submission seen):**")
+        for a in absent[:5]:
+            lines.append(f"  • `{a['name']}` (fid {a['fid']})")
+        if len(absent) > 5:
+            lines.append(f"  • …and {len(absent) - 5} more")
+    embed = discord.Embed(
+        title=f"{theme.verifiedIcon} {title}",
+        description="\n".join(lines) if lines else f"{theme.warnIcon} No data parsed.",
+        color=theme.emColor3 if not unmatched else theme.emColor4,
+    )
+    if session.progress_message:
+        try:
+            await session.progress_message.edit(embed=embed, view=None)
+        except discord.NotFound:
+            pass
+    session.cog.end_session(session.channel.id, session.uploader_id)
+
+
+# ── Power Rankings session ────────────────────────────────────────────────
+
+class PowerRankingsSession(OcrUploadSession):
+    """Power Rankings parser. Stitches paginated scroll screenshots and writes Power to users.
+
+    Dedup key is (name, power) since the top 3 ranks render as medal icons in
+    the screenshot and the OCR can't pick up their rank digits.
+    """
+
+    def __init__(self, *, alliance_id: int, **kwargs):
+        super().__init__(**kwargs)
+        self.alliance_id = alliance_id
+        self.rows: dict[tuple[str, int], dict] = {}
+
+    async def _process_attachments(self, attachments: list[discord.Attachment]):
+        for att in attachments:
+            self.current_image_idx = self.processed_images + 1
+            await self.render_progress()
+            try:
+                text = await ocr_attachment(att)
+            except Exception:
+                self.processed_images += 1
+                continue
+            for row in _parse_power_rows(text):
+                key = (row["name"].casefold(), row["power"])
+                if key not in self.rows:
+                    self.rows[key] = row
+            self.processed_images += 1
+            await self.render_progress()
+
+    def extra_progress_lines(self) -> str:
+        return f"**{theme.listIcon} Players parsed so far:** `{len(self.rows)}`\n"
+
+    async def render_review(self, *, timed_out: bool):
+        roster = load_alliance_roster(self.alliance_id)
+        matched, unmatched = [], []
+        # Sort by power desc — the canonical ranking
+        for row in sorted(self.rows.values(), key=lambda r: -r["power"]):
+            fid, status = fuzzy_match_name(row.get("name", ""), roster)
+            row["matched_fid"] = fid
+            row["match_status"] = status
+            row["value"] = row["power"]
+            (matched if fid else unmatched).append(row)
+
+        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        for row in matched:
+            update_users_power(row["matched_fid"], row["power"], ts)
+
+        await _send_summary(
+            self, "Power Rankings recorded",
+            matched=matched, unmatched=unmatched, value_label="Power",
+            extra_lines=[f"**{theme.listIcon} Total rows seen:** `{len(self.rows)}`"],
+        )
+
+
+def _parse_power_rows(text: str) -> list[dict]:
+    """Parse Power Rankings rows from OCR text. The top 3 ranks display medal
+    icons (no rank digit in the OCR), so a leading rank digit is optional;
+    rank is None when not found.
+    """
+    rows = []
+    text = _trim_to_data_section(text)
+    prev_end = 0
+    for start, end, value in find_formatted_numbers(text):
+        chunk = text[prev_end:start].strip()
+        prev_end = end
+        if value < 1_000_000:
+            continue
+        rank = None
+        m = _RANK_PREFIX_RE.match(chunk)
+        if m:
+            try:
+                rank = int(m.group(1))
+            except ValueError:
+                rank = None
+            if rank is not None and rank > 1000:
+                continue
+            chunk = chunk[m.end():].strip()
+        chunk = re.sub(r"\bR\d+\b", "", chunk)
+        tokens = [
+            t for t in chunk.split()
+            if t.lower() not in _PARSE_STOPWORDS
+            and any(c.isalpha() for c in t)
+            and len(t) >= 2
+        ]
+        if not tokens:
+            continue
+        name = " ".join(tokens[-3:]).strip()
+        if len(name) < 2:
+            continue
+        rows.append({"rank": rank, "name": name, "power": value})
+    return rows
+
+
+# ── Foundry / Canyon unified session: registration + result in one ────────
+
+class _PointsSession(OcrUploadSession):
+    """Unified Foundry/Canyon session. Collects registration + result screenshots
+    in one upload and routes each parsed row into `registered_rows` or
+    `result_rows` by per-attachment kind detection."""
+
+    db_event_type: str = ""
+    registration_value_label: str = "Power"
+    result_value_label: str = "Points"
+    update_fn_registration = staticmethod(lambda fid, val, ts: None)
+
+    def __init__(self, *, alliance_id: int, **kwargs):
+        super().__init__(**kwargs)
+        self.alliance_id = alliance_id
+        self.registered_rows: list[dict] = []
+        self.result_rows: list[dict] = []
+        self._last_kind: Optional[str] = None
+        self.detected_date = None
+        self.detected_legion = None
+        self.detected_time: Optional[str] = None
+        self.date_confidence = None
+        self.alliance_rank: Optional[int] = None
+        self.alliance_scores: list[dict] = []
+        self.stats: dict[str, int] = {}
+        self.mvps: list[dict] = []
+
+    async def _process_attachments(self, attachments: list[discord.Attachment]):
+        for att in attachments:
+            self.current_image_idx = self.processed_images + 1
+            await self.render_progress()
+            try:
+                blocks = await ocr_attachment_with_boxes(att)
+                text = " ".join(t for t, _ in blocks)
+            except Exception:
+                self.processed_images += 1
+                continue
+
+            # Scroll pages match no fingerprint — inherit the last classified kind.
+            kind = detect_kind(self.db_event_type, text)
+            if kind is None:
+                kind = self._last_kind or "result"
+            else:
+                self._last_kind = kind
+
+            if self.detected_date is None:
+                d = extract_header_date(text)
+                if d:
+                    self.detected_date, self.date_confidence = resolve_event_date(d, self.db_event_type)
+            if self.detected_legion is None:
+                self.detected_legion = extract_legion(text)
+
+            target = self.result_rows if kind == "result" else self.registered_rows
+            if kind == "result":
+                self._merge_result_metadata(text, blocks=blocks)
+            for row in _parse_player_value_rows(text):
+                _dedup_into(target, row)
+            self.processed_images += 1
+            await self.render_progress()
+
+    def _merge_result_metadata(self, text: str, blocks: Optional[list] = None):
+        """Capture alliance rank / scoreboard / stats / MVPs from a result-mail header."""
+        if self.alliance_rank is None:
+            m = _ALLIANCE_RANK_RE.search(text)
+            if m:
+                try:
+                    self.alliance_rank = int(m.group(1))
+                except ValueError:
+                    pass
+        if not self.alliance_scores:
+            scoreboard = []
+            if blocks:
+                scoreboard = _parse_alliance_scoreboard_spatial(blocks)
+            if not scoreboard:
+                scoreboard = _parse_alliance_scoreboard(text)
+            if scoreboard:
+                self.alliance_scores = scoreboard
+        if not self.stats:
+            parsed_stats = _parse_stats_panel(text)
+            if parsed_stats:
+                self.stats = parsed_stats
+        if not self.mvps:
+            parsed_mvps = _parse_mvps(text)
+            if parsed_mvps:
+                self.mvps = parsed_mvps
+
+    def extra_progress_lines(self) -> str:
+        # Order: event identity first (legion / date / rank), then row counts —
+        # the identity gives the user something stable to look at while OCR
+        # is still streaming new row counts beneath it.
+        bits = []
+        if self.detected_legion:
+            bits.append(f"**{theme.shieldIcon} Legion:** `{self.detected_legion}`")
+        if self.detected_date:
+            bits.append(f"**{theme.calendarIcon} Event date:** `{self.detected_date.isoformat()}`")
+        if self.alliance_rank is not None:
+            bits.append(f"**{theme.crownIcon} Alliance rank:** `No. {self.alliance_rank}`")
+        if self.registered_rows:
+            bits.append(f"**{theme.listIcon} Registered:** `{len(self.registered_rows)}`")
+        if self.result_rows:
+            bits.append(f"**{theme.listIcon} Results:** `{len(self.result_rows)}`")
+        return "\n".join(bits) + "\n" if bits else ""
+
+    async def render_review(self, *, timed_out: bool):
+        from .attendance_ocr_review import EventReviewView
+
+        # Two enrichment paths: re-uploading a CLOSED session (rare, admin
+        # fix) vs. uploading the result that closes an OPEN registration
+        # (the common workflow — what triggers the "complete" mode).
+        existing_closed_id = (
+            _find_closed_session(
+                event_type=self.db_event_type,
+                event_date=self.detected_date,
+                event_subtype=self.detected_legion,
+                alliance_id=self.alliance_id,
+            ) if self.result_rows else None
+        )
+        existing_open_id = None
+        if existing_closed_id is None and self.result_rows:
+            existing_open_id = _find_open_session(
+                event_type=self.db_event_type,
+                event_date=self.detected_date,
+                event_subtype=self.detected_legion,
+                alliance_id=self.alliance_id,
+            )
+
+        if existing_closed_id:
+            self._merge_existing(_load_existing_session_data(existing_closed_id))
+        elif existing_open_id:
+            self._merge_open_registration(_load_existing_session_data(existing_open_id))
+
+        view = EventReviewView(
+            self,
+            registration_value_label=self.registration_value_label,
+            result_value_label=self.result_value_label,
+            existing_session_id=existing_closed_id,
+            enriching_open_session_id=existing_open_id,
+        )
+        if self.progress_message:
+            try:
+                await self.progress_message.edit(embed=view.build_embed(), view=view)
+            except discord.NotFound:
+                pass
+
+    def _merge_existing(self, existing: dict):
+        """Overlay newly-OCR'd data on top of an existing CLOSED session's data; new wins."""
+        if self.alliance_rank is None:
+            self.alliance_rank = existing.get("alliance_rank")
+        if self.detected_time is None:
+            self.detected_time = existing.get("event_time")
+        if self.detected_date is None:
+            self.detected_date = existing.get("event_date")
+        if self.detected_legion is None:
+            self.detected_legion = existing.get("event_subtype")
+
+        if not self.alliance_scores:
+            self.alliance_scores = existing.get("alliance_scores", [])
+        if not self.stats:
+            self.stats = existing.get("stats", {})
+        if not self.mvps:
+            self.mvps = existing.get("mvps", [])
+
+        merged = list(self.result_rows)
+        seen_fids = {r["fid"] for r in self.result_rows if r.get("fid")}
+        seen_names = {
+            _normalize_for_match(r.get("name") or "")
+            for r in self.result_rows if not r.get("fid")
+        }
+        for r in existing.get("rows", []):
+            fid = r.get("fid")
+            name_key = _normalize_for_match(r.get("name") or "")
+            if fid and fid in seen_fids:
+                continue
+            if not fid and name_key in seen_names:
+                continue
+            merged.append({"name": r.get("name") or "", "value": int(r.get("value") or 0)})
+        self.result_rows = merged
+
+    def _merge_open_registration(self, existing: dict):
+        """Result mail arriving for an event whose registration is already on
+        file: pull the registered roster + header fields from the DB so the
+        review shows the complete picture and submit closes the existing
+        session rather than creating a parallel one."""
+        if self.alliance_rank is None:
+            self.alliance_rank = existing.get("alliance_rank")
+        if self.detected_time is None:
+            self.detected_time = existing.get("event_time")
+        if self.detected_date is None:
+            self.detected_date = existing.get("event_date")
+        if self.detected_legion is None:
+            self.detected_legion = existing.get("event_subtype")
+
+        if not self.registered_rows:
+            self.registered_rows = [
+                {"name": r.get("name") or "", "value": int(r.get("value") or 0)}
+                for r in existing.get("registered_rows", [])
+            ]
+
+
+class FoundryBattleSession(_PointsSession):
+    db_event_type = "foundry_battle"
+    registration_value_label = "Combat Power"
+    result_value_label = "Personal Arsenal Points"
+    update_fn_registration = staticmethod(update_users_combat_power)
+
+
+class CanyonClashSession(_PointsSession):
+    db_event_type = "canyon_clash"
+    registration_value_label = "Power"
+    result_value_label = "Personal Points"
+    update_fn_registration = staticmethod(update_users_power)
+
+
+# ── Alliance Showdown session ─────────────────────────────────────────────
+
+_ALLIANCE_RANK_RE = re.compile(
+    r"(?:rank(?:ed|ing)?\s+No\.?\s+|Alliance\s+Rank(?:ing)?[:\s]+)(\d{1,3})",
+    re.IGNORECASE,
+)
+
+
+class AllianceShowdownSession(OcrUploadSession):
+    """Alliance Showdown final-rankings parser. Records per-player points + alliance rank."""
+
+    def __init__(self, *, alliance_id: int, **kwargs):
+        super().__init__(**kwargs)
+        self.alliance_id = alliance_id
+        self.rows: list[dict] = []
+        self.detected_date = None
+        self.date_confidence = None
+        self.alliance_rank: Optional[int] = None
+
+    async def _process_attachments(self, attachments: list[discord.Attachment]):
+        for att in attachments:
+            self.current_image_idx = self.processed_images + 1
+            await self.render_progress()
+            try:
+                text = await ocr_attachment(att)
+            except Exception:
+                self.processed_images += 1
+                continue
+            if self.detected_date is None:
+                d = extract_header_date(text)
+                if d:
+                    self.detected_date, self.date_confidence = resolve_event_date(d, self.event_type)
+            if self.alliance_rank is None:
+                m = _ALLIANCE_RANK_RE.search(text)
+                if m:
+                    try:
+                        self.alliance_rank = int(m.group(1))
+                    except ValueError:
+                        pass
+            for row in _parse_player_value_rows(text):
+                _dedup_into(self.rows, row)
+            self.processed_images += 1
+            await self.render_progress()
+
+    def extra_progress_lines(self) -> str:
+        bits = [f"**{theme.listIcon} Players parsed:** `{len(self.rows)}`"]
+        if self.alliance_rank is not None:
+            bits.append(f"**{theme.shieldIcon} Alliance rank:** `{self.alliance_rank}`")
+        if self.detected_date:
+            bits.append(f"**{theme.calendarIcon} Event date:** `{self.detected_date.isoformat()}`")
+        return "\n".join(bits) + "\n"
+
+    async def render_review(self, *, timed_out: bool):
+        roster = load_alliance_roster(self.alliance_id)
+        matched, unmatched = [], []
+        for row in self.rows:
+            fid, status = fuzzy_match_name(row["name"], roster)
+            row["matched_fid"] = fid
+            row["match_status"] = status
+            (matched if fid else unmatched).append(row)
+
+        session_id = str(uuid.uuid4())
+        _record_session(
+            session_id=session_id, event_type="alliance_showdown",
+            event_date=self.detected_date, date_confidence=self.date_confidence,
+            event_subtype=None, alliance_id=self.alliance_id, awaiting_result=0,
+        )
+        for row in matched:
+            _record_attendance_row(
+                session_id=session_id, event_type="alliance_showdown",
+                event_date=self.detected_date, event_subtype=None,
+                alliance_id=self.alliance_id, fid=row["matched_fid"],
+                name=row["name"], status="present", points=row["value"],
+                alliance_rank=self.alliance_rank,
+            )
+
+        extra = []
+        if self.alliance_rank is not None:
+            extra.append(f"**{theme.shieldIcon} Alliance rank:** `{self.alliance_rank}`")
+        await _send_summary(
+            self, "Alliance Showdown recorded",
+            matched=matched, unmatched=unmatched, value_label="Showdown Points",
+            extra_lines=extra,
+        )
+
+
+# ── factory ───────────────────────────────────────────────────────────────
+
+SESSION_CLASSES: dict[str, type[OcrUploadSession]] = {
+    "power_rankings": PowerRankingsSession,
+    "foundry_battle": FoundryBattleSession,
+    "canyon_clash": CanyonClashSession,
+    "alliance_showdown": AllianceShowdownSession,
+}
+
+
+def build_session(event_type: str, *, cog, channel, uploader, alliance_id: int) -> Optional[OcrUploadSession]:
+    cls = SESSION_CLASSES.get(event_type)
+    if cls is None:
+        return None
+    return cls(
+        cog=cog, channel=channel, uploader_id=uploader.id,
+        event_type=event_type, alliance_id=alliance_id,
+    )
