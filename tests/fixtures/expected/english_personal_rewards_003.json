@@ -1,0 +1,13 @@
+{
+  "_comment": "Source: Screenshot_20260421-071809.png. English UI. Personal-rewards prose at top with the rank-list visible underneath (rows 1-4). Verifies the parser finds the rank section after the prose without leaking the personal-rewards numbers as fake rows.",
+  "language": "english",
+  "screen_type": "rank_top",
+  "event_id": "20260420_2130_trap1",
+  "trap": "1",
+  "expected_rows": [
+    {"damage": 42691117368, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 37338099863, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 37273869343, "match": {"fid": 99999998, "min_status": "auto"}},
+    {"damage": 32973560662, "match": {"fid": 44348649, "min_status": "auto"}}
+  ]
+}

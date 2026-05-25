@@ -1,0 +1,18 @@
+{
+  "_comment": "Source: Screenshot_20260421-071814.png. English UI. Top of the rank list (rows 1-9 visible) with the [Hunting Trap 1] header. Verifies that bare-int '0' from '0$Trololololf#%' OCR garbage no longer leaks as rallies (was the bug that made the embed show '-' for rallies).",
+  "language": "english",
+  "screen_type": "rank_top",
+  "event_id": "20260420_2130_trap1",
+  "trap": "1",
+  "rallies": "",
+  "expected_rows": [
+    {"damage": 42691117368, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 37338099863, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 37273869343, "match": {"fid": 99999998, "min_status": "auto"}},
+    {"damage": 32973560662, "match": {"fid": 44348649, "min_status": "auto"}},
+    {"damage": 31598271109, "match": {"fid": 99999994, "min_status": "auto"}},
+    {"damage": 28582817832, "match": {"fid": 99999993, "min_status": "auto"}},
+    {"damage": 27209593990, "match": {"fid": 42398947, "min_status": "auto"}},
+    {"damage": 26462701136, "match": {"fid": 99999991, "min_status": "likely", "allow_unmatched": true}}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "description": "Power Rankings page 1 — top of alliance ranking, rank 1-8.",
+  "event_type": "power_rankings",
+  "legion": null,
+  "header_date": null,
+  "min_rows": 6,
+  "expected_rows": [
+    {"name": "vtr",      "value": 1142832517, "expected_fid": 10001, "min_status": "auto"},
+    {"name": "MADO",     "value": 1034240119, "expected_fid": 10002, "min_status": "auto"},
+    {"name": "AlejoCAT", "value": 1027972491, "expected_fid": 10003, "min_status": "likely"}
+  ]
+}

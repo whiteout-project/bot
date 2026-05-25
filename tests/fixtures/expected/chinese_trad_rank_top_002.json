@@ -1,0 +1,15 @@
+{
+  "_comment": "Source: Screenshot_20260430-225253.png. Chinese Traditional UI. DIFFERENT EVENT — 2026-04-30 15:00 Trap 2 hunt. The 'chinese_cht' engine drops the surrounding brackets on '[狩獵陷阱2]', so `_BRACKETED_TRAP_RE` misses; `_HEADERLESS_TRAP_RE` recovers the trap by matching `狩獵陷阱(\\d)`.",
+  "language": "chinese_traditional",
+  "screen_type": "rank_top",
+  "event_id": "20260430_1500_trap2",
+  "trap": "2",
+  "rallies": "42",
+  "total_damage": 179083993180,
+  "expected_rows": [
+    {"damage": 28603703705, "match": {"fid": 88888887, "min_status": "auto"}},
+    {"damage": 27335984636, "match": {"fid": 99999995, "min_status": "auto"}},
+    {"damage": 23543553966, "match": {"fid": 99999994, "min_status": "auto"}},
+    {"damage": 21065038588, "match": {"fid": 99999998, "min_status": "auto"}}
+  ]
+}
