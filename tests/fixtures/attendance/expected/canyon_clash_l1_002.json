@@ -1,0 +1,15 @@
+{
+  "description": "Canyon Clash Legion 1 — Personal Point Ranking page 1 (rank 1-10 visible).",
+  "event_type": "canyon_clash",
+  "legion": null,
+  "header_date": null,
+  "min_rows": 6,
+  "expected_rows": [
+    {"name": "MIMOUN",      "value": 492963, "expected_fid": 10007, "min_status": "auto"},
+    {"name": "HOGER KURDI", "value": 320044, "expected_fid": 10009, "min_status": "likely"},
+    {"name": "AlejoRoll",   "value": 298888, "expected_fid": 10004, "min_status": "auto"},
+    {"name": "MADO",        "value": 296599, "expected_fid": 10002, "min_status": "auto"},
+    {"name": "Moly",        "value": 285637, "expected_fid": 10012, "min_status": "auto"},
+    {"name": "Andrea_XVI",  "value": 256960, "expected_fid": 10011, "min_status": "likely"}
+  ]
+}

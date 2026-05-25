@@ -635,7 +635,7 @@ class IDChannelSettingsView(discord.ui.View):
                 f"└ Scan for missed IDs when the bot starts or every 5 minutes\n\n"
                 f"{theme.listIcon} **Scan Limit:** `{scan_limit}` messages per channel\n"
                 f"└ Max messages checked per scan (lower = fewer API calls)\n\n"
-                f"{theme.editIcon} **Auto-Delete:** `{delete_text}`\n"
+                f"{theme.editListIcon} **Auto-Delete:** `{delete_text}`\n"
                 f"└ How long bot replies (errors, warnings) stay visible\n"
                 f"{theme.lowerDivider}"
             ),

@@ -3,7 +3,9 @@ import sys
 import os
 import shutil
 import stat
+import contextlib
 from cogs import bot_startup_display as startup
+from cogs.bot_restart import is_container, restart_process
 
 # Python version check
 MIN_PYTHON = (3, 11)
@@ -11,30 +13,6 @@ MIN_PYTHON = (3, 11)
 if sys.version_info < MIN_PYTHON:
     startup.python_too_old(f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}", f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     sys.exit(1)
-
-def is_container() -> bool:
-    # Docker, Kubernetes, Podman - simple marker file checks
-    marker_files = ["/.dockerenv", "/var/run/secrets/kubernetes.io", "/run/.containerenv"]
-    if any(os.path.exists(path) for path in marker_files):
-        return True
-
-    # LXC - check init process environment
-    try:
-        with open("/proc/1/environ", "r") as f:
-            if "container=lxc" in f.read():
-                return True
-    except (IOError, OSError):
-        pass
-
-    # Systemd-nspawn - check container type file
-    try:
-        with open("/run/systemd/container", "r") as f:
-            if f.read() == "systemd-nspawn\n":
-                return True
-    except (IOError, OSError):
-        pass
-
-    return False
 
 def is_ci_environment() -> bool:
     """Check if running in a CI environment"""
@@ -172,6 +150,12 @@ def safe_remove(path, is_dir=None):
     
     return False
 
+def _requirement_name(spec):
+    """Extract the bare package name from a requirements.txt line/spec."""
+    for sep in ("==", ">=", "<=", "~=", "!="):
+        spec = spec.split(sep)[0]
+    return spec
+
 def calculate_file_hash(filepath):
     """Calculate SHA256 hash of a file."""
     import hashlib
@@ -203,8 +187,7 @@ def cleanup_removed_packages():
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#"):
-                        name = line.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
-                        result.add(name.strip().lower())
+                        result.add(_requirement_name(line).strip().lower())
         except Exception:
             pass
         return result
@@ -226,22 +209,6 @@ def cleanup_removed_packages():
                 pass
 
     safe_remove("requirements.old", is_dir=False)
-
-# v1.2.0 upgrade-path safeguard: if requirements.txt mentions any of these,
-# it's stale and the bootstrap will re-download a fresh one before installing.
-_OBSOLETE_REQUIREMENTS_MARKERS = ("ddddocr", "easyocr", "torch", "torchvision", "torchaudio")
-
-def has_obsolete_requirements():
-    """True if requirements.txt mentions packages from older bot versions."""
-    if not os.path.exists("requirements.txt"):
-        return False
-    try:
-        with open("requirements.txt", "r") as f:
-            content = f.read().lower()
-        return any(marker in content for marker in _OBSOLETE_REQUIREMENTS_MARKERS)
-    except Exception:
-        return False
-
 
 # Configuration for multiple update sources
 UPDATE_SOURCES = [
@@ -362,17 +329,6 @@ def download_requirements_from_release(beta_mode=False):
     except Exception:
         return False
 
-def _import_onnxruntime_quietly():
-    """Import onnxruntime while suppressing C++ GPU discovery warning."""
-    # Redirect fd 2 (C-level stderr) since ONNX writes there, not to sys.stderr
-    _fd, _null = sys.stderr.fileno(), os.open(os.devnull, os.O_WRONLY)
-    _bak = os.dup(_fd); os.dup2(_null, _fd); os.close(_null)
-    try:
-        import onnxruntime
-        return onnxruntime
-    finally:
-        os.dup2(_bak, _fd); os.close(_bak)
-
 def check_and_install_requirements():
     """Check each requirement and install missing ones."""
     if not os.path.exists("requirements.txt"):
@@ -386,8 +342,8 @@ def check_and_install_requirements():
     
     # Test each requirement
     for requirement in requirements:
-        package_name = requirement.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
-        
+        package_name = _requirement_name(requirement)
+
         try:
             if package_name == "discord.py":
                 import discord
@@ -403,8 +359,6 @@ def check_and_install_requirements():
                 import PIL
             elif package_name.lower() == "numpy":
                 import numpy
-            elif package_name.lower() == "onnxruntime":
-                _import_onnxruntime_quietly()
             else:
                 __import__(package_name)
 
@@ -415,7 +369,7 @@ def check_and_install_requirements():
         startup.phase_start("Installing missing packages")
 
         for package in missing_packages:
-            package_name = package.split("==")[0].split(">=")[0].split("<=")[0].split("~=")[0].split("!=")[0]
+            package_name = _requirement_name(package)
 
             try:
                 cmd = [sys.executable, "-m", "pip", "install", package, "--no-cache-dir"]
@@ -436,11 +390,6 @@ def setup_dependencies(beta_mode=False):
     """Main function to set up all dependencies."""
     startup.phase_start("Checking dependencies")
 
-    removed_obsolete = False
-    if has_obsolete_requirements():
-        removed_obsolete = True
-        safe_remove("requirements.txt", is_dir=False)
-
     if not os.path.exists("requirements.txt"):
         if not download_requirements_from_release(beta_mode=beta_mode):
             startup.phase_fail("Dependencies failed", details=["Could not download requirements.txt"], fix="Download the complete bot package from: https://github.com/whiteout-project/bot/releases")
@@ -453,8 +402,7 @@ def setup_dependencies(beta_mode=False):
     return True
 
 beta_mode = "--beta" in sys.argv
-if not setup_dependencies(beta_mode=beta_mode):
-    pass  # Warnings already shown by setup_dependencies
+setup_dependencies(beta_mode=beta_mode)  # Warnings shown internally on failure
 
 try:
     from colorama import Fore, Style, init
@@ -519,10 +467,7 @@ try:
     if original_create_default_https_context is None or \
        original_create_default_https_context is ssl.create_default_context:
         ssl._create_default_https_context = _create_ssl_context_with_certifi
-        
-        pass  # SSL context patch applied silently
-    else: # Assume if it's already patched, it's for a good reason
-        pass  # SSL context already modified, skip
+    # else: already patched elsewhere, leave it alone
 except ImportError:
     pass  # Certifi not found, SSL verification might fail
 except Exception:
@@ -542,12 +487,10 @@ if __name__ == "__main__":
             if _proxy_idx + 1 < len(sys.argv) and not sys.argv[_proxy_idx + 1].startswith("--")
             else "http://localhost:18080"
         )
-        import os as _os
-        _os.environ.setdefault("HTTP_PROXY",  _proxy_url)
-        _os.environ.setdefault("HTTPS_PROXY", _proxy_url)
-        _os.environ.setdefault("http_proxy",  _proxy_url)
-        _os.environ.setdefault("https_proxy", _proxy_url)
-    import requests
+        os.environ.setdefault("HTTP_PROXY",  _proxy_url)
+        os.environ.setdefault("HTTPS_PROXY", _proxy_url)
+        os.environ.setdefault("http_proxy",  _proxy_url)
+        os.environ.setdefault("https_proxy", _proxy_url)
 
     # Display startup header
     _version = "unknown"
@@ -579,29 +522,6 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
-    def restart_bot():
-        python = sys.executable
-        script_path = os.path.abspath(sys.argv[0])
-        # Filter out --no-venv and --repair from restart args to avoid loops
-        filtered_args = [arg for arg in sys.argv[1:] if arg not in ["--no-venv", "--repair"]]
-        args = [python, script_path] + filtered_args
-
-        if sys.platform == "win32":
-            # For Windows, provide direct venv command like initial setup
-            venv_path = "bot_venv"
-            venv_python_name = os.path.join(venv_path, "Scripts", "python.exe")
-            startup.venv_exists_instructions(venv_python_name, sys.platform)
-            sys.exit(0)
-        else:
-            # For non-Windows, try automatic restart
-            print("  Restarting bot...")
-            try:
-                subprocess.Popen(args)
-                os._exit(0)
-            except Exception as e:
-                print(f"Error restarting: {e}")
-                os.execl(python, python, script_path, *sys.argv[1:])
-            
     def install_packages(requirements_txt_path: str, debug: bool = False) -> bool:
         """Install packages from requirements.txt file using pip install -r."""
         full_command = [sys.executable, "-m", "pip", "install", "-r", requirements_txt_path, "--no-cache-dir"]
@@ -808,7 +728,7 @@ if __name__ == "__main__":
 
                         startup.phase_ok(f"Update completed (v{latest_tag} from {source_name})")
 
-                        restart_bot()
+                        restart_process()
                     else:
                         startup.phase_fail("Update failed", details=[f"HTTP {download_resp.status_code} from {source_name}"])
                         return
@@ -820,10 +740,8 @@ if __name__ == "__main__":
     import asyncio
     from datetime import datetime
             
-    # Handle update/repair logic
-    if "--repair" in sys.argv:
-        asyncio.run(check_and_update_files())
-    elif "--no-update" in sys.argv:
+    # Handle update/repair logic (--repair is detected inside check_and_update_files)
+    if "--no-update" in sys.argv:
         startup.phase_ok("Update check skipped")
     else:
         asyncio.run(check_and_update_files())
@@ -968,8 +886,6 @@ if __name__ == "__main__":
             except ValueError:
                 print("Invalid --save-captcha value. Must be 0-3. Defaulting to 0.")
                 bot.save_captcha = 0
-
-    init(autoreset=True)
 
     token_file = "bot_token.txt"
     if not os.path.exists(token_file):
@@ -1148,20 +1064,13 @@ if __name__ == "__main__":
         # Suppress all console output during cog loading to prevent
         # third-party libraries (RapidOCR, onnxruntime) from spamming.
         logging.disable(logging.INFO)
-        _real_stderr = sys.stderr
-        sys.stderr = open(os.devnull, 'w')
-        # Also suppress empty newlines leaking through stdout filter
-        _real_stdout = sys.stdout
-        sys.stdout = open(os.devnull, 'w')
-
-        for cog in cogs:
-            try:
-                await bot.load_extension(f"cogs.{cog}")
-            except Exception as e:
-                failed_cogs.append((cog, str(e)))
-
-        sys.stdout = _real_stdout
-        sys.stderr = _real_stderr
+        with open(os.devnull, 'w') as devnull, \
+                contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+            for cog in cogs:
+                try:
+                    await bot.load_extension(f"cogs.{cog}")
+                except Exception as e:
+                    failed_cogs.append((cog, str(e)))
         logging.disable(logging.NOTSET)
 
         total = len(cogs)
@@ -1345,5 +1254,4 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             pass  # Already handled by signal handler
 
-    if __name__ == "__main__":
-        run_bot()
+    run_bot()

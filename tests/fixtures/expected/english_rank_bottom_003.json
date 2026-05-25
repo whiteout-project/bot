@@ -1,0 +1,18 @@
+{
+  "_comment": "Source: Screenshot_20260421-071817.png. English UI. Bottom of the rank list (rows 2-10). The CRITICAL fixture for the position-fill cross-check fix: this screenshot has 'pYWJI slLo' (English engine's mistransliteration of ملك الظلام) at rank-8's damage AND a clean 'Numb Little Bug' at rank-9's damage. The Arabic fallback's position-fill previously assigned ملك الظلام to BOTH rows; the cross-check guard must skip the second assignment because that fid is already cleanly captured in this image's row set.",
+  "language": "english",
+  "screen_type": "rank_bottom",
+  "event_id": "20260420_2130_trap1",
+  "date": "",
+  "expected_rows": [
+    {"damage": 37338099863, "match": {"fid": 45379845, "min_status": "likely", "allow_unmatched": true}},
+    {"damage": 37273869343, "match": {"fid": 99999998, "min_status": "auto"}},
+    {"damage": 32973560662, "match": {"fid": 44348649, "min_status": "auto"}},
+    {"damage": 31598271109, "match": {"fid": 99999994, "min_status": "auto"}},
+    {"damage": 28582817832, "match": {"fid": 99999993, "min_status": "auto"}},
+    {"damage": 27209593990, "match": {"fid": 42398947, "min_status": "auto"}},
+    {"damage": 26462701136, "match": {"fid": 99999991, "min_status": "likely", "allow_unmatched": true}},
+    {"damage": 13769060743, "match": {"fid": 99999997, "min_status": "auto"}},
+    {"damage": 13492853348, "match": {"fid": 99999996, "min_status": "auto"}}
+  ]
+}

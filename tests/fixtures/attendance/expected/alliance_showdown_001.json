@@ -1,0 +1,10 @@
+{
+  "description": "Alliance Showdown final — header with alliance ranking No. 30 + Just me at rank 1. Validates header parsing (date + alliance_rank); the row name is noisy because the rank-1 medal icon prefixes the name in OCR.",
+  "event_type": "alliance_showdown",
+  "alliance_rank": 30,
+  "header_date": "2026-05-03",
+  "min_rows": 1,
+  "expected_rows": [
+    {"name": "Just me", "value": 13556184}
+  ]
+}
