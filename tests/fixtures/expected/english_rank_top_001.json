@@ -1,0 +1,13 @@
+{
+  "_comment": "Source: Screenshot_20260430-213025.png. English UI. 2026-04-30 21:30 Trap 1, top of rank list (positions 1-4). The top two Trololololele rows OCR with leading noise (`0%$Trololololol#%`, `$Trololololol&e`) so they fuzzy-match at 'likely' rather than 'auto' — that's expected real-world behaviour, not a regression.",
+  "language": "english",
+  "screen_type": "rank_top",
+  "event_id": "20260430_2130_trap1",
+  "trap": "1",
+  "expected_rows": [
+    {"damage": 26776216324, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 23739615741, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 23578101931, "match": {"fid": 44348649, "min_status": "auto"}},
+    {"damage": 19903598834, "match": {"fid": 99999991, "min_status": "likely", "allow_unmatched": true}}
+  ]
+}

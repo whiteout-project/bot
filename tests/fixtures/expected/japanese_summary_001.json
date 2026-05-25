@@ -1,0 +1,10 @@
+{
+  "_comment": "Source: Screenshot_20260430-225045.png. Japanese UI. The 'japan' OCR engine drops the '[' / ']' on bracketed trap headers, so we use two fallbacks: (a) `_HEADERLESS_TRAP_RE` matches `同盟罠N` without brackets to recover the trap number, and (b) `_PERSONAL_REWARDS_RE` recognises the personal-rewards marker phrase so summary screens still suppress fake rows even when no ']' is found.",
+  "language": "japanese",
+  "screen_type": "summary",
+  "event_id": "20260430_2130_trap1",
+  "trap": "1",
+  "rallies": "34",
+  "total_damage": 144926041887,
+  "expected_rows": []
+}

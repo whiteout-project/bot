@@ -1,0 +1,10 @@
+{
+  "_comment": "Source: Screenshot_20260430-213019.png. English UI. 2026-04-30 21:30 Trap 1 hunt summary screen. No rank list — summary should yield zero rows (the personal-rewards bracket-prose number must NOT leak as a row).",
+  "language": "english",
+  "screen_type": "summary",
+  "event_id": "20260430_2130_trap1",
+  "trap": "1",
+  "rallies": "34",
+  "total_damage": 144926041887,
+  "expected_rows": []
+}
