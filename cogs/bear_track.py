@@ -2556,16 +2556,14 @@ class BearTrack(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.chartIcon} Bear Damage Tracking",
                 description=(
-                    f"Track your alliance's bear hunt damage by uploading "
-                    f"in-game screenshots — no manual data entry.\n\n"
+                    f"Track your alliance's bear hunt damage by uploading in-game screenshots.\n\n"
                     f"{setup_hint}"
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
                     f"{theme.chartIcon} **View Bear Damage**\n"
                     f"└ Damage trend charts per alliance and trap\n\n"
                     f"{theme.editListIcon} **Bear Channel Setup**\n"
-                    f"└ Pick the channel, keywords, OCR engines and chart "
-                    f"range — everything per-alliance\n\n"
+                    f"└ Pick the channel, keywords, OCR engines and chart range\n\n"
                     f"{theme.documentIcon} **Edit Bear Damage**\n"
                     f"└ Edit or delete saved records, re-match unmatched rows\n\n"
                     f"{theme.settingsIcon} **Settings**\n"
