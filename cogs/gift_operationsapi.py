@@ -114,7 +114,7 @@ class GiftCodeAPI:
         except Exception as e:
             self.logger.exception(f"Fatal error in API check loop: {e}")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Clean up database connections and the API check task when unloaded."""
         task = getattr(self, '_api_check_task', None)
         if task is not None and not task.done():

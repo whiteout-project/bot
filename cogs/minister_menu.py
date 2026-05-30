@@ -763,7 +763,7 @@ class MinisterMenu(commands.Cog):
         self.svs_cursor = self.svs_conn.cursor()
         self.original_interaction = None
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         try:
             self.users_conn.close()

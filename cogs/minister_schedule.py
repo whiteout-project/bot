@@ -208,7 +208,7 @@ class MinisterSchedule(commands.Cog):
 
         self.svs_conn.commit()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         try:
             self.users_conn.close()

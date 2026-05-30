@@ -245,7 +245,7 @@ class AllianceHistory(commands.Cog):
         """)
         self.conn.commit()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if hasattr(self, 'cursor'):
             self.cursor.close()
         if hasattr(self, 'conn'):

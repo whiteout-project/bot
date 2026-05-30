@@ -258,25 +258,26 @@ class AllianceSync(commands.Cog):
         else:
             return {'error': result.get('error_message', 'Unknown error'), 'fid': fid}
 
-    async def remove_invalid_fid(self, fid: str, reason: str):
+    async def remove_invalid_fid(self, fid: str, reason: str) -> tuple[bool, str | None]:
         """Safely remove an invalid ID from the database with logging"""
         try:
             async with self.db_lock:
                 # Get user info before deletion for logging
                 self.cursor_users.execute("SELECT nickname, alliance FROM users WHERE fid = ?", (fid,))
                 user_info = self.cursor_users.fetchone()
-                
+
                 if user_info:
                     nickname, alliance_id = user_info
-                    
+
                     # Delete from users table
                     self.cursor_users.execute("DELETE FROM users WHERE fid = ?", (fid,))
                     self.conn_users.commit()
-                    
+
                     # Log the deletion to alliance control log
                     self.logger.warning(f"[AUTO-CLEANUP] Removed invalid ID {fid} (nickname: {nickname}) - Reason: {reason}")
-                    
+
                     return True, nickname
+                return False, None
         except Exception as e:
             self.logger.error(f"Failed to remove invalid ID {fid}: {str(e)}")
             return False, None
@@ -529,8 +530,8 @@ class AllianceSync(commands.Cog):
         removal_count = len(members_to_remove)
         removal_percentage = (removal_count / total_users * 100) if total_users > 0 else 0
 
-        # Only apply safeguard if alliance has at least 5 members and would remove >20%
-        if total_users >= 5 and removal_percentage > 20:
+        # Cap applies regardless of alliance size — small alliances are the case this guards.
+        if removal_percentage > 20:
             self.logger.error(f"BULK REMOVAL BLOCKED: Attempted to remove {removal_count}/{total_users} members ({removal_percentage:.1f}%) from alliance {alliance_id}")
 
             # Send alert to channel
@@ -1071,8 +1072,8 @@ class AllianceSync(commands.Cog):
                         continue
 
                     # Check if settings changed (channel, interval, or start_time)
-                    settings_changed = cached_settings and cached_settings != (channel_id, interval, start_time)
-                    if settings_changed and task_exists:
+                    settings_changed = cached_settings is not None and cached_settings != (channel_id, interval, start_time)
+                    if settings_changed and task_exists and cached_settings is not None:
                         old_channel, old_interval, old_start = cached_settings
                         print(f"[SYNC] Settings changed for alliance {alliance_id}:")
                         if old_channel != channel_id:

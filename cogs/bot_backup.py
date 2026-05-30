@@ -84,7 +84,7 @@ class BackupOperations(commands.Cog):
             )
             conn.commit()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.automatic_backup_loop.cancel()
 
     def get_disk_space_info(self):

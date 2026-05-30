@@ -4,6 +4,7 @@ Centralized menu system that handles all main menu logic and routing.
 
 import discord
 from discord.ext import commands
+from datetime import datetime
 import logging
 import sqlite3
 from .permission_handler import (
@@ -298,11 +299,7 @@ class MainMenu(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.allianceIcon} {alliance_name}",
                 description=(
-                    f"**Overview**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.fidIcon} **ID:** `{alliance_id}`\n"
-                    f"{theme.membersIcon} {stats_line}\n"
-                    f"{theme.lowerDivider}\n\n"
+                    f"{theme.membersIcon} {stats_line}\n\n"
                     f"Pick an action below, or use the dropdown to switch "
                     f"to a different alliance.\n\n"
                     f"**Actions**\n"
@@ -1301,7 +1298,14 @@ class AdminManagerView(discord.ui.View):
             self.add_item(page_lbl)
             self.add_item(next_btn)
 
-        # Row 4: Back.
+        # Row 4: View Audit Log + Back.
+        audit_btn = discord.ui.Button(
+            label="View Audit Log", style=discord.ButtonStyle.secondary,
+            emoji=theme.infoIcon, row=4,
+        )
+        audit_btn.callback = self._on_view_audit
+        self.add_item(audit_btn)
+
         back_btn = discord.ui.Button(
             label="Back", style=discord.ButtonStyle.secondary,
             emoji=theme.backIcon, row=4,
@@ -1310,6 +1314,20 @@ class AdminManagerView(discord.ui.View):
         self.add_item(back_btn)
 
     # ───── callbacks ─────
+
+    async def _on_view_audit(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        # Owner + Global only — re-check at click time.
+        _, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only Global admins and the Owner can view the audit log.",
+                ephemeral=True,
+            )
+            return
+        view = AuditLogView(self.cog.bot, viewer_id=interaction.user.id)
+        await view.render(interaction)
 
     async def _on_claim_owner(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
@@ -1371,6 +1389,131 @@ class AdminManagerView(discord.ui.View):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
         await self.cog.show_main_menu(interaction)
+
+
+def _format_audit_state(state):
+    """Render a stored audit state. Translates legacy 'tier=X, alliances=[...]' entries too."""
+    if not state:
+        return "—"
+    if state.startswith("tier="):
+        tier_part = state.split(",", 1)[0].split("=", 1)[1].strip()
+        tier_map = {"Owner": "Bot Owner", "Global": "Global Admin",
+                    "Server": "Server Admin", "Alliance": "Alliance Admin"}
+        label = tier_map.get(tier_part, tier_part)
+        if "alliances=[" in state:
+            try:
+                inner = state.split("alliances=[", 1)[1].rsplit("]", 1)[0].strip()
+                count = (inner.count(",") + 1) if inner else 0
+                if count:
+                    label += f" ({count} alliance{'s' if count != 1 else ''})"
+            except Exception:
+                pass
+        return label
+    return state
+
+
+class AuditLogView(discord.ui.View):
+    """Ephemeral, pagination-only viewer for permission_audit_log."""
+
+    PAGE_SIZE = 10
+
+    def __init__(self, bot, viewer_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.viewer_id = viewer_id
+        self.page = 0
+        self.total = 0
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} This audit log was opened by someone else.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    def _total_pages(self) -> int:
+        return max(1, -(-self.total // self.PAGE_SIZE))
+
+    async def _build_embed(self) -> discord.Embed:
+        rows, total = PermissionManager.get_audit_log_page(
+            offset=self.page * self.PAGE_SIZE, limit=self.PAGE_SIZE,
+        )
+        self.total = total
+        embed = discord.Embed(
+            title=f"{theme.infoIcon} Permission Audit Log",
+            color=theme.emColor1,
+        )
+        if not rows:
+            embed.description = "*No permission changes have been logged yet.*"
+            return embed
+        action_meta = {
+            "add_admin":      (theme.addIcon,      "Admin Added",       "added"),
+            "set_tier":       (theme.transferIcon, "Tier Changed",      "updated"),
+            "remove_admin":   (theme.trashIcon,    "Admin Removed",     "removed"),
+            "transfer_owner": (theme.crownIcon,    "Owner Transferred", "transferred ownership to"),
+        }
+        blocks = []
+        for r in rows:
+            icon, label, verb = action_meta.get(
+                r['action'], (theme.infoIcon, r['action'], "changed"),
+            )
+            try:
+                ts = int(datetime.fromisoformat(r['timestamp']).timestamp())
+                when = f"<t:{ts}:R>"
+            except Exception:
+                when = r['timestamp']
+            before = _format_audit_state(r['before_state'])
+            after = _format_audit_state(r['after_state'])
+            blocks.append(
+                f"{icon} **{label}** · {when}\n"
+                f"<@{r['actor_id']}> {verb} <@{r['target_id']}>\n"
+                f"{before} → **{after}**"
+            )
+        embed.description = "\n\n".join(blocks)
+        start = self.page * self.PAGE_SIZE + 1
+        end = min(start + self.PAGE_SIZE - 1, total)
+        embed.set_footer(text=f"Entries {start}–{end} of {total}")
+        return embed
+
+    def _build_buttons(self):
+        self.clear_items()
+        total_pages = self._total_pages()
+        prev_btn = discord.ui.Button(
+            label="◀ Prev", style=discord.ButtonStyle.secondary,
+            disabled=(self.page == 0),
+        )
+        prev_btn.callback = self._on_prev
+        page_lbl = discord.ui.Button(
+            label=f"Page {self.page + 1}/{total_pages}",
+            style=discord.ButtonStyle.secondary, disabled=True,
+        )
+        next_btn = discord.ui.Button(
+            label="Next ▶", style=discord.ButtonStyle.secondary,
+            disabled=(self.page >= total_pages - 1),
+        )
+        next_btn.callback = self._on_next
+        self.add_item(prev_btn)
+        self.add_item(page_lbl)
+        self.add_item(next_btn)
+
+    async def render(self, interaction: discord.Interaction):
+        embed = await self._build_embed()
+        self._build_buttons()
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        embed = await self._build_embed()
+        self._build_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self._total_pages() - 1, self.page + 1)
+        embed = await self._build_embed()
+        self._build_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 async def _resolve_user_name(bot, user_id: int) -> str:
@@ -1558,6 +1701,7 @@ class AdminContextView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        before_state = PermissionManager.describe_state(self.target_id)
         try:
             PermissionManager.set_tier(
                 self.target_id, self.staged_tier,
@@ -1568,6 +1712,10 @@ class AdminContextView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "set_tier", self.target_id,
+            before_state, PermissionManager.describe_state(self.target_id),
+        )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 
     async def _on_remove(self, interaction):
@@ -1605,6 +1753,7 @@ class AdminContextView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def _do_remove(self, interaction):
+        before_state = PermissionManager.describe_state(self.target_id)
         try:
             PermissionManager.remove_admin(self.target_id)
         except ValueError as e:
@@ -1612,6 +1761,10 @@ class AdminContextView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "remove_admin", self.target_id,
+            before_state, "removed",
+        )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 
     async def _refresh_self(self, interaction):
@@ -1749,6 +1902,7 @@ class AddAdminView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        before_state = PermissionManager.describe_state(self.target_id)
         try:
             PermissionManager.add_admin(
                 self.target_id, tier=self.staged_tier,
@@ -1759,6 +1913,10 @@ class AddAdminView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "add_admin", self.target_id,
+            before_state, PermissionManager.describe_state(self.target_id),
+        )
         # If they auto-became owner (brand-new install path), the parent
         # list view will show them with the crown — no extra messaging needed.
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
@@ -1860,6 +2018,7 @@ class TransferOwnerView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def _do_transfer(self, interaction, target_id):
+        before_target = PermissionManager.describe_state(target_id)
         try:
             PermissionManager.transfer_owner(self.viewer_id, target_id)
         except ValueError as e:
@@ -1867,6 +2026,10 @@ class TransferOwnerView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "transfer_owner", target_id,
+            before_target, PermissionManager.describe_state(target_id),
+        )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 
     async def _refresh_self(self, interaction):

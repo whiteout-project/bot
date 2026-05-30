@@ -2661,7 +2661,7 @@ class AllianceMemberOperations(commands.Cog):
         else:
             logger.error("AllianceMemberOps: ProcessQueue cog not found, member_add operations will not work")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.conn_users.close()
         self.conn_alliance.close()
 

@@ -39,7 +39,7 @@ class AllianceLogs(commands.Cog):
             logger.error(f"Error setting up log system database: {e}")
             print(f"Error setting up log system database: {e}")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         try:
             self.settings_db.close()
             self.alliance_db.close()

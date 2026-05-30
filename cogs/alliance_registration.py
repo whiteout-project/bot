@@ -21,7 +21,7 @@ class AllianceRegistration(commands.Cog):
         self.conn_users = sqlite3.connect("db/users.sqlite", timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.conn_alliance.close()
         self.conn_users.close()
 

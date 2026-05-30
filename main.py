@@ -5,8 +5,7 @@ import shutil
 import stat
 import contextlib
 def _bootstrap_from_main_branch(zip_url):
-    """Download and extract a GitHub-style source archive into the cwd, stripping
-    the archive's top-level directory. Called when cogs/ is missing on startup."""
+    """Self-heal: download source zip, extract atomically via staging dir, guard against path traversal."""
     import urllib.request, zipfile, io
     print("Bot files missing — downloading latest source...")
     try:
@@ -17,18 +16,41 @@ def _bootstrap_from_main_branch(zip_url):
         print(f"Please download the source manually from:\n  {zip_url}")
         print("Extract everything into this folder and run main.py again.")
         sys.exit(1)
-    with zipfile.ZipFile(buf) as zf:
-        for m in zf.namelist():
-            parts = m.split("/", 1)
-            if len(parts) < 2 or not parts[1]:
-                continue
-            dest = parts[1]
-            if m.endswith("/"):
-                os.makedirs(dest, exist_ok=True)
+
+    staging = "bot-bootstrap-tmp"
+    if os.path.exists(staging):
+        shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    staging_root = os.path.realpath(staging)
+
+    try:
+        with zipfile.ZipFile(buf) as zf:
+            for m in zf.namelist():
+                parts = m.split("/", 1)
+                if len(parts) < 2 or not parts[1]:
+                    continue
+                target = os.path.realpath(os.path.join(staging, parts[1]))
+                if target != staging_root and not target.startswith(staging_root + os.sep):
+                    raise RuntimeError(f"zip entry escapes staging dir: {m}")
+                if m.endswith("/"):
+                    os.makedirs(target, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(target) or staging, exist_ok=True)
+                    with zf.open(m) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        # Extraction succeeded — flip staged tree into cwd
+        for item in os.listdir(staging):
+            src = os.path.join(staging, item)
+            if os.path.isdir(src):
+                shutil.copytree(src, item, dirs_exist_ok=True)
             else:
-                os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-                with zf.open(m) as src, open(dest, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                shutil.copy2(src, item)
+    except Exception as e:
+        print(f"Extraction failed: {e}")
+        print("Your existing files were not modified. Re-run main.py to retry.")
+        sys.exit(1)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 try:
     from cogs import bot_startup_display as startup
@@ -316,7 +338,7 @@ def get_latest_release_info(beta_mode=False):
             
             # Add handling for other sources here
             
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             continue
         except Exception:
             continue
@@ -580,6 +602,12 @@ if __name__ == "__main__":
     async def check_and_update_files():
         beta_mode = "--beta" in sys.argv
         repair_mode = "--repair" in sys.argv
+        # Auto-detect beta installs (version starts with "beta-") so --repair stays on the same channel.
+        if repair_mode and not beta_mode and os.path.exists("version"):
+            with open("version", "r") as f:
+                if f.read().strip().startswith("beta-"):
+                    beta_mode = True
+                    print("  Repair detected a beta install — repairing from the main branch instead of the latest release.")
         release_info = get_latest_release_info(beta_mode=beta_mode)
         
         if release_info:
@@ -989,6 +1017,18 @@ if __name__ == "__main__":
             conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_process_queue_status_priority
                 ON process_queue(status, priority, id)""")
 
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS permission_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_id INTEGER NOT NULL,
+                before_state TEXT,
+                after_state TEXT,
+                timestamp TEXT NOT NULL
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_permission_audit_timestamp
+                ON permission_audit_log(timestamp DESC)""")
+
         with connections["conn_users"] as conn_users:
             conn_users.execute("""CREATE TABLE IF NOT EXISTS users (
                 fid INTEGER PRIMARY KEY, 
@@ -1021,9 +1061,14 @@ if __name__ == "__main__":
             )""")
             
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
-                alliance_id INTEGER PRIMARY KEY, 
-                name TEXT
+                alliance_id INTEGER PRIMARY KEY,
+                name TEXT,
+                discord_server_id INTEGER
             )""")
+            # Upgrade path: ensure discord_server_id exists before any cog queries it.
+            existing_cols = [row[1] for row in conn_alliance.execute("PRAGMA table_info(alliance_list)").fetchall()]
+            if "discord_server_id" not in existing_cols:
+                conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
 
     create_tables()
     startup.phase_ok("Database ready")

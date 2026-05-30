@@ -139,7 +139,7 @@ class BotOperations(commands.Cog):
         # len(globals_) == 0: brand-new install. The first admin created via
         # the new Add Admin flow gets is_initial=1, is_owner=1 atomically.
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         try:
             self.settings_db.close()

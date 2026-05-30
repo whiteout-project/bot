@@ -552,10 +552,14 @@ def _ocr_image_with_engine(image_bytes: bytes, engine) -> str:
     text or "". Pulled out so async callers can dispatch via to_thread."""
     if engine is None or not image_bytes:
         return ""
-    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-    if max(image.size) > MAX_OCR_DIM:
-        image.thumbnail((MAX_OCR_DIM, MAX_OCR_DIM), Image.LANCZOS)
-    result = engine(np.array(image))
+    with Image.open(io.BytesIO(image_bytes)) as src:
+        image = src.convert('RGB')
+    try:
+        if max(image.size) > MAX_OCR_DIM:
+            image.thumbnail((MAX_OCR_DIM, MAX_OCR_DIM), Image.LANCZOS)
+        result = engine(np.array(image))
+    finally:
+        image.close()
     if not result:
         return ""
     if hasattr(result, 'txts') and result.txts:
@@ -1760,7 +1764,7 @@ class BearTrack(commands.Cog):
         conn.commit()
         return conn, conn.cursor()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         for session in list(_active_sessions.values()):
             session.stop_timer()
             session.finalized = True
@@ -1903,11 +1907,14 @@ class BearTrack(commands.Cog):
 
     async def get_keywords_for_channel(self, channel_id: int) -> list:
         """Return keywords list for the alliance that has this bear channel."""
-        self.alliance_cursor.execute(
-            "SELECT bear_keywords FROM alliancesettings WHERE bear_score_channel = ?",
-            (channel_id,)
-        )
-        result = self.alliance_cursor.fetchone()
+        def _query():
+            cur = self.alliance_conn.cursor()
+            cur.execute(
+                "SELECT bear_keywords FROM alliancesettings WHERE bear_score_channel = ?",
+                (channel_id,)
+            )
+            return cur.fetchone()
+        result = await asyncio.to_thread(_query)
         if result and result[0]:
             return [kw.strip() for kw in result[0].split(",") if kw.strip()]
         return []
@@ -1965,11 +1972,14 @@ class BearTrack(commands.Cog):
     # -------------------------------------------------------------------
 
     async def alliance_autocomplete(self, interaction: discord.Interaction, current: str):
-        self.alliance_cursor.execute(
-            "SELECT alliance_id, name FROM alliance_list WHERE name LIKE ? ORDER BY name LIMIT 20",
-            (f"%{current}%",)
-        )
-        rows = self.alliance_cursor.fetchall()
+        def _query():
+            cur = self.alliance_conn.cursor()
+            cur.execute(
+                "SELECT alliance_id, name FROM alliance_list WHERE name LIKE ? ORDER BY name LIMIT 20",
+                (f"%{current}%",)
+            )
+            return cur.fetchall()
+        rows = await asyncio.to_thread(_query)
         return [
             discord.app_commands.Choice(name=row[1], value=str(row[0]))
             for row in rows
@@ -1992,14 +2002,18 @@ class BearTrack(commands.Cog):
             alliance_id = int(alliance_val)
         except (TypeError, ValueError):
             return []
-        self.users_cursor.execute(
-            "SELECT fid, nickname FROM users WHERE alliance = ? AND nickname LIKE ? "
-            "ORDER BY nickname LIMIT 25",
-            (str(alliance_id), f"%{current}%"),
-        )
+        def _query():
+            cur = self.users_conn.cursor()
+            cur.execute(
+                "SELECT fid, nickname FROM users WHERE alliance = ? AND nickname LIKE ? "
+                "ORDER BY nickname LIMIT 25",
+                (str(alliance_id), f"%{current}%"),
+            )
+            return cur.fetchall()
+        rows = await asyncio.to_thread(_query)
         return [
             discord.app_commands.Choice(name=f"{nick} ({fid})", value=str(fid))
-            for fid, nick in self.users_cursor.fetchall()
+            for fid, nick in rows
         ]
 
     # -------------------------------------------------------------------
@@ -4479,27 +4493,31 @@ class FixUnmatchedModal(discord.ui.Modal):
             )
             return
 
-        existing = cur.execute(
-            "SELECT id FROM bear_player_damage WHERE hunt_id = ? AND fid = ? AND id != ?",
-            (self.parent_view.hunt_id, fid, self.row['id']),
-        ).fetchone()
-        if existing:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} `{nick}` (ID {fid}) is already in this hunt. "
-                f"Delete one of the two rows instead.",
-                ephemeral=True,
-            )
-            return
-
         score = candidates[0][2] if candidates else None
+        # Folds the duplicate-fid check into the UPDATE's WHERE to dodge a SELECT/UPDATE race.
         try:
             cur.execute(
                 "UPDATE bear_player_damage "
-                "SET fid = ?, resolved_nickname = ?, match_score = ? WHERE id = ?",
-                (fid, nick, score, self.row['id']),
+                "SET fid = ?, resolved_nickname = ?, match_score = ? "
+                "WHERE id = ? AND NOT EXISTS ("
+                "  SELECT 1 FROM bear_player_damage AS dup "
+                "  WHERE dup.hunt_id = ? AND dup.fid = ? AND dup.id != ?"
+                ")",
+                (fid, nick, score,
+                 self.row['id'],
+                 self.parent_view.hunt_id, fid, self.row['id']),
             )
+            if cur.rowcount == 0:
+                self.parent_view.cog.bear_conn.rollback()
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} `{nick}` (ID {fid}) is already in this hunt, "
+                    f"or the row no longer exists. Refresh and try again.",
+                    ephemeral=True,
+                )
+                return
             self.parent_view.cog.bear_conn.commit()
         except Exception as e:
+            self.parent_view.cog.bear_conn.rollback()
             logger.error(f"Failed to resolve unmatched row {self.row['id']}: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Failed to update row.", ephemeral=True,
@@ -5314,38 +5332,43 @@ class DataSubmit:
         rallies = int(rallies) if rallies is not None else None
         total_damage = int(total_damage)
 
-        # Insert the hunt summary row.
-        try:
-            self.bear_cursor.execute(
-                "INSERT INTO bear_hunts (alliance_id, date, hunting_trap, rallies, total_damage) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (alliance_id, date, hunting_trap, rallies, total_damage),
-            )
-            hunt_id = self.bear_cursor.lastrowid
-        except sqlite3.IntegrityError:
-            await interaction.followup.send(
-                f"{theme.warnIcon} This alliance already submitted this trap for that date.",
-                ephemeral=True,
-            )
-            return
-
+        # Single transaction so a mid-loop failure rolls the hunt back instead of leaving it orphaned.
         matched = unmatched = 0
-        if player_rows:
-            for r in player_rows:
-                fid = r.get('fid')
-                score = r['candidates'][0][2] if r.get('candidates') else None
+        try:
+            try:
                 self.bear_cursor.execute(
-                    "INSERT INTO bear_player_damage "
-                    "(hunt_id, fid, raw_name, resolved_nickname, damage, rank, match_score) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (hunt_id, fid, r.get('name'), r.get('nickname'),
-                     int(r['damage']), r.get('rank'), score),
+                    "INSERT INTO bear_hunts (alliance_id, date, hunting_trap, rallies, total_damage) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (alliance_id, date, hunting_trap, rallies, total_damage),
                 )
-                if fid:
-                    matched += 1
-                else:
-                    unmatched += 1
-        self.bear_conn.commit()
+                hunt_id = self.bear_cursor.lastrowid
+            except sqlite3.IntegrityError:
+                self.bear_conn.rollback()
+                await interaction.followup.send(
+                    f"{theme.warnIcon} This alliance already submitted this trap for that date.",
+                    ephemeral=True,
+                )
+                return
+
+            if player_rows:
+                for r in player_rows:
+                    fid = r.get('fid')
+                    score = r['candidates'][0][2] if r.get('candidates') else None
+                    self.bear_cursor.execute(
+                        "INSERT INTO bear_player_damage "
+                        "(hunt_id, fid, raw_name, resolved_nickname, damage, rank, match_score) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (hunt_id, fid, r.get('name'), r.get('nickname'),
+                         int(r['damage']), r.get('rank'), score),
+                    )
+                    if fid:
+                        matched += 1
+                    else:
+                        unmatched += 1
+            self.bear_conn.commit()
+        except Exception:
+            self.bear_conn.rollback()
+            raise
 
         title_suffix = "Latest Submission"
         if player_rows:
