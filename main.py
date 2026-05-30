@@ -4,8 +4,45 @@ import os
 import shutil
 import stat
 import contextlib
-from cogs import bot_startup_display as startup
-from cogs.bot_restart import is_container, restart_process
+def _bootstrap_from_main_branch(zip_url):
+    """Download and extract a GitHub-style source archive into the cwd, stripping
+    the archive's top-level directory. Called when cogs/ is missing on startup."""
+    import urllib.request, zipfile, io
+    print("Bot files missing — downloading latest source...")
+    try:
+        with urllib.request.urlopen(zip_url, timeout=600) as r:
+            buf = io.BytesIO(r.read())
+    except Exception as e:
+        print(f"Download failed: {e}")
+        print(f"Please download the source manually from:\n  {zip_url}")
+        print("Extract everything into this folder and run main.py again.")
+        sys.exit(1)
+    with zipfile.ZipFile(buf) as zf:
+        for m in zf.namelist():
+            parts = m.split("/", 1)
+            if len(parts) < 2 or not parts[1]:
+                continue
+            dest = parts[1]
+            if m.endswith("/"):
+                os.makedirs(dest, exist_ok=True)
+            else:
+                os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+                with zf.open(m) as src, open(dest, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+try:
+    from cogs import bot_startup_display as startup
+    from cogs.bot_restart import is_container, restart_process
+except ImportError:
+    # cogs/ is missing (likely a bare main.py drop). Fetch the full source for this branch and restart.
+    _bootstrap_from_main_branch(os.environ.get(
+        "BOT_BOOTSTRAP_URL",
+        "https://github.com/whiteout-project/bot/archive/refs/heads/main.zip",
+    ))
+    print("Download complete. Restarting...")
+    if sys.platform == "win32":
+        sys.exit(0)  # .bat / user re-runs; os.execv on Windows can race with the launcher
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 # Python version check
 MIN_PYTHON = (3, 11)
