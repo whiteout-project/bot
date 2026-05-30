@@ -1160,7 +1160,7 @@ class NotificationSystem(commands.Cog):
                         if len(parts) > 1:
                             desc_preview = parts[1][:50]
 
-                    print(f"[INFO] Notification {id} - {event_display} {time_str} ({desc_preview}) was disabled since it is not set to repeat")
+                    logger.info(f"Notification {id} - {event_display} {time_str} ({desc_preview}) was disabled since it is not set to repeat")
 
                     self.cursor.execute("""
                         UPDATE bear_notifications
@@ -1207,6 +1207,7 @@ class NotificationSystem(commands.Cog):
         except Exception as e:
             notif_id = id if id is not None else "unknown"
             error_msg = f"[ERROR] Error processing notification {notif_id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
+            logger.error(error_msg)
             print(error_msg)
 
     async def get_notifications(self, guild_id: int) -> list:
@@ -1251,6 +1252,7 @@ class NotificationSystem(commands.Cog):
 
             return True
         except Exception as e:
+            logger.error(f"Error deleting notification {notification_id}: {e}")
             print(f"[ERROR] Error deleting notification {notification_id}: {e}")
             return False
 
@@ -3075,6 +3077,7 @@ class BearTrapView(discord.ui.View):
 
         except Exception as e:
             error_msg = f"[ERROR] Error in set time button: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
+            logger.error(error_msg)
             print(error_msg)
 
             try:
@@ -3089,6 +3092,7 @@ class BearTrapView(discord.ui.View):
                         ephemeral=True
                     )
             except Exception as notify_error:
+                logger.error(f"Failed to notify user about error: {notify_error}")
                 print(f"[ERROR] Failed to notify user about error: {notify_error}")
 
     @discord.ui.button(
@@ -3559,6 +3563,7 @@ class BearTrapView(discord.ui.View):
                                     )
 
                             except Exception as e:
+                                logger.error(f"Exception in PreviewButton: {e}")
                                 print(f"[ERROR] Exception in PreviewButton: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while fetching the preview.", ephemeral=True)
@@ -3706,12 +3711,12 @@ class BearTrapView(discord.ui.View):
                                             await interaction.followup.send(f"{theme.verifiedIcon} Successfully deleted.", ephemeral=True)
 
                                         else:
-                                            print(f"[DEBUG] Deletion failed for notification_id {self.notification_id}")
                                             await interaction.response.send_message(
                                                 f"{theme.deniedIcon} Failed to delete the notification.", ephemeral=True
                                             )
 
                                     except Exception as e:
+                                        logger.error(f"Exception in confirm_callback: {e}")
                                         print(f"[ERROR] Exception in confirm_callback: {e}")
                                         await interaction.response.send_message(
                                             f"{theme.deniedIcon} An error occurred while deleting the notification.", ephemeral=True
@@ -3732,6 +3737,7 @@ class BearTrapView(discord.ui.View):
                                             view=view
                                         )
                                     except Exception as e:
+                                        logger.error(f"Exception in cancel callback: {e}")
                                         print(f"[ERROR] Exception in cancel callback: {e}")
 
                                 confirm_button.callback = confirm_callback
@@ -3745,6 +3751,7 @@ class BearTrapView(discord.ui.View):
                                 )
 
                             except Exception as e:
+                                logger.error(f"Exception in DeleteButton callback: {e}")
                                 print(f"[ERROR] Exception in DeleteButton callback: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while attempting to delete the notification.",
@@ -3815,6 +3822,7 @@ class BearTrapView(discord.ui.View):
                                                                             ephemeral=True)
 
                             except Exception as e:
+                                logger.error(f"Exception in ToggleButton callback: {e}")
                                 print(f"[ERROR] Exception in ToggleButton callback: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while toggling notification!", ephemeral=True
@@ -3879,6 +3887,7 @@ class BearTrapView(discord.ui.View):
                                         )
 
                                     except Exception as e:
+                                        logger.error(f"Error updating channel: {e}")
                                         print(f"[ERROR] Error updating channel: {e}")
                                         await select_interaction.response.send_message(
                                             f"{theme.deniedIcon} An error occurred while updating the channel.",
@@ -3896,6 +3905,7 @@ class BearTrapView(discord.ui.View):
                                 )
 
                             except Exception as e:
+                                logger.error(f"Exception in ChangeChannelButton callback: {e}")
                                 print(f"[ERROR] Exception in ChangeChannelButton callback: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred!",
@@ -3943,6 +3953,7 @@ class BearTrapView(discord.ui.View):
                     )
 
                 except Exception as e:
+                    logger.error(f"Error in select callback: {e}")
                     print(f"[ERROR] Error in select callback: {e}")
                     await select_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred while editing notification!",
@@ -3965,6 +3976,7 @@ class BearTrapView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in manage_notification button: {e}")
             print(f"[ERROR] Error in manage_notification button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while starting the edit process!",
@@ -3992,6 +4004,7 @@ class BearTrapView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error in schedule boards button: {e}")
             print(f"[ERROR] Error in schedule boards button: {e}")
             traceback.print_exc()
             await interaction.response.send_message(

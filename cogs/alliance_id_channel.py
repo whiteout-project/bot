@@ -277,9 +277,6 @@ class AllianceIDChannel(commands.Cog):
                         f"Self-healed orphan ID {fid} from deleted alliance "
                         f"{existing_alliance[0]}; allowing registration into alliance {alliance_id}"
                     )
-                    print(
-                        f"[ID-CHANNEL] Self-healed orphan ID {fid} from deleted alliance {existing_alliance[0]}"
-                    )
 
             result = await LoginHandler().fetch_player_data(str(fid))
 
@@ -422,10 +419,10 @@ class AllianceIDChannel(commands.Cog):
                     await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            logger.error(f"Error in check_channels_loop: {e}")
             if '503' in str(e) or '502' in str(e) or 'connect error' in str(e).lower():
-                print(f"ID Channel check skipped — Discord is temporarily unavailable. This is normal and will resolve itself.")
+                logger.info(f"ID Channel check skipped — Discord temporarily unavailable: {e}")
             else:
+                logger.error(f"Error in check_channels_loop: {e}")
                 print(f"Error in check_channels_loop: {e}")
 
     async def show_id_channel_for(self, interaction: discord.Interaction, alliance_id: int):

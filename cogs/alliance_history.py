@@ -273,7 +273,6 @@ class AllianceHistory(commands.Cog):
         except Exception as e:
             if not any(error_code in str(e) for error_code in ["10062", "40060"]):
                 logger.error(f"Show alliance history menu error: {e}")
-                print(f"Show alliance history menu error: {e}")
 
     async def show_furnace_history(self, interaction: discord.Interaction, fid: int):
         try:
@@ -736,7 +735,6 @@ class HistoryView(discord.ui.View):
                     await self.member_callback(select_interaction, alliance_id)
                 except Exception as e:
                     logger.error(f"Error in alliance selection: {e}")
-                    print(f"Error in alliance selection: {e}")
                     if not select_interaction.response.is_done():
                         await select_interaction.response.send_message(
                             f"{theme.deniedIcon} An error occurred while processing your selection.",
@@ -758,7 +756,6 @@ class HistoryView(discord.ui.View):
 
         except Exception as e:
             logger.error(f"Error in furnace_changes_button: {e}")
-            print(f"Error in furnace_changes_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while processing the request.",
                 ephemeral=True
@@ -806,7 +803,6 @@ class HistoryView(discord.ui.View):
 
         except Exception as e:
             logger.error(f"Error in member_callback: {e}")
-            print(f"Error in member_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing member list.",
@@ -869,7 +865,6 @@ class HistoryView(discord.ui.View):
                     await self.cog.show_member_list_nickname(select_interaction, alliance_id)
                 except Exception as e:
                     logger.error(f"Error in alliance selection: {e}")
-                    print(f"Error in alliance selection: {e}")
                     if not select_interaction.response.is_done():
                         await select_interaction.response.send_message(
                             f"{theme.deniedIcon} An error occurred while processing your selection.",
@@ -891,7 +886,6 @@ class HistoryView(discord.ui.View):
 
         except Exception as e:
             logger.error(f"Error in nickname_changes_button: {e}")
-            print(f"Error in nickname_changes_button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while processing the request.",
                 ephemeral=True
@@ -920,7 +914,6 @@ class HistoryView(discord.ui.View):
                 )
         except Exception as e:
             logger.error(f"Menu navigation error in changes: {e}")
-            print(f"[ERROR] Menu navigation error in changes: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "An error occurred while returning to menu.",
@@ -939,7 +932,6 @@ class HistoryView(discord.ui.View):
             await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "7d"))
         except Exception as e:
             logger.error(f"Error in last_week_callback: {e}")
-            print(f"Error in last_week_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -958,7 +950,6 @@ class HistoryView(discord.ui.View):
             await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "24h"))
         except Exception as e:
             logger.error(f"Error in last_day_callback: {e}")
-            print(f"Error in last_day_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -976,7 +967,6 @@ class HistoryView(discord.ui.View):
             await interaction.response.send_modal(modal)
         except Exception as e:
             logger.error(f"Error in custom_time_callback: {e}")
-            print(f"Error in custom_time_callback: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing the time input.",
                 ephemeral=True
@@ -1019,7 +1009,6 @@ class MemberListView(discord.ui.View):
                 await self.cog.show_furnace_history(interaction, fid)
             except Exception as e:
                 logger.error(f"Error in member_callback: {e}")
-                print(f"Error in member_callback: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred while showing furnace history.",
@@ -1117,7 +1106,6 @@ class MemberListView(discord.ui.View):
             await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "7d"))
         except Exception as e:
             logger.error(f"Error in last_week_callback: {e}")
-            print(f"Error in last_week_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1136,7 +1124,6 @@ class MemberListView(discord.ui.View):
             await self.cog.show_recent_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "24h"))
         except Exception as e:
             logger.error(f"Error in last_day_callback: {e}")
-            print(f"Error in last_day_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1154,7 +1141,6 @@ class MemberListView(discord.ui.View):
             await interaction.response.send_modal(modal)
         except Exception as e:
             logger.error(f"Error in custom_time_callback: {e}")
-            print(f"Error in custom_time_callback: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing the time input.",
                 ephemeral=True
@@ -1264,7 +1250,6 @@ class MemberListViewNickname(discord.ui.View):
                 await self.cog.show_nickname_history(interaction, fid)
             except Exception as e:
                 logger.error(f"Error in member_callback: {e}")
-                print(f"Error in member_callback: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred while showing nickname history.",
@@ -1362,7 +1347,6 @@ class MemberListViewNickname(discord.ui.View):
             await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "7d"))
         except Exception as e:
             logger.error(f"Error in last_week_callback: {e}")
-            print(f"Error in last_week_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1381,7 +1365,6 @@ class MemberListViewNickname(discord.ui.View):
             await self.cog.show_recent_nickname_changes(interaction, self.alliance_name, re.match(r"^(\d+)(h|d|mo)$", "24h"))
         except Exception as e:
             logger.error(f"Error in last_day_callback: {e}")
-            print(f"Error in last_day_callback: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while showing recent changes.",
@@ -1399,7 +1382,6 @@ class MemberListViewNickname(discord.ui.View):
             await interaction.response.send_modal(modal)
         except Exception as e:
             logger.error(f"Error in custom_time_callback: {e}")
-            print(f"Error in custom_time_callback: {e}")
             await interaction.followup.send(
                 f"{theme.deniedIcon} An error occurred while showing the time input.",
                 ephemeral=True

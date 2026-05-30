@@ -251,7 +251,6 @@ class ThemeManager:
             return {e.id for e in app_emojis}
         except Exception as e:
             logger.warning(f"Could not fetch application emojis: {e}")
-            print(f"Could not fetch application emojis: {e}")
             return set()
 
     def _validate_emojis(self, accessible_emoji_ids: set = None):
@@ -280,7 +279,6 @@ class ThemeManager:
                 # If bot can't access this emoji, set to empty string (hidden)
                 if emoji_id not in accessible_emoji_ids:
                     logger.warning(f"Theme emoji '{icon_name}' (:{emoji_name}:{emoji_id}) is inaccessible - hiding it")
-                    print(f"[WARNING] Theme emoji '{icon_name}' (:{emoji_name}:{emoji_id}) is inaccessible - hiding it")
                     setattr(self, icon_name, "")
 
     def _set_defaults(self):
@@ -507,7 +505,6 @@ class ThemeManager:
                 """)
                 conn.commit()
                 logger.info("Theme database created with default theme.")
-                print("Theme database created with default theme.")
 
     def load(self):
         """Load theme from database. Safe to call multiple times."""
@@ -544,7 +541,6 @@ class ThemeManager:
 
         except Exception as e:
             logger.warning(f"Could not load theme settings: {e}")
-            print(f"Warning: Could not load theme settings: {e}")
 
     def _apply_theme(self, theme_dict):
         """Apply theme data from database row dictionary."""
@@ -636,7 +632,6 @@ class ThemeManager:
 
         except Exception as e:
             logger.warning(f"Could not load theme for guild {guild_id}: {e}")
-            print(f"Warning: Could not load theme for guild {guild_id}: {e}")
 
     def get_server_theme_name(self, guild_id: int) -> str:
         """Get the theme name for a specific server (or global if no override)."""

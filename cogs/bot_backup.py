@@ -183,7 +183,7 @@ class BackupOperations(commands.Cog):
 
             can_backup, reason = self.can_create_backup(save_locally=True)
             if not can_backup:
-                print(f"Automatic backup skipped: {reason}")
+                logger.info(f"Automatic backup skipped: {reason}")
                 for admin_id in global_admins:
                     self.log_backup(str(admin_id[0]), False, "Automatic Backup", "Local", None, reason)
                 return

@@ -35,7 +35,7 @@ try:
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
-    print("Matplotlib not available - using text attendance reports only")
+    logger.info("Matplotlib not available - using text attendance reports only")
 
 FC_LEVEL_MAPPING = {
     31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
@@ -1553,4 +1553,5 @@ async def setup(bot):
         cog = AttendanceReport(bot)
         await bot.add_cog(cog)
     except Exception as e:
+        logger.error(f"Failed to load AttendanceReport cog: {e}")
         print(f"[ERROR] Failed to load AttendanceReport cog: {e}")

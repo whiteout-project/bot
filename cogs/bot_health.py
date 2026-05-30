@@ -1323,7 +1323,7 @@ class BotHealth(commands.Cog):
         else:
             title = f"{theme.refreshIcon} Restarting..."
             description = "The bot is restarting. Please wait a moment."
-        print(f"  {title.replace(chr(10), ' ')}")
+        self.logger.info(title.replace(chr(10), ' '))
 
         # Send confirmation message before restart
         try:

@@ -127,7 +127,6 @@ class BotOperations(commands.Cog):
             )
             self.settings_db.commit()
             logger.info(f"[OWNER-CLAIM] Auto-promoted single Global admin {globals_[0]} to Bot Owner.")
-            print(f"[OWNER-CLAIM] Auto-promoted single Global admin {globals_[0]} to Bot Owner.")
         elif len(globals_) >= 2:
             msg = (
                 f"[OWNER-CLAIM] {len(globals_)} Global admins detected, no Bot Owner is set. "
@@ -135,7 +134,6 @@ class BotOperations(commands.Cog):
                 f"becomes the permanent owner."
             )
             logger.warning(msg)
-            print(msg)
         # len(globals_) == 0: brand-new install. The first admin created via
         # the new Add Admin flow gets is_initial=1, is_owner=1 atomically.
 
@@ -195,6 +193,7 @@ class BotOperations(commands.Cog):
                                 ephemeral=True
                             )
                     except Exception as e:
+                        logger.error(f"Main Menu error in bot operations: {e}")
                         print(f"[ERROR] Main Menu error in bot operations: {e}")
                         if not interaction.response.is_done():
                             await interaction.response.send_message(
@@ -209,6 +208,7 @@ class BotOperations(commands.Cog):
 
             except Exception as e:
                 if not interaction.response.is_done():
+                    logger.error(f"Error processing {custom_id}: {e}")
                     print(f"Error processing {custom_id}: {e}")
                     await interaction.response.send_message(
                         "An error occurred while processing your request.",
@@ -305,6 +305,7 @@ class BotOperations(commands.Cog):
                 )
 
             except Exception as e:
+                logger.error(f"Check updates error: {e}")
                 print(f"Check updates error: {e}")
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
@@ -353,6 +354,7 @@ class BotOperations(commands.Cog):
             return current_version, latest_tag, update_notes, updates_needed
 
         except Exception as e:
+            logger.error(f"Error checking for updates: {e}")
             print(f"Error checking for updates: {e}")
             return None, None, [], False
     
@@ -376,6 +378,7 @@ class BotOperations(commands.Cog):
             await view.update_view(interaction)
 
         except Exception as e:
+            logger.error(f"Error in show_sync_settings_menu: {e}")
             print(f"Error in show_sync_settings_menu: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -410,6 +413,7 @@ class BotOperations(commands.Cog):
             await view.update_view(interaction)
 
         except Exception as e:
+            logger.error(f"Error in show_control_settings_for: {e}")
             print(f"Error in show_control_settings_for: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
@@ -611,6 +615,7 @@ class SyncSettingsView(discord.ui.View):
             self.selected_alliance = int(self.alliance_select.values[0])
             await self.update_view(interaction)
         except Exception as e:
+            logger.error(f"Error in alliance_selected: {e}")
             print(f"Error in alliance_selected: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while selecting the alliance.",
@@ -642,6 +647,7 @@ class SyncSettingsView(discord.ui.View):
             await self.update_view(interaction)
             
         except Exception as e:
+            logger.error(f"Error toggling auto-removal: {e}")
             print(f"Error toggling auto-removal: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating the setting.",
@@ -664,6 +670,7 @@ class SyncSettingsView(discord.ui.View):
             await self.update_view(interaction)
             
         except Exception as e:
+            logger.error(f"Error toggling notifications: {e}")
             print(f"Error toggling notifications: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating the setting.",
@@ -684,6 +691,7 @@ class SyncSettingsView(discord.ui.View):
             await self.update_view(interaction)
 
         except Exception as e:
+            logger.error(f"Error toggling keep control log: {e}")
             print(f"Error toggling keep control log: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating the setting.",
@@ -700,6 +708,7 @@ class SyncSettingsView(discord.ui.View):
             self.alliance_db.commit()
             await self.update_view(interaction)
         except Exception as e:
+            logger.error(f"Error toggling show_sync_message: {e}")
             print(f"Error toggling show_sync_message: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating the setting.",

@@ -2249,7 +2249,7 @@ class Attendance(commands.Cog):
                 except sqlite3.OperationalError:
                     # Column doesn't exist, add it
                     cursor.execute("ALTER TABLE user_preferences ADD COLUMN sort_preference TEXT DEFAULT 'points_desc'")
-                    print("Added sort_preference column to user_preferences table")
+                    logger.info("Added sort_preference column to user_preferences table")
 
                 attendance_db.commit()
                 

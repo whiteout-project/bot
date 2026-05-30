@@ -1053,7 +1053,7 @@ class NotificationSchedule(commands.Cog):
                 result = self.cursor.fetchone()
 
                 if not result:
-                    print(f"[WARNING] Board {board_id} not found in database")
+                    self.logger.warning(f"[SCHEDULE] Board {board_id} not found in database")
                     return False
 
                 channel_id, message_id = result
@@ -1061,7 +1061,7 @@ class NotificationSchedule(commands.Cog):
                 # Get channel and message
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
-                    print(f"[WARNING] Channel {channel_id} not found, removing board {board_id}")
+                    self.logger.warning(f"[SCHEDULE] Channel {channel_id} not found, removing board {board_id}")
                     self.cursor.execute("DELETE FROM notification_schedule_boards WHERE id = ?", (board_id,))
                     self.conn.commit()
                     return False
@@ -1069,7 +1069,7 @@ class NotificationSchedule(commands.Cog):
                 try:
                     message = await channel.fetch_message(message_id)
                 except discord.NotFound:
-                    print(f"[WARNING] Message {message_id} not found, removing board {board_id}")
+                    self.logger.warning(f"[SCHEDULE] Message {message_id} not found, removing board {board_id}")
                     self.cursor.execute("DELETE FROM notification_schedule_boards WHERE id = ?", (board_id,))
                     self.conn.commit()
                     return False

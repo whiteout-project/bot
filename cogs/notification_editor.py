@@ -1008,7 +1008,7 @@ class NotificationEditor(commands.Cog):
                 await interaction.followup.send(f"An error occurred in PLAIN_MESSAGE section. {e}", ephemeral=True)
                 return
         else:
-            print(f"No known format matched, description is {description}")
+            logger.warning(f"No known format matched, description is {description}")
 
         view.message = message
 

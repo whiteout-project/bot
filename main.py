@@ -1172,6 +1172,7 @@ if __name__ == "__main__":
 
             startup.ready()
         except Exception as e:
+            logging.getLogger('bot').error(f"Error syncing commands: {e}")
             print(f"Error syncing commands: {e}")
 
     async def main():
