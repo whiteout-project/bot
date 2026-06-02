@@ -52,6 +52,49 @@ def test_no_unprefixed_placeholder_string_literals():
     assert not offenders, "string literals with a placeholder but no f-prefix:\n  " + "\n  ".join(offenders)
 
 
+# ── 5c. LEVEL_MAPPING single source of truth ──
+# `cogs/bot_level_mapping.py` is the only place that should define the FC level
+# table; everything else must import from it. Attendance had a no-spaces copy
+# that drifted from the canonical "FC 1 - 1" format and went unnoticed until
+# manually spotted — this guards against that recurrence.
+def test_level_mapping_defined_only_in_bot_level_mapping():
+    pattern = re.compile(r"^\s*\w*LEVEL_MAPPING\s*=\s*\{", re.MULTILINE)
+    offenders = [
+        f.name for f in COG_FILES
+        if f.name != "bot_level_mapping.py" and pattern.search(_read(f))
+    ]
+    assert not offenders, (
+        "These files define their own *LEVEL_MAPPING dict — import from "
+        "cogs.bot_level_mapping instead:\n  " + "\n  ".join(offenders)
+    )
+
+
+# ── 5d. matplotlib backend safety ──
+# Any cog importing matplotlib.pyplot must first call matplotlib.use('Agg').
+# Without this, matplotlib lazy-picks the interactive TkAgg backend on Windows
+# hosts (Tk is bundled with CPython), and figures GC'd off the main thread —
+# which is exactly what the bot does inside asyncio executors for OCR + chart
+# rendering — crash the interpreter with "main thread is not in main loop" and
+# "Tcl_AsyncDelete: async handler deleted by the wrong thread". CI doesn't
+# notice because slim-bookworm images don't ship Tk.
+def test_matplotlib_pyplot_imports_set_agg_backend_first():
+    pyplot_re = re.compile(r"^\s*import\s+matplotlib\.pyplot\b", re.M)
+    use_re = re.compile(r"matplotlib\.use\(\s*['\"]Agg['\"]")
+    bad = []
+    for f in COG_FILES:
+        text = _read(f)
+        py_match = pyplot_re.search(text)
+        if not py_match:
+            continue
+        use_match = use_re.search(text)
+        if not use_match or use_match.start() > py_match.start():
+            bad.append(f.name)
+    assert not bad, (
+        "These cogs import matplotlib.pyplot without calling "
+        "matplotlib.use('Agg') first:\n  " + "\n  ".join(bad)
+    )
+
+
 # ── 6. Cog registration integrity (CLAUDE.md: get_cog must match a real cog) ──
 KNOWN_NON_COG = {"LoginHandler"}  # helper looked up via get_cog with a fallback (bot_health)
 

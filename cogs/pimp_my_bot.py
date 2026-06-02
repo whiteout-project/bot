@@ -157,7 +157,8 @@ async def check_interaction_user(interaction: discord.Interaction, expected_user
 
 
 async def safe_edit_message(interaction: discord.Interaction, embed: discord.Embed = None,
-                            view: discord.ui.View = None, content: str = None):
+                            view: discord.ui.View = None, content: str = None,
+                            clear_attachments: bool = False):
     """
     Safely edit an interaction message, handling all response states.
     Use this instead of manually checking interaction.response.is_done().
@@ -167,14 +168,18 @@ async def safe_edit_message(interaction: discord.Interaction, embed: discord.Emb
         embed: Optional embed to display
         view: Optional view with components
         content: Optional text content (use None to clear existing content)
+        clear_attachments: Pass True when navigating away from a message that
+            had a file/image attached (e.g. a chart) so the stale attachment
+            doesn't persist under the new content.
     """
+    extra = {"attachments": []} if clear_attachments else {}
     try:
         if not interaction.response.is_done():
-            await interaction.response.edit_message(embed=embed, view=view, content=content)
+            await interaction.response.edit_message(embed=embed, view=view, content=content, **extra)
         else:
-            await interaction.edit_original_response(embed=embed, view=view, content=content)
+            await interaction.edit_original_response(embed=embed, view=view, content=content, **extra)
     except discord.InteractionResponded:
-        await interaction.edit_original_response(embed=embed, view=view, content=content)
+        await interaction.edit_original_response(embed=embed, view=view, content=content, **extra)
 
 
 def build_divider(start, pattern, end, length, max_length=99):
