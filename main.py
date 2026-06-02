@@ -1110,19 +1110,32 @@ if __name__ == "__main__":
             # API health checks
             try:
                 import aiohttp as _aio
+                # trust_env so HTTPS_PROXY is honored, matching the redemption path.
                 timeout = _aio.ClientTimeout(total=5)
-                async with _aio.ClientSession(timeout=timeout) as session:
-                    try:
-                        headers = {'X-API-Key': 'super_secret_bot_token_nobody_will_ever_find'}
-                        async with session.get("http://gift-code-api.whiteout-bot.com/giftcode_api.php", headers=headers) as resp:
-                            if resp.status < 500:
-                                startup.api_status("Gift Code Distribution API", "ok")
-                            else:
-                                startup.api_status("Gift Code Distribution API", "error", f"HTTP {resp.status}")
-                    except Exception:
-                        startup.api_status("Gift Code Distribution API", "error", "Offline")
+                async with _aio.ClientSession(timeout=timeout, trust_env=True) as session:
+                    startup.phase_start("Checking Gift Code Distribution API")
+                    headers = {'X-API-Key': 'super_secret_bot_token_nobody_will_ever_find'}
+                    url = "http://gift-code-api.whiteout-bot.com/giftcode_api.php"
+
+                    async def _probe_distribution():
+                        try:
+                            async with session.get(url, headers=headers) as resp:
+                                if resp.status < 500:
+                                    return "ok", None
+                                return "error", f"HTTP {resp.status}"
+                        except TimeoutError:
+                            return "error", "Timed out"
+                        except _aio.ClientError:
+                            return "error", "Offline (connection failed)"
+
+                    # One retry so a single transient blip doesn't read as offline.
+                    state, detail = await _probe_distribution()
+                    if state != "ok":
+                        state, detail = await _probe_distribution()
+                    startup.api_status("Gift Code Distribution API", state, detail)
 
                 try:
+                    startup.phase_start("Checking Gift Code Redemption API")
                     proxy_detail = (
                         f"via proxy {os.environ.get('HTTPS_PROXY')}"
                         if os.environ.get("HTTPS_PROXY")
@@ -1132,6 +1145,9 @@ if __name__ == "__main__":
                     login_handler = getattr(sync_cog, 'login_handler', None)
                     if login_handler:
                         status = await login_handler.check_apis_availability()
+                        # One retry if both report down — parity with the distribution check.
+                        if not (status.get('api1_available') or status.get('api2_available')):
+                            status = await login_handler.check_apis_availability()
                         if status.get('api1_available') and status.get('api2_available'):
                             startup.api_status("Gift Code Redemption API", "ok", "Dual-API mode")
                         elif status.get('api1_available') or status.get('api2_available'):
@@ -1178,6 +1194,7 @@ if __name__ == "__main__":
     async def main():
         await load_cogs()
 
+        startup.phase_start("Connecting to Discord")
         attempt = 0
         while True:
             attempt += 1
@@ -1262,6 +1279,35 @@ if __name__ == "__main__":
                     await task
                 except asyncio.CancelledError:
                     pass
+
+            # Cancel background loops + the queue worker up front so shutdown
+            # doesn't wait on idle ticks. Bypasses ProcessQueue's 30s reload-drain.
+            try:
+                from discord.ext import tasks as _tasks_mod
+                loop_tasks = []
+                for cog in list(bot.cogs.values()):
+                    for attr in dir(cog):
+                        try:
+                            obj = getattr(cog, attr)
+                        except Exception:
+                            continue
+                        if isinstance(obj, _tasks_mod.Loop):
+                            obj.cancel()
+                            t = obj.get_task()
+                            if t is not None:
+                                loop_tasks.append(t)
+                pq = bot.get_cog("ProcessQueue")
+                if pq is not None:
+                    pq._shutting_down = True
+                    pq._wake_event.set()
+                    pqt = getattr(pq, "_processor_task", None)
+                    if pqt is not None and not pqt.done():
+                        pqt.cancel()
+                        loop_tasks.append(pqt)
+                if loop_tasks:
+                    await asyncio.wait(loop_tasks, timeout=3.0)
+            except Exception as e:
+                print(f"  Background-task shutdown hiccup: {e}")
 
             # Properly close the bot and await completion
             if not bot.is_closed():

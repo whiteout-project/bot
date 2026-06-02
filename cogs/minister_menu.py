@@ -847,7 +847,7 @@ class MinisterMenu(commands.Cog):
                 f"└ Shows available Research Day slots\n\n"
                 f"{theme.trainingIcon} **Training Channel**\n"
                 f"└ Shows available Training Day slots\n\n"
-                f"{theme.listIcon} **Log Channel**\n"
+                f"{theme.documentIcon} **Log Channel**\n"
                 f"└ Receives all change notifications\n\n"
                 f"{theme.lowerDivider}\n\n"
                 f"Select a channel type to configure:"

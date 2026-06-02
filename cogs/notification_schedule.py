@@ -1207,9 +1207,15 @@ class NotificationSchedule(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.calendarIcon} Schedule Board Management",
                 description=(
-                    "Manage automated schedule boards that display upcoming notifications.\n\n"
+                    f"Manage automated schedule boards that display upcoming notifications.\n\n"
                     f"**Active Boards:** {len(boards)}\n\n"
-                    "Use the buttons below to create or manage boards."
+                    f"**Available Operations**\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.addIcon} **Create Board**\n"
+                    f"└ Post a new live schedule board to a channel of your choice\n"
+                    f"{theme.settingsIcon} **Manage Boards**\n"
+                    f"└ Edit settings, move, or delete an existing board\n"
+                    f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
             )

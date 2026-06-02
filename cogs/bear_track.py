@@ -17,6 +17,8 @@ from datetime import datetime, date, timedelta, timezone
 from cogs.attendance import MATPLOTLIB_AVAILABLE
 from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
 from .permission_handler import PermissionManager
+from .login_handler import LoginHandler
+from .bot_level_mapping import format_furnace_level
 import numpy as np
 
 logger = logging.getLogger('bot')
@@ -347,6 +349,7 @@ def _better_row(existing, candidate, roster=None) -> bool:
 MATCH_AUTO_CONFIRM = 90
 MATCH_LIKELY_MIN = 80
 MATCH_AMBIGUOUS_DELTA = 5
+MATCH_HISTORY_PENALTY = 15  # subtracted from scores for opt-in historical names
 
 
 # Default initialised above (DEFAULT_OCR_LANG) before RapidOCR import.
@@ -638,31 +641,69 @@ def _strip_minority_script(name: str, threshold: float = 0.85) -> str:
     return ''.join(c for c in name if _script_of(c) in (None, dom, 'other'))
 
 
+def _name_at_date(changes, date_str, current_nick):
+    """The name a player had on `date_str`, from their ascending
+    (old, new, change_date) history. Falls back to current_nick."""
+    if not changes:
+        return current_nick
+    d = (date_str or "")[:10]
+    active = None
+    for _old_n, new_n, change_date in changes:
+        if (change_date or "")[:10] <= d:
+            active = new_n  # name became new_n at/before the date
+        else:
+            break
+    if active is not None:
+        return active
+    return changes[0][0] or current_nick  # all changes after date → earliest old name
+
+
 def match_roster(detected_name: str, roster):
-    """Top 5 fuzzy matches as [(fid, nickname, score_0_100), ...].
-    Names < 3 alpha chars require case-insensitive exact equality
-    (WRatio's partial-ratio would otherwise let "G" hit 100% on anything)."""
+    """Top fuzzy matches as [(fid, display_nick, score_0_100), ...], best per fid.
+
+    Roster entries are `(fid, name)` or `(fid, match_name, penalty, display)`;
+    the 4-tuple matches against `match_name`, subtracts `penalty`, and returns
+    `display` — so historical/date-aware aliases can participate without
+    outranking current names. Names with fewer than 3 alpha chars require
+    case-insensitive exact equality (else WRatio's partial-ratio lets "G" hit
+    100% on anything).
+    """
     if not detected_name or not roster or not RAPIDFUZZ_AVAILABLE:
         return []
+
+    def _parts(entry):
+        fid, match_name = entry[0], entry[1]
+        penalty = entry[2] if len(entry) > 2 else 0
+        display = entry[3] if len(entry) > 3 else entry[1]
+        return fid, match_name, penalty, display
+
+    best: dict = {}
     if sum(c.isalpha() for c in detected_name) < 3:
         normalized = detected_name.strip().lower()
-        for fid, nick in roster:
-            if (nick or '').strip().lower() == normalized:
-                return [(fid, nick, 100)]
-        return []
+        for entry in roster:
+            fid, match_name, penalty, display = _parts(entry)
+            if (match_name or '').strip().lower() == normalized:
+                score = 100 - penalty
+                if fid not in best or score > best[fid][2]:
+                    best[fid] = (fid, display, score)
+        return sorted(best.values(), key=lambda c: -c[2])[:5]
+
     cleaned = _strip_minority_script(detected_name)
-    names = [nick or "" for (_fid, nick) in roster]
+    names = [(_parts(e)[1] or "") for e in roster]
     results = _rf_process.extract(
         cleaned, names,
         scorer=_rf_fuzz.WRatio,
         processor=_rf_utils.default_process,
-        limit=5, score_cutoff=MATCH_LIKELY_MIN,
+        limit=None, score_cutoff=MATCH_LIKELY_MIN,
     )
-    out = []
     for _match_str, score, idx in results:
-        fid, nick = roster[idx]
-        out.append((fid, nick, int(score)))
-    return out
+        fid, _match_name, penalty, display = _parts(roster[idx])
+        adj = int(score) - penalty
+        if adj < MATCH_LIKELY_MIN:
+            continue
+        if fid not in best or adj > best[fid][2]:
+            best[fid] = (fid, display, adj)
+    return sorted(best.values(), key=lambda c: -c[2])[:5]
 
 
 def classify_match(candidates):
@@ -1587,6 +1628,8 @@ def _render_damage_chart(dates, values, *, title, ylabel="Damage", series=None):
         series = [(None, dates, values)]
     if not any(s[1] for s in series):
         return None
+    import matplotlib
+    matplotlib.use('Agg', force=False)  # non-interactive backend; avoids Tkinter (fatal off the main thread on Windows)
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from matplotlib.ticker import MaxNLocator, FuncFormatter
@@ -1704,6 +1747,7 @@ class BearTrack(commands.Cog):
         self.alliance_conn, self.alliance_cursor = self._open_db("db/alliance.sqlite")
         self.bear_conn, self.bear_cursor = self._open_db("db/bear_data.sqlite")
         self.users_conn, self.users_cursor = self._open_db("db/users.sqlite")
+        self.changes_conn, self.changes_cursor = self._open_db("db/changes.sqlite")
 
         # Ensure required columns exist on alliancesettings
         self.alliance_cursor.execute("PRAGMA table_info(alliancesettings)")
@@ -1720,6 +1764,7 @@ class BearTrack(commands.Cog):
             "bear_ocr_autoprune": "INTEGER DEFAULT 0",
             "bear_session_timeout_min": "INTEGER DEFAULT 15",
             "bear_auto_delete_screenshots": "INTEGER DEFAULT 1",
+            "bear_match_all_history": "INTEGER DEFAULT 0",
         }
         for col_name, col_type in new_columns.items():
             if col_name not in columns:
@@ -1769,7 +1814,7 @@ class BearTrack(commands.Cog):
             session.stop_timer()
             session.finalized = True
         _active_sessions.clear()
-        for attr in ('alliance_conn', 'bear_conn', 'users_conn'):
+        for attr in ('alliance_conn', 'bear_conn', 'users_conn', 'changes_conn'):
             conn = getattr(self, attr, None)
             if conn is not None:
                 conn.close()
@@ -1781,6 +1826,73 @@ class BearTrack(commands.Cog):
             (str(alliance_id),),
         )
         return [(int(fid), nick or "") for (fid, nick) in self.users_cursor.fetchall()]
+
+    def get_match_roster(self, alliance_id, *, as_of_date=None, include_history=False):
+        """Roster for fuzzy matching, as match_roster entries.
+
+        Always includes each member's current name (full weight, the reliable
+        fallback when there's no sync/history). When `as_of_date` is given, also
+        includes the name the player had on that date (full weight) so a renamed
+        player matches their older screenshot. When `include_history`, also adds
+        every other past name at a score penalty. Every entry resolves to the
+        member's *current* nickname for display/storage."""
+        current = {int(fid): (nick or "") for (fid, nick) in
+                   [(f, n) for (f, n) in self._fetch_current_members(alliance_id)]}
+        if not current:
+            return []
+        # entries: (fid, match_name, penalty, display=current_nick)
+        seen: set = set()  # (fid, lowercased match_name) already added
+        entries: list = []
+
+        def _add(fid, name, penalty):
+            name = (name or "").strip()
+            if not name:
+                return
+            key = (fid, name.lower())
+            if key in seen:
+                return
+            seen.add(key)
+            entries.append((fid, name, penalty, current[fid]))
+
+        for fid, nick in current.items():
+            _add(fid, nick, 0)
+
+        if not (as_of_date or include_history):
+            return entries
+
+        history = self._fetch_name_history(list(current.keys()))  # {fid: [(old, new, date)]}
+        for fid in current:
+            changes = history.get(fid) or []
+            if as_of_date and changes:
+                _add(fid, _name_at_date(changes, as_of_date, current[fid]), 0)
+            if include_history:
+                for old_n, new_n, _d in changes:
+                    _add(fid, old_n, MATCH_HISTORY_PENALTY)
+                    _add(fid, new_n, MATCH_HISTORY_PENALTY)
+        return entries
+
+    def _fetch_current_members(self, alliance_id):
+        self.users_cursor.execute(
+            "SELECT fid, nickname FROM users WHERE alliance = ?", (str(alliance_id),))
+        return self.users_cursor.fetchall()
+
+    def _fetch_name_history(self, fids) -> dict:
+        """{fid: [(old_nickname, new_nickname, change_date), ...] sorted asc}."""
+        if not fids:
+            return {}
+        out: dict = {}
+        placeholders = ",".join("?" * len(fids))
+        try:
+            self.changes_cursor.execute(
+                f"SELECT fid, old_nickname, new_nickname, change_date "
+                f"FROM nickname_changes WHERE fid IN ({placeholders}) "
+                f"ORDER BY change_date ASC",
+                [int(f) for f in fids])
+            for fid, old_n, new_n, dt in self.changes_cursor.fetchall():
+                out.setdefault(int(fid), []).append((old_n or "", new_n or "", dt or ""))
+        except Exception as e:
+            logger.warning(f"Bear: name-history lookup failed: {e}")
+        return out
 
     def get_ocr_language_settings(self, alliance_id):
         """Return (primary_lang, [fallback_langs]) for the alliance."""
@@ -1867,7 +1979,8 @@ class BearTrack(commands.Cog):
         self.alliance_cursor.execute(
             "SELECT bear_score_channel, bear_keywords, bear_damage_range, "
             "bear_admin_only_view, bear_admin_only_add, "
-            "bear_session_timeout_min, bear_auto_delete_screenshots "
+            "bear_session_timeout_min, bear_auto_delete_screenshots, "
+            "bear_match_all_history "
             "FROM alliancesettings WHERE alliance_id = ?",
             (alliance_id,)
         )
@@ -1881,6 +1994,7 @@ class BearTrack(commands.Cog):
                 "admin_only_add": 0,
                 "session_timeout_min": 15,
                 "auto_delete_screenshots": 1,
+                "match_all_history": 0,
             }
         return {
             "channel_id": row[0],
@@ -1890,13 +2004,15 @@ class BearTrack(commands.Cog):
             "admin_only_add": row[4] or 0,
             "session_timeout_min": row[5] if row[5] is not None else 15,
             "auto_delete_screenshots": row[6] if row[6] is not None else 1,
+            "match_all_history": row[7] or 0,
         }
 
     def update_bear_setting(self, alliance_id: int, column: str, value):
         """Update a single bear setting column."""
         allowed = {"bear_score_channel", "bear_keywords", "bear_damage_range",
                     "bear_admin_only_view", "bear_admin_only_add",
-                    "bear_session_timeout_min", "bear_auto_delete_screenshots"}
+                    "bear_session_timeout_min", "bear_auto_delete_screenshots",
+                    "bear_match_all_history"}
         if column not in allowed:
             return
         self.alliance_cursor.execute(
@@ -1965,6 +2081,18 @@ class BearTrack(commands.Cog):
             f"{theme.deniedIcon} You don't have permission to {action} bear damage for this alliance.",
             ephemeral=True
         )
+        return False
+
+    def can_manage_bear(self, interaction: discord.Interaction, alliance_id: int) -> bool:
+        """Pure predicate (no message sent) — can this user manage this alliance's
+        bear data? Used to gray/hide edit controls instead of denial ephemerals."""
+        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+        if is_global:
+            return True
+        if is_admin:
+            alliance_ids, _ = PermissionManager.get_admin_alliance_ids(
+                interaction.user.id, interaction.guild_id if interaction.guild else 0)
+            return alliance_id in alliance_ids
         return False
 
     # -------------------------------------------------------------------
@@ -2071,7 +2199,12 @@ class BearTrack(commands.Cog):
             )
             anrow = self.alliance_cursor.fetchone()
             alliance_name = anrow[0] if anrow else f"Alliance {alliance_id}"
-            roster = self.get_alliance_roster(alliance_id)
+            # Fresh upload: the event date isn't known until review, so resolve
+            # names as of today (≈ current). The opt-in history flag still applies.
+            _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            _hist = bool(self.get_bear_settings(alliance_id).get("match_all_history"))
+            roster = self.get_match_roster(
+                alliance_id, as_of_date=_today, include_history=_hist)
             primary_lang, fallback_langs = self.get_ocr_language_settings(alliance_id)
             fallback_langs = sorted(fallback_langs, key=lambda l: l in _LATIN_ONLY_LANGS)
             timeout_min, auto_delete = self.get_session_settings(alliance_id)
@@ -2560,12 +2693,10 @@ class BearTrack(commands.Cog):
                     f"{setup_hint}"
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.chartIcon} **View Bear Damage**\n"
-                    f"└ Damage trend charts per alliance and trap\n\n"
+                    f"{theme.chartIcon} **Bear Damage**\n"
+                    f"└ Damage charts, top players, and per-hunt player breakdowns\n\n"
                     f"{theme.editListIcon} **Bear Channel Setup**\n"
                     f"└ Pick the channel, keywords, OCR engines and chart range\n\n"
-                    f"{theme.documentIcon} **Edit Bear Damage**\n"
-                    f"└ Edit or delete saved records, re-match unmatched rows\n\n"
                     f"{theme.settingsIcon} **Settings**\n"
                     f"└ Session timeout, auto-delete, and permissions\n"
                     f"{theme.lowerDivider}"
@@ -2573,7 +2704,7 @@ class BearTrack(commands.Cog):
                 color=theme.emColor1
             )
 
-            await safe_edit_message(interaction, embed=embed, view=view, content=None)
+            await safe_edit_message(interaction, embed=embed, view=view, content=None, clear_attachments=True)
 
         except Exception as e:
             logger.error(f"Error in show_bear_track_menu: {e}")
@@ -2637,6 +2768,71 @@ class RetryOcrLanguagePicker(discord.ui.View):
             view=None,
         )
         await self.parent_review._run_retry_ocr(interaction, new_primary)
+
+
+class RetryOcrPreviewView(discord.ui.View):
+    """Preview a Retry-OCR proposed merge before applying it.
+
+    Retry OCR is experimental by nature ("does this engine help with this
+    script?"). Applying immediately can pollute a clean review with garbage
+    rows if the chosen engine misreads — see the devanagari-on-Latin case where
+    the alliance total parsed as a player row. This view shows the diff and
+    lets the user accept or reject; no destructive action without confirmation.
+    """
+
+    def __init__(self, parent_review, new_primary_lang: str, proposal: dict):
+        super().__init__(timeout=300)
+        self.parent_review = parent_review
+        self.new_primary_lang = new_primary_lang
+        self.proposal = proposal
+
+    @discord.ui.button(label="Apply Changes", style=discord.ButtonStyle.success,
+                       emoji=theme.verifiedIcon)
+    async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.parent_review.original_user_id):
+            return
+        applied = self.parent_review._apply_retry_proposal(self.proposal)
+        if self.parent_review.message is not None:
+            try:
+                await self.parent_review.message.edit(
+                    embed=self.parent_review.build_embed(),
+                    view=self.parent_review,
+                )
+            except Exception as e:
+                logger.warning(f"Bear retry OCR apply: refresh failed: {e}")
+        parts = []
+        if applied['rows_added']:
+            parts.append(
+                f"**{applied['rows_added']}** new row"
+                f"{'s' if applied['rows_added'] != 1 else ''}"
+            )
+        if applied['rows_upgraded']:
+            parts.append(
+                f"**{applied['rows_upgraded']}** match"
+                f"{'es' if applied['rows_upgraded'] != 1 else ''} upgraded"
+            )
+        summary = " · ".join(parts) or "no rows changed"
+        await interaction.response.edit_message(
+            content=(
+                f"{theme.verifiedIcon} Applied Re-OCR with "
+                f"`{self.new_primary_lang}`: {summary}. Existing confirmed "
+                f"rows left untouched."
+            ),
+            view=None,
+        )
+
+    @discord.ui.button(label="Discard", style=discord.ButtonStyle.danger,
+                       emoji=theme.deniedIcon)
+    async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.parent_review.original_user_id):
+            return
+        await interaction.response.edit_message(
+            content=(
+                f"{theme.infoIcon} Re-OCR with `{self.new_primary_lang}` "
+                f"discarded — the review below is unchanged."
+            ),
+            view=None,
+        )
 
 
 class BearHuntReviewView(discord.ui.View):
@@ -2735,41 +2931,58 @@ class BearHuntReviewView(discord.ui.View):
         )
 
     def _lookup_nickname(self, fid):
-        for f, nick in self.roster:
-            if f == fid:
-                return nick
+        # roster entries may be (fid, nick) or (fid, match_name, penalty, display)
+        for entry in self.roster:
+            if entry[0] == fid:
+                return entry[-1]
         return None
 
     def _total_pages(self):
         return max(1, -(-len(self.rows) // self.ROWS_PER_PAGE))
 
     def build_embed(self):
-        embed = discord.Embed(
-            title=f"{theme.chartIcon} Review Bear Hunt",
-            description=(
-                f"Review the detected rows below. Use **Edit a row** to fix "
-                f"matches, **Add Row** for missed players, **Edit Hunt Info** "
-                f"for date/trap/rallies/total, then **Submit**.\n"
-                f"To **delete a row**, pick it from **Edit a row** and clear "
-                f"the **Player** field before submitting the modal.\n"
-                f"Use **Save Totals Only** to record just the summary and "
-                f"skip per-player tracking for this hunt."
-            ),
-            color=theme.emColor1,
-        )
-        # Hint only on truly unreadable rows; `none`-with-name = roster
-        # gap and `likely` = OCR captured well enough.
+        # Warnings above, button descriptors below — mirrors the post-submit
+        # hunt editor's layout. `none`-with-name = roster gap and `likely` =
+        # OCR captured well enough; neither counts as "unreadable".
+        parts = []
         unreadable_rows = sum(
             1 for r in self.rows
             if sum(c.isalpha() for c in (r.get('name') or '')) < 3
         )
         if self.rows and unreadable_rows / len(self.rows) >= 0.25:
-            embed.description += (
-                f"\n\n{theme.warnIcon} *Many rows didn't match cleanly. "
+            parts.append(
+                f"{theme.warnIcon} *Many rows didn't match cleanly. "
                 f"If this happens often, your OCR language may not fit your "
                 f"alliance's player names — adjust under "
                 f"**Settings → Bear Tracking → OCR Languages**.*"
             )
+        # Row-edit instruction reads as a plain header line rather than a
+        # button-card, because Edit a row is the dropdown above, not a button.
+        parts.append(
+            "*Select a player to edit in the drop-down; "
+            "clear the name to delete the row.*"
+        )
+        action_lines = [
+            f"{theme.addIcon} **Add Player**\n"
+            f"└ Add a missed player row manually.",
+            f"{theme.editListIcon} **Edit Hunt**\n"
+            f"└ Update date, trap, rallies, or total damage.",
+        ]
+        if self.source_messages:
+            action_lines.append(
+                f"{theme.globeIcon} **Retry OCR**\n"
+                f"└ Re-run OCR with a different engine to catch missed rows."
+            )
+        action_lines.append(
+            f"{theme.verifiedIcon} **Submit**\n"
+            f"└ Save this hunt — including unmatched rows you can fix later."
+        )
+        parts.append("\n".join(action_lines))
+        embed = discord.Embed(
+            title=f"{theme.chartIcon} Review Bear Hunt",
+            description="\n\n".join(parts),
+            color=theme.emColor1,
+        )
         embed.add_field(name="Alliance", value=self.alliance_name or f"ID {self.alliance_id}", inline=False)
         embed.add_field(name="Date", value=self.hunt_meta['date'], inline=True)
         embed.add_field(
@@ -2789,7 +3002,7 @@ class BearHuntReviewView(discord.ui.View):
         )
 
         if not self.rows:
-            embed.add_field(name="Players", value="*No player rows detected. Use + Add Row to add manually.*", inline=False)
+            embed.add_field(name="Players", value="*No player rows detected. Use Add Player to add manually.*", inline=False)
             return embed
 
         start = self.page * self.ROWS_PER_PAGE
@@ -2813,8 +3026,13 @@ class BearHuntReviewView(discord.ui.View):
             elif status == 'manual':
                 player = f"`{_isolate_rtl(r['nickname'])}` · `{r['fid']}`"
             else:
-                name = r['name'] or "unreadable"
-                player = f"`{_isolate_rtl(name)}` — no match"
+                cands = r.get('candidates') or []
+                if cands:
+                    top_fid, top_nick, score = cands[0]
+                    player = f"`{_isolate_rtl(top_nick)}` ({score}%) · taken by another row"
+                else:
+                    name = r['name'] or "unreadable"
+                    player = f"`{_isolate_rtl(name)}` — no match"
             lines.append(_ltr_line(f"{rank_str} {icon} {player} — `{format_damage_for_embed(r['damage'])}`"))
 
         total_pages = self._total_pages()
@@ -2861,8 +3079,8 @@ class BearHuntReviewView(discord.ui.View):
 
         # Retry OCR needs source_messages to re-download attachments.
         row1 = [
-            ("Add Row", theme.addIcon, discord.ButtonStyle.secondary, self._on_add_row, False),
-            ("Edit Hunt Info", theme.editListIcon, discord.ButtonStyle.secondary, self._on_edit_header, False),
+            ("Add Player", theme.addIcon, discord.ButtonStyle.success, self._on_add_row, False),
+            ("Edit Hunt", theme.editListIcon, discord.ButtonStyle.primary, self._on_edit_header, False),
             ("Retry OCR", theme.globeIcon, discord.ButtonStyle.secondary, self._on_retry_ocr,
              not self.source_messages),
         ]
@@ -2873,7 +3091,6 @@ class BearHuntReviewView(discord.ui.View):
 
         row2 = [
             ("Submit", theme.verifiedIcon, discord.ButtonStyle.success, self._on_submit),
-            ("Save Totals Only", theme.totalIcon, discord.ButtonStyle.primary, self._on_submit_totals_only),
             ("Cancel", theme.deniedIcon, discord.ButtonStyle.secondary, self._on_cancel),
         ]
         for label, emoji, style, cb in row2:
@@ -2980,43 +3197,6 @@ class BearHuntReviewView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error in bear review submit: {e}")
             print(f"[ERROR] Error in bear review submit: {e}")
-            try:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} Error during submission: {e}", ephemeral=True
-                )
-            except Exception:
-                pass
-
-    async def _on_submit_totals_only(self, interaction):
-        """Save the hunt summary (date / trap / rallies / total damage) and
-        ignore every detected player row. For alliances that don't track
-        per-player damage, or when the OCR row data is too noisy to
-        bother curating.
-        """
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
-        errors = validate_bear_submission(
-            self.hunt_meta['date'], self.hunt_meta['hunting_trap'],
-            self.hunt_meta['rallies'], self.hunt_meta['total_damage'],
-        )
-        if errors:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Cannot submit: " + "; ".join(errors),
-                ephemeral=True,
-            )
-            return
-        try:
-            await self.data_submit.process_full_submission(
-                interaction,
-                hunt_meta=self.hunt_meta,
-                player_rows=None,
-                alliance_id=self.alliance_id,
-                alliance_name=self.alliance_name,
-            )
-            await self._notify_tracker_submit()
-        except Exception as e:
-            logger.error(f"Error in bear review summary-only submit: {e}")
-            print(f"[ERROR] Error in bear review summary-only submit: {e}")
             try:
                 await interaction.followup.send(
                     f"{theme.deniedIcon} Error during submission: {e}", ephemeral=True
@@ -3158,68 +3338,14 @@ class BearHuntReviewView(discord.ui.View):
         # Strip the alliance-total damage so it doesn't merge as a row.
         new_rows_by_damage.pop(new_total, None)
 
-        strong_statuses = {'auto', 'manual'}
-        existing_by_damage = {r['damage']: r for r in self.rows}
-        rows_added = 0
-        rows_upgraded = 0
-        for dmg, new_row in new_rows_by_damage.items():
-            existing = existing_by_damage.get(dmg)
-            if existing is None:
-                enriched = self._enrich_row({**new_row, 'rank': None})
-                self.rows.append(enriched)
-                rows_added += 1
-                continue
-            if existing['status'] in strong_statuses:
-                continue
-            existing_score = name_match_score(existing.get('name') or '', self.roster)
-            new_score = name_match_score(new_row.get('name') or '', self.roster)
-            if new_score > existing_score and new_score >= MATCH_LIKELY_MIN:
-                idx = self.rows.index(existing)
-                self.rows[idx] = self._enrich_row({
-                    **new_row,
-                    'rank': existing.get('rank'),
-                })
-                rows_upgraded += 1
-
-        # Hunt header is additive — preserve admin Edit Hunt Info edits.
-        if not self.hunt_meta.get('hunting_trap') and new_trap and new_trap.isdigit():
-            self.hunt_meta['hunting_trap'] = int(new_trap)
-        if not self.hunt_meta.get('rallies') and new_rallies and new_rallies.isdigit():
-            self.hunt_meta['rallies'] = int(new_rallies)
-        if not self.hunt_meta.get('total_damage') and new_total:
-            self.hunt_meta['total_damage'] = new_total
-
-        for i, row in enumerate(sorted(self.rows, key=lambda r: -r['damage']), start=1):
-            if row.get('rank') is None:
-                row['rank'] = i
-
-        self.page = 0
-        self._resolve_unique_assignments()
-        self._sort_rows()
-        self._build_components()
-
-        if self.message is not None:
-            try:
-                await self.message.edit(embed=self.build_embed(), view=self)
-            except Exception as e:
-                logger.warning(f"Bear retry OCR: could not refresh review message: {e}")
-
-        if rows_added or rows_upgraded:
-            parts = []
-            if rows_added:
-                parts.append(f"**{rows_added}** new row{'s' if rows_added != 1 else ''}")
-            if rows_upgraded:
-                parts.append(f"**{rows_upgraded}** match{'es' if rows_upgraded != 1 else ''} upgraded")
-            summary = " · ".join(parts)
-            await interaction.edit_original_response(
-                content=(
-                    f"{theme.verifiedIcon} Re-OCR with `{new_primary_lang}` "
-                    f"complete: {summary}. Existing confirmed rows left "
-                    f"untouched."
-                ),
-                view=None,
-            )
-        else:
+        # Compute proposed changes (pure — no mutation yet). The actual merge
+        # happens only if the user clicks Apply on the preview view below.
+        proposal = self._build_retry_proposal(
+            new_rows_by_damage, new_trap, new_rallies, new_total,
+        )
+        if not (proposal['rows_to_add']
+                or proposal['rows_to_upgrade']
+                or proposal['hunt_meta_updates']):
             await interaction.edit_original_response(
                 content=(
                     f"{theme.warnIcon} Re-OCR with `{new_primary_lang}` "
@@ -3228,6 +3354,115 @@ class BearHuntReviewView(discord.ui.View):
                 ),
                 view=None,
             )
+            return
+        preview = self._format_retry_proposal_preview(new_primary_lang, proposal)
+        view = RetryOcrPreviewView(self, new_primary_lang, proposal)
+        await interaction.edit_original_response(content=preview, view=view)
+
+    def _build_retry_proposal(self, new_rows_by_damage, new_trap, new_rallies, new_total):
+        """Compute what a Retry-OCR merge would do without mutating state.
+
+        Pure function of inputs + self.rows/self.hunt_meta. Returns a dict
+        consumed by `_apply_retry_proposal` and `_format_retry_proposal_preview`.
+        """
+        strong_statuses = {'auto', 'manual'}
+        existing_by_damage = {r['damage']: r for r in self.rows}
+        rows_to_add = []
+        rows_to_upgrade = []  # (idx_in_self_rows, new_row, existing_row)
+        for dmg, new_row in new_rows_by_damage.items():
+            existing = existing_by_damage.get(dmg)
+            if existing is None:
+                rows_to_add.append(new_row)
+                continue
+            if existing['status'] in strong_statuses:
+                continue
+            existing_score = name_match_score(existing.get('name') or '', self.roster)
+            new_score = name_match_score(new_row.get('name') or '', self.roster)
+            if new_score > existing_score and new_score >= MATCH_LIKELY_MIN:
+                idx = self.rows.index(existing)
+                rows_to_upgrade.append((idx, new_row, existing))
+        hunt_meta_updates = {}
+        if not self.hunt_meta.get('hunting_trap') and new_trap and new_trap.isdigit():
+            hunt_meta_updates['hunting_trap'] = int(new_trap)
+        if not self.hunt_meta.get('rallies') and new_rallies and new_rallies.isdigit():
+            hunt_meta_updates['rallies'] = int(new_rallies)
+        if not self.hunt_meta.get('total_damage') and new_total:
+            hunt_meta_updates['total_damage'] = new_total
+        return {
+            'rows_to_add': rows_to_add,
+            'rows_to_upgrade': rows_to_upgrade,
+            'hunt_meta_updates': hunt_meta_updates,
+        }
+
+    def _apply_retry_proposal(self, proposal):
+        """Apply a proposal built by `_build_retry_proposal`.
+
+        Mutates self.rows + self.hunt_meta; re-sorts, re-ranks, rebuilds
+        components. Returns a counts dict.
+        """
+        # Upgrades first — their captured indices into self.rows must still be valid.
+        rows_upgraded = 0
+        for idx, new_row, _existing in proposal['rows_to_upgrade']:
+            existing = self.rows[idx]
+            self.rows[idx] = self._enrich_row({
+                **new_row,
+                'rank': existing.get('rank'),
+            })
+            rows_upgraded += 1
+        # Then append new rows.
+        rows_added = 0
+        for new_row in proposal['rows_to_add']:
+            self.rows.append(self._enrich_row({**new_row, 'rank': None}))
+            rows_added += 1
+        # Hunt meta is additive (only fills empty fields).
+        for key, value in proposal['hunt_meta_updates'].items():
+            self.hunt_meta[key] = value
+        for i, row in enumerate(sorted(self.rows, key=lambda r: -r['damage']), start=1):
+            if row.get('rank') is None:
+                row['rank'] = i
+        self.page = 0
+        self._resolve_unique_assignments()
+        self._sort_rows()
+        self._build_components()
+        return {'rows_added': rows_added, 'rows_upgraded': rows_upgraded}
+
+    def _format_retry_proposal_preview(self, new_primary_lang, proposal):
+        """Render a Retry-OCR proposal as a Discord message body (≤2000 chars)."""
+        n_add = len(proposal['rows_to_add'])
+        n_up = len(proposal['rows_to_upgrade'])
+        meta = proposal['hunt_meta_updates']
+        lines = [
+            f"{theme.infoIcon} **Re-OCR with `{new_primary_lang}` — preview**",
+            "",
+        ]
+        if n_add:
+            lines.append(
+                f"{theme.addIcon} **{n_add}** new row"
+                f"{'s' if n_add != 1 else ''}:"
+            )
+            for r in proposal['rows_to_add'][:5]:
+                name = (r.get('name') or '').strip() or '(unreadable)'
+                dmg = format_damage_for_embed(r.get('damage', 0))
+                lines.append(f"  • `{name}` — `{dmg}`")
+            if n_add > 5:
+                lines.append(f"  …and {n_add - 5} more")
+        if n_up:
+            lines.append(
+                f"{theme.refreshIcon} **{n_up}** match"
+                f"{'es' if n_up != 1 else ''} upgraded:"
+            )
+            for _idx, new_row, old in proposal['rows_to_upgrade'][:3]:
+                old_name = (old.get('name') or '').strip() or '(unreadable)'
+                new_name = (new_row.get('name') or '').strip() or '(unreadable)'
+                lines.append(f"  • `{old_name}` → `{new_name}`")
+            if n_up > 3:
+                lines.append(f"  …and {n_up - 3} more")
+        if meta:
+            bits = [f"{k}={v}" for k, v in meta.items()]
+            lines.append(f"{theme.editListIcon} Hunt info: {', '.join(bits)}")
+        lines.append("")
+        lines.append("**Apply** these changes, or **Discard**?")
+        return "\n".join(lines)
 
     async def _on_prev(self, interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
@@ -3398,8 +3633,10 @@ def _resolve_player(text, roster):
     """
     if text.isdigit():
         fid = int(text)
-        for f, nick in roster:
-            if f == fid:
+        # roster entries may be (fid, nick) or (fid, match_name, penalty, display)
+        for entry in roster:
+            if entry[0] == fid:
+                nick = entry[-1]
                 return fid, nick, [(fid, nick, 100)]
         return None, None, []
     matches = match_roster(text, roster)
@@ -3441,13 +3678,36 @@ def _parse_row_inputs(player_text, damage_text, rank_text, roster):
 # BearMenuView — main navigation
 # ---------------------------------------------------------------------------
 
+def _bear_viewer_embed() -> discord.Embed:
+    """The Bear Damage Viewer landing embed — shown until an alliance is picked.
+    Lists each control with a one-line description, matching the bot's menu style."""
+    return discord.Embed(
+        title=f"{theme.chartIcon} Bear Damage Viewer",
+        description=(
+            f"Pick an alliance to load its damage chart.\n\n"
+            f"**Controls**\n"
+            f"{theme.upperDivider}\n"
+            f"{theme.bearTrapIcon} **Trap 1 / Trap 2 / Both**\n"
+            f"└ Choose which trap to chart\n\n"
+            f"{theme.calendarIcon} **Time Range**\n"
+            f"└ Set the chart date window (default: last 3 months)\n\n"
+            f"{theme.medalIcon} **Top Players**\n"
+            f"└ Leaderboard by total, hunts, or average damage\n\n"
+            f"{theme.documentIcon} **Hunts**\n"
+            f"└ Browse and manage individual hunts and their players\n"
+            f"{theme.lowerDivider}"
+        ),
+        color=theme.emColor1,
+    )
+
+
 class BearMenuView(discord.ui.View):
     def __init__(self, cog, original_user_id):
         super().__init__(timeout=7200)
         self.cog = cog
         self.original_user_id = original_user_id
 
-    @discord.ui.button(label="View Bear Damage", style=discord.ButtonStyle.primary, emoji=theme.chartIcon, row=1)
+    @discord.ui.button(label="Bear Damage", style=discord.ButtonStyle.primary, emoji=theme.chartIcon, row=1)
     async def view_bear_damage(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
@@ -3458,20 +3718,9 @@ class BearMenuView(discord.ui.View):
             original_user_id=self.original_user_id,
         )
 
-        embed = discord.Embed(
-            title=f"{theme.chartIcon} Bear Damage Viewer",
-            description=(
-                f"Pick an alliance to load its damage chart.\n"
-                f"{theme.upperDivider}\n"
-                f"Defaults to **Trap 1** for the **last 3 months**. Use the "
-                f"buttons below to switch trap or date range. **Edit Date "
-                f"Range** opens a custom picker.\n"
-                f"{theme.lowerDivider}"
-            ),
-            color=theme.emColor1
-        )
+        embed = _bear_viewer_embed()
 
-        await safe_edit_message(interaction, embed=embed, view=view, content=None)
+        await safe_edit_message(interaction, embed=embed, view=view, content=None, clear_attachments=True)
 
     @discord.ui.button(label="Bear Channel Setup", style=discord.ButtonStyle.success, emoji=theme.editListIcon, row=1)
     async def bear_channel_setup(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3488,37 +3737,6 @@ class BearMenuView(discord.ui.View):
         await safe_edit_message(
             interaction, embed=view._build_embed(), view=view, content=None,
         )
-
-    @discord.ui.button(label="Edit Bear Damage", style=discord.ButtonStyle.secondary, emoji=theme.documentIcon, row=2)
-    async def edit_bear_damage(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
-
-        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
-        if not is_admin:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} You need admin permissions to edit bear damage records.",
-                ephemeral=True
-            )
-            return
-
-        view = BearDamageEditView(
-            cog=self.cog,
-            original_user_id=self.original_user_id,
-        )
-
-        embed = discord.Embed(
-            title=f"{theme.documentIcon} Edit Bear Damage",
-            description=(
-                f"Select an alliance to view and manage its damage records.\n"
-                f"{theme.upperDivider}\n"
-                f"Pick an alliance from the dropdown, then select a record to edit or delete.\n"
-                f"{theme.lowerDivider}"
-            ),
-            color=theme.emColor1
-        )
-
-        await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
     @discord.ui.button(label="Settings", style=discord.ButtonStyle.secondary, emoji=theme.settingsIcon, row=2)
     async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -3687,43 +3905,83 @@ class BearDamageView(discord.ui.View):
             btn.callback = self._make_trap_cb(trap)
             self.add_item(btn)
 
-        # Row 2: rolling-window presets. Active preset styled .success.
-        for preset in ('this_month', 'last_month', '3m', '1y'):
-            btn = discord.ui.Button(
-                label=self.PRESET_LABELS[preset],
-                style=(discord.ButtonStyle.success if self.preset == preset
-                       else discord.ButtonStyle.secondary),
-                row=2,
-            )
-            btn.callback = self._make_preset_cb(preset)
-            self.add_item(btn)
-
-        all_time_btn = discord.ui.Button(
-            label=self.PRESET_LABELS['all'],
-            style=(discord.ButtonStyle.success if self.preset == 'all'
-                   else discord.ButtonStyle.secondary),
-            row=3,
+        # Time Range sits on the trap row (row 1) to keep row 2 short.
+        has_alliance = self.alliance_id is not None
+        range_btn = discord.ui.Button(
+            label=f"Time Range: {self._range_label()}",
+            emoji=theme.calendarIcon,
+            style=discord.ButtonStyle.secondary, row=1,
         )
-        all_time_btn.callback = self._make_preset_cb('all')
-        self.add_item(all_time_btn)
+        range_btn.callback = self._on_time_range
+        self.add_item(range_btn)
 
-        edit_btn = discord.ui.Button(
-            label="Edit Date Range",
-            emoji=theme.editListIcon,
-            style=discord.ButtonStyle.secondary,
-            row=3,
+        leaderboard_btn = discord.ui.Button(
+            label="Top Players", emoji=theme.medalIcon,
+            style=discord.ButtonStyle.primary, row=2,
+            disabled=not has_alliance,
         )
-        edit_btn.callback = self._on_edit_range
-        self.add_item(edit_btn)
+        leaderboard_btn.callback = self._on_leaderboard
+        self.add_item(leaderboard_btn)
+
+        hunts_btn = discord.ui.Button(
+            label="Hunts", emoji=theme.documentIcon,
+            style=discord.ButtonStyle.primary, row=2,
+            disabled=not has_alliance,
+        )
+        hunts_btn.callback = self._on_hunts
+        self.add_item(hunts_btn)
 
         back_btn = discord.ui.Button(
-            label="Back",
-            emoji=theme.backIcon,
-            style=discord.ButtonStyle.secondary,
-            row=3,
+            label="Back", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=2,
         )
         back_btn.callback = self._on_back
         self.add_item(back_btn)
+
+    def _range_label(self) -> str:
+        if self.preset and self.preset in self.PRESET_LABELS:
+            return self.PRESET_LABELS[self.preset]
+        return "Custom"
+
+    async def _on_time_range(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        view = BearTimeRangeView(self)
+        await safe_edit_message(interaction, embed=view.build_embed(), view=view,
+                                content=None, clear_attachments=True)
+
+    async def _on_hunts(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        if not self.alliance_id:
+            return
+        view = BearDamageEditView(
+            cog=self.cog, original_user_id=self.original_user_id,
+            alliance_id=self.alliance_id, chart_view=self)
+        await view.open(interaction)
+
+    async def _on_leaderboard(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        if not self.alliance_id:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Pick an alliance first.", ephemeral=True)
+            return
+        if not await self.cog.check_bear_permission(interaction, self.alliance_id, "view"):
+            return
+        self.cog.alliance_cursor.execute(
+            "SELECT name FROM alliance_list WHERE alliance_id = ?", (self.alliance_id,))
+        arow = self.cog.alliance_cursor.fetchone()
+        alliance_name = arow[0] if arow else f"Alliance ID: {self.alliance_id}"
+        from_str = self.from_date.strftime("%Y-%m-%d") if self.from_date else None
+        to_str = self.to_date.strftime("%Y-%m-%d") if self.to_date else None
+        view = BearLeaderboardView(
+            cog=self.cog, original_user_id=self.original_user_id,
+            alliance_id=self.alliance_id, alliance_name=alliance_name,
+            hunting_trap=self.hunting_trap, from_date=from_str, to_date=to_str,
+            chart_view=self)
+        await interaction.response.edit_message(
+            embed=view.build_embed(), view=view, attachments=[])
 
     def _make_trap_cb(self, trap: int):
         async def _cb(interaction: discord.Interaction):
@@ -3736,22 +3994,6 @@ class BearDamageView(discord.ui.View):
             await self.try_redraw(interaction)
         return _cb
 
-    def _make_preset_cb(self, preset: str):
-        async def _cb(interaction: discord.Interaction):
-            if not await check_interaction_user(interaction, self.original_user_id):
-                return
-            if self.preset == preset:
-                await interaction.response.defer()
-                return
-            self._apply_preset(preset)
-            await self.try_redraw(interaction)
-        return _cb
-
-    async def _on_edit_range(self, interaction: discord.Interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
-        await interaction.response.send_modal(DateRangeModal(self))
-
     async def _on_back(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
@@ -3760,19 +4002,8 @@ class BearDamageView(discord.ui.View):
     async def try_redraw(self, interaction: discord.Interaction):
         self._build_components()
         if not self.alliance_id:
-            placeholder = discord.Embed(
-                title=f"{theme.chartIcon} Bear Damage Viewer",
-                description=(
-                    f"Pick an alliance to load its damage chart.\n"
-                    f"{theme.upperDivider}\n"
-                    f"Trap and date range can be set first; the chart "
-                    f"renders as soon as you pick an alliance.\n"
-                    f"{theme.lowerDivider}"
-                ),
-                color=theme.emColor1,
-            )
             await interaction.response.edit_message(
-                embed=placeholder, attachments=[], view=self,
+                embed=_bear_viewer_embed(), attachments=[], view=self,
             )
             return
         from_str = self.from_date.strftime("%Y-%m-%d") if self.from_date else None
@@ -3788,8 +4019,8 @@ class BearDamageView(discord.ui.View):
             empty = discord.Embed(
                 title=f"{theme.warnIcon} No data for this range",
                 description=(
-                    f"{trap_label} has no recorded hunts in the selected "
-                    f"range. Try a different preset or **Edit Date Range**."
+                    f"There are no recorded hunts for {trap_label} in the selected time range.\n"
+                    f"Try a different preset or change the **Time Range**."
                 ),
                 color=theme.emColor2,
             )
@@ -3803,321 +4034,497 @@ class BearDamageView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# BearTimeRangeView — time-range picker subview for the chart
+# ---------------------------------------------------------------------------
+
+class BearTimeRangeView(discord.ui.View):
+    """Preset/custom range picker. Applies to the chart view and returns to it."""
+
+    PRESETS = [('this_month', 'This Month'), ('last_month', 'Last Month'),
+               ('3m', '3 Months'), ('1y', '1 Year'), ('all', 'All Time')]
+
+    def __init__(self, chart_view: 'BearDamageView'):
+        super().__init__(timeout=7200)
+        self.chart = chart_view
+        self.original_user_id = chart_view.original_user_id
+        self._build_components()
+
+    def build_embed(self) -> discord.Embed:
+        return discord.Embed(
+            title=f"{theme.calendarIcon} Time Range",
+            description=(
+                "Pick the range for the damage chart (default is last 3 months).\n"
+                f"{theme.upperDivider}\n"
+                f"Choose a preset, or **Custom** for an exact date range.\n"
+                f"{theme.lowerDivider}"),
+            color=theme.emColor1)
+
+    def _build_components(self):
+        self.clear_items()
+        for i, (preset, label) in enumerate(self.PRESETS):
+            btn = discord.ui.Button(
+                label=label, row=0 if i < 3 else 1,
+                style=(discord.ButtonStyle.success if self.chart.preset == preset
+                       else discord.ButtonStyle.secondary))
+            btn.callback = self._make_preset_cb(preset)
+            self.add_item(btn)
+        custom_btn = discord.ui.Button(
+            label="Custom", emoji=theme.editListIcon, row=1,
+            style=(discord.ButtonStyle.success if self.chart.preset is None
+                   else discord.ButtonStyle.secondary))
+        custom_btn.callback = self._on_custom
+        self.add_item(custom_btn)
+        back_btn = discord.ui.Button(label="Back", emoji=theme.backIcon,
+                                     style=discord.ButtonStyle.secondary, row=2)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    def _make_preset_cb(self, preset):
+        async def _cb(interaction: discord.Interaction):
+            if not await check_interaction_user(interaction, self.original_user_id):
+                return
+            self.chart._apply_preset(preset)
+            self.chart._build_components()
+            await self.chart.try_redraw(interaction)
+        return _cb
+
+    async def _on_custom(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        await interaction.response.send_modal(DateRangeModal(self.chart))
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.chart._build_components()
+        await self.chart.try_redraw(interaction)
+
+
+# ---------------------------------------------------------------------------
 # BearDamageEditView — edit/delete records
 # ---------------------------------------------------------------------------
 
 class BearDamageEditView(discord.ui.View):
-    def __init__(self, cog, original_user_id):
+    """Unified Hunts view, entered from the chart with an alliance pre-selected.
+    Pick a hunt → its players show inline with a row-edit dropdown + Add Player.
+    Edit controls appear only when the user can manage this alliance; otherwise
+    it's a read-only browser."""
+
+    PLAYER_PAGE = 20  # < 25 so the row-edit select never exceeds Discord's cap
+
+    def __init__(self, cog, original_user_id, alliance_id=None, chart_view=None):
         super().__init__(timeout=7200)
         self.cog = cog
         self.original_user_id = original_user_id
-
-        self.alliance_id: int | None = None
+        self.chart_view = chart_view
+        self.alliance_id: int | None = alliance_id
+        self.alliance_name: str | None = None
+        self.can_manage = False
+        self.roster: list = []
+        self._records: list = []
         self.selected_record_id: int | None = None
         self.date: str | None = None
         self.hunting_trap: int | None = None
         self.rallies: int | None = None
         self.total_damage: int | None = None
+        self.players: list = []
+        self.page = 0
+        self._note: str | None = None  # transient one-shot banner (e.g. re-match result)
 
-        options = build_alliance_options(cog.alliance_conn)
-        self.add_item(AllianceSelect(self, options, action="manage"))
+    @property
+    def hunt_id(self):
+        return self.selected_record_id
 
-        self.date_trap_select = discord.ui.Select(
-            placeholder="Select a record",
-            min_values=1,
-            max_values=1,
-            options=[discord.SelectOption(label="Select an alliance first", value="__placeholder__")],
-            disabled=True
-        )
-        self.date_trap_select.callback = self.date_trap_selected
-        self.add_item(self.date_trap_select)
+    async def open(self, interaction: discord.Interaction):
+        """Entry point from the chart view: load the alliance's hunts and show."""
+        if self.alliance_id is not None:
+            self.can_manage = self.cog.can_manage_bear(interaction, self.alliance_id)
+            self.roster = self.cog.get_alliance_roster(self.alliance_id)
+            try:
+                self.cog.alliance_cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (self.alliance_id,))
+                arow = self.cog.alliance_cursor.fetchone()
+                self.alliance_name = arow[0] if arow else None
+            except Exception as e:
+                logger.warning(f"Bear edit view: could not resolve alliance name: {e}")
+                self.alliance_name = None
+            self._load_records()
+        self._build_components()
+        await safe_edit_message(
+            interaction, embed=self.build_record_embed(), view=self,
+            content=None, clear_attachments=True)
+
+    def _load_records(self):
+        try:
+            self._records = self.cog.bear_cursor.execute(
+                "SELECT id, hunting_trap, date FROM bear_hunts WHERE alliance_id = ? "
+                "ORDER BY date DESC LIMIT 25",
+                (self.alliance_id,)).fetchall()
+        except Exception as e:
+            logger.error(f"Failed to fetch records: {e}")
+            print(f"[ERROR] Failed to fetch records: {e}")
+            self._records = []
+
+    def _load_players(self):
+        if not self.selected_record_id:
+            self.players = []
+            return
+        try:
+            rows = self.cog.bear_cursor.execute(
+                "SELECT id, fid, raw_name, resolved_nickname, damage, rank "
+                "FROM bear_player_damage WHERE hunt_id = ? "
+                "ORDER BY CASE WHEN rank IS NULL THEN 1 ELSE 0 END, rank ASC, damage DESC",
+                (self.selected_record_id,)).fetchall()
+        except Exception as e:
+            logger.error(f"Failed to load players: {e}")
+            print(f"[ERROR] Failed to load players: {e}")
+            rows = []
+        self.players = [
+            {'id': r[0], 'fid': r[1], 'raw_name': r[2] or '', 'nickname': r[3],
+             'damage': int(r[4]), 'rank': r[5]}
+            for r in rows]
+        self.page = min(self.page, max(0, (len(self.players) - 1) // self.PLAYER_PAGE))
+
+    def _select_record(self, rid: int):
+        self.selected_record_id = rid
+        row = self.cog.bear_cursor.execute(
+            "SELECT date, hunting_trap, rallies, total_damage FROM bear_hunts WHERE id = ?",
+            (rid,)).fetchone()
+        if row:
+            self.date, self.hunting_trap, self.rallies, self.total_damage = row
+        self.page = 0
+        self._load_players()
 
     def _player_counts(self) -> tuple[int, int]:
-        """Return (matched, unmatched) row counts for the selected record."""
-        if not self.selected_record_id:
-            return 0, 0
-        try:
-            row = self.cog.bear_cursor.execute(
-                "SELECT "
-                "SUM(CASE WHEN fid IS NOT NULL THEN 1 ELSE 0 END), "
-                "SUM(CASE WHEN fid IS NULL THEN 1 ELSE 0 END) "
-                "FROM bear_player_damage WHERE hunt_id = ?",
-                (self.selected_record_id,)
-            ).fetchone()
-        except Exception:
-            return 0, 0
-        return (row[0] or 0, row[1] or 0)
+        matched = sum(1 for p in self.players if p['fid'])
+        return matched, len(self.players) - matched
+
+    def _total_player_pages(self) -> int:
+        return max(1, -(-len(self.players) // self.PLAYER_PAGE))
 
     def build_record_embed(self) -> discord.Embed:
+        if not self.selected_record_id:
+            return discord.Embed(
+                title=f"{theme.documentIcon} Hunts",
+                description=(
+                    "Pick a hunt from the dropdown to view its players."
+                    if self._records else
+                    ("*No hunts recorded for this alliance yet.*" if self.alliance_id
+                     else "Pick an alliance first.")),
+                color=theme.emColor1)
+
+        # Description: one-shot warning/update note above, button descriptors
+        # below — mirrors the Review Bear Hunt layout.
+        parts = []
+        if self._note:
+            parts.append(self._note)
+            self._note = None  # one-shot banner (e.g. re-match result)
+        # Row-edit instruction matches the Review screen — the dropdown only
+        # renders for managers with at least one player on the hunt.
+        if self.can_manage and self.players:
+            parts.append(
+                "*Select a player to edit in the drop-down; "
+                "clear the name to delete the row.*"
+            )
+        if self.can_manage:
+            _, unmatched = self._player_counts()
+            bits = [
+                f"{theme.addIcon} **Add Player**\n"
+                f"└ Manually add a player row to this hunt.",
+                f"{theme.editListIcon} **Edit Hunt**\n"
+                f"└ Update date, trap, rallies, or total damage.",
+            ]
+            if unmatched:
+                bits.append(
+                    f"{theme.refreshIcon} **Re-match**\n"
+                    f"└ Re-match against the current roster after adding new members."
+                )
+            bits.append(
+                f"{theme.trashIcon} **Delete Hunt**\n"
+                f"└ Permanently delete this hunt and all its rows."
+            )
+            parts.append("\n".join(bits))
+
         embed = discord.Embed(
-            title=f"{theme.editListIcon} Bear Damage Record",
-            color=theme.emColor1
+            title=f"{theme.documentIcon} Bear Hunt",
+            description="\n\n".join(parts) if parts else None,
+            color=theme.emColor1,
         )
-        embed.add_field(name="Date", value=self.date or "-", inline=False)
-        embed.add_field(name="Hunting Trap", value=self.hunting_trap or "-", inline=True)
-        embed.add_field(name="Rallies", value=self.rallies or "-", inline=True)
+        embed.add_field(
+            name="Alliance",
+            value=self.alliance_name or f"ID {self.alliance_id}",
+            inline=False,
+        )
+        embed.add_field(name="Date", value=self.date or "-", inline=True)
+        embed.add_field(
+            name="Hunting Trap",
+            value=str(self.hunting_trap) if self.hunting_trap is not None else "-",
+            inline=True,
+        )
+        embed.add_field(
+            name="Rallies",
+            value=str(self.rallies) if self.rallies is not None else "-",
+            inline=True,
+        )
         embed.add_field(
             name="Total Alliance Damage",
             value=format_damage_for_embed(self.total_damage) if self.total_damage else "-",
-            inline=False
+            inline=False,
         )
-        if self.selected_record_id:
-            matched, unmatched = self._player_counts()
-            value = f"{matched} matched"
-            if unmatched:
-                value += f" · {unmatched} unmatched"
-            embed.add_field(name="Players", value=value, inline=False)
+
+        if not self.players:
+            embed.add_field(name="Players", value="*No player rows on this hunt.*", inline=False)
+            return embed
+
+        start = self.page * self.PLAYER_PAGE
+        end = min(start + self.PLAYER_PAGE, len(self.players))
+        lines = []
+        for p in self.players[start:end]:
+            rank_str = f"**#{p['rank']}**" if p['rank'] is not None else "**?**"
+            if p['fid']:
+                who = f"`{_isolate_rtl(p['nickname'] or str(p['fid']))}` · `{p['fid']}`"
+            else:
+                who = f"{theme.warnIcon} `{_isolate_rtl(p['raw_name'] or '(unreadable)')}` — unmatched"
+            lines.append(_ltr_line(f"{rank_str} {who} — `{format_damage_for_embed(p['damage'])}`"))
+
+        total_pages = self._total_player_pages()
+        field_name = (
+            f"Players {start + 1}-{end} of {len(self.players)}"
+            if total_pages > 1 else f"Players ({len(self.players)})"
+        )
+        value = "\n".join(lines)
+        if len(value) > 1024:
+            value = value[:1010] + "\n…(truncated)"
+        embed.add_field(name=field_name, value=value, inline=False)
+
+        matched, unmatched = self._player_counts()
+        foot_bits = [f"{matched} matched"]
+        if unmatched:
+            foot_bits.append(f"{unmatched} unmatched")
+        if total_pages > 1:
+            foot_bits.append(f"page {self.page + 1}/{total_pages}")
+        embed.set_footer(text=" · ".join(foot_bits))
         return embed
+
+    def _build_components(self):
+        self.clear_items()
+        # Row 0: hunt picker (alliance is fixed from the chart — no alliance dropdown).
+        if self._records:
+            self.date_trap_select = discord.ui.Select(
+                placeholder="Select a hunt", row=0,
+                options=[discord.SelectOption(
+                    label=f"{dt} - Trap {trap}", value=str(rid),
+                    default=(self.selected_record_id == rid))
+                    for rid, trap, dt in self._records])
+        else:
+            self.date_trap_select = discord.ui.Select(
+                placeholder=("No hunts for this alliance" if self.alliance_id else "No alliance selected"),
+                disabled=True, row=0,
+                options=[discord.SelectOption(label="—", value="__placeholder__")])
+        self.date_trap_select.callback = self.date_trap_selected
+        self.add_item(self.date_trap_select)
+
+        has_hunt = bool(self.selected_record_id)
+        # Row 1: row-edit dropdown (managers only).
+        if has_hunt and self.players and self.can_manage:
+            start = self.page * self.PLAYER_PAGE
+            end = min(start + self.PLAYER_PAGE, len(self.players))
+            opts = []
+            for i, p in enumerate(self.players[start:end], start=start):
+                rank_part = f"#{p['rank']}" if p['rank'] is not None else "#?"
+                who = p['nickname'] or p['raw_name'] or "(unreadable)"
+                opts.append(discord.SelectOption(
+                    label=_ltr_line(f"{rank_part} {who}")[:100], value=str(i),
+                    description=format_damage_for_embed(p['damage'])[:100]))
+            sel = discord.ui.Select(placeholder="Edit a player row…", options=opts, row=1)
+            sel.callback = self._on_row_selected
+            self.add_item(sel)
+
+        # Row 2: manage actions.
+        if has_hunt and self.can_manage:
+            add_btn = discord.ui.Button(label="Add Player", emoji=theme.addIcon,
+                                        style=discord.ButtonStyle.success, row=2)
+            add_btn.callback = self._on_add
+            self.add_item(add_btn)
+            edit_btn = discord.ui.Button(label="Edit Hunt", emoji=theme.editListIcon,
+                                         style=discord.ButtonStyle.primary, row=2)
+            edit_btn.callback = self._on_edit_hunt
+            self.add_item(edit_btn)
+            _, unmatched = self._player_counts()
+            if unmatched:
+                rematch_btn = discord.ui.Button(label="Re-match", emoji=theme.refreshIcon,
+                                                style=discord.ButtonStyle.secondary, row=2)
+                rematch_btn.callback = self._on_rematch
+                self.add_item(rematch_btn)
+
+        # Row 3: delete + back.
+        if has_hunt and self.can_manage:
+            delete_btn = discord.ui.Button(label="Delete Hunt", emoji=theme.trashIcon,
+                                           style=discord.ButtonStyle.danger, row=3)
+            delete_btn.callback = self._on_delete
+            self.add_item(delete_btn)
+        back_btn = discord.ui.Button(label="Back", emoji=theme.backIcon,
+                                     style=discord.ButtonStyle.secondary, row=3)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+        # Row 4: player-list pagination.
+        if has_hunt and self._total_player_pages() > 1:
+            prev_btn = discord.ui.Button(label="Prev", emoji=theme.prevIcon,
+                style=discord.ButtonStyle.secondary, row=4, disabled=(self.page == 0))
+            prev_btn.callback = self._on_prev
+            next_btn = discord.ui.Button(label="Next", emoji=theme.nextIcon,
+                style=discord.ButtonStyle.secondary, row=4,
+                disabled=(self.page >= self._total_player_pages() - 1))
+            next_btn.callback = self._on_next
+            self.add_item(prev_btn)
+            self.add_item(next_btn)
 
     async def date_trap_selected(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-
         selected_value = self.date_trap_select.values[0]
         if selected_value in ("__placeholder__", "__none__"):
             return
-
-        self.selected_record_id = int(selected_value)
-
-        try:
-            row = self.cog.bear_cursor.execute(
-                "SELECT date, hunting_trap, rallies, total_damage FROM bear_hunts WHERE id = ?",
-                (self.selected_record_id,)
-            ).fetchone()
-        except Exception as e:
-            logger.error(f"Failed to fetch record: {e}")
-            print(f"[ERROR] Failed to fetch record: {e}")
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Failed to fetch record.", ephemeral=True
-            )
-            return
-
-        if not row:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Record not found.", ephemeral=True
-            )
-            return
-
-        self.date, self.hunting_trap, self.rallies, self.total_damage = row
-
-        # Update defaults on the select
-        self._refresh_record_select_defaults()
-
+        self._select_record(int(selected_value))
+        self._build_components()
         await interaction.response.edit_message(content=None, view=self, embed=self.build_record_embed())
 
-    def _refresh_record_select_defaults(self):
-        for opt in self.date_trap_select.options:
-            if opt.value in ("__placeholder__", "__none__"):
-                continue
-            opt.default = (int(opt.value) == self.selected_record_id) if self.selected_record_id else False
+    async def refresh(self, interaction: discord.Interaction):
+        """Reload players for the current hunt and re-render (used by edit modals)."""
+        self._load_players()
+        self._build_components()
+        await safe_edit_message(interaction, embed=self.build_record_embed(), view=self, content=None)
 
-    async def on_alliance_selected(self, interaction: discord.Interaction):
-        """Called by AllianceSelect when an alliance is picked."""
-        try:
-            rows = self.cog.bear_cursor.execute(
-                "SELECT id, hunting_trap, date FROM bear_hunts WHERE alliance_id = ? ORDER BY date DESC LIMIT 25",
-                (self.alliance_id,)
-            ).fetchall()
-        except Exception as e:
-            logger.error(f"Failed to fetch records: {e}")
-            print(f"[ERROR] Failed to fetch records: {e}")
-            rows = []
+    async def rerender(self, interaction: discord.Interaction):
+        """Re-show this view (used by child views returning via Back)."""
+        self._load_players()
+        self._build_components()
+        await safe_edit_message(interaction, embed=self.build_record_embed(), view=self, content=None)
 
-        if not rows:
-            self.date_trap_select.options = [discord.SelectOption(label="No records found", value="__none__")]
-            self.date_trap_select.disabled = True
-        else:
-            self.date_trap_select.options = [
-                discord.SelectOption(
-                    label=f"{dt} - Trap {trap}",
-                    value=str(row_id),
-                    default=(self.selected_record_id == row_id) if self.selected_record_id else False
-                )
-                for row_id, trap, dt in rows
-            ]
-            self.date_trap_select.disabled = False
-
-        self.selected_record_id = None
-        self.date = self.hunting_trap = self.rallies = self.total_damage = None
-
-        await interaction.response.edit_message(content=None, view=self, embed=self.build_record_embed())
-
-    @discord.ui.button(label="Filter Records", style=discord.ButtonStyle.primary, emoji=theme.searchIcon, row=2)
-    async def filter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_row_selected(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        if not self.alliance_id:
+        idx = int(interaction.data['values'][0])
+        if idx >= len(self.players):
             await interaction.response.send_message(
-                f"{theme.warnIcon} Please select an alliance first.", ephemeral=True
-            )
+                f"{theme.deniedIcon} That row no longer exists.", ephemeral=True)
             return
+        await interaction.response.send_modal(EditSavedPlayerModal(self, self.players[idx]))
 
-        allowed = await self.cog.check_bear_permission(interaction, self.alliance_id, "manage")
-        if not allowed:
-            return
-
-        await interaction.response.send_modal(RecordFilterModal(self))
-
-    @discord.ui.button(label="Edit", style=discord.ButtonStyle.primary, emoji=theme.editListIcon, row=2)
-    async def edit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_add(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        if not self.alliance_id or not self.selected_record_id:
-            await interaction.response.send_message(
-                f"{theme.warnIcon} Select an alliance and record first.", ephemeral=True
-            )
+        if not (self.selected_record_id and self.can_manage):
             return
+        await interaction.response.send_modal(AddSavedPlayerModal(self))
 
-        allowed = await self.cog.check_bear_permission(interaction, self.alliance_id, "manage")
-        if not allowed:
+    async def _on_prev(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
             return
+        self.page = max(0, self.page - 1)
+        self._build_components()
+        await interaction.response.edit_message(view=self, embed=self.build_record_embed())
 
+    async def _on_next(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.page = min(self._total_player_pages() - 1, self.page + 1)
+        self._build_components()
+        await interaction.response.edit_message(view=self, embed=self.build_record_embed())
+
+    async def _on_edit_hunt(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        if not (self.alliance_id and self.selected_record_id and self.can_manage):
+            return
         await interaction.response.send_modal(RecordEditModal(self))
 
-    @discord.ui.button(label="Fix Unmatched", style=discord.ButtonStyle.primary, emoji=theme.warnIcon, row=2)
-    async def fix_unmatched_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    def _do_rematch(self) -> int:
+        """Re-run the auto-matcher on this hunt's unmatched rows. Matches against
+        the date-aware roster (names as of the hunt date) plus, if the alliance
+        opted in, all historical names at a penalty. Persists only confident
+        (>=MATCH_AUTO_CONFIRM) unique matches. Returns how many rows resolved."""
+        _hist = bool(self.cog.get_bear_settings(self.alliance_id).get("match_all_history"))
+        self.roster = self.cog.get_match_roster(
+            self.alliance_id, as_of_date=self.date, include_history=_hist)
+        cur = self.cog.bear_cursor
+        cur.execute(
+            "SELECT id, raw_name FROM bear_player_damage WHERE hunt_id = ? AND fid IS NULL",
+            (self.selected_record_id,))
+        unmatched_rows = [{'id': r[0], 'raw_name': r[1] or ''} for r in cur.fetchall()]
+        if not unmatched_rows:
+            return 0
+        cur.execute(
+            "SELECT fid FROM bear_player_damage WHERE hunt_id = ? AND fid IS NOT NULL",
+            (self.selected_record_id,))
+        assigned_fids = {row[0] for row in cur.fetchall()}
+
+        candidates = []
+        for idx, row in enumerate(unmatched_rows):
+            for fid, nick, score in match_roster(row['raw_name'], self.roster):
+                candidates.append((score, idx, fid, nick))
+        candidates.sort(key=lambda c: (-c[0], c[1]))
+
+        assignments: dict = {}
+        for score, idx, fid, nick in candidates:
+            if score < MATCH_AUTO_CONFIRM or idx in assignments or fid in assigned_fids:
+                continue
+            assignments[idx] = (fid, nick, score)
+            assigned_fids.add(fid)
+        if not assignments:
+            return 0
+        for idx, (fid, nick, score) in assignments.items():
+            cur.execute(
+                "UPDATE bear_player_damage SET fid = ?, resolved_nickname = ?, match_score = ? WHERE id = ?",
+                (fid, nick, score, unmatched_rows[idx]['id']))
+        self.cog.bear_conn.commit()
+        return len(assignments)
+
+    async def _on_rematch(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        if not self.alliance_id or not self.selected_record_id:
-            await interaction.response.send_message(
-                f"{theme.warnIcon} Select an alliance and record first.", ephemeral=True
-            )
+        if not (self.alliance_id and self.selected_record_id and self.can_manage):
             return
-        allowed = await self.cog.check_bear_permission(interaction, self.alliance_id, "manage")
-        if not allowed:
-            return
-        _, unmatched = self._player_counts()
-        if not unmatched:
-            await interaction.response.send_message(
-                f"{theme.verifiedIcon} This record has no unmatched rows.", ephemeral=True
-            )
-            return
-        view = FixUnmatchedView(
-            cog=self.cog,
-            alliance_id=self.alliance_id,
-            hunt_id=self.selected_record_id,
-            parent_view=self,
-            original_user_id=self.original_user_id,
-        )
-        await interaction.response.edit_message(content=None, embed=view.build_embed(), view=view)
+        resolved = self._do_rematch()
+        if resolved:
+            self._note = f"{theme.verifiedIcon} Re-matched {resolved} row(s) against the roster."
+        else:
+            self._note = f"{theme.warnIcon} No new confident matches. Edit unmatched rows individually."
+        await self.refresh(interaction)
 
-    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger, emoji=theme.trashIcon, row=2)
-    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_delete(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        if not self.alliance_id or not self.selected_record_id:
-            await interaction.response.send_message(
-                f"{theme.warnIcon} Select an alliance and record first.", ephemeral=True
-            )
+        if not (self.alliance_id and self.selected_record_id and self.can_manage):
             return
-
-        allowed = await self.cog.check_bear_permission(interaction, self.alliance_id, "manage")
-        if not allowed:
-            return
-
-        # Delete the record
         try:
             self.cog.bear_cursor.execute(
-                "DELETE FROM bear_hunts WHERE id = ?", (self.selected_record_id,)
-            )
+                "DELETE FROM bear_hunts WHERE id = ?", (self.selected_record_id,))
             self.cog.bear_conn.commit()
         except Exception as e:
             logger.error(f"Failed to delete record: {e}")
             print(f"[ERROR] Failed to delete record: {e}")
             await interaction.response.send_message(
-                f"{theme.deniedIcon} Failed to delete record.", ephemeral=True
-            )
+                f"{theme.deniedIcon} Failed to delete hunt.", ephemeral=True)
             return
-
         self.selected_record_id = None
         self.date = self.hunting_trap = self.rallies = self.total_damage = None
+        self.players = []
+        self._load_records()
+        self._build_components()
+        await interaction.response.edit_message(content=None, view=self, embed=self.build_record_embed())
 
-        # Refresh record list
-        await self.on_alliance_selected(interaction)
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=2)
-    async def back_to_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def _on_back(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        await self.cog.show_bear_track_menu(interaction)
-
-
-class RecordFilterModal(discord.ui.Modal):
-    """Filter damage records by trap, month, year."""
-
-    def __init__(self, parent_view: BearDamageEditView):
-        super().__init__(title="Filter Damage Records")
-        self.parent_view = parent_view
-
-        self.trap_input = discord.ui.TextInput(
-            label="Trap Number (1 or 2)", required=False,
-            placeholder="Leave empty for no trap filter"
-        )
-        self.month_input = discord.ui.TextInput(
-            label="Month (1-12)", required=False,
-            placeholder="Leave empty for no month filter"
-        )
-        self.year_input = discord.ui.TextInput(
-            label="Year (YYYY)", required=False,
-            placeholder="Leave empty for no year filter"
-        )
-        self.add_item(self.trap_input)
-        self.add_item(self.month_input)
-        self.add_item(self.year_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        trap_val = self.trap_input.value.strip()
-        month_val = self.month_input.value.strip()
-        year_val = self.year_input.value.strip()
-
-        filters = []
-        params = [self.parent_view.alliance_id]
-
-        if trap_val:
-            filters.append("hunting_trap = ?")
-            params.append(trap_val)
-        if month_val:
-            filters.append("strftime('%m', date) = ?")
-            params.append(month_val.zfill(2))
-        if year_val:
-            filters.append("strftime('%Y', date) = ?")
-            params.append(year_val)
-
-        where_extra = (" AND " + " AND ".join(filters)) if filters else ""
-
-        try:
-            rows = self.parent_view.cog.bear_cursor.execute(
-                f"SELECT id, hunting_trap, date FROM bear_hunts "
-                f"WHERE alliance_id = ?{where_extra} ORDER BY date DESC LIMIT 25",
-                params
-            ).fetchall()
-        except Exception as e:
-            logger.error(f"Failed to fetch filtered records: {e}")
-            print(f"[ERROR] Failed to fetch filtered records: {e}")
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Failed to fetch filtered records.", ephemeral=True
-            )
-            return
-
-        if not rows:
-            self.parent_view.date_trap_select.options = [
-                discord.SelectOption(label="No records found", value="__none__")
-            ]
-            self.parent_view.date_trap_select.disabled = True
+        if self.chart_view is not None:
+            self.chart_view.alliance_id = self.alliance_id
+            self.chart_view._build_components()
+            await self.chart_view.try_redraw(interaction)
         else:
-            self.parent_view.date_trap_select.options = [
-                discord.SelectOption(label=f"{dt} - Trap {trap}", value=str(row_id))
-                for row_id, trap, dt in rows
-            ]
-            self.parent_view.date_trap_select.disabled = False
-
-        self.parent_view.selected_record_id = None
-        self.parent_view.date = self.parent_view.hunting_trap = None
-        self.parent_view.rallies = self.parent_view.total_damage = None
-
-        await interaction.response.edit_message(
-            view=self.parent_view, embed=self.parent_view.build_record_embed()
-        )
+            await self.cog.show_bear_track_menu(interaction)
 
 
 class RecordEditModal(discord.ui.Modal):
@@ -4202,326 +4609,713 @@ class RecordEditModal(discord.ui.Modal):
         self.parent_view.hunting_trap = new_trap
         self.parent_view.rallies = new_rallies
         self.parent_view.total_damage = new_damage
+        # Reload so the hunt dropdown label reflects an edited date/trap.
+        self.parent_view._load_records()
+        self.parent_view._build_components()
 
         embed = self.parent_view.build_record_embed()
-        embed.description = f"{theme.verifiedIcon} Record updated successfully."
 
         await interaction.response.edit_message(embed=embed, view=self.parent_view)
 
 
 # ---------------------------------------------------------------------------
-# FixUnmatchedView — resolve NULL-fid rows of a saved hunt
+# Player-damage helpers: per-hunt breakdown, same-trap deltas, aggregates
 # ---------------------------------------------------------------------------
 
-class FixUnmatchedView(discord.ui.View):
-    """Paginated picker for unmatched rows of a saved hunt."""
+def _previous_same_trap_hunt_id(cur, alliance_id, hunting_trap, date):
+    """ID of the most recent prior hunt of the SAME trap for this alliance, or
+    None. The UNIQUE(alliance_id, date, trap) constraint means `date <` is
+    enough — there's never a same-trap tie on the same date."""
+    cur.execute(
+        "SELECT id FROM bear_hunts "
+        "WHERE alliance_id = ? AND hunting_trap = ? AND date < ? "
+        "ORDER BY date DESC LIMIT 1",
+        (alliance_id, hunting_trap, date),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
 
-    PAGE_SIZE = 25
 
-    def __init__(self, *, cog, alliance_id: int, hunt_id: int,
-                 parent_view: 'BearDamageEditView', original_user_id: int):
-        super().__init__(timeout=7200)
-        self.cog = cog
-        self.alliance_id = alliance_id
-        self.hunt_id = hunt_id
-        self.parent_view = parent_view
-        self.original_user_id = original_user_id
-        self.roster = cog.get_alliance_roster(alliance_id)
-        self.page = 0
-        self.rows: list[dict] = []
-        # One-shot rematch summary, cleared by build_embed.
-        self._rematch_result: tuple[int, int] | None = None
-        self._load_rows()
-        self._build_components()
-
-    def _load_rows(self):
-        cur = self.cog.bear_cursor
+def _compute_player_deltas(cur, *, alliance_id, hunt_id, hunting_trap, date):
+    """Matched players of `hunt_id`, each with a %-change vs their damage in
+    the most recent prior SAME-trap hunt. Players absent from that baseline get
+    pct=None (new/returning) — we never compare across traps or reach further
+    back than the immediately-previous same-trap hunt. Returns (players, prev_id)."""
+    cur.execute(
+        "SELECT fid, resolved_nickname, damage, rank FROM bear_player_damage "
+        "WHERE hunt_id = ? AND fid IS NOT NULL",
+        (hunt_id,),
+    )
+    players = [
+        {'fid': r[0], 'nickname': r[1] or str(r[0]), 'damage': int(r[2]), 'rank': r[3]}
+        for r in cur.fetchall()
+    ]
+    prev_id = _previous_same_trap_hunt_id(cur, alliance_id, hunting_trap, date)
+    prev_by_fid = {}
+    if prev_id is not None:
         cur.execute(
-            "SELECT id, raw_name, damage, rank FROM bear_player_damage "
-            "WHERE hunt_id = ? AND fid IS NULL ORDER BY damage DESC",
-            (self.hunt_id,),
+            "SELECT fid, damage FROM bear_player_damage "
+            "WHERE hunt_id = ? AND fid IS NOT NULL",
+            (prev_id,),
         )
-        self.rows = [
-            {'id': r[0], 'raw_name': r[1] or '', 'damage': int(r[2]), 'rank': r[3]}
-            for r in cur.fetchall()
-        ]
-        max_page = max(0, (len(self.rows) - 1) // self.PAGE_SIZE)
-        self.page = min(self.page, max_page)
+        prev_by_fid = {r[0]: int(r[1]) for r in cur.fetchall()}
+    for p in players:
+        base = prev_by_fid.get(p['fid'])
+        p['prev_damage'] = base
+        p['pct'] = ((p['damage'] - base) / base * 100.0) if base else None
+    players.sort(key=lambda p: (p['rank'] if p['rank'] is not None else 1 << 30, -p['damage']))
+    return players, prev_id
 
-    def _total_pages(self) -> int:
-        return max(1, -(-len(self.rows) // self.PAGE_SIZE))
+
+def _format_delta_pct(pct) -> str:
+    """Render a same-trap %-change badge, or a new/returning marker."""
+    if pct is None:
+        return f"{theme.newIcon}"
+    if pct > 0:
+        return f"{theme.upIcon} +{pct:.0f}%"
+    if pct < 0:
+        return f"{theme.downIcon} {pct:.0f}%"
+    return f"{theme.forwardIcon} 0%"
+
+
+def _build_player_breakdown_embed(*, alliance_name, hunting_trap, players, has_baseline):
+    """Channel-post embed listing each matched player's damage + same-trap delta."""
+    embed = discord.Embed(
+        title=f"{theme.membersIcon} {alliance_name} · Trap {hunting_trap} · Player Damage",
+        color=theme.emColor1,
+    )
+    lines = []
+    for p in players:
+        rank_str = f"`#{p['rank']}`" if p['rank'] is not None else "`#?`"
+        nick = _isolate_rtl(p['nickname'])
+        dmg = format_damage_for_embed(p['damage'])
+        line = f"{rank_str} {nick} — `{dmg}`"
+        if has_baseline:
+            line += f"  {_format_delta_pct(p['pct'])}"
+        lines.append(_ltr_line(line))
+    desc = "\n".join(lines)
+    if len(desc) > 4000:
+        desc = desc[:3990] + "\n…(truncated)"
+    embed.description = desc or "*No matched players in this hunt.*"
+    if has_baseline:
+        embed.set_footer(text=f"Change vs the previous Trap {hunting_trap} bear · 🆕 = new/returning this trap")
+    else:
+        embed.set_footer(text=f"No earlier Trap {hunting_trap} bear to compare against yet.")
+    return embed
+
+
+def _aggregate_leaderboard(cur, *, alliance_id, hunting_trap, from_date, to_date):
+    """Sum/avg damage per matched player over a window. `hunting_trap` may be
+    1, 2, or 'both'. Returns rows: (fid, nickname, hunts, total, avg)."""
+    sql = (
+        "SELECT bpd.fid, MAX(bpd.resolved_nickname), COUNT(*), "
+        "SUM(bpd.damage), AVG(bpd.damage) "
+        "FROM bear_player_damage bpd JOIN bear_hunts bh ON bh.id = bpd.hunt_id "
+        "WHERE bh.alliance_id = ? AND bpd.fid IS NOT NULL"
+    )
+    params: list = [alliance_id]
+    if hunting_trap != 'both':
+        sql += " AND bh.hunting_trap = ?"
+        params.append(int(hunting_trap))
+    if from_date:
+        sql += " AND bh.date >= ?"
+        params.append(from_date)
+    if to_date:
+        sql += " AND bh.date <= ?"
+        params.append(to_date)
+    sql += " GROUP BY bpd.fid ORDER BY SUM(bpd.damage) DESC"
+    cur.execute(sql, params)
+    return [
+        {'fid': r[0], 'nickname': r[1] or str(r[0]), 'hunts': int(r[2]),
+         'total': int(r[3]), 'avg': int(r[4])}
+        for r in cur.fetchall()
+    ]
+
+# ---------------------------------------------------------------------------
+# Shared player-entry resolution: match to roster, swap an existing match,
+# or look up an unknown ID via the player API and offer to add them.
+# ---------------------------------------------------------------------------
+
+def _write_match_to_row(view, *, row_id, fid, nick, damage, rank):
+    """Persist a player match. If another row in the hunt already holds this fid,
+    that row is freed back to unmatched first (the match 'moves' to this row).
+    row_id=None inserts a new row instead of updating."""
+    cur = view.cog.bear_cursor
+    conn = view.cog.bear_conn
+    try:
+        # Free any other row in this hunt currently holding the fid.
+        cur.execute(
+            "UPDATE bear_player_damage SET fid=NULL, resolved_nickname=NULL, match_score=NULL "
+            "WHERE hunt_id=? AND fid=? AND id != ?",
+            (view.hunt_id, fid, row_id if row_id is not None else -1))
+        if row_id is not None:
+            cur.execute(
+                "UPDATE bear_player_damage SET fid=?, resolved_nickname=?, damage=?, rank=?, match_score=? "
+                "WHERE id=?",
+                (fid, nick, damage, rank, 100, row_id))
+        else:
+            cur.execute(
+                "INSERT INTO bear_player_damage "
+                "(hunt_id, fid, raw_name, resolved_nickname, damage, rank, match_score) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (view.hunt_id, fid, nick, nick, damage, rank, 100))
+        conn.commit()
+        return True
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to write player match: {e}")
+        print(f"[ERROR] Failed to write player match: {e}")
+        return False
+
+
+def _fid_in_hunt(view, fid) -> bool:
+    """True if any row of the current hunt already holds this fid."""
+    row = view.cog.bear_cursor.execute(
+        "SELECT 1 FROM bear_player_damage WHERE hunt_id=? AND fid=? LIMIT 1",
+        (view.hunt_id, fid)).fetchone()
+    return row is not None
+
+
+async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, raw_name):
+    """Resolve `text` (a roster name or an ID) and apply it to the target row.
+    Known members match immediately (moving the match off any other row). An
+    unknown ID is looked up via the player API and offered for confirmation +
+    add-to-alliance. `view` must expose cog, alliance_id, hunt_id, roster,
+    original_user_id, and an async refresh()."""
+    text = (text or "").strip()
+    if not text:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} Enter an ID or name.", ephemeral=True)
+        return
+
+    if text.isdigit():
+        fid = int(text)
+        # Adding a brand-new row for someone already in the hunt would orphan
+        # their existing row — reject it (editing an existing row swaps instead).
+        if row_id is None and _fid_in_hunt(view, fid):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} ID `{fid}` is already in this hunt.", ephemeral=True)
+            return
+        roster_nick = next((n for f, n in view.roster if f == fid), None)
+        if roster_nick is not None:
+            if _write_match_to_row(view, row_id=row_id, fid=fid, nick=roster_nick,
+                                   damage=damage, rank=rank):
+                await view.refresh(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Failed to update row.", ephemeral=True)
+            return
+        # Not a current member of this alliance — is the ID known elsewhere?
+        other = view.cog.users_cursor.execute(
+            "SELECT nickname, alliance FROM users WHERE fid = ?", (fid,)).fetchone()
+        if other and other[1] and str(other[1]) != str(view.alliance_id):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} ID `{fid}` (`{other[0]}`) belongs to another alliance "
+                f"on the bot. Moving members between alliances isn't enabled.",
+                ephemeral=True)
+            return
+        await _offer_api_add(interaction, view, row_id=row_id, fid=fid,
+                             damage=damage, rank=rank, raw_name=raw_name)
+        return
+
+    # Name entered — fuzzy-match the roster only (can't API-lookup by name).
+    fid, nick, _ = _resolve_player(text, view.roster)
+    if fid is None:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} No roster match for `{text}`. Enter the player's **ID** "
+            f"to look them up and add them.", ephemeral=True)
+        return
+    if row_id is None and _fid_in_hunt(view, fid):
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} `{nick}` (ID {fid}) is already in this hunt.", ephemeral=True)
+        return
+    if _write_match_to_row(view, row_id=row_id, fid=fid, nick=nick, damage=damage, rank=rank):
+        await view.refresh(interaction)
+    else:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} Failed to update row.", ephemeral=True)
+
+
+async def _offer_api_add(interaction, view, *, row_id, fid, damage, rank, raw_name):
+    """Look up an unknown fid via the player API and show a confirm card."""
+    await interaction.response.defer()
+    try:
+        result = await LoginHandler().fetch_player_data(str(fid))
+    except Exception as e:
+        logger.error(f"Player lookup failed for {fid}: {e}")
+        print(f"[ERROR] Player lookup failed for {fid}: {e}")
+        await interaction.followup.send(
+            f"{theme.deniedIcon} Lookup failed for ID `{fid}`. Try again later.", ephemeral=True)
+        return
+    if result.get('status') != 'success' or not result.get('data'):
+        reason = {'rate_limited': "API rate limit reached — try again shortly.",
+                  'not_found': f"No player found with ID `{fid}`."}.get(
+            result.get('status') or '', result.get('error_message') or "Lookup failed.")
+        await interaction.followup.send(f"{theme.deniedIcon} {reason}", ephemeral=True)
+        return
+    data = result['data']
+    confirm = PlayerAddConfirmView(
+        view=view, row_id=row_id, fid=fid, player_data=data,
+        damage=damage, rank=rank, raw_name=raw_name)
+    await interaction.edit_original_response(embed=confirm.build_embed(), view=confirm)
+
+
+class PlayerAddConfirmView(discord.ui.View):
+    """Confirm adding a looked-up player to the alliance and matching the row."""
+
+    def __init__(self, *, view, row_id, fid, player_data, damage, rank, raw_name):
+        super().__init__(timeout=120)
+        self.parent = view
+        self.original_user_id = view.original_user_id
+        self.row_id = row_id
+        self.fid = fid
+        self.pdata = player_data
+        self.damage = damage
+        self.rank = rank
+        self.raw_name = raw_name or ""
+        confirm_btn = discord.ui.Button(label="Confirm & Add", emoji=theme.verifiedIcon,
+                                        style=discord.ButtonStyle.success)
+        confirm_btn.callback = self._on_confirm
+        cancel_btn = discord.ui.Button(label="Cancel", emoji=theme.deniedIcon,
+                                       style=discord.ButtonStyle.secondary)
+        cancel_btn.callback = self._on_cancel
+        self.add_item(confirm_btn)
+        self.add_item(cancel_btn)
+
+    def _nickname(self):
+        return self.pdata.get('nickname') or str(self.fid)
 
     def build_embed(self) -> discord.Embed:
-        description = (
-            "Pick an unmatched row to assign it to a roster member, or "
-            "leave the player field blank in the modal to delete it. "
-            "**Re-match against roster** retries the auto-matcher against "
-            "the current roster — useful after adding new alliance members."
-        )
-        if self._rematch_result is not None:
-            resolved, remaining = self._rematch_result
-            self._rematch_result = None
-            if resolved:
-                banner = (
-                    f"{theme.verifiedIcon} Re-matched **{resolved}** row"
-                    f"{'s' if resolved != 1 else ''} against the roster. "
-                    f"**{remaining}** still unmatched."
-                )
-            else:
-                banner = (
-                    f"{theme.warnIcon} No additional rows could be matched "
-                    f"against the current roster (need a confident ≥90% "
-                    f"match). **{remaining}** still unmatched — pick rows "
-                    f"individually below."
-                )
-            description = banner + "\n\n" + description
+        nick = self._nickname()
+        level = format_furnace_level(self.pdata.get('stove_lv', '?'))
+        kid = self.pdata.get('kid', '?')
         embed = discord.Embed(
-            title=f"{theme.warnIcon} Fix Unmatched Rows",
-            description=description,
-            color=theme.emColor1,
-        )
-        if not self.rows:
-            embed.description += f"\n\n{theme.verifiedIcon} All rows are matched."
-            return embed
-
-        start = self.page * self.PAGE_SIZE
-        end = min(start + self.PAGE_SIZE, len(self.rows))
-        lines = []
-        for r in self.rows[start:end]:
-            rank_str = f"**#{r['rank']}**" if r['rank'] is not None else "**?**"
-            raw = r['raw_name'] or "(unreadable)"
-            lines.append(_ltr_line(
-                f"{rank_str} `{raw}` — `{format_damage_for_embed(r['damage'])}`"
-            ))
-        total_pages = self._total_pages()
-        header = (
-            f"Unmatched {start + 1}-{end} of {len(self.rows)}"
-            if total_pages > 1 else f"Unmatched ({len(self.rows)})"
-        )
-        value = "\n".join(lines)
-        if len(value) > 1024:
-            value = value[:1010] + "\n…(truncated)"
-        embed.add_field(name=header, value=value, inline=False)
+            title=f"{theme.userIcon} Add Player to Alliance?",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"**{theme.userIcon} Name:** {_isolate_rtl(nick)}\n"
+                f"**{theme.fidIcon} ID:** `{self.fid}`\n"
+                f"**{theme.levelIcon} Furnace:** `{level}`\n"
+                f"**{theme.globeIcon} State:** `{kid}`\n"
+                f"{theme.lowerDivider}\n"
+                f"This will add them to **this alliance** and match the bear row."),
+            color=theme.emColor1)
+        # Soft warning when the looked-up name doesn't resemble the OCR'd name.
+        # Skip it when raw_name is a typed ID (Add-by-ID) rather than an OCR name.
+        if (self.raw_name and not self.raw_name.isdigit()
+                and name_match_score(self.raw_name, [(self.fid, nick)]) < 60):
+            embed.add_field(
+                name=f"{theme.warnIcon} Name mismatch",
+                value=f"OCR read `{self.raw_name}` but this ID is `{nick}`. "
+                      f"Confirm only if you're sure it's the right player.",
+                inline=False)
+        # Show the player's profile picture (not the FC-level image) so the
+        # admin can visually confirm it's the right person.
+        avatar = self.pdata.get('avatar_image')
+        if isinstance(avatar, str) and avatar.startswith("http"):
+            embed.set_thumbnail(url=avatar)
         return embed
 
-    def _build_components(self):
-        self.clear_items()
-        if self.rows:
-            start = self.page * self.PAGE_SIZE
-            end = min(start + self.PAGE_SIZE, len(self.rows))
-            options = []
-            for i, r in enumerate(self.rows[start:end], start=start):
-                rank_part = f"#{r['rank']}" if r['rank'] is not None else "?"
-                raw = r['raw_name'] or "(unreadable)"
-                label = _ltr_line(f"{rank_part} {raw}")[:100]
-                desc = format_damage_for_embed(r['damage'])[:100]
-                options.append(discord.SelectOption(label=label, value=str(i), description=desc))
-            select = discord.ui.Select(
-                placeholder="Pick a row to fix…",
-                options=options,
-                row=0,
-            )
-            select.callback = self._on_row_selected
-            self.add_item(select)
-
-        rematch_btn = discord.ui.Button(
-            label="Re-match against roster",
-            emoji=theme.refreshIcon,
-            style=discord.ButtonStyle.primary, row=1,
-        )
-        rematch_btn.callback = self._on_rematch
-        self.add_item(rematch_btn)
-
-        back_btn = discord.ui.Button(
-            label="Back", emoji=theme.backIcon,
-            style=discord.ButtonStyle.secondary, row=1,
-        )
-        back_btn.callback = self._on_back
-        self.add_item(back_btn)
-
-        total_pages = self._total_pages()
-        if total_pages > 1:
-            prev_btn = discord.ui.Button(
-                label="Prev", emoji=theme.prevIcon,
-                style=discord.ButtonStyle.secondary, row=2,
-                disabled=(self.page == 0),
-            )
-            prev_btn.callback = self._on_prev
-            next_btn = discord.ui.Button(
-                label="Next", emoji=theme.nextIcon,
-                style=discord.ButtonStyle.secondary, row=2,
-                disabled=(self.page >= total_pages - 1),
-            )
-            next_btn.callback = self._on_next
-            self.add_item(prev_btn)
-            self.add_item(next_btn)
-
-    async def _on_row_selected(self, interaction: discord.Interaction):
+    async def _on_confirm(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        idx = int(interaction.data['values'][0])
-        if idx >= len(self.rows):
+        cog = self.parent.cog
+        nick = self._nickname()
+        try:
+            cog.users_conn.execute(
+                "INSERT OR REPLACE INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (self.fid, nick, self.pdata.get('stove_lv', 0), str(self.pdata.get('kid', '')),
+                 self.pdata.get('stove_lv_content', ''), str(self.parent.alliance_id)))
+            cog.users_conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to add user {self.fid}: {e}")
+            print(f"[ERROR] Failed to add user {self.fid}: {e}")
             await interaction.response.send_message(
-                f"{theme.deniedIcon} That row no longer exists.", ephemeral=True
-            )
+                f"{theme.deniedIcon} Failed to add the player to the alliance.", ephemeral=True)
             return
-        await interaction.response.send_modal(FixUnmatchedModal(self, self.rows[idx]))
+        # Refresh the roster cache so the new member resolves immediately.
+        self.parent.roster = cog.get_alliance_roster(self.parent.alliance_id)
+        if not _write_match_to_row(self.parent, row_id=self.row_id, fid=self.fid,
+                                   nick=nick, damage=self.damage, rank=self.rank):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Player added, but matching the row failed.", ephemeral=True)
+            return
+        await self.parent.refresh(interaction)
 
-    async def _on_rematch(self, interaction: discord.Interaction):
+    async def _on_cancel(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        resolved = self._do_rematch()
-        # Snapshot remaining BEFORE refresh reloads `self.rows`.
-        self._rematch_result = (resolved, max(0, len(self.rows) - resolved))
-        await self.refresh(interaction)
-
-    def _do_rematch(self) -> int:
-        """Re-run roster match on unmatched rows; persist auto-confirmed
-        only. Returns the count resolved."""
-        self.roster = self.cog.get_alliance_roster(self.alliance_id)
-
-        cur = self.cog.bear_cursor
-        cur.execute(
-            "SELECT fid FROM bear_player_damage "
-            "WHERE hunt_id = ? AND fid IS NOT NULL",
-            (self.hunt_id,),
-        )
-        assigned_fids: set = {row[0] for row in cur.fetchall()}
-
-        candidates = []
-        for row_idx, row in enumerate(self.rows):
-            for fid, nick, score in match_roster(row['raw_name'], self.roster):
-                candidates.append((score, row_idx, fid, nick))
-        candidates.sort(key=lambda c: (-c[0], c[1]))
-
-        row_assignments: dict[int, tuple[int, str, int]] = {}
-        for score, row_idx, fid, nick in candidates:
-            if score < MATCH_AUTO_CONFIRM:
-                continue
-            if row_idx in row_assignments or fid in assigned_fids:
-                continue
-            row_assignments[row_idx] = (fid, nick, score)
-            assigned_fids.add(fid)
-
-        if not row_assignments:
-            return 0
-
-        for row_idx, (fid, nick, score) in row_assignments.items():
-            cur.execute(
-                "UPDATE bear_player_damage SET fid = ?, "
-                "resolved_nickname = ?, match_score = ? WHERE id = ?",
-                (fid, nick, score, self.rows[row_idx]['id']),
-            )
-        self.cog.bear_conn.commit()
-        return len(row_assignments)
-
-    async def _on_prev(self, interaction: discord.Interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
-        if self.page > 0:
-            self.page -= 1
-        await self.refresh(interaction)
-
-    async def _on_next(self, interaction: discord.Interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
-        if self.page < self._total_pages() - 1:
-            self.page += 1
-        await self.refresh(interaction)
-
-    async def _on_back(self, interaction: discord.Interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
-        await safe_edit_message(
-            interaction,
-            embed=self.parent_view.build_record_embed(),
-            view=self.parent_view,
-            content=None,
-        )
-
-    async def refresh(self, interaction: discord.Interaction):
-        self._load_rows()
-        self._build_components()
-        await safe_edit_message(
-            interaction, embed=self.build_embed(), view=self, content=None,
-        )
+        await self.parent.refresh(interaction)
 
 
-class FixUnmatchedModal(discord.ui.Modal):
-    """Resolve a single unmatched bear_player_damage row to a roster member,
-    or delete it when the player field is left blank."""
+class EditSavedPlayerModal(discord.ui.Modal):
+    """Edit a saved player row (player / damage / rank). Blank player deletes it."""
 
-    def __init__(self, parent_view: FixUnmatchedView, row: dict):
-        title = f"Fix Row · {format_damage_for_embed(row['damage'])}"
-        super().__init__(title=title[:45])
+    def __init__(self, parent_view: 'BearDamageEditView', row: dict):
+        super().__init__(title=f"Edit Player · {format_damage_for_embed(row['damage'])}"[:45])
         self.parent_view = parent_view
         self.row = row
         self.player_input = discord.ui.TextInput(
             label="Player (ID or name — blank to delete)",
-            default=row['raw_name'] or '',
-            required=False,
-            max_length=80,
-        )
+            default=(row['nickname'] or row['raw_name'] or ''), required=False, max_length=80)
+        self.damage_input = discord.ui.TextInput(
+            label="Damage", default=format_damage_for_embed(row['damage']),
+            required=True, max_length=30)
+        self.rank_input = discord.ui.TextInput(
+            label="Rank (optional)",
+            default=str(row['rank']) if row['rank'] is not None else "",
+            required=False, max_length=3)
         self.add_item(self.player_input)
+        self.add_item(self.damage_input)
+        self.add_item(self.rank_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         cur = self.parent_view.cog.bear_cursor
-        text = self.player_input.value.strip()
-        if not text:
+        conn = self.parent_view.cog.bear_conn
+        if not self.player_input.value.strip():
             try:
-                cur.execute(
-                    "DELETE FROM bear_player_damage WHERE id = ?", (self.row['id'],)
-                )
-                self.parent_view.cog.bear_conn.commit()
+                cur.execute("DELETE FROM bear_player_damage WHERE id = ?", (self.row['id'],))
+                conn.commit()
             except Exception as e:
-                logger.error(f"Failed to delete unmatched row {self.row['id']}: {e}")
+                conn.rollback()
+                logger.error(f"Failed to delete player row {self.row['id']}: {e}")
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} Failed to delete row.", ephemeral=True,
-                )
+                    f"{theme.deniedIcon} Failed to delete row.", ephemeral=True)
                 return
             await self.parent_view.refresh(interaction)
             return
-
-        fid, nick, candidates = _resolve_player(text, self.parent_view.roster)
-        if fid is None:
+        damage = bear_damage(self.damage_input.value)
+        if damage <= 0:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} No roster match for `{text}`. "
-                f"Try an ID or a closer spelling.",
-                ephemeral=True,
-            )
+                f"{theme.deniedIcon} Invalid damage value.", ephemeral=True)
             return
-
-        score = candidates[0][2] if candidates else None
-        # Folds the duplicate-fid check into the UPDATE's WHERE to dodge a SELECT/UPDATE race.
-        try:
-            cur.execute(
-                "UPDATE bear_player_damage "
-                "SET fid = ?, resolved_nickname = ?, match_score = ? "
-                "WHERE id = ? AND NOT EXISTS ("
-                "  SELECT 1 FROM bear_player_damage AS dup "
-                "  WHERE dup.hunt_id = ? AND dup.fid = ? AND dup.id != ?"
-                ")",
-                (fid, nick, score,
-                 self.row['id'],
-                 self.parent_view.hunt_id, fid, self.row['id']),
-            )
-            if cur.rowcount == 0:
-                self.parent_view.cog.bear_conn.rollback()
+        rank = None
+        rc = self.rank_input.value.strip()
+        if rc:
+            try:
+                rank = int(rc)
+            except ValueError:
                 await interaction.response.send_message(
-                    f"{theme.deniedIcon} `{nick}` (ID {fid}) is already in this hunt, "
-                    f"or the row no longer exists. Refresh and try again.",
-                    ephemeral=True,
-                )
+                    f"{theme.deniedIcon} Rank must be a whole number.", ephemeral=True)
                 return
-            self.parent_view.cog.bear_conn.commit()
-        except Exception as e:
-            self.parent_view.cog.bear_conn.rollback()
-            logger.error(f"Failed to resolve unmatched row {self.row['id']}: {e}")
+        await _resolve_and_apply(
+            interaction, self.parent_view, row_id=self.row['id'],
+            text=self.player_input.value, damage=damage, rank=rank,
+            raw_name=self.row.get('raw_name'))
+
+
+class AddSavedPlayerModal(discord.ui.Modal):
+    """Add a player row to a saved hunt (for players OCR missed entirely)."""
+
+    def __init__(self, parent_view: 'BearDamageEditView'):
+        super().__init__(title="Add Player")
+        self.parent_view = parent_view
+        self.player_input = discord.ui.TextInput(label="Player (ID or name)", required=True, max_length=80)
+        self.damage_input = discord.ui.TextInput(label="Damage", required=True, max_length=30)
+        self.rank_input = discord.ui.TextInput(label="Rank (optional)", required=False, max_length=3)
+        self.add_item(self.player_input)
+        self.add_item(self.damage_input)
+        self.add_item(self.rank_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        text = self.player_input.value.strip()
+        if not text:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} Failed to update row.", ephemeral=True,
-            )
+                f"{theme.deniedIcon} Player is required.", ephemeral=True)
             return
-        await self.parent_view.refresh(interaction)
+        damage = bear_damage(self.damage_input.value)
+        if damage <= 0:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Invalid damage value.", ephemeral=True)
+            return
+        rank = None
+        rc = self.rank_input.value.strip()
+        if rc:
+            try:
+                rank = int(rc)
+            except ValueError:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Rank must be a whole number.", ephemeral=True)
+                return
+        await _resolve_and_apply(
+            interaction, self.parent_view, row_id=None,
+            text=text, damage=damage, rank=rank, raw_name=text)
+
+
+# ---------------------------------------------------------------------------
+# BearLeaderboardView — top players by summed damage over a window
+# ---------------------------------------------------------------------------
+
+class BearLeaderboardView(discord.ui.View):
+    PAGE_SIZE = 15
+    SORT_LABELS = {'total': 'Total Damage', 'hunts': 'Hunts Attended', 'avg': 'Average Damage'}
+
+    def __init__(self, *, cog, original_user_id, alliance_id, alliance_name,
+                 hunting_trap, from_date, to_date, chart_view=None):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.original_user_id = original_user_id
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.hunting_trap = hunting_trap
+        self.from_date = from_date
+        self.to_date = to_date
+        self.chart_view = chart_view
+        self.page = 0
+        self.sort_mode = 'total'
+        self.entries = _aggregate_leaderboard(
+            cog.bear_cursor, alliance_id=alliance_id, hunting_trap=hunting_trap,
+            from_date=from_date, to_date=to_date)
+        self._apply_sort()
+        self._build_components()
+
+    def _apply_sort(self):
+        key = {'total': lambda e: e['total'], 'hunts': lambda e: e['hunts'],
+               'avg': lambda e: e['avg']}[self.sort_mode]
+        self.entries.sort(key=key, reverse=True)
+
+    def _total_pages(self) -> int:
+        return max(1, -(-len(self.entries) // self.PAGE_SIZE))
+
+    def build_embed(self) -> discord.Embed:
+        trap_label = "Both Traps" if self.hunting_trap == 'both' else f"Trap {self.hunting_trap}"
+        rng = f"{self.from_date} → {self.to_date}" if (self.from_date and self.to_date) else "All time"
+        embed = discord.Embed(
+            title=f"{theme.medalIcon} Top Players · {self.alliance_name} · {trap_label}",
+            color=theme.emColor1)
+        if not self.entries:
+            embed.description = "*No matched player damage in this range.*"
+            embed.set_footer(text=rng)
+            return embed
+        start = self.page * self.PAGE_SIZE
+        end = min(start + self.PAGE_SIZE, len(self.entries))
+        lines = []
+        for i, e in enumerate(self.entries[start:end], start=start + 1):
+            lines.append(_ltr_line(
+                f"`#{i}` {_isolate_rtl(e['nickname'])} — `{format_damage_for_embed(e['total'])}` "
+                f"· {e['hunts']} hunt(s) · avg `{format_damage_for_embed(e['avg'])}`"))
+        embed.description = "\n".join(lines)
+        foot = f"Sorted by {self.SORT_LABELS[self.sort_mode]} · {rng}"
+        if self._total_pages() > 1:
+            foot += f" · page {self.page + 1}/{self._total_pages()}"
+        embed.set_footer(text=foot)
+        return embed
+
+    def _build_components(self):
+        self.clear_items()
+        if self.entries:
+            start = self.page * self.PAGE_SIZE
+            end = min(start + self.PAGE_SIZE, len(self.entries))
+            opts = []
+            for e in self.entries[start:end]:
+                # IDs live here (not in the main list) so duplicate-name players
+                # are still distinguishable when drilling into history.
+                opts.append(discord.SelectOption(
+                    label=_ltr_line(e['nickname'])[:100], value=str(e['fid']),
+                    description=f"ID {e['fid']} · {format_damage_for_embed(e['total'])} total · {e['hunts']} hunts"[:100]))
+            sel = discord.ui.Select(placeholder="View a player's history…", options=opts, row=0)
+            sel.callback = self._on_player_selected
+            self.add_item(sel)
+        # Row 1: pagination right below the dropdown (Prev · Page X/Y · Next).
+        total_pages = self._total_pages()
+        if total_pages > 1:
+            prev_btn = discord.ui.Button(label="Prev", emoji=theme.prevIcon,
+                style=discord.ButtonStyle.secondary, row=1, disabled=(self.page == 0))
+            prev_btn.callback = self._on_prev
+            page_lbl = discord.ui.Button(label=f"Page {self.page + 1}/{total_pages}",
+                style=discord.ButtonStyle.secondary, row=1, disabled=True)
+            next_btn = discord.ui.Button(label="Next", emoji=theme.nextIcon,
+                style=discord.ButtonStyle.secondary, row=1,
+                disabled=(self.page >= total_pages - 1))
+            next_btn.callback = self._on_next
+            self.add_item(prev_btn)
+            self.add_item(page_lbl)
+            self.add_item(next_btn)
+        # Row 2: sort toggles — active mode highlighted.
+        for mode, label in (('total', "Sort: Total"), ('hunts', "Sort: Hunts"), ('avg', "Sort: Average")):
+            btn = discord.ui.Button(
+                label=label, row=2,
+                style=(discord.ButtonStyle.success if self.sort_mode == mode
+                       else discord.ButtonStyle.secondary))
+            btn.callback = self._make_sort_cb(mode)
+            self.add_item(btn)
+        # Row 3: Back (kept apart from pagination to avoid confusion).
+        back_btn = discord.ui.Button(label="Back", emoji=theme.backIcon,
+                                     style=discord.ButtonStyle.secondary, row=3)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    def _make_sort_cb(self, mode):
+        async def _cb(interaction: discord.Interaction):
+            if not await check_interaction_user(interaction, self.original_user_id):
+                return
+            if self.sort_mode == mode:
+                await interaction.response.defer()
+                return
+            self.sort_mode = mode
+            self.page = 0
+            self._apply_sort()
+            self._build_components()
+            await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        return _cb
+
+    async def _on_player_selected(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        fid = int(interaction.data['values'][0])
+        view = PlayerHistoryView(
+            cog=self.cog, original_user_id=self.original_user_id,
+            alliance_id=self.alliance_id, alliance_name=self.alliance_name,
+            fid=fid, hunting_trap=self.hunting_trap, parent_view=self)
+        await view.render(interaction)
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.page = max(0, self.page - 1)
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.page = min(self._total_pages() - 1, self.page + 1)
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        # Return to the exact chart view we came from (preserves trap + range,
+        # including All Time, which a rebuilt view would otherwise reset to 3m).
+        if self.chart_view is not None:
+            await self.chart_view.try_redraw(interaction)
+        else:
+            await self.cog.show_bear_track_menu(interaction)
+
+
+# ---------------------------------------------------------------------------
+# PlayerHistoryView — one player's damage history + personal chart
+# ---------------------------------------------------------------------------
+
+class PlayerHistoryView(discord.ui.View):
+    def __init__(self, *, cog, original_user_id, alliance_id, alliance_name, fid,
+                 hunting_trap, parent_view):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.original_user_id = original_user_id
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.fid = fid
+        # History defaults to a single trap; 'both' overlays the two series.
+        self.hunting_trap = hunting_trap if hunting_trap in (1, 2, '1', '2') else 'both'
+        self.parent_view = parent_view
+        self.nickname = str(fid)
+        self.records: list = []
+        self._load()
+        self._build_components()
+
+    def _load(self):
+        cur = self.cog.bear_cursor
+        sql = ("SELECT bh.date, bh.hunting_trap, bpd.damage, bpd.rank, bpd.resolved_nickname "
+               "FROM bear_player_damage bpd JOIN bear_hunts bh ON bh.id = bpd.hunt_id "
+               "WHERE bpd.fid = ? AND bh.alliance_id = ?")
+        params: list = [self.fid, self.alliance_id]
+        if self.hunting_trap != 'both':
+            sql += " AND bh.hunting_trap = ?"
+            params.append(int(self.hunting_trap))
+        sql += " ORDER BY bh.date ASC"
+        cur.execute(sql, params)
+        self.records = cur.fetchall()
+        if self.records:
+            self.nickname = self.records[-1][4] or str(self.fid)
+
+    def _build_components(self):
+        self.clear_items()
+        for trap, label in ((1, "Trap 1"), (2, "Trap 2"), ('both', "Both")):
+            btn = discord.ui.Button(
+                label=label, row=0,
+                style=(discord.ButtonStyle.success if self.hunting_trap == trap
+                       else discord.ButtonStyle.secondary))
+            btn.callback = self._make_trap_cb(trap)
+            self.add_item(btn)
+        back_btn = discord.ui.Button(label="Back", emoji=theme.backIcon,
+                                     style=discord.ButtonStyle.secondary, row=1)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    def build(self):
+        trap_label = "Both Traps" if self.hunting_trap == 'both' else f"Trap {self.hunting_trap}"
+        embed = discord.Embed(
+            title=f"{theme.chartIcon} {_isolate_rtl(self.nickname)} · {trap_label} History",
+            color=theme.emColor1)
+        if not self.records:
+            embed.description = "*No recorded hunts for this player in this filter.*"
+            return embed, None
+        # Same-trap delta within the listing.
+        lines = []
+        last_by_trap: dict = {}
+        for dt, trap, dmg, rank, _ in self.records:
+            rank_str = f"#{rank}" if rank is not None else "#?"
+            prev = last_by_trap.get(trap)
+            delta = ""
+            if prev:
+                pct = (dmg - prev) / prev * 100.0 if prev else 0
+                delta = f"  {_format_delta_pct(pct)}"
+            last_by_trap[trap] = dmg
+            lines.append(_ltr_line(
+                f"`{dt}` · Trap {trap} - {rank_str} — `{format_damage_for_embed(dmg)}`{delta}"))
+        embed.description = "\n".join(lines[-25:])
+        values = [int(r[2]) for r in self.records]
+        total = sum(values)
+        avg = total // len(values)
+        embed.set_footer(
+            text=f"{len(self.records)} hunt(s) · total {format_damage_for_embed(total)} "
+                 f"· avg {format_damage_for_embed(avg)}")
+        # Chart: one series per trap when 'both', else a single line.
+        if self.hunting_trap == 'both':
+            series = []
+            for t in (1, 2):
+                pts = [(datetime.strptime(r[0], "%Y-%m-%d"), int(r[2]))
+                       for r in self.records if r[1] == t]
+                if pts:
+                    series.append((f"Trap {t}", [p[0] for p in pts], [p[1] for p in pts]))
+            file = _render_damage_chart(
+                None, None, series=series,
+                title=f"{self.nickname} Damage Over Time", ylabel="Damage")
+        else:
+            dates = [datetime.strptime(r[0], "%Y-%m-%d") for r in self.records]
+            file = _render_damage_chart(
+                dates, values, title=f"{self.nickname} Damage Over Time", ylabel="Damage")
+        if file is not None:
+            embed.set_image(url="attachment://plot.png")
+        return embed, file
+
+    def _make_trap_cb(self, trap):
+        async def _cb(interaction: discord.Interaction):
+            if not await check_interaction_user(interaction, self.original_user_id):
+                return
+            if self.hunting_trap == trap:
+                await interaction.response.defer()
+                return
+            self.hunting_trap = trap
+            self._load()
+            self._build_components()
+            await self.render(interaction)
+        return _cb
+
+    async def render(self, interaction: discord.Interaction):
+        embed, file = self.build()
+        await interaction.response.edit_message(
+            embed=embed, view=self, attachments=[file] if file else [])
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.parent_view._build_components()
+        await interaction.response.edit_message(
+            embed=self.parent_view.build_embed(), view=self.parent_view, attachments=[])
 
 
 # ---------------------------------------------------------------------------
@@ -4543,23 +5337,30 @@ class BearSettingsView(discord.ui.View):
 
         has_alliance = self.alliance_id is not None
 
-        timeout_btn = discord.ui.Button(label="Session Timeout", style=discord.ButtonStyle.primary, emoji=theme.hourglassIcon, row=2, disabled=not has_alliance)
+        timeout_btn = discord.ui.Button(label="Session Timeout", style=discord.ButtonStyle.primary, emoji=theme.hourglassIcon, row=1, disabled=not has_alliance)
         timeout_btn.callback = self._session_timeout_callback
         self.add_item(timeout_btn)
 
-        auto_delete_btn = discord.ui.Button(label="Toggle Auto-Delete", style=discord.ButtonStyle.primary, emoji=theme.trashIcon, row=2, disabled=not has_alliance)
+        auto_delete_btn = discord.ui.Button(label="Toggle Auto-Delete", style=discord.ButtonStyle.primary, emoji=theme.trashIcon, row=1, disabled=not has_alliance)
         auto_delete_btn.callback = self._toggle_auto_delete_callback
         self.add_item(auto_delete_btn)
 
-        add_perm_btn = discord.ui.Button(label="Toggle Add Permission", style=discord.ButtonStyle.primary, emoji=theme.lockIcon, row=2, disabled=not has_alliance)
+        add_perm_btn = discord.ui.Button(label="Toggle Add Permission", style=discord.ButtonStyle.primary, emoji=theme.lockIcon, row=1, disabled=not has_alliance)
         add_perm_btn.callback = self._toggle_add_callback
         self.add_item(add_perm_btn)
 
-        view_perm_btn = discord.ui.Button(label="Toggle View Permission", style=discord.ButtonStyle.primary, emoji=theme.eyeIcon, row=2, disabled=not has_alliance)
+        view_perm_btn = discord.ui.Button(label="Toggle View Permission", style=discord.ButtonStyle.primary, emoji=theme.eyeIcon, row=1, disabled=not has_alliance)
         view_perm_btn.callback = self._toggle_view_callback
         self.add_item(view_perm_btn)
 
-        back_btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=3)
+        # History toggle sits to the left of Back on row 2 — it doesn't belong
+        # in the row-1 "Toggle X" cluster (it's an opt-in matching tweak, not a
+        # session/permission knob), but it also doesn't warrant its own row.
+        history_btn = discord.ui.Button(label="Toggle Name History Match", style=discord.ButtonStyle.primary, emoji=theme.listIcon, row=2, disabled=not has_alliance)
+        history_btn.callback = self._toggle_history_callback
+        self.add_item(history_btn)
+
+        back_btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=2)
         back_btn.callback = self._back_callback
         self.add_item(back_btn)
 
@@ -4567,17 +5368,19 @@ class BearSettingsView(discord.ui.View):
         embed = discord.Embed(
             title=f"{theme.settingsIcon} Bear Settings",
             description=(
-                f"Operational settings — session pacing, cleanup, and who "
-                f"can interact with the system. \n\n"
+                f"Operational settings — session pacing, cleanup, who "
+                f"can interact with the system and more. \n\n"
                 f"**Available Settings**\n"
                 f"{theme.upperDivider}\n"
                 f"{theme.hourglassIcon} **Session Timeout**\n"
-                f"└ Minutes to wait for more screenshots before finalising the event"
-                f"(1-60)\n\n"
+                f"└ Minutes to wait for more screenshots before finalising the event (1-60)\n\n"
                 f"{theme.trashIcon} **Toggle Auto-Delete**\n"
-                f"└ Delete uploaded screenshots after submit (needs **Manage Messages**)\n\n"
+                f"└ Delete uploaded screenshots after event submission\n\n"
                 f"{theme.lockIcon} **Toggle Permissions**\n"
-                f"└ Who can add hunts and view saved data\n"
+                f"└ Who can add hunts and view saved data\n\n"
+                f"{theme.listIcon} **Toggle Full Name History Match**\n"
+                f"└ Whether to match players by all their past names\n"
+                f"└ Their current & event-date names are always matched\n"
                 f"{theme.lowerDivider}"
             ),
             color=theme.emColor1
@@ -4589,11 +5392,13 @@ class BearSettingsView(discord.ui.View):
             add_text = "Admins only" if settings["admin_only_add"] else "Everyone"
             timeout_min = settings["session_timeout_min"]
             auto_delete_text = "On" if settings["auto_delete_screenshots"] else "Off"
+            history_text = "On" if settings["match_all_history"] else "Off"
 
             current_settings = (
                 f"{theme.upperDivider}\n"
                 f"**Session Timeout:** {timeout_min} min\n"
                 f"**Auto-Delete Screenshots:** {auto_delete_text}\n"
+                f"**Full Name History Match:** {history_text}\n"
                 f"**Add Permission:** {add_text}\n"
                 f"**View Permission:** {view_text}\n"
                 f"{theme.lowerDivider}"
@@ -4633,6 +5438,20 @@ class BearSettingsView(discord.ui.View):
         embed = self._build_embed()
         on_off = "On" if new_value else "Off"
         embed.description += f"\n{theme.verifiedIcon} Auto-delete is now **{on_off}**."
+        await safe_edit_message(interaction, embed=embed, view=self, content=None)
+
+    async def _toggle_history_callback(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        allowed = await self.cog.check_bear_permission(interaction, self.alliance_id, "manage")
+        if not allowed:
+            return
+        settings = self.cog.get_bear_settings(self.alliance_id)
+        new_value = 0 if settings["match_all_history"] else 1
+        self.cog.update_bear_setting(self.alliance_id, "bear_match_all_history", new_value)
+        embed = self._build_embed()
+        on_off = "On" if new_value else "Off"
+        embed.description += f"\n{theme.verifiedIcon} Full Name History Match is now **{on_off}**."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
 
     async def _toggle_add_callback(self, interaction: discord.Interaction):
@@ -5425,15 +6244,37 @@ class DataSubmit:
                      f"resolve from Bear Damage Records when ready."
             )
 
+        # Build the per-player breakdown alongside the chart so both ride in a
+        # single message (two embeds + the chart attachment). Previously this
+        # posted as a separate follow-up, which split the submission across two
+        # messages and made the chart-vs-breakdown relationship harder to read.
+        breakdown_embed = None
+        if matched:
+            try:
+                players, prev_id = _compute_player_deltas(
+                    self.bear_cursor, alliance_id=alliance_id, hunt_id=hunt_id,
+                    hunting_trap=hunting_trap, date=date,
+                )
+                if players:
+                    breakdown_embed = _build_player_breakdown_embed(
+                        alliance_name=alliance_name, hunting_trap=hunting_trap,
+                        players=players, has_baseline=prev_id is not None,
+                    )
+            except Exception as e:
+                logger.error(f"Failed to build player breakdown: {e}")
+                print(f"[ERROR] Failed to build player breakdown: {e}")
+        embeds = [embed] + ([breakdown_embed] if breakdown_embed else [])
+
         try:
             await interaction.edit_original_response(
-                embed=embed, attachments=[image_file] if image_file else [], view=None,
+                embeds=embeds,
+                attachments=[image_file] if image_file else [], view=None,
             )
         except discord.NotFound:
             # Original response unavailable (e.g. OCR flow used channel.send).
             try:
                 await interaction.followup.send(
-                    embed=embed, file=image_file if image_file else None,
+                    embeds=embeds, file=image_file if image_file else None,
                 )
             except Exception as e:
                 logger.error(f"Failed to send submission result: {e}")

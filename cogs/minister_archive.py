@@ -468,9 +468,9 @@ class MinisterArchive(commands.Cog):
                 f"{theme.middleDivider}\n\n"
                 f"{theme.saveIcon} **Save Current Schedule**\n"
                 f"└ Archive current minister appointments\n\n"
-                f"{theme.documentIcon} **View Archives**\n"
+                f"{theme.archiveIcon} **View Archives**\n"
                 f"└ Browse previously saved archives\n\n"
-                f"{theme.listIcon} **Current Change History**\n"
+                f"{theme.documentIcon} **Current Change History**\n"
                 f"└ See all changes made since the last archive\n\n"
                 f"{theme.lowerDivider}"
             ),
