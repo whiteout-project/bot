@@ -2771,15 +2771,6 @@ class RetryOcrLanguagePicker(discord.ui.View):
 
 
 class RetryOcrPreviewView(discord.ui.View):
-    """Preview a Retry-OCR proposed merge before applying it.
-
-    Retry OCR is experimental by nature ("does this engine help with this
-    script?"). Applying immediately can pollute a clean review with garbage
-    rows if the chosen engine misreads — see the devanagari-on-Latin case where
-    the alliance total parsed as a player row. This view shows the diff and
-    lets the user accept or reject; no destructive action without confirmation.
-    """
-
     def __init__(self, parent_review, new_primary_lang: str, proposal: dict):
         super().__init__(timeout=300)
         self.parent_review = parent_review
@@ -2956,8 +2947,6 @@ class BearHuntReviewView(discord.ui.View):
                 f"alliance's player names — adjust under "
                 f"**Settings → Bear Tracking → OCR Languages**.*"
             )
-        # Row-edit instruction reads as a plain header line rather than a
-        # button-card, because Edit a row is the dropdown above, not a button.
         parts.append(
             "*Select a player to edit in the drop-down; "
             "clear the name to delete the row.*"
@@ -3338,8 +3327,6 @@ class BearHuntReviewView(discord.ui.View):
         # Strip the alliance-total damage so it doesn't merge as a row.
         new_rows_by_damage.pop(new_total, None)
 
-        # Compute proposed changes (pure — no mutation yet). The actual merge
-        # happens only if the user clicks Apply on the preview view below.
         proposal = self._build_retry_proposal(
             new_rows_by_damage, new_trap, new_rallies, new_total,
         )
@@ -3360,11 +3347,6 @@ class BearHuntReviewView(discord.ui.View):
         await interaction.edit_original_response(content=preview, view=view)
 
     def _build_retry_proposal(self, new_rows_by_damage, new_trap, new_rallies, new_total):
-        """Compute what a Retry-OCR merge would do without mutating state.
-
-        Pure function of inputs + self.rows/self.hunt_meta. Returns a dict
-        consumed by `_apply_retry_proposal` and `_format_retry_proposal_preview`.
-        """
         strong_statuses = {'auto', 'manual'}
         existing_by_damage = {r['damage']: r for r in self.rows}
         rows_to_add = []
@@ -3395,12 +3377,7 @@ class BearHuntReviewView(discord.ui.View):
         }
 
     def _apply_retry_proposal(self, proposal):
-        """Apply a proposal built by `_build_retry_proposal`.
-
-        Mutates self.rows + self.hunt_meta; re-sorts, re-ranks, rebuilds
-        components. Returns a counts dict.
-        """
-        # Upgrades first — their captured indices into self.rows must still be valid.
+        # Upgrades first — captured indices into self.rows must still be valid.
         rows_upgraded = 0
         for idx, new_row, _existing in proposal['rows_to_upgrade']:
             existing = self.rows[idx]
@@ -3427,7 +3404,6 @@ class BearHuntReviewView(discord.ui.View):
         return {'rows_added': rows_added, 'rows_upgraded': rows_upgraded}
 
     def _format_retry_proposal_preview(self, new_primary_lang, proposal):
-        """Render a Retry-OCR proposal as a Discord message body (≤2000 chars)."""
         n_add = len(proposal['rows_to_add'])
         n_up = len(proposal['rows_to_upgrade'])
         meta = proposal['hunt_meta_updates']
@@ -4214,14 +4190,10 @@ class BearDamageEditView(discord.ui.View):
                      else "Pick an alliance first.")),
                 color=theme.emColor1)
 
-        # Description: one-shot warning/update note above, button descriptors
-        # below — mirrors the Review Bear Hunt layout.
         parts = []
         if self._note:
             parts.append(self._note)
-            self._note = None  # one-shot banner (e.g. re-match result)
-        # Row-edit instruction matches the Review screen — the dropdown only
-        # renders for managers with at least one player on the hunt.
+            self._note = None  # one-shot
         if self.can_manage and self.players:
             parts.append(
                 "*Select a player to edit in the drop-down; "
