@@ -232,9 +232,9 @@ class AllianceSync(commands.Cog):
         error_lower = error_msg.lower()
         return any(indicator in error_lower for indicator in network_indicators)
 
-    async def fetch_user_data(self, fid, proxy=None):
+    async def fetch_user_data(self, fid, proxy=None, retry=True):
         """Fetch user data using the centralized login handler"""
-        result = await self.login_handler.fetch_player_data(fid, use_proxy=proxy)
+        result = await self.login_handler.fetch_player_data(fid, use_proxy=proxy, retry=retry)
         
         if result['status'] == 'success':
             # Return in the old format for compatibility
@@ -382,6 +382,8 @@ class AllianceSync(commands.Cog):
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
         members_to_remove = []  # Track members that should be removed for bulk check
         connection_errors = []  # Track network/connection issues separately (not invalid members)
+        consecutive_conn_failures = 0  # Reset on any API response; 15 in a row = treat API as down
+        api_down = False  # Once set, skip per-member retries for the rest of this run
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -400,8 +402,8 @@ class AllianceSync(commands.Cog):
                     self.logger.info(f"AllianceSync: Preempting sync for {alliance_name} - higher priority work waiting")
                     raise PreemptedException()
 
-                data = await self.fetch_user_data(fid)
-                
+                data = await self.fetch_user_data(fid, retry=not api_down)
+
                 if data == 429:
                     # Get wait time from login handler
                     wait_time = self.login_handler._get_wait_time()
@@ -426,6 +428,7 @@ class AllianceSync(commands.Cog):
                         
                         # Check if this is a permanently invalid ID (not found)
                         if error_msg == 'not_found':
+                            consecutive_conn_failures = 0  # API responded
                             fail_count = self.increment_invalid_counter(fid, alliance_id, old_nickname)
 
                             if fail_count >= 3:  # Silently track failures 1 and 2, remove after 3
@@ -435,14 +438,20 @@ class AllianceSync(commands.Cog):
                             # Network/connection issue - NOT an invalid member, just track FID for summary
                             connection_errors.append(fid)
                             self.logger.warning(f"Connection issue checking ID {fid}: {error_msg}")
+                            consecutive_conn_failures += 1
+                            if consecutive_conn_failures >= 15 and not api_down:
+                                api_down = True
+                                self.logger.warning(f"AllianceSync: {alliance_name} - 15 consecutive connection failures, treating game API as down (skipping retries for remaining members)")
                         else:
                             # For other API errors, report without removing
+                            consecutive_conn_failures = 0  # API responded
                             check_fail_list.append(f"{theme.deniedIcon} `{fid}` - {error_msg}")
                             self.logger.warning(f"Failed to check ID {fid}: {error_msg}")
 
                         checked_users += 1
                     elif 'data' in data:
                         # Process successful response
+                        consecutive_conn_failures = 0  # API responded
                         user_data = data['data']
                         new_furnace_lv = user_data['stove_lv']
                         new_nickname = user_data['nickname'].strip()
@@ -612,25 +621,22 @@ class AllianceSync(commands.Cog):
                     footer=footer_text
                 )
 
-            if connection_errors:
-                # Connection issues are informational - members NOT removed
-                if len(connection_errors) <= 5:
-                    # Show specific IDs for small numbers
-                    description = "\n".join([f"{theme.warnIcon} `{fid}` - Connection issue" for fid in connection_errors])
-                else:
-                    # Show summary for large numbers (API likely down)
-                    description = (
-                        f"{theme.chartIcon} **{len(connection_errors)}** member(s) had connection issues\n"
-                        f"{theme.linkIcon} Unable to reach game API - these members will be checked on next scheduled run\n\n"
+            # Isolated connection issues are logged but not posted; only alert when widespread.
+            api_likely_down = len(connection_errors) >= 10 or len(connection_errors) > total_users / 2
+            if connection_errors and api_likely_down:
+                alert = dict(
+                    title=f"{theme.warnIcon} **{alliance_name}** Game API Unreachable",
+                    description=(
+                        f"{theme.chartIcon} **{len(connection_errors)}** member(s) could not be reached\n"
+                        f"{theme.linkIcon} The game API appears to be down - these members will be checked on the next scheduled run\n\n"
                         f"Members NOT affected - no data was changed."
-                    )
-                await self.send_embed(
-                    channel=channel,
-                    title=f"{theme.warnIcon} **{alliance_name}** Connection Issues",
-                    description=description,
+                    ),
                     color=discord.Color.orange(),
                     footer=f"{theme.chartIcon} {len(connection_errors)} connection issue(s) - Members NOT affected"
                 )
+                # DM the bot owner; fall back to the channel only if DMs are closed/unavailable.
+                if not await self._dm_owner_embed(**alert):
+                    await self.send_embed(channel=channel, **alert)
 
             embed.color = discord.Color.green()
             embed.set_field_at(
@@ -748,6 +754,26 @@ class AllianceSync(commands.Cog):
                 await interaction_message.edit(embed=status_embed)
             except Exception as e:
                 self.logger.warning(f"Could not update interaction message at completion: {e}")
+
+    async def _dm_owner_embed(self, title, description, color, footer) -> bool:
+        """DM the bot owner (first global admin) an embed. Returns False if it couldn't be delivered."""
+        try:
+            self.cursor_settings.execute(
+                "SELECT id FROM admin WHERE is_initial = 1 ORDER BY rowid LIMIT 1"
+            )
+            owner = self.cursor_settings.fetchone()
+            if not owner:
+                return False
+            user = await self.bot.fetch_user(owner[0])
+            if not user:
+                return False
+            await self.send_embed(user, title, description, color, footer)
+            return True
+        except discord.Forbidden:
+            return False
+        except Exception as e:
+            self.logger.warning(f"Could not DM bot owner: {e}")
+            return False
 
     async def send_embed(self, channel, title, description, color, footer):
         if isinstance(description, str):
