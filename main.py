@@ -4,8 +4,67 @@ import os
 import shutil
 import stat
 import contextlib
-from cogs import bot_startup_display as startup
-from cogs.bot_restart import is_container, restart_process
+def _bootstrap_from_main_branch(zip_url):
+    """Self-heal: download source zip, extract atomically via staging dir, guard against path traversal."""
+    import urllib.request, zipfile, io
+    print("Bot files missing — downloading latest source...")
+    try:
+        with urllib.request.urlopen(zip_url, timeout=600) as r:
+            buf = io.BytesIO(r.read())
+    except Exception as e:
+        print(f"Download failed: {e}")
+        print(f"Please download the source manually from:\n  {zip_url}")
+        print("Extract everything into this folder and run main.py again.")
+        sys.exit(1)
+
+    staging = "bot-bootstrap-tmp"
+    if os.path.exists(staging):
+        shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    staging_root = os.path.realpath(staging)
+
+    try:
+        with zipfile.ZipFile(buf) as zf:
+            for m in zf.namelist():
+                parts = m.split("/", 1)
+                if len(parts) < 2 or not parts[1]:
+                    continue
+                target = os.path.realpath(os.path.join(staging, parts[1]))
+                if target != staging_root and not target.startswith(staging_root + os.sep):
+                    raise RuntimeError(f"zip entry escapes staging dir: {m}")
+                if m.endswith("/"):
+                    os.makedirs(target, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(target) or staging, exist_ok=True)
+                    with zf.open(m) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        # Extraction succeeded — flip staged tree into cwd
+        for item in os.listdir(staging):
+            src = os.path.join(staging, item)
+            if os.path.isdir(src):
+                shutil.copytree(src, item, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, item)
+    except Exception as e:
+        print(f"Extraction failed: {e}")
+        print("Your existing files were not modified. Re-run main.py to retry.")
+        sys.exit(1)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+try:
+    from cogs import bot_startup_display as startup
+    from cogs.bot_restart import is_container, restart_process
+except ImportError:
+    # cogs/ is missing (likely a bare main.py drop). Fetch the full source for this branch and restart.
+    _bootstrap_from_main_branch(os.environ.get(
+        "BOT_BOOTSTRAP_URL",
+        "https://github.com/whiteout-project/bot/archive/refs/heads/main.zip",
+    ))
+    print("Download complete. Restarting...")
+    if sys.platform == "win32":
+        sys.exit(0)  # .bat / user re-runs; os.execv on Windows can race with the launcher
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 # Python version check
 MIN_PYTHON = (3, 11)
@@ -279,7 +338,7 @@ def get_latest_release_info(beta_mode=False):
             
             # Add handling for other sources here
             
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             continue
         except Exception:
             continue
@@ -543,6 +602,12 @@ if __name__ == "__main__":
     async def check_and_update_files():
         beta_mode = "--beta" in sys.argv
         repair_mode = "--repair" in sys.argv
+        # Auto-detect beta installs (version starts with "beta-") so --repair stays on the same channel.
+        if repair_mode and not beta_mode and os.path.exists("version"):
+            with open("version", "r") as f:
+                if f.read().strip().startswith("beta-"):
+                    beta_mode = True
+                    print("  Repair detected a beta install — repairing from the main branch instead of the latest release.")
         release_info = get_latest_release_info(beta_mode=beta_mode)
         
         if release_info:
@@ -991,6 +1056,18 @@ if __name__ == "__main__":
                 (channel_id, event_type)
                 SELECT DISTINCT channel_id, event_type FROM ocr_channel_event_keywords""")
 
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS permission_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target_id INTEGER NOT NULL,
+                before_state TEXT,
+                after_state TEXT,
+                timestamp TEXT NOT NULL
+            )""")
+            conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_permission_audit_timestamp
+                ON permission_audit_log(timestamp DESC)""")
+
         with connections["conn_users"] as conn_users:
             conn_users.execute("""CREATE TABLE IF NOT EXISTS users (
                 fid INTEGER PRIMARY KEY,
@@ -1050,8 +1127,13 @@ if __name__ == "__main__":
 
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
                 alliance_id INTEGER PRIMARY KEY,
-                name TEXT
+                name TEXT,
+                discord_server_id INTEGER
             )""")
+            # Upgrade path: ensure discord_server_id exists before any cog queries it.
+            existing_cols = [row[1] for row in conn_alliance.execute("PRAGMA table_info(alliance_list)").fetchall()]
+            if "discord_server_id" not in existing_cols:
+                conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
 
     create_tables()
     startup.phase_ok("Database ready")
@@ -1093,19 +1175,32 @@ if __name__ == "__main__":
             # API health checks
             try:
                 import aiohttp as _aio
+                # trust_env so HTTPS_PROXY is honored, matching the redemption path.
                 timeout = _aio.ClientTimeout(total=5)
-                async with _aio.ClientSession(timeout=timeout) as session:
-                    try:
-                        headers = {'X-API-Key': 'super_secret_bot_token_nobody_will_ever_find'}
-                        async with session.get("http://gift-code-api.whiteout-bot.com/giftcode_api.php", headers=headers) as resp:
-                            if resp.status < 500:
-                                startup.api_status("Gift Code Distribution API", "ok")
-                            else:
-                                startup.api_status("Gift Code Distribution API", "error", f"HTTP {resp.status}")
-                    except Exception:
-                        startup.api_status("Gift Code Distribution API", "error", "Offline")
+                async with _aio.ClientSession(timeout=timeout, trust_env=True) as session:
+                    startup.phase_start("Checking Gift Code Distribution API")
+                    headers = {'X-API-Key': 'super_secret_bot_token_nobody_will_ever_find'}
+                    url = "http://gift-code-api.whiteout-bot.com/giftcode_api.php"
+
+                    async def _probe_distribution():
+                        try:
+                            async with session.get(url, headers=headers) as resp:
+                                if resp.status < 500:
+                                    return "ok", None
+                                return "error", f"HTTP {resp.status}"
+                        except TimeoutError:
+                            return "error", "Timed out"
+                        except _aio.ClientError:
+                            return "error", "Offline (connection failed)"
+
+                    # One retry so a single transient blip doesn't read as offline.
+                    state, detail = await _probe_distribution()
+                    if state != "ok":
+                        state, detail = await _probe_distribution()
+                    startup.api_status("Gift Code Distribution API", state, detail)
 
                 try:
+                    startup.phase_start("Checking Gift Code Redemption API")
                     proxy_detail = (
                         f"via proxy {os.environ.get('HTTPS_PROXY')}"
                         if os.environ.get("HTTPS_PROXY")
@@ -1115,6 +1210,9 @@ if __name__ == "__main__":
                     login_handler = getattr(sync_cog, 'login_handler', None)
                     if login_handler:
                         status = await login_handler.check_apis_availability()
+                        # One retry if both report down — parity with the distribution check.
+                        if not (status.get('api1_available') or status.get('api2_available')):
+                            status = await login_handler.check_apis_availability()
                         if status.get('api1_available') and status.get('api2_available'):
                             startup.api_status("Gift Code Redemption API", "ok", "Dual-API mode")
                         elif status.get('api1_available') or status.get('api2_available'):
@@ -1155,11 +1253,13 @@ if __name__ == "__main__":
 
             startup.ready()
         except Exception as e:
+            logging.getLogger('bot').error(f"Error syncing commands: {e}")
             print(f"Error syncing commands: {e}")
 
     async def main():
         await load_cogs()
 
+        startup.phase_start("Connecting to Discord")
         attempt = 0
         while True:
             attempt += 1
@@ -1244,6 +1344,35 @@ if __name__ == "__main__":
                     await task
                 except asyncio.CancelledError:
                     pass
+
+            # Cancel background loops + the queue worker up front so shutdown
+            # doesn't wait on idle ticks. Bypasses ProcessQueue's 30s reload-drain.
+            try:
+                from discord.ext import tasks as _tasks_mod
+                loop_tasks = []
+                for cog in list(bot.cogs.values()):
+                    for attr in dir(cog):
+                        try:
+                            obj = getattr(cog, attr)
+                        except Exception:
+                            continue
+                        if isinstance(obj, _tasks_mod.Loop):
+                            obj.cancel()
+                            t = obj.get_task()
+                            if t is not None:
+                                loop_tasks.append(t)
+                pq = bot.get_cog("ProcessQueue")
+                if pq is not None:
+                    pq._shutting_down = True
+                    pq._wake_event.set()
+                    pqt = getattr(pq, "_processor_task", None)
+                    if pqt is not None and not pqt.done():
+                        pqt.cancel()
+                        loop_tasks.append(pqt)
+                if loop_tasks:
+                    await asyncio.wait(loop_tasks, timeout=3.0)
+            except Exception as e:
+                print(f"  Background-task shutdown hiccup: {e}")
 
             # Properly close the bot and await completion
             if not bot.is_closed():

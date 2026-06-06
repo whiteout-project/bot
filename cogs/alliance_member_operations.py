@@ -17,6 +17,7 @@ from .login_handler import LoginHandler
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .process_queue import MEMBER_ADD, PreemptedException
+from .bot_level_mapping import LEVEL_MAPPING
 
 logger = logging.getLogger('alliance')
 
@@ -796,19 +797,7 @@ class AllianceMemberOperations(commands.Cog):
         self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
         
-        self.level_mapping = {
-            31: "F30 - 1", 32: "F30 - 2", 33: "F30 - 3", 34: "F30 - 4",
-            35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
-            40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
-            45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
-            50: "FC 4", 51: "FC 4 - 1", 52: "FC 4 - 2", 53: "FC 4 - 3", 54: "FC 4 - 4",
-            55: "FC 5", 56: "FC 5 - 1", 57: "FC 5 - 2", 58: "FC 5 - 3", 59: "FC 5 - 4",
-            60: "FC 6", 61: "FC 6 - 1", 62: "FC 6 - 2", 63: "FC 6 - 3", 64: "FC 6 - 4",
-            65: "FC 7", 66: "FC 7 - 1", 67: "FC 7 - 2", 68: "FC 7 - 3", 69: "FC 7 - 4",
-            70: "FC 8", 71: "FC 8 - 1", 72: "FC 8 - 2", 73: "FC 8 - 3", 74: "FC 8 - 4",
-            75: "FC 9", 76: "FC 9 - 1", 77: "FC 9 - 2", 78: "FC 9 - 3", 79: "FC 9 - 4",
-            80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
-        }
+        self.level_mapping = LEVEL_MAPPING
 
         self.fl_emojis = {
             range(35, 40): "<:fc1:1326751863764156528>",
@@ -1110,10 +1099,8 @@ class AllianceMemberOperations(commands.Cog):
                                             await ch.send(embed=log_embed)
                                     except Exception as e:
                                         logger.error(f"Alliance Log Sending Error: {e}")
-                                        print(f"Alliance Log Sending Error: {e}")
                         except Exception as e:
                             logger.error(f"Log record error: {e}")
-                            print(f"Log record error: {e}")
 
                         success_embed = discord.Embed(
                             title=f"{theme.verifiedIcon} Members Deleted",
@@ -1199,10 +1186,8 @@ class AllianceMemberOperations(commands.Cog):
                                         await ch.send(embed=log_embed)
                                 except Exception as e:
                                     logger.error(f"Alliance Log Sending Error: {e}")
-                                    print(f"Alliance Log Sending Error: {e}")
                     except Exception as e:
                         logger.error(f"Log record error: {e}")
-                        print(f"Log record error: {e}")
 
                     success_embed = discord.Embed(
                         title=f"{theme.verifiedIcon} Members Deleted",
@@ -1549,7 +1534,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Source callback error: {e}")
-                    print(f"Source callback error: {e}")
                     await source_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred. Please try again.",
                         ephemeral=True
@@ -1574,14 +1558,20 @@ class AllianceMemberOperations(commands.Cog):
         embed = discord.Embed(
             title=f"{theme.userIcon} Alliance Member Operations",
             description=(
-                "Please select an operation from below:\n\n"
-                "**Available Operations:**\n"
-                f"{theme.newIcon} `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
-                f"{theme.refreshIcon} `Transfer Members` - Transfer members to another alliance\n"
-                f"{theme.minusIcon} `Remove Members` - Remove members from alliance\n"
-                f"{theme.userIcon} `View Members` - View alliance member list\n"
-                f"{theme.chartIcon} `Export Members` - Export member data to CSV/TSV\n"
-                f"{theme.backIcon} `Back` - Return to Alliances"
+                "Add, remove, move, view and export your alliance members here.\n\n"
+                "**Available Operations**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.addIcon} **Add Members**\n"
+                f"└ Add new members by ID or CSV/TSV import\n\n"
+                f"{theme.minusIcon} **Remove Members**\n"
+                f"└ Remove members from an alliance\n\n"
+                f"{theme.retryIcon} **Transfer Members**\n"
+                f"└ Move members to another alliance\n\n"
+                f"{theme.membersIcon} **View Members**\n"
+                f"└ Browse the alliance member list\n\n"
+                f"{theme.chartIcon} **Export Members**\n"
+                f"└ Save member data to a CSV or TSV file\n"
+                f"{theme.lowerDivider}"
             ),
             color=theme.emColor1
         )
@@ -1652,7 +1642,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Error in add_member_button: {e}")
-                    print(f"Error in add_member_button: {e}")
                     await button_interaction.response.send_message(
                         "An error occurred while processing your request.", 
                         ephemeral=True
@@ -1825,10 +1814,8 @@ class AllianceMemberOperations(commands.Cog):
                                                             await alliance_log_channel.send(embed=log_embed)
                                                     except Exception as e:
                                                         logger.error(f"Alliance Log Sending Error: {e}")
-                                                        print(f"Alliance Log Sending Error: {e}")
                                         except Exception as e:
                                             logger.error(f"Log record error: {e}")
-                                            print(f"Log record error: {e}")
                                         
                                         success_embed = discord.Embed(
                                             title=f"{theme.verifiedIcon} Members Deleted",
@@ -1898,10 +1885,8 @@ class AllianceMemberOperations(commands.Cog):
                                                         await alliance_log_channel.send(embed=log_embed)
                                                 except Exception as e:
                                                     logger.error(f"Alliance Log Sending Error: {e}")
-                                                    print(f"Alliance Log Sending Error: {e}")
                                     except Exception as e:
                                         logger.error(f"Log record error: {e}")
-                                        print(f"Log record error: {e}")
 
                                     success_embed = discord.Embed(
                                         title=f"{theme.verifiedIcon} Members Deleted",
@@ -1941,7 +1926,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Error in remove_member_button: {e}")
-                    print(f"Error in remove_member_button: {e}")
                     await button_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred during the member deletion process.",
                         ephemeral=True
@@ -2042,7 +2026,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Error in view_members_button: {e}")
-                    print(f"Error in view_members_button: {e}")
                     if not button_interaction.response.is_done():
                         await button_interaction.response.send_message(
                             f"{theme.deniedIcon} An error occurred while displaying the member list.",
@@ -2677,7 +2660,6 @@ class AllianceMemberOperations(commands.Cog):
                 return is_admin
         except Exception as e:
             logger.error(f"Error in admin check: {e}")
-            print(f"Error in admin check: {e}")
             return False
 
     @commands.Cog.listener()
@@ -2689,7 +2671,7 @@ class AllianceMemberOperations(commands.Cog):
         else:
             logger.error("AllianceMemberOps: ProcessQueue cog not found, member_add operations will not work")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.conn_users.close()
         self.conn_alliance.close()
 
@@ -2905,7 +2887,6 @@ class AllianceMemberOperations(commands.Cog):
                 )
         except Exception as e:
             logger.error(f"Menu navigation error in member operations: {e}")
-            print(f"Menu navigation error in member operations: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while returning to menu.",
@@ -3034,7 +3015,6 @@ class AllianceSelectView(discord.ui.View):
             await interaction.response.send_modal(modal)
         except Exception as e:
             logger.error(f"ID button error: {e}")
-            print(f"ID button error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error has occurred. Please try again.",
                 ephemeral=True
@@ -3299,7 +3279,6 @@ class IDSearchModal(discord.ui.Modal):
 
         except Exception as e:
             logger.error(f"Error in IDSearchModal on_submit: {e.__class__.__name__}: {e}")
-            print(f"Error details: {str(e.__class__.__name__)}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error has occurred. Please try again.",
@@ -3825,7 +3804,6 @@ class MemberSelectView(discord.ui.View):
 
             except Exception as e:
                 logger.error(f"Select callback error: {e}")
-                print(f"Select callback error: {e}")
                 error_embed = discord.Embed(
                     title=f"{theme.deniedIcon} Error",
                     description="An error occurred while selecting members. Please try again.",
@@ -3906,7 +3884,6 @@ class MemberSelectView(discord.ui.View):
             await interaction.response.send_modal(IDMultiSelectModal(self))
         except Exception as e:
             logger.error(f"ID button error: {e}")
-            print(f"ID button error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error has occurred. Please try again.",
                 ephemeral=True

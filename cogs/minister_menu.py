@@ -763,7 +763,7 @@ class MinisterMenu(commands.Cog):
         self.svs_cursor = self.svs_conn.cursor()
         self.original_interaction = None
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         try:
             self.users_conn.close()
@@ -847,7 +847,7 @@ class MinisterMenu(commands.Cog):
                 f"└ Shows available Research Day slots\n\n"
                 f"{theme.trainingIcon} **Training Channel**\n"
                 f"└ Shows available Training Day slots\n\n"
-                f"{theme.listIcon} **Log Channel**\n"
+                f"{theme.documentIcon} **Log Channel**\n"
                 f"└ Receives all change notifications\n\n"
                 f"{theme.lowerDivider}\n\n"
                 f"Select a channel type to configure:"
@@ -1079,6 +1079,7 @@ class MinisterMenu(commands.Cog):
                 else:
                     failed_count += 1
             except Exception as e:
+                logger.error(f"Error updating nickname for ID {fid}: {e}")
                 print(f"Error updating nickname for ID {fid}: {e}")
                 failed_count += 1
         
@@ -1329,6 +1330,7 @@ class MinisterMenu(commands.Cog):
                 error_msg = f"{theme.deniedIcon} Error booking appointment: {e}"
                 await interaction.followup.send(error_msg, ephemeral=True)
             except Exception:
+                logger.error(f"Failed to show error message for booking: {e}")
                 print(f"Failed to show error message for booking: {e}")
 
     async def update_channel_message(self, activity_name: str):
@@ -1369,8 +1371,9 @@ class MinisterMenu(commands.Cog):
                         await minister_schedule_cog.get_or_create_message(context, message_content, channel)
 
         except Exception as e:
+            logger.error(f"Error updating channel message: {e}")
             print(f"Error updating channel message: {e}")
-    
+
     async def clear_user_reservation(self, interaction: discord.Interaction, activity_name: str, fid: str, current_time: str):
         """Clear a user's reservation and return to the day management page"""
         try:
@@ -1446,6 +1449,7 @@ class MinisterMenu(commands.Cog):
                 error_msg = f"{theme.deniedIcon} Error clearing reservation: {e}"
                 await interaction.followup.send(error_msg, ephemeral=True)
             except Exception:
+                logger.error(f"Failed to show error message for clearing reservation: {e}")
                 print(f"Failed to show error message for clearing reservation: {e}")
     
     async def show_clear_channels_selection(self, interaction: discord.Interaction):

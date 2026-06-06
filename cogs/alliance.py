@@ -62,7 +62,7 @@ class Alliance(commands.Cog):
             self.c.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
             self.conn.commit()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         for conn_name in ['conn_users', 'conn_settings', 'conn_giftcode']:
             if hasattr(self, conn_name):

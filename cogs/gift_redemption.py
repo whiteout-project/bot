@@ -693,6 +693,9 @@ async def attempt_gift_code_with_api(cog, player_id, giftcode, session):
             if error == "CAPTCHA_TOO_FREQUENT":
                 cog.logger.info(f"GiftOps: API returned CAPTCHA_TOO_FREQUENT for ID {player_id}")
                 return "CAPTCHA_TOO_FREQUENT", None, None, None
+            elif error == "CAPTCHA_TRANSIENT_ERROR":
+                cog.logger.warning(f"GiftOps: Transient captcha fetch error for ID {player_id} — queuing for retry")
+                return "TIMEOUT_RETRY", None, None, None
             else:
                 cog.logger.error(f"GiftOps: Captcha fetch error for ID {player_id}: {error}")
                 return "CAPTCHA_FETCH_ERROR", None, None, None
@@ -1492,6 +1495,9 @@ async def fetch_captcha(cog, player_id, session=None):
             if "data" in captcha_data and "img" in captcha_data["data"]:
                 return captcha_data["data"]["img"], None
 
+        # Transient HTTP errors retry; matches the classification used elsewhere.
+        if response.status_code in (429, 502, 503, 504):
+            return None, "CAPTCHA_TRANSIENT_ERROR"
         return None, "CAPTCHA_FETCH_ERROR"
     except Exception as e:
         cog.logger.exception(f"Error fetching captcha: {e}")

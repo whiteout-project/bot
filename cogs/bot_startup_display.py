@@ -191,12 +191,18 @@ def summary(servers, alliances, members, alliance_details=None):
 
 
 def api_status(name, status, detail=None):
-    """Display API connection status."""
+    """Display API connection status. Overwrites a preceding phase_start line
+    on TTY so a 'Checking …' hourglass becomes the result in place."""
     is_ok = status in ('ok', 'healthy')
     symbol = _OK if is_ok else _FAIL
     verb = "Connected to" if is_ok else "Could not reach"
     detail_str = f" ({detail})" if detail else ""
-    print(f"  {symbol} {verb} {name}{detail_str}")
+    line = f"  {symbol} {verb} {name}{detail_str}"
+    if _IS_TTY:
+        sys.stdout.write(f"\r{line}          \n")
+        sys.stdout.flush()
+    else:
+        print(line)
 
 
 def info(message):

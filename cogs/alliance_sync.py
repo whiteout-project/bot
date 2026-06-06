@@ -13,20 +13,8 @@ import logging
 from .login_handler import LoginHandler
 from .pimp_my_bot import theme
 from .process_queue import ALLIANCE_SYNC, PreemptedException
+from .bot_level_mapping import LEVEL_MAPPING as level_mapping
 
-level_mapping = {
-    31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
-    35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
-    40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
-    45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
-    50: "FC 4", 51: "FC 4 - 1", 52: "FC 4 - 2", 53: "FC 4 - 3", 54: "FC 4 - 4",
-    55: "FC 5", 56: "FC 5 - 1", 57: "FC 5 - 2", 58: "FC 5 - 3", 59: "FC 5 - 4",
-    60: "FC 6", 61: "FC 6 - 1", 62: "FC 6 - 2", 63: "FC 6 - 3", 64: "FC 6 - 4",
-    65: "FC 7", 66: "FC 7 - 1", 67: "FC 7 - 2", 68: "FC 7 - 3", 69: "FC 7 - 4",
-    70: "FC 8", 71: "FC 8 - 1", 72: "FC 8 - 2", 73: "FC 8 - 3", 74: "FC 8 - 4",
-    75: "FC 9", 76: "FC 9 - 1", 77: "FC 9 - 2", 78: "FC 9 - 3", 79: "FC 9 - 4",
-    80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
-}
 
 class AllianceSync(commands.Cog):
     def __init__(self, bot):
@@ -244,9 +232,9 @@ class AllianceSync(commands.Cog):
         error_lower = error_msg.lower()
         return any(indicator in error_lower for indicator in network_indicators)
 
-    async def fetch_user_data(self, fid, proxy=None):
+    async def fetch_user_data(self, fid, proxy=None, retry=True):
         """Fetch user data using the centralized login handler"""
-        result = await self.login_handler.fetch_player_data(fid, use_proxy=proxy)
+        result = await self.login_handler.fetch_player_data(fid, use_proxy=proxy, retry=retry)
         
         if result['status'] == 'success':
             # Return in the old format for compatibility
@@ -258,25 +246,26 @@ class AllianceSync(commands.Cog):
         else:
             return {'error': result.get('error_message', 'Unknown error'), 'fid': fid}
 
-    async def remove_invalid_fid(self, fid: str, reason: str):
+    async def remove_invalid_fid(self, fid: str, reason: str) -> tuple[bool, str | None]:
         """Safely remove an invalid ID from the database with logging"""
         try:
             async with self.db_lock:
                 # Get user info before deletion for logging
                 self.cursor_users.execute("SELECT nickname, alliance FROM users WHERE fid = ?", (fid,))
                 user_info = self.cursor_users.fetchone()
-                
+
                 if user_info:
                     nickname, alliance_id = user_info
-                    
+
                     # Delete from users table
                     self.cursor_users.execute("DELETE FROM users WHERE fid = ?", (fid,))
                     self.conn_users.commit()
-                    
+
                     # Log the deletion to alliance control log
                     self.logger.warning(f"[AUTO-CLEANUP] Removed invalid ID {fid} (nickname: {nickname}) - Reason: {reason}")
-                    
+
                     return True, nickname
+                return False, None
         except Exception as e:
             self.logger.error(f"Failed to remove invalid ID {fid}: {str(e)}")
             return False, None
@@ -393,6 +382,8 @@ class AllianceSync(commands.Cog):
         furnace_changes, nickname_changes, kid_changes, check_fail_list = [], [], [], []
         members_to_remove = []  # Track members that should be removed for bulk check
         connection_errors = []  # Track network/connection issues separately (not invalid members)
+        consecutive_conn_failures = 0  # Reset on any API response; 15 in a row = treat API as down
+        api_down = False  # Once set, skip per-member retries for the rest of this run
 
         def safe_list(input_list): # Avoid issues with list indexing
             if not isinstance(input_list, list):
@@ -411,8 +402,8 @@ class AllianceSync(commands.Cog):
                     self.logger.info(f"AllianceSync: Preempting sync for {alliance_name} - higher priority work waiting")
                     raise PreemptedException()
 
-                data = await self.fetch_user_data(fid)
-                
+                data = await self.fetch_user_data(fid, retry=not api_down)
+
                 if data == 429:
                     # Get wait time from login handler
                     wait_time = self.login_handler._get_wait_time()
@@ -437,6 +428,7 @@ class AllianceSync(commands.Cog):
                         
                         # Check if this is a permanently invalid ID (not found)
                         if error_msg == 'not_found':
+                            consecutive_conn_failures = 0  # API responded
                             fail_count = self.increment_invalid_counter(fid, alliance_id, old_nickname)
 
                             if fail_count >= 3:  # Silently track failures 1 and 2, remove after 3
@@ -446,14 +438,20 @@ class AllianceSync(commands.Cog):
                             # Network/connection issue - NOT an invalid member, just track FID for summary
                             connection_errors.append(fid)
                             self.logger.warning(f"Connection issue checking ID {fid}: {error_msg}")
+                            consecutive_conn_failures += 1
+                            if consecutive_conn_failures >= 15 and not api_down:
+                                api_down = True
+                                self.logger.warning(f"AllianceSync: {alliance_name} - 15 consecutive connection failures, treating game API as down (skipping retries for remaining members)")
                         else:
                             # For other API errors, report without removing
+                            consecutive_conn_failures = 0  # API responded
                             check_fail_list.append(f"{theme.deniedIcon} `{fid}` - {error_msg}")
                             self.logger.warning(f"Failed to check ID {fid}: {error_msg}")
 
                         checked_users += 1
                     elif 'data' in data:
                         # Process successful response
+                        consecutive_conn_failures = 0  # API responded
                         user_data = data['data']
                         new_furnace_lv = user_data['stove_lv']
                         new_nickname = user_data['nickname'].strip()
@@ -529,8 +527,8 @@ class AllianceSync(commands.Cog):
         removal_count = len(members_to_remove)
         removal_percentage = (removal_count / total_users * 100) if total_users > 0 else 0
 
-        # Only apply safeguard if alliance has at least 5 members and would remove >20%
-        if total_users >= 5 and removal_percentage > 20:
+        # Cap applies regardless of alliance size — small alliances are the case this guards.
+        if removal_percentage > 20:
             self.logger.error(f"BULK REMOVAL BLOCKED: Attempted to remove {removal_count}/{total_users} members ({removal_percentage:.1f}%) from alliance {alliance_id}")
 
             # Send alert to channel
@@ -623,25 +621,22 @@ class AllianceSync(commands.Cog):
                     footer=footer_text
                 )
 
-            if connection_errors:
-                # Connection issues are informational - members NOT removed
-                if len(connection_errors) <= 5:
-                    # Show specific IDs for small numbers
-                    description = "\n".join([f"{theme.warnIcon} `{fid}` - Connection issue" for fid in connection_errors])
-                else:
-                    # Show summary for large numbers (API likely down)
-                    description = (
-                        f"{theme.chartIcon} **{len(connection_errors)}** member(s) had connection issues\n"
-                        f"{theme.linkIcon} Unable to reach game API - these members will be checked on next scheduled run\n\n"
+            # Isolated connection issues are logged but not posted; only alert when widespread.
+            api_likely_down = len(connection_errors) >= 10 or len(connection_errors) > total_users / 2
+            if connection_errors and api_likely_down:
+                alert = dict(
+                    title=f"{theme.warnIcon} **{alliance_name}** Game API Unreachable",
+                    description=(
+                        f"{theme.chartIcon} **{len(connection_errors)}** member(s) could not be reached\n"
+                        f"{theme.linkIcon} The game API appears to be down - these members will be checked on the next scheduled run\n\n"
                         f"Members NOT affected - no data was changed."
-                    )
-                await self.send_embed(
-                    channel=channel,
-                    title=f"{theme.warnIcon} **{alliance_name}** Connection Issues",
-                    description=description,
+                    ),
                     color=discord.Color.orange(),
                     footer=f"{theme.chartIcon} {len(connection_errors)} connection issue(s) - Members NOT affected"
                 )
+                # DM the bot owner; fall back to the channel only if DMs are closed/unavailable.
+                if not await self._dm_owner_embed(**alert):
+                    await self.send_embed(channel=channel, **alert)
 
             embed.color = discord.Color.green()
             embed.set_field_at(
@@ -760,6 +755,26 @@ class AllianceSync(commands.Cog):
             except Exception as e:
                 self.logger.warning(f"Could not update interaction message at completion: {e}")
 
+    async def _dm_owner_embed(self, title, description, color, footer) -> bool:
+        """DM the bot owner (first global admin) an embed. Returns False if it couldn't be delivered."""
+        try:
+            self.cursor_settings.execute(
+                "SELECT id FROM admin WHERE is_initial = 1 ORDER BY rowid LIMIT 1"
+            )
+            owner = self.cursor_settings.fetchone()
+            if not owner:
+                return False
+            user = await self.bot.fetch_user(owner[0])
+            if not user:
+                return False
+            await self.send_embed(user, title, description, color, footer)
+            return True
+        except discord.Forbidden:
+            return False
+        except Exception as e:
+            self.logger.warning(f"Could not DM bot owner: {e}")
+            return False
+
     async def send_embed(self, channel, title, description, color, footer):
         if isinstance(description, str):
             description = [description]
@@ -823,7 +838,7 @@ class AllianceSync(commands.Cog):
             return max(0, int(delay_seconds))
         except (ValueError, AttributeError) as e:
             self.logger.error(f"Invalid start_time format '{start_time}': {e}")
-            print(f"[SYNC] Invalid start_time format '{start_time}': {e}")
+            print(f"[ERROR] Invalid start_time format '{start_time}': {e}")
             return interval * 60  # Fall back to interval delay
 
     async def schedule_alliance_check(self, alliance_id):
@@ -832,7 +847,7 @@ class AllianceSync(commands.Cog):
             # Get initial settings
             cached = self.current_task_settings.get(alliance_id)
             if not cached:
-                print(f"[SYNC] No cached settings for alliance {alliance_id}, stopping")
+                self.logger.info(f"No cached settings for alliance {alliance_id}, stopping")
                 return
 
             channel_id, interval, start_time = cached
@@ -847,7 +862,7 @@ class AllianceSync(commands.Cog):
                     # Fetch fresh settings from cache (updated by monitor loop)
                     cached = self.current_task_settings.get(alliance_id)
                     if not cached:
-                        print(f"[SYNC] Alliance {alliance_id} removed from settings, stopping")
+                        self.logger.info(f"Alliance {alliance_id} removed from settings, stopping")
                         break
 
                     channel_id, interval, start_time = cached
@@ -855,7 +870,7 @@ class AllianceSync(commands.Cog):
                     # Get the channel fresh each time
                     channel = self.bot.get_channel(channel_id)
                     if channel is None:
-                        print(f"[SYNC] Channel {channel_id} not found for alliance {alliance_id}")
+                        self.logger.warning(f"Channel {channel_id} not found for alliance {alliance_id}")
                         await asyncio.sleep(60)
                         continue
 
@@ -1031,7 +1046,6 @@ class AllianceSync(commands.Cog):
 
                 if scheduled_alliances:
                     msg = f"Scheduled syncs for {len(scheduled_alliances)} alliance(s): {', '.join(scheduled_alliances)}"
-                    print(f"[SYNC] {msg}")
                     self.logger.info(msg)
 
         except Exception as e:
@@ -1061,7 +1075,7 @@ class AllianceSync(commands.Cog):
 
                     # If interval is 0, stop the task
                     if interval == 0 and task_exists:
-                        print(f"[SYNC] Stopping alliance {alliance_id} - interval set to 0")
+                        self.logger.info(f"Stopping alliance {alliance_id} - interval set to 0")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()
@@ -1071,16 +1085,15 @@ class AllianceSync(commands.Cog):
                         continue
 
                     # Check if settings changed (channel, interval, or start_time)
-                    settings_changed = cached_settings and cached_settings != (channel_id, interval, start_time)
-                    if settings_changed and task_exists:
+                    settings_changed = cached_settings is not None and cached_settings != (channel_id, interval, start_time)
+                    if settings_changed and task_exists and cached_settings is not None:
                         old_channel, old_interval, old_start = cached_settings
-                        print(f"[SYNC] Settings changed for alliance {alliance_id}:")
-                        if old_channel != channel_id:
-                            print(f"  Channel: {old_channel} -> {channel_id}")
-                        if old_interval != interval:
-                            print(f"  Interval: {old_interval} -> {interval}")
-                        if old_start != start_time:
-                            print(f"  Start time: {old_start} -> {start_time}")
+                        self.logger.info(
+                            f"Settings changed for alliance {alliance_id}: "
+                            f"channel {old_channel}->{channel_id}, "
+                            f"interval {old_interval}->{interval}, "
+                            f"start_time {old_start}->{start_time}"
+                        )
                         # Cancel existing task to restart with new settings
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
@@ -1102,7 +1115,7 @@ class AllianceSync(commands.Cog):
                 # Clean up tasks for removed alliances
                 for alliance_id in list(self.alliance_tasks.keys()):
                     if alliance_id not in current_settings:
-                        print(f"[SYNC] Removing task for deleted alliance {alliance_id}")
+                        self.logger.info(f"Removing task for deleted alliance {alliance_id}")
                         self.is_running[alliance_id] = False
                         if not self.alliance_tasks[alliance_id].done():
                             self.alliance_tasks[alliance_id].cancel()

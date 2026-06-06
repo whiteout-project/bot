@@ -13,6 +13,7 @@ from discord.ext import tasks
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .login_handler import LoginHandler
+from .bot_level_mapping import LEVEL_MAPPING
 
 logger = logging.getLogger('alliance')
 
@@ -28,19 +29,7 @@ class AllianceIDChannel(commands.Cog):
 
         self.invalid_format_warnings = {}  # {channel_id: last_warning_timestamp}
 
-        self.level_mapping = {
-            31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
-            35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
-            40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
-            45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
-            50: "FC 4", 51: "FC 4 - 1", 52: "FC 4 - 2", 53: "FC 4 - 3", 54: "FC 4 - 4",
-            55: "FC 5", 56: "FC 5 - 1", 57: "FC 5 - 2", 58: "FC 5 - 3", 59: "FC 5 - 4",
-            60: "FC 6", 61: "FC 6 - 1", 62: "FC 6 - 2", 63: "FC 6 - 3", 64: "FC 6 - 4",
-            65: "FC 7", 66: "FC 7 - 1", 67: "FC 7 - 2", 68: "FC 7 - 3", 69: "FC 7 - 4",
-            70: "FC 8", 71: "FC 8 - 1", 72: "FC 8 - 2", 73: "FC 8 - 3", 74: "FC 8 - 4",
-            75: "FC 9", 76: "FC 9 - 1", 77: "FC 9 - 2", 78: "FC 9 - 3", 79: "FC 9 - 4",
-            80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
-        }
+        self.level_mapping = LEVEL_MAPPING
 
     def setup_database(self):
         if not os.path.exists('db'):
@@ -277,9 +266,6 @@ class AllianceIDChannel(commands.Cog):
                         f"Self-healed orphan ID {fid} from deleted alliance "
                         f"{existing_alliance[0]}; allowing registration into alliance {alliance_id}"
                     )
-                    print(
-                        f"[ID-CHANNEL] Self-healed orphan ID {fid} from deleted alliance {existing_alliance[0]}"
-                    )
 
             result = await LoginHandler().fetch_player_data(str(fid))
 
@@ -422,10 +408,10 @@ class AllianceIDChannel(commands.Cog):
                     await self.process_fid(message, fid, alliance_id)
 
         except Exception as e:
-            logger.error(f"Error in check_channels_loop: {e}")
             if '503' in str(e) or '502' in str(e) or 'connect error' in str(e).lower():
-                print(f"ID Channel check skipped — Discord is temporarily unavailable. This is normal and will resolve itself.")
+                logger.info(f"ID Channel check skipped — Discord temporarily unavailable: {e}")
             else:
+                logger.error(f"Error in check_channels_loop: {e}")
                 print(f"Error in check_channels_loop: {e}")
 
     async def show_id_channel_for(self, interaction: discord.Interaction, alliance_id: int):
@@ -503,13 +489,18 @@ class AllianceIDChannel(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.fidIcon} ID Channel Management",
                 description=(
-                    f"Manage your alliance ID channels here:\n\n"
+                    f"Set up channels where players post their in-game ID to "
+                    f"join an alliance.\n\n"
                     f"**Available Operations**\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.addIcon} Create new ID channel\n"
-                    f"{theme.listIcon} View active ID channels\n"
-                    f"{theme.trashIcon} Delete existing ID channel\n"
-                    f"{theme.settingsIcon} Configure scan and auto-delete settings\n"
+                    f"{theme.addIcon} **Create Channel**\n"
+                    f"└ Pick a channel and link it to an alliance\n\n"
+                    f"{theme.listIcon} **View Channels**\n"
+                    f"└ List the ID channels set up on this server\n\n"
+                    f"{theme.trashIcon} **Delete Channel**\n"
+                    f"└ Stop using a channel for ID registration\n\n"
+                    f"{theme.settingsIcon} **Settings**\n"
+                    f"└ Adjust scanning and auto-delete behaviour\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1

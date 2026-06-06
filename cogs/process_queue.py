@@ -54,15 +54,29 @@ class ProcessQueue(commands.Cog):
         self._processor_task: Optional[asyncio.Task] = None
         self._wake_event = asyncio.Event()
         self._current_process: Optional[Dict] = None
+        self._shutting_down = False
         # Runtime context for non-serializable references (Discord interactions, messages).
         # Lost on restart by design — handlers should fall back gracefully when missing.
         self._runtime_contexts: Dict[int, Dict] = {}
 
         logger.info("ProcessQueue cog initialized")
 
-    def cog_unload(self):
+    async def cog_unload(self):
+        # Drain: let the in-flight handler commit cleanly before closing the connection.
+        self._shutting_down = True
+        self._wake_event.set()
         if self._processor_task and not self._processor_task.done():
-            self._processor_task.cancel()
+            try:
+                await asyncio.wait_for(self._processor_task, timeout=30.0)
+            except asyncio.TimeoutError:
+                logger.warning("ProcessQueue: handler exceeded 30s drain timeout, cancelling")
+                self._processor_task.cancel()
+                try:
+                    await self._processor_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            except (asyncio.CancelledError, Exception):
+                pass
         try:
             self.conn.close()
         except Exception:
@@ -269,7 +283,7 @@ class ProcessQueue(commands.Cog):
 
     async def _processor_loop(self):
         """Main processor loop. Picks highest-priority queued process and executes it."""
-        while True:
+        while not self._shutting_down:
             try:
                 process = self.get_next_queued()
 
@@ -281,6 +295,9 @@ class ProcessQueue(commands.Cog):
                     except asyncio.TimeoutError:
                         pass
                     continue
+
+                if self._shutting_down:
+                    break
 
                 action = process['action']
                 handler = self._handlers.get(action)

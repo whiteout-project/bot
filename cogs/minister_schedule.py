@@ -208,7 +208,7 @@ class MinisterSchedule(commands.Cog):
 
         self.svs_conn.commit()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         try:
             self.users_conn.close()
@@ -237,7 +237,8 @@ class MinisterSchedule(commands.Cog):
         if log_channel:
             await log_channel.send(embed=embed)
         else:
-            print(f"Error: Could not find the log channel please change it to a valid channel")
+            logger.error("Could not find the minister log channel; please change it to a valid channel")
+            print("Error: Could not find the log channel please change it to a valid channel")
 
     async def is_admin(self, user_id: int) -> bool:
         if user_id == self.bot.owner_id:
@@ -278,6 +279,7 @@ class MinisterSchedule(commands.Cog):
 
             self.svs_conn.commit()
         except Exception as e:
+            logger.error(f"Error logging change: {e}")
             print(f"Error logging change: {e}")
 
     def fix_arabic(self, text):
@@ -350,6 +352,7 @@ class MinisterSchedule(commands.Cog):
 
             return filtered_choices
         except Exception as e:
+            logger.error(f"Error in appointment type autocomplete: {e}")
             print(f"Error in appointment type autocomplete: {e}")
             return []
 
@@ -387,6 +390,7 @@ class MinisterSchedule(commands.Cog):
 
             return filtered_choices
         except Exception as e:
+            logger.error(f"Autocomplete for fid failed: {e}")
             print(f"Autocomplete for fid failed: {e}")
             return []
 
@@ -428,6 +432,7 @@ class MinisterSchedule(commands.Cog):
 
             return filtered_choices
         except Exception as e:
+            logger.error(f"Autocomplete for registered fid failed: {e}")
             print(f"Autocomplete for registered fid failed: {e}")
             return []
 
@@ -482,6 +487,7 @@ class MinisterSchedule(commands.Cog):
 
             return filtered_choices
         except Exception as e:
+            logger.error(f"Error in time autocomplete: {e}")
             print(f"Error in time autocomplete: {e}")
             return []
 
@@ -500,6 +506,7 @@ class MinisterSchedule(commands.Cog):
 
             return filtered_choices
         except Exception as e:
+            logger.error(f"Error in all_or_available autocomplete: {e}")
             print(f"Error in all_or_available autocomplete: {e}")
             return []
 
@@ -797,6 +804,7 @@ class MinisterSchedule(commands.Cog):
                     )
                     return
                 except Exception as e:
+                    logger.error(f"Failed to select channel: {e}")
                     print(f"Failed to select channel: {e}")
                     await interaction.followup.send(f"Could not select the channel: {e}")
                     return
@@ -809,6 +817,7 @@ class MinisterSchedule(commands.Cog):
                     )
                     return
                 except Exception as e:
+                    logger.error(f"Failed to select channel: {e}")
                     print(f"Failed to select channel: {e}")
                     await interaction.followup.send(f"Could not select the channel: {e}")
                     return
@@ -947,6 +956,7 @@ class MinisterSchedule(commands.Cog):
             await self.get_or_create_message(context, message_content, channel)
 
         except Exception as e:
+            logger.error(f"minister_add unexpected error: {e}")
             print(f"An unexpected error occurred: {e}")
             await interaction.followup.send(f"An unexpected error occurred while processing the request: {e}")
 
@@ -994,6 +1004,7 @@ class MinisterSchedule(commands.Cog):
                     )
                     return
                 except Exception as e:
+                    logger.error(f"Failed to select channel: {e}")
                     print(f"Failed to select channel: {e}")
                     await interaction.followup.send(f"Could not select the channel: {e}")
                     return
@@ -1006,6 +1017,7 @@ class MinisterSchedule(commands.Cog):
                     )
                     return
                 except Exception as e:
+                    logger.error(f"Failed to select channel: {e}")
                     print(f"Failed to select channel: {e}")
                     await interaction.followup.send(f"Could not select the channel: {e}")
                     return
@@ -1092,6 +1104,7 @@ class MinisterSchedule(commands.Cog):
             await self.get_or_create_message(context, message_content, channel)
 
         except Exception as e:
+            logger.error(f"minister_remove error: {e}")
             print(f"An error occurred: {e}")
             await interaction.followup.send(f"An error occurred while canceling the slot: {e}")
 
@@ -1206,6 +1219,7 @@ class MinisterSchedule(commands.Cog):
                 await confirmation_message.reply(f"<@{interaction.user.id}> did not respond in time. The action has been cancelled.")
 
         except Exception as e:
+            logger.error(f"minister_clear_all error: {e}")
             print(f"An error occurred: {e}")
             await interaction.followup.send(f"An error occurred while clearing the appointments: {e}", ephemeral=True)
         
@@ -1238,7 +1252,7 @@ class MinisterSchedule(commands.Cog):
                             try:
                                 await interaction.edit_original_response(embed=embed)
                             except discord.NotFound:
-                                print("Interaction expired before progress update.")
+                                pass  # Interaction expired; nothing to do
 
                     # Fetch updated data via API
                     time_list, _ = await self.update_time_list(booked_times, update_progress)
@@ -1258,7 +1272,7 @@ class MinisterSchedule(commands.Cog):
                     try:
                         await interaction.edit_original_response(embed=embed)
                     except discord.NotFound:
-                        print("Interaction expired before final update.")
+                        pass  # Interaction expired; nothing to do
 
             elif all_or_available == "available only":
                 available_slots = self.generate_available_time_list(booked_times)
@@ -1269,6 +1283,7 @@ class MinisterSchedule(commands.Cog):
                     await interaction.followup.send(f"All appointment slots are filled for {appointment_type}")
 
         except Exception as e:
+            logger.error(f"minister_list error: {e}")
             print(f"An error occurred: {e}")
             await interaction.followup.send(f"An error occurred while fetching the schedule: {e}")
 
@@ -1345,6 +1360,7 @@ class MinisterSchedule(commands.Cog):
 
             return choices[:25]
         except Exception as e:
+            logger.error(f"Error in archive autocomplete: {e}")
             print(f"Error in archive autocomplete: {e}")
             return []
 

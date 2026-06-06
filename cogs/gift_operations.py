@@ -212,10 +212,10 @@ class GiftOperations(commands.Cog):
                 else:
                     raise
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if hasattr(self, 'periodic_validation_loop') and self.periodic_validation_loop.is_running():
             self.periodic_validation_loop.cancel()
-        for conn_name in ['settings_conn', 'alliance_conn']:
+        for conn_name in ['conn', 'settings_conn', 'alliance_conn']:
             if hasattr(self, conn_name):
                 try:
                     getattr(self, conn_name).close()
@@ -416,7 +416,7 @@ class GiftOperations(commands.Cog):
                 f"└ Redeem gift code(s) for one or more alliances\n\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Set up a gift code channel, configure auto redemption, and more...\n\n"
-                f"{theme.deniedIcon} **Delete Gift Code**\n"
+                f"{theme.trashIcon} **Delete Gift Code**\n"
                 f"└ Remove existing codes (rarely needed)\n"
                 f"{theme.lowerDivider}"
             ),

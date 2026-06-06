@@ -302,7 +302,7 @@ class BotStartup(commands.Cog):
             "timestamp": None
         }
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if hasattr(self, 'conn'):
             self.conn.close()
 
