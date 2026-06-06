@@ -70,11 +70,12 @@ if PIL_AVAILABLE:
 
 os.makedirs("db", exist_ok=True)
 
+BEAR_DB_PATH = "db/bear_data.sqlite"
+
 
 def init_bear_database():
     """Initialize bear_hunts + bear_player_damage tables."""
-    db_path = "db/bear_data.sqlite"
-    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn = sqlite3.connect(BEAR_DB_PATH, timeout=30.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     cursor = conn.cursor()
@@ -112,6 +113,19 @@ def init_bear_database():
             rows_filled INTEGER NOT NULL DEFAULT 0,
             last_run_at TEXT,
             PRIMARY KEY (alliance_id, lang, role)
+        )
+    """)
+    # Learned OCR→player aliases: maps the normalized OCR text of a name the
+    # bot can't read (decorated/homoglyph gamertags) to the player it belongs to,
+    # so an admin only has to resolve it once.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bear_name_alias (
+            alliance_id INTEGER NOT NULL,
+            ocr_key     TEXT    NOT NULL,
+            fid         INTEGER NOT NULL,
+            raw_name    TEXT,
+            updated_at  TEXT,
+            PRIMARY KEY (alliance_id, ocr_key)
         )
     """)
     conn.commit()
@@ -350,6 +364,8 @@ MATCH_AUTO_CONFIRM = 90
 MATCH_LIKELY_MIN = 80
 MATCH_AMBIGUOUS_DELTA = 5
 MATCH_HISTORY_PENALTY = 15  # subtracted from scores for opt-in historical names
+MATCH_ALIAS_SCORE = 100      # confidence given to a learned-alias hit (admin-taught)
+MATCH_ALIAS_FUZZY_MIN = 92   # min similarity to reuse a stored alias key when OCR drifts
 
 
 # Default initialised above (DEFAULT_OCR_LANG) before RapidOCR import.
@@ -641,6 +657,48 @@ def _strip_minority_script(name: str, threshold: float = 0.85) -> str:
     return ''.join(c for c in name if _script_of(c) in (None, dom, 'other'))
 
 
+# Homoglyph folding. Decorated gamertags swap Latin letters for Greek/Cyrillic
+# lookalikes (ROγAL, ĎƐΔΗ). NFKD already handles accents/superscripts/fullwidth;
+# this table covers cross-script lookalikes NFKD leaves alone. Comparison only —
+# never shown to users.
+_CONFUSABLES = {
+    # Greek → Latin
+    'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K',
+    'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X',
+    'Δ': 'A', 'Θ': 'O', 'Φ': 'O', 'Ɛ': 'E',
+    'α': 'a', 'β': 'b', 'γ': 'y', 'ε': 'e', 'ζ': 'z', 'η': 'n', 'ι': 'i',
+    'κ': 'k', 'μ': 'u', 'ν': 'v', 'ο': 'o', 'π': 'n', 'ρ': 'p', 'σ': 'o',
+    'τ': 't', 'υ': 'u', 'χ': 'x',
+    # Cyrillic → Latin
+    'А': 'A', 'В': 'B', 'Е': 'E', 'Ѕ': 'S', 'І': 'I', 'Ј': 'J', 'К': 'K',
+    'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y',
+    'Ү': 'Y', 'Х': 'X', 'Ԛ': 'Q', 'Ԝ': 'W',
+    'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o',
+    'р': 'p', 'с': 'c', 'т': 't', 'у': 'y', 'х': 'x', 'ѕ': 's', 'і': 'i',
+    'ј': 'j',
+}
+_CONFUSABLE_TABLE = {ord(k): v for k, v in _CONFUSABLES.items()}
+
+
+def _skeleton(s: str) -> str:
+    """Fold a name to a Latin-ish skeleton: decompose (NFKD), drop combining
+    marks, then map Greek/Cyrillic lookalikes to Latin. For matching only."""
+    if not s:
+        return s or ""
+    decomposed = unicodedata.normalize('NFKD', s)
+    no_marks = ''.join(c for c in decomposed if not unicodedata.combining(c))
+    return no_marks.translate(_CONFUSABLE_TABLE)
+
+
+def _fold(s: str) -> str:
+    """Canonical comparison/alias-key form: skeleton, lowercased, alnum-only,
+    whitespace-collapsed. Doubles as the fuzzy-match processor and the alias key."""
+    sk = _skeleton(s or "")
+    if RAPIDFUZZ_AVAILABLE:
+        return _rf_utils.default_process(sk)
+    return re.sub(r'[^a-z0-9]+', ' ', sk.lower()).strip()
+
+
 def _name_at_date(changes, date_str, current_nick):
     """The name a player had on `date_str`, from their ascending
     (old, new, change_date) history. Falls back to current_nick."""
@@ -679,10 +737,10 @@ def match_roster(detected_name: str, roster):
 
     best: dict = {}
     if sum(c.isalpha() for c in detected_name) < 3:
-        normalized = detected_name.strip().lower()
+        normalized = _fold(detected_name)
         for entry in roster:
             fid, match_name, penalty, display = _parts(entry)
-            if (match_name or '').strip().lower() == normalized:
+            if _fold(match_name or '') == normalized:
                 score = 100 - penalty
                 if fid not in best or score > best[fid][2]:
                     best[fid] = (fid, display, score)
@@ -693,7 +751,7 @@ def match_roster(detected_name: str, roster):
     results = _rf_process.extract(
         cleaned, names,
         scorer=_rf_fuzz.WRatio,
-        processor=_rf_utils.default_process,
+        processor=_fold,
         limit=None, score_cutoff=MATCH_LIKELY_MIN,
     )
     for _match_str, score, idx in results:
@@ -737,13 +795,81 @@ def is_row_unfilled(row, roster) -> bool:
     return name_match_score(row.get('name') or '', roster) < MATCH_LIKELY_MIN
 
 
+def learn_alias(alliance_id, raw_name, fid) -> None:
+    """Remember that this alliance's OCR text `raw_name` resolves to `fid`, so a
+    decorated name only has to be matched by hand once. No-op for blank/short keys."""
+    if not alliance_id or not fid or not raw_name:
+        return
+    key = _fold(raw_name)
+    if len(key) < 2:  # too little signal to key on reliably
+        return
+    try:
+        with sqlite3.connect(BEAR_DB_PATH, timeout=30.0) as conn:
+            conn.execute("""
+                INSERT INTO bear_name_alias (alliance_id, ocr_key, fid, raw_name, updated_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(alliance_id, ocr_key) DO UPDATE SET
+                    fid = excluded.fid,
+                    raw_name = excluded.raw_name,
+                    updated_at = excluded.updated_at
+            """, (int(alliance_id), key, int(fid), raw_name))
+    except Exception as e:
+        logger.warning(f"Bear OCR: could not learn alias for {raw_name!r}: {e}")
+
+
+def alias_lookup(alliance_id, detected_name, roster):
+    """A learned alias for `detected_name` → (fid, display), or None.
+    Exact key first, then a fuzzy pass over this alliance's keys (OCR can drift
+    slightly between screenshots). Only returns members still on the roster."""
+    if not alliance_id or not detected_name:
+        return None
+    key = _fold(detected_name)
+    if len(key) < 2:
+        return None
+    roster_fids = {e[0]: e[-1] for e in roster}
+    try:
+        with sqlite3.connect(BEAR_DB_PATH, timeout=30.0) as conn:
+            rows = conn.execute(
+                "SELECT ocr_key, fid FROM bear_name_alias WHERE alliance_id = ?",
+                (int(alliance_id),)).fetchall()
+    except Exception as e:
+        logger.warning(f"Bear OCR: alias lookup failed: {e}")
+        return None
+    for ocr_key, fid in rows:
+        if ocr_key == key and fid in roster_fids:
+            return fid, roster_fids[fid]
+    if RAPIDFUZZ_AVAILABLE and rows:
+        keys = [r[0] for r in rows]
+        m = _rf_process.extractOne(
+            key, keys, scorer=_rf_fuzz.WRatio, score_cutoff=MATCH_ALIAS_FUZZY_MIN)
+        if m:
+            fid = rows[m[2]][1]
+            if fid in roster_fids:
+                return fid, roster_fids[fid]
+    return None
+
+
+def resolve_against_roster(detected_name, roster, alliance_id=None):
+    """match_roster, plus a learned-alias fallback. A strong unique direct match
+    always wins (collision guard); the alias only fills in when the read alone
+    isn't confident. Returns match_roster-shaped candidates."""
+    candidates = match_roster(detected_name, roster)
+    if alliance_id is None or classify_match(candidates) == 'auto':
+        return candidates
+    alias = alias_lookup(alliance_id, detected_name, roster)
+    if not alias:
+        return candidates
+    fid, display = alias
+    return [(fid, display, MATCH_ALIAS_SCORE)]
+
+
 def record_ocr_lang_run(alliance_id: int, lang: str, role: str,
                         rows_filled: int) -> None:
     """Bump the (alliance, lang, role) effectiveness counter."""
     if not alliance_id or not lang:
         return
     try:
-        with sqlite3.connect("db/bear_data.sqlite", timeout=30.0) as conn:
+        with sqlite3.connect(BEAR_DB_PATH, timeout=30.0) as conn:
             conn.execute("""
                 INSERT INTO bear_ocr_lang_stats
                     (alliance_id, lang, role, runs, rows_filled, last_run_at)
@@ -760,7 +886,7 @@ def record_ocr_lang_run(alliance_id: int, lang: str, role: str,
 def get_ocr_lang_stats(alliance_id: int) -> list[dict]:
     """Per-language effectiveness rows, most-used first."""
     try:
-        with sqlite3.connect("db/bear_data.sqlite", timeout=30.0) as conn:
+        with sqlite3.connect(BEAR_DB_PATH, timeout=30.0) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
                 SELECT lang, role, runs, rows_filled, last_run_at
@@ -1745,7 +1871,7 @@ class BearTrack(commands.Cog):
 
         # Persistent DB connections with WAL mode
         self.alliance_conn, self.alliance_cursor = self._open_db("db/alliance.sqlite")
-        self.bear_conn, self.bear_cursor = self._open_db("db/bear_data.sqlite")
+        self.bear_conn, self.bear_cursor = self._open_db(BEAR_DB_PATH)
         self.users_conn, self.users_cursor = self._open_db("db/users.sqlite")
         self.changes_conn, self.changes_cursor = self._open_db("db/changes.sqlite")
 
@@ -2872,7 +2998,8 @@ class BearHuntReviewView(discord.ui.View):
                 logger.warning(f"Bear auto-delete tracker (on_cancel) raised: {e}")
 
     def _enrich_row(self, raw_row):
-        candidates = match_roster(raw_row.get('name') or '', self.roster)
+        candidates = resolve_against_roster(
+            raw_row.get('name') or '', self.roster, self.alliance_id)
         status = classify_match(candidates)
         fid = nickname = None
         if status == 'auto':
@@ -4435,7 +4562,8 @@ class BearDamageEditView(discord.ui.View):
 
         candidates = []
         for idx, row in enumerate(unmatched_rows):
-            for fid, nick, score in match_roster(row['raw_name'], self.roster):
+            for fid, nick, score in resolve_against_roster(
+                    row['raw_name'], self.roster, self.alliance_id):
                 candidates.append((score, idx, fid, nick))
         candidates.sort(key=lambda c: (-c[0], c[1]))
 
@@ -4708,10 +4836,11 @@ def _aggregate_leaderboard(cur, *, alliance_id, hunting_trap, from_date, to_date
 # or look up an unknown ID via the player API and offer to add them.
 # ---------------------------------------------------------------------------
 
-def _write_match_to_row(view, *, row_id, fid, nick, damage, rank):
+def _write_match_to_row(view, *, row_id, fid, nick, damage, rank, raw_name=None):
     """Persist a player match. If another row in the hunt already holds this fid,
     that row is freed back to unmatched first (the match 'moves' to this row).
-    row_id=None inserts a new row instead of updating."""
+    row_id=None inserts a new row instead of updating. When `raw_name` is given,
+    the OCR text → fid mapping is learned so it auto-matches next time."""
     cur = view.cog.bear_cursor
     conn = view.cog.bear_conn
     try:
@@ -4732,6 +4861,8 @@ def _write_match_to_row(view, *, row_id, fid, nick, damage, rank):
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (view.hunt_id, fid, nick, nick, damage, rank, 100))
         conn.commit()
+        if raw_name:
+            learn_alias(view.alliance_id, raw_name, fid)
         return True
     except Exception as e:
         conn.rollback()
@@ -4771,7 +4902,7 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
         roster_nick = next((n for f, n in view.roster if f == fid), None)
         if roster_nick is not None:
             if _write_match_to_row(view, row_id=row_id, fid=fid, nick=roster_nick,
-                                   damage=damage, rank=rank):
+                                   damage=damage, rank=rank, raw_name=raw_name):
                 await view.refresh(interaction)
             else:
                 await interaction.response.send_message(
@@ -4801,7 +4932,8 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
         await interaction.response.send_message(
             f"{theme.deniedIcon} `{nick}` (ID {fid}) is already in this hunt.", ephemeral=True)
         return
-    if _write_match_to_row(view, row_id=row_id, fid=fid, nick=nick, damage=damage, rank=rank):
+    if _write_match_to_row(view, row_id=row_id, fid=fid, nick=nick, damage=damage,
+                           rank=rank, raw_name=raw_name):
         await view.refresh(interaction)
     else:
         await interaction.response.send_message(
@@ -4909,7 +5041,8 @@ class PlayerAddConfirmView(discord.ui.View):
         # Refresh the roster cache so the new member resolves immediately.
         self.parent.roster = cog.get_alliance_roster(self.parent.alliance_id)
         if not _write_match_to_row(self.parent, row_id=self.row_id, fid=self.fid,
-                                   nick=nick, damage=self.damage, rank=self.rank):
+                                   nick=nick, damage=self.damage, rank=self.rank,
+                                   raw_name=self.raw_name):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Player added, but matching the row failed.", ephemeral=True)
             return
@@ -6152,6 +6285,7 @@ class DataSubmit:
                     )
                     if fid:
                         matched += 1
+                        learn_alias(alliance_id, r.get('name'), fid)
                     else:
                         unmatched += 1
             self.bear_conn.commit()

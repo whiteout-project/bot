@@ -23,6 +23,7 @@ _REQUIRES = {
     "test_attendance_ocr_layer2.py": "cogs/attendance_ocr_parsers.py",
     "test_layer1_parser.py": "cogs/bear_track.py",
     "test_layer2_ocr.py": "cogs/bear_track.py",
+    "test_bear_name_matching.py": "cogs/bear_track.py",
 }
 for _test_file, _needed in _REQUIRES.items():
     if not (_REPO / _needed).exists():
