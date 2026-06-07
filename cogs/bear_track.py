@@ -2881,17 +2881,19 @@ class BearTrack(commands.Cog):
     # Slash commands
     # -------------------------------------------------------------------
 
-    @app_commands.command(name="bear_damage_add", description="Manually add bear hunt damage data")
+    @app_commands.command(name="bear_damage_add",
+                          description="Create a bear hunt manually and add players in the review editor")
     @app_commands.autocomplete(alliance=alliance_autocomplete, hunting_trap=hunting_trap_autocomplete)
     @app_commands.describe(
         alliance="Alliance name",
-        hunting_trap="Hunting trap number",
-        rallies="Number of rallies",
-        total_damage="Total alliance damage",
+        hunting_trap="Hunting trap number (1 or 2)",
+        rallies="Number of rallies (optional; can be set in the editor)",
+        total_damage="Total alliance damage (optional; can be set in the editor)",
         date="UTC date (YYYY-MM-DD). Defaults to today."
     )
     async def bear_damage_add(self, interaction: discord.Interaction, alliance: str, hunting_trap: int,
-                              rallies: int, total_damage: int, date: str | None = None):
+                              rallies: int | None = None, total_damage: int | None = None,
+                              date: str | None = None):
         try:
             alliance_id = int(alliance)
         except ValueError:
@@ -2904,6 +2906,12 @@ class BearTrack(commands.Cog):
         if not allowed:
             return
 
+        if hunting_trap not in (1, 2):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Hunting trap must be 1 or 2.", ephemeral=True
+            )
+            return
+
         if not date:
             date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -2914,21 +2922,31 @@ class BearTrack(commands.Cog):
         row = self.alliance_cursor.fetchone()
         alliance_name = row[0] if row else f"Alliance ID: {alliance_id}"
 
-        errors = validate_bear_submission(date, hunting_trap, rallies, total_damage)
-        if errors:
-            msg = f"{theme.deniedIcon} Submission failed:\n" + "\n".join(f"- {e}" for e in errors)
-            await interaction.response.send_message(msg, ephemeral=True)
-            return
+        # Open the same review editor used after a screenshot upload, but with no
+        # rows — the admin adds players by ID/name via Add Player, then Submits.
+        _hist = bool(self.get_bear_settings(alliance_id).get("match_all_history"))
+        roster = self.get_match_roster(
+            alliance_id, as_of_date=date, include_history=_hist)
 
-        await self.data_submit.process_submission(
-            interaction,
-            date=date,
-            hunting_trap=hunting_trap,
-            rallies=rallies,
-            total_damage=total_damage,
+        hunt_meta = {
+            'date': date,
+            'hunting_trap': int(hunting_trap),
+            'rallies': int(rallies) if rallies else None,
+            'total_damage': int(total_damage) if total_damage else 0,
+        }
+
+        review = BearHuntReviewView(
+            cog=self,
+            data_submit=self.data_submit,
+            hunt_meta=hunt_meta,
+            rows=[],
+            roster=roster,
             alliance_id=alliance_id,
-            alliance_name=alliance_name
+            alliance_name=alliance_name,
+            original_user_id=interaction.user.id,
         )
+        await interaction.response.send_message(embed=review.build_embed(), view=review)
+        review.message = await interaction.original_response()
 
     @app_commands.command(name="bear_damage_view", description="View bear damage for an alliance")
     @app_commands.autocomplete(alliance=alliance_autocomplete, hunting_trap=hunting_trap_autocomplete)
@@ -6563,14 +6581,6 @@ class DataSubmit:
         self.bear_conn = bear_conn
         self.bear_cursor = bear_conn.cursor()
 
-    async def process_submission(self, interaction, date, hunting_trap, rallies, total_damage,
-                                 *, alliance_id: int | None = None, alliance_name: str | None = None):
-        await self._persist_hunt_and_render(
-            interaction, date=date, hunting_trap=hunting_trap,
-            rallies=rallies, total_damage=total_damage,
-            alliance_id=alliance_id, alliance_name=alliance_name,
-        )
-
     async def process_full_submission(self, interaction, *, hunt_meta, player_rows,
                                       alliance_id=None, alliance_name=None):
         """Persist a reviewed bear hunt: hunt summary + every player row.
@@ -6591,9 +6601,7 @@ class DataSubmit:
                                        total_damage, player_rows=None,
                                        alliance_id=None, alliance_name=None):
         """Insert one hunt row (and any provided player rows), then build
-        and send the standard per-trap chart embed. Shared by both the
-        manual `/bear_damage_add` slash command and the OCR review submit.
-        """
+        and send the standard per-trap chart embed."""
         if not interaction.response.is_done():
             await interaction.response.defer()
 
