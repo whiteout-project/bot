@@ -145,3 +145,16 @@ def test_blank_or_tiny_keys_are_not_learned(temp_bear_db):
     with sqlite3.connect(temp_bear_db) as conn:
         count = conn.execute("SELECT COUNT(*) FROM bear_name_alias").fetchone()[0]
     assert count == 0
+
+
+# ---------------------------------------------------------------------------
+# Bear channel info message — self-heal fingerprint must match the rendered text
+# ---------------------------------------------------------------------------
+
+def test_info_message_fingerprints_present_in_render():
+    """Every fingerprint used to recognise our own pinned message must appear in
+    the rendered text — otherwise self-heal can't find/dedupe it."""
+    rendered = bt.render_bear_info_message()
+    assert bt._BEAR_INFO_FINGERPRINTS
+    for fp in bt._BEAR_INFO_FINGERPRINTS:
+        assert fp in rendered

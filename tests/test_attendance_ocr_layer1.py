@@ -360,6 +360,74 @@ def test_parse_player_value_rows_handles_unformatted_number():
     assert rows == [{"name": "Big Player", "value": 1234567}]
 
 
+def test_parse_player_value_rows_keeps_four_word_name():
+    """Regression: 'Bow to thy Lord' was truncated to 'to thy Lord' by a
+    last-3-tokens cap. The full name must survive."""
+    rows = parsers._parse_player_value_rows("Bow to thy Lord 259,726,677\n")
+    assert rows == [{"name": "Bow to thy Lord", "value": 259726677}]
+
+
+def test_parse_player_value_rows_splits_merged_rows_at_garbled_number():
+    """When a power value is OCR-garbled (letters mixed into the digits) the
+    number regex misses it, so the chunk bleeds into the previous row. The real
+    name is whatever follows the last garbled number; the leading rank-sticker
+    artifact ('Rs') is dropped too."""
+    text = "Hobal A36,17o,548 Rs Noura 410,700,498\n"
+    rows = parsers._parse_player_value_rows(text)
+    assert rows == [{"name": "Noura", "value": 410700498}]
+
+
+def test_name_from_tokens_keeps_digit_names():
+    """A real name with a digit or two is not a number boundary."""
+    assert parsers._name_from_tokens(["Antoha28"]) == "Antoha28"
+    assert parsers._name_from_tokens(["Just4Fun"]) == "Just4Fun"
+    # Garbled number in front of a clean name → only the name survives.
+    assert parsers._name_from_tokens(["44эаэа84", "Fifarafa"]) == "Fifarafa"
+
+
+def test_foundry_rank_from_outcome():
+    """Foundry's result mail has no 'ranked No. N' — a 2-alliance head-to-head,
+    so a win is rank 1 and a loss rank 2."""
+    assert parsers._foundry_rank_from_outcome(
+        "Congratulations! Your alliance [Legion 1] prevailed in the [Foundry Battle] VICTORY") == 1
+    assert parsers._foundry_rank_from_outcome(
+        "Unfortunately your alliance was defeated in the [Foundry Battle]") == 2
+    assert parsers._foundry_rank_from_outcome(
+        "Personal Arsenal Points MIMOUN 10,585,588") is None
+
+
+def test_result_header_page_skipped():
+    """A Foundry/Canyon result mail's scoreboard/tally/rewards page must not be
+    parsed as player rows (its alliance scores + reward totals bled into the
+    leaderboard before). Header markers + no leaderboard marker → skip."""
+    header = ("Congratulations [Legion 1] prevailed VICTORY [CAT]bluCATs 308,419 "
+              "Legion Tally Control Rewards 230,349 Gathering Rewards 39,392 "
+              "Loot Rewards 38,678 KO Rewards 20,786,720")
+    assert parsers._is_result_header_page(header) is True
+    # The leaderboard page itself parses normally.
+    assert parsers._is_result_header_page(
+        "Personal Arsenal Points MIMOUN 10,585,588 Dracula 1,419,545") is False
+    # A continuation leaderboard page (no header markers) parses too.
+    assert parsers._is_result_header_page("Lukaku 343,320 Ymir 30,587") is False
+
+
+def test_default_lord_name_not_read_as_value():
+    """Unnamed players default to 'lord<digits>' (no separator). The glued
+    digit run must NOT be detected as a power value, the name must survive, and
+    the real power must still be captured. Critical on new servers."""
+    # Digits glued to letters are not a number; the comma-formatted power is.
+    values = [v for _s, _e, v in parsers.find_formatted_numbers("5 lord235342323 211,813,266")]
+    assert values == [211813266]
+    assert parsers._parse_power_rows("5 lord235342323 211,813,266") == [
+        {"rank": 5, "name": "lord235342323", "power": 211813266, "value": 211813266},
+    ]
+    assert parsers._parse_player_value_rows("lord235342323 211,813,266") == [
+        {"name": "lord235342323", "value": 211813266},
+    ]
+    # A clean letters-then-digits token is always a name, never a boundary.
+    assert parsers._looks_like_garbled_number("lord235342323") is False
+
+
 # ---------------------------------------------------------------------------
 # Power-rankings row parser (rank prefix + name + power, only ≥1M)
 # ---------------------------------------------------------------------------
@@ -377,6 +445,32 @@ def test_parse_power_rows_basic():
     assert "vtr" in rows[0]["name"]
     assert rows[2]["rank"] == 3
     assert "AlejoCAT" in rows[2]["name"]
+
+
+def test_parse_power_rows_value_mirrors_power():
+    """`value` mirrors `power` so the shared OCR fallback merge/match (keyed on
+    name+value, like Showdown/Foundry) works for Power Rankings too."""
+    text = "1 R4 vtr 1,142,832,517\n2 R3 MADO 1,034,240,119\n"
+    rows = parsers._parse_power_rows(text)
+    assert rows
+    for r in rows:
+        assert r["value"] == r["power"]
+
+
+def test_parse_power_rows_keeps_four_word_name():
+    """Same truncation regression on the power parser."""
+    rows = parsers._parse_power_rows("5 Bow to thy Lord 259,726,677\n")
+    assert rows and rows[0]["name"] == "Bow to thy Lord"
+
+
+def test_cleaner_name_dedup_preference():
+    """Power Rankings dedup keeps the cleaner name on a power collision (the
+    pinned self-row / scroll-overlap duplicate)."""
+    # Fewer digit-noise tokens wins (decorated self-row read as '008$Trolol8e').
+    assert parsers._cleaner_name("Trololololol", "008$Trolol8e") is True
+    # Same noise → longer (more complete) name wins.
+    assert parsers._cleaner_name("Trololololol", "Trolo") is True
+    assert parsers._cleaner_name("Trolo", "Trololololol") is False
 
 
 def test_parse_power_rows_drops_sub_million_values():
@@ -992,3 +1086,29 @@ def test_parse_mvps_simple_pairs():
     assert by_key["squads_defeated"]["value"] == 122
     assert by_key["buildings"]["name"] == "AlejoCAT"
     assert by_key["buildings"]["value"] == 25
+
+
+# ---------------------------------------------------------------------------
+# _dedup_into — same-value name merge prefers the cleaner / more complete name
+# ---------------------------------------------------------------------------
+
+def _dedup(names_vals):
+    target = []
+    for name, val in names_vals:
+        parsers._dedup_into(target, {"name": name, "value": val})
+    return [r["name"] for r in target]
+
+
+def test_dedup_keeps_legit_prefix_not_truncated():
+    # 'Bow to thy Lord' split across pages must not collapse to 'to thy Lord'.
+    assert _dedup([("to thy Lord", 1477213), ("Bow to thy Lord", 1477213)]) == ["Bow to thy Lord"]
+    assert _dedup([("Bow to thy Lord", 1477213), ("to thy Lord", 1477213)]) == ["Bow to thy Lord"]
+
+
+def test_dedup_drops_ocr_noise_prefix():
+    # Digit-noise prefix capture is still dropped in favour of the clean name.
+    assert _dedup([("48Z lII Moly", 999), ("Moly", 999)]) == ["Moly"]
+
+
+def test_dedup_keeps_distinct_values():
+    assert _dedup([("Alpha", 1), ("Beta", 2)]) == ["Alpha", "Beta"]

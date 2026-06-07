@@ -87,8 +87,14 @@ class AttendanceReport(commands.Cog):
         self.bot = bot
 
     def _get_status_emoji(self, status):
-        """Helper to get status emoji"""
-        return {"present": f"{theme.verifiedIcon}", "absent": f"{theme.deniedIcon}", "not_recorded": "⚪"}.get(status, "❓")
+        """Helper to get status emoji. 'registered' is the transient pre-result
+        state used by OCR sessions before their result mail is uploaded."""
+        return {
+            "present": f"{theme.verifiedIcon}",
+            "absent": f"{theme.deniedIcon}",
+            "not_recorded": "⚪",
+            "registered": f"{theme.timeIcon}",
+        }.get(status, "❓")
 
     def _format_last_attendance(self, last_attendance):
         """Helper to format last attendance with emojis"""
@@ -812,51 +818,55 @@ class AttendanceReport(commands.Cog):
             fig_width = 10 if is_preview else 13
             
             fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-            ax.axis('off')
-            
-            # Format title with event type and date
-            title_text = f'Attendance Report - {alliance_name} | {session_name}'
-            if event_type:
-                title_text += f' [{event_type}]'
-            if event_date:
-                if isinstance(event_date, str):
-                    date_str = event_date.split('T')[0] if 'T' in event_date else event_date.split()[0]
-                else:
-                    try:
-                        date_str = event_date.strftime("%Y-%m-%d")
-                    except Exception:
-                        date_str = str(event_date)
-                title_text += f' | Date: {date_str}'
-            
-            ax.text(0.5, 0.98, title_text, 
-                   transform=ax.transAxes, fontsize=16 if not is_preview else 14, color=table_color, 
-                   ha='center', va='top', weight='bold')
-            
-            # Create table with adjusted position to avoid title overlap
-            table = ax.table(
-                cellText=table_data,
-                colLabels=headers,
-                cellLoc='left',
-                loc='upper center',
-                bbox=[0, -0.05, 1, 0.90],  # Move down and reduce height to avoid title
-                colColours=[table_color]*len(headers)
-            )
-            table.auto_set_font_size(False)
-            table.set_fontsize(12)
-            table.scale(1, 1.5)
-            
-            # Set larger width for columns - only for full report
-            if not is_preview:
-                nrows = len(table_data) + 1
-                for row in range(nrows):
-                    cell = table[(row, 2)]
-                    cell.set_width(0.35)
-                    cell = table[(row, 4)]
-                    cell.set_width(0.25)
+            # Close in finally so an error mid-render (table build / savefig)
+            # never leaks the figure — matplotlib figures are process-global.
+            try:
+                ax.axis('off')
 
-            img_buffer = BytesIO()
-            plt.savefig(img_buffer, format='png', bbox_inches='tight')
-            plt.close(fig)
+                # Format title with event type and date
+                title_text = f'Attendance Report - {alliance_name} | {session_name}'
+                if event_type:
+                    title_text += f' [{event_type}]'
+                if event_date:
+                    if isinstance(event_date, str):
+                        date_str = event_date.split('T')[0] if 'T' in event_date else event_date.split()[0]
+                    else:
+                        try:
+                            date_str = event_date.strftime("%Y-%m-%d")
+                        except Exception:
+                            date_str = str(event_date)
+                    title_text += f' | Date: {date_str}'
+
+                ax.text(0.5, 0.98, title_text,
+                       transform=ax.transAxes, fontsize=16 if not is_preview else 14, color=table_color,
+                       ha='center', va='top', weight='bold')
+
+                # Create table with adjusted position to avoid title overlap
+                table = ax.table(
+                    cellText=table_data,
+                    colLabels=headers,
+                    cellLoc='left',
+                    loc='upper center',
+                    bbox=[0, -0.05, 1, 0.90],  # Move down and reduce height to avoid title
+                    colColours=[table_color]*len(headers)
+                )
+                table.auto_set_font_size(False)
+                table.set_fontsize(12)
+                table.scale(1, 1.5)
+
+                # Set larger width for columns - only for full report
+                if not is_preview:
+                    nrows = len(table_data) + 1
+                    for row in range(nrows):
+                        cell = table[(row, 2)]
+                        cell.set_width(0.35)
+                        cell = table[(row, 4)]
+                        cell.set_width(0.25)
+
+                img_buffer = BytesIO()
+                plt.savefig(img_buffer, format='png', bbox_inches='tight')
+            finally:
+                plt.close(fig)
             img_buffer.seek(0)
 
             file = discord.File(img_buffer, filename="attendance_report.png")
@@ -1458,36 +1468,15 @@ class AttendanceReport(commands.Cog):
                 # Add back button
                 back_view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="Back to Alliance Selection", emoji=f"{theme.backIcon}",
+                    label="Back", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
-                
+
                 async def back_callback(back_interaction: discord.Interaction):
                     attendance_cog = self.bot.get_cog("Attendance")
                     if attendance_cog:
-                        try:
-                            result = await attendance_cog._handle_permission_check(back_interaction)
-                            if not result:
-                                return
+                        await attendance_cog.show_attendance_hub(back_interaction, alliance_id)
 
-                            alliances, _ = result
-                            alliances_with_counts = attendance_cog._get_alliances_with_counts(alliances)
-
-                            from .attendance import AllianceSelectView
-                            view = AllianceSelectView(alliances_with_counts, attendance_cog, is_marking=False)
-
-                            select_embed = discord.Embed(
-                                title="👀 View Attendance - Alliance Selection",
-                                description="Please select an alliance to view attendance records:",
-                                color=theme.emColor3
-                            )
-
-                            await back_interaction.response.edit_message(embed=select_embed, view=view)
-                        except Exception as e:
-                            logger.error(f"Error going back to alliance selection: {e}")
-                            print(f"Error going back to alliance selection: {e}")
-                            await attendance_cog.show_attendance_menu(back_interaction)
-                
                 back_button.callback = back_callback
                 back_view.add_item(back_button)
                 

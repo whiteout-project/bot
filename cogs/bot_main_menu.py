@@ -874,7 +874,7 @@ class AllianceHubView(discord.ui.View):
         )
 
     @discord.ui.button(label="History", emoji=theme.listIcon,
-                       style=discord.ButtonStyle.secondary, row=2)
+                       style=discord.ButtonStyle.secondary, row=3)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceHistory",
@@ -883,15 +883,24 @@ class AllianceHubView(discord.ui.View):
             missing_label="Alliance History",
         )
 
-    # ── Nav (row 3) ──
+    @discord.ui.button(label="Power Rankings", emoji=theme.chartIcon,
+                       style=discord.ButtonStyle.secondary, row=3)
+    async def power_rankings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_power_rankings_for", self.alliance_id,
+            missing_label="Alliance Members",
+        )
+
+    # ── Nav (row 4) ──
 
     @discord.ui.button(label="Back", emoji=theme.backIcon,
-                       style=discord.ButtonStyle.secondary, row=3)
+                       style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_alliance_management(interaction)
 
     @discord.ui.button(label="Delete Alliance", emoji=theme.trashIcon,
-                       style=discord.ButtonStyle.danger, row=3)
+                       style=discord.ButtonStyle.danger, row=4)
     async def delete_alliance(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
