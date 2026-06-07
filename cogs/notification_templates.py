@@ -65,7 +65,7 @@ class NotificationTemplates(commands.Cog):
         # Always sync non-customized templates with latest defaults from notification_event_types.py
         self._sync_default_templates()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Close database connections when cog is unloaded."""
         try:
             self.conn.close()

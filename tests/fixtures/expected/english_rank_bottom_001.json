@@ -1,0 +1,16 @@
+{
+  "_comment": "Source: Screenshot_20260430-213029.png. English UI. 2026-04-30 21:30 Trap 1, bottom of rank list (positions 3-10). No bracket header on this slice; trap will not extract from this screen alone.",
+  "language": "english",
+  "screen_type": "rank_bottom",
+  "event_id": "20260430_2130_trap1",
+  "expected_rows": [
+    {"damage": 23578101931, "match": {"fid": 44348649, "min_status": "auto"}},
+    {"damage": 19903598834, "match": {"fid": 99999991, "min_status": "likely", "allow_unmatched": true}},
+    {"damage": 15459277434, "match": {"fid": 88888881, "min_status": "auto"}},
+    {"damage": 14724170844, "match": {"fid": 88888882, "min_status": "auto"}},
+    {"damage": 11153378500, "match": {"fid": 88888883, "min_status": "auto"}},
+    {"damage": 2822314852,  "match": {"fid": 88888884, "min_status": "auto"}},
+    {"damage": 2564936386,  "match": {"fid": 88888885, "min_status": "auto"}},
+    {"damage": 2491422864,  "match": {"fid": 88888886, "min_status": "auto"}}
+  ]
+}

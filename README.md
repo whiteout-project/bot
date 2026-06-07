@@ -1,8 +1,8 @@
-# Whiteout Survival Discord Bot
+# WOSLand Discord Bot for Whiteout Survival
 
-Whiteout Survival Discord Bot that supports alliance management, event reminders and attendance tracking, gift code redemption, minister appointment planning and more. This bot is free, open source and self-hosted.
+Discord Bot written in Python that supports alliance management, event reminders and attendance tracking, gift code redemption, minister appointment planning and more. This bot is free, open source and self-hosted.
 
-**This is the actively maintained and improved version of the original bot that was created and soon abandoned by Reloisback.**
+**The bot is being actively maintained by the [WOSLand](https://discord.gg/apYByj6K2m) community.**
 
 ## 🚀 Getting Started
 

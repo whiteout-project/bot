@@ -1053,7 +1053,7 @@ class NotificationSchedule(commands.Cog):
                 result = self.cursor.fetchone()
 
                 if not result:
-                    print(f"[WARNING] Board {board_id} not found in database")
+                    self.logger.warning(f"[SCHEDULE] Board {board_id} not found in database")
                     return False
 
                 channel_id, message_id = result
@@ -1061,7 +1061,7 @@ class NotificationSchedule(commands.Cog):
                 # Get channel and message
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
-                    print(f"[WARNING] Channel {channel_id} not found, removing board {board_id}")
+                    self.logger.warning(f"[SCHEDULE] Channel {channel_id} not found, removing board {board_id}")
                     self.cursor.execute("DELETE FROM notification_schedule_boards WHERE id = ?", (board_id,))
                     self.conn.commit()
                     return False
@@ -1069,7 +1069,7 @@ class NotificationSchedule(commands.Cog):
                 try:
                     message = await channel.fetch_message(message_id)
                 except discord.NotFound:
-                    print(f"[WARNING] Message {message_id} not found, removing board {board_id}")
+                    self.logger.warning(f"[SCHEDULE] Message {message_id} not found, removing board {board_id}")
                     self.cursor.execute("DELETE FROM notification_schedule_boards WHERE id = ?", (board_id,))
                     self.conn.commit()
                     return False
@@ -1207,9 +1207,15 @@ class NotificationSchedule(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.calendarIcon} Schedule Board Management",
                 description=(
-                    "Manage automated schedule boards that display upcoming notifications.\n\n"
+                    f"Manage automated schedule boards that display upcoming notifications.\n\n"
                     f"**Active Boards:** {len(boards)}\n\n"
-                    "Use the buttons below to create or manage boards."
+                    f"**Available Operations**\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.addIcon} **Create Board**\n"
+                    f"└ Post a new live schedule board to a channel of your choice\n"
+                    f"{theme.settingsIcon} **Manage Boards**\n"
+                    f"└ Edit settings, move, or delete an existing board\n"
+                    f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
             )

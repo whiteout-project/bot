@@ -1,0 +1,11 @@
+{
+  "_comment": "Source: Screenshot_20260421-071802.png. English UI. 2026-04-20 21:30 Trap 1 hunt summary screen. Pinned to verify the rallies-marker preference (was returning 0 due to '0$Trololololf' bare-int leak), the date-from-OCR extraction (was defaulting to today), and that personal-rewards prose still doesn't leak as fake rows.",
+  "language": "english",
+  "screen_type": "summary",
+  "event_id": "20260420_2130_trap1",
+  "trap": "1",
+  "rallies": "50",
+  "total_damage": 305722250397,
+  "date": "2026-04-20",
+  "expected_rows": []
+}

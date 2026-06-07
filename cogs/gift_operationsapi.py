@@ -114,7 +114,7 @@ class GiftCodeAPI:
         except Exception as e:
             self.logger.exception(f"Fatal error in API check loop: {e}")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Clean up database connections and the API check task when unloaded."""
         task = getattr(self, '_api_check_task', None)
         if task is not None and not task.done():
@@ -687,7 +687,7 @@ class GiftCodeAPI:
                 self.logger.info("No codes to validate")
                 return
             
-            test_fid = "244886619" # Default fallback
+            test_fid = "45379845" # Default fallback
             try:
                 gift_operations = self.bot.get_cog('GiftOperations')
                 if gift_operations and hasattr(gift_operations, 'get_test_fid'):

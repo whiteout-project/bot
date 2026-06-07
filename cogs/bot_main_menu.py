@@ -4,6 +4,7 @@ Centralized menu system that handles all main menu logic and routing.
 
 import discord
 from discord.ext import commands
+from datetime import datetime
 import logging
 import sqlite3
 from .permission_handler import (
@@ -298,11 +299,7 @@ class MainMenu(commands.Cog):
             embed = discord.Embed(
                 title=f"{theme.allianceIcon} {alliance_name}",
                 description=(
-                    f"**Overview**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.fidIcon} **ID:** `{alliance_id}`\n"
-                    f"{theme.membersIcon} {stats_line}\n"
-                    f"{theme.lowerDivider}\n\n"
+                    f"{theme.membersIcon} {stats_line}\n\n"
                     f"Pick an action below, or use the dropdown to switch "
                     f"to a different alliance.\n\n"
                     f"**Actions**\n"
@@ -311,8 +308,8 @@ class MainMenu(commands.Cog):
                     f"└ View, add, transfer, export and remove members\n\n"
                     f"{theme.announceIcon} **Channel Setup**\n"
                     f"└ Configure alliance channels: ID, Sync, Log\n\n"
-                    f"{theme.refreshIcon} **Sync Settings**\n"
-                    f"└ Sync interval, start time and other options\n\n"
+                    f"{theme.settingsIcon} **Settings**\n"
+                    f"└ Sync interval, auto-removal on transfer, notifications, logs\n\n"
                     f"{theme.editListIcon} **Edit Name**\n"
                     f"└ Rename this alliance\n\n"
                     f"{theme.listIcon} **History**\n"
@@ -785,11 +782,12 @@ class AllianceManagementEntryView(discord.ui.View):
 
 
 class AllianceHubView(discord.ui.View):
-    """Per-alliance hub. Lean layout:
+    """Per-alliance hub. Layout:
       row 0: alliance switch dropdown
-      row 1: Manage Members | History
-      row 2: Channel Setup | Sync Settings | Edit Name
-      row 3: Back | Delete Alliance
+      row 1: Manage Members | Channel Setup
+      row 2: Settings | Edit Name
+      row 3: History | Power Rankings
+      row 4: Back | Delete Alliance
     """
 
     def __init__(self, cog, alliance_id: int, alliance_name: str,
@@ -858,7 +856,7 @@ class AllianceHubView(discord.ui.View):
 
     # ── Secondary actions (row 2) ──
 
-    @discord.ui.button(label="Sync Settings", emoji=theme.refreshIcon,
+    @discord.ui.button(label="Settings", emoji=theme.settingsIcon,
                        style=discord.ButtonStyle.primary, row=2)
     async def sync_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
@@ -879,7 +877,7 @@ class AllianceHubView(discord.ui.View):
         )
 
     @discord.ui.button(label="History", emoji=theme.listIcon,
-                       style=discord.ButtonStyle.secondary, row=2)
+                       style=discord.ButtonStyle.secondary, row=3)
     async def history(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceHistory",
@@ -888,15 +886,24 @@ class AllianceHubView(discord.ui.View):
             missing_label="Alliance History",
         )
 
-    # ── Nav (row 3) ──
+    @discord.ui.button(label="Power Rankings", emoji=theme.chartIcon,
+                       style=discord.ButtonStyle.secondary, row=3)
+    async def power_rankings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceMemberOperations",
+            "show_power_rankings_for", self.alliance_id,
+            missing_label="Alliance Members",
+        )
+
+    # ── Nav (row 4) ──
 
     @discord.ui.button(label="Back", emoji=theme.backIcon,
-                       style=discord.ButtonStyle.secondary, row=3)
+                       style=discord.ButtonStyle.secondary, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_alliance_management(interaction)
 
     @discord.ui.button(label="Delete Alliance", emoji=theme.trashIcon,
-                       style=discord.ButtonStyle.danger, row=3)
+                       style=discord.ButtonStyle.danger, row=4)
     async def delete_alliance(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
@@ -1303,7 +1310,14 @@ class AdminManagerView(discord.ui.View):
             self.add_item(page_lbl)
             self.add_item(next_btn)
 
-        # Row 4: Back.
+        # Row 4: View Audit Log + Back.
+        audit_btn = discord.ui.Button(
+            label="View Audit Log", style=discord.ButtonStyle.secondary,
+            emoji=theme.infoIcon, row=4,
+        )
+        audit_btn.callback = self._on_view_audit
+        self.add_item(audit_btn)
+
         back_btn = discord.ui.Button(
             label="Back", style=discord.ButtonStyle.secondary,
             emoji=theme.backIcon, row=4,
@@ -1312,6 +1326,20 @@ class AdminManagerView(discord.ui.View):
         self.add_item(back_btn)
 
     # ───── callbacks ─────
+
+    async def _on_view_audit(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        # Owner + Global only — re-check at click time.
+        _, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only Global admins and the Owner can view the audit log.",
+                ephemeral=True,
+            )
+            return
+        view = AuditLogView(self.cog.bot, viewer_id=interaction.user.id)
+        await view.render(interaction)
 
     async def _on_claim_owner(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
@@ -1373,6 +1401,131 @@ class AdminManagerView(discord.ui.View):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
         await self.cog.show_main_menu(interaction)
+
+
+def _format_audit_state(state):
+    """Render a stored audit state. Translates legacy 'tier=X, alliances=[...]' entries too."""
+    if not state:
+        return "—"
+    if state.startswith("tier="):
+        tier_part = state.split(",", 1)[0].split("=", 1)[1].strip()
+        tier_map = {"Owner": "Bot Owner", "Global": "Global Admin",
+                    "Server": "Server Admin", "Alliance": "Alliance Admin"}
+        label = tier_map.get(tier_part, tier_part)
+        if "alliances=[" in state:
+            try:
+                inner = state.split("alliances=[", 1)[1].rsplit("]", 1)[0].strip()
+                count = (inner.count(",") + 1) if inner else 0
+                if count:
+                    label += f" ({count} alliance{'s' if count != 1 else ''})"
+            except Exception:
+                pass
+        return label
+    return state
+
+
+class AuditLogView(discord.ui.View):
+    """Ephemeral, pagination-only viewer for permission_audit_log."""
+
+    PAGE_SIZE = 10
+
+    def __init__(self, bot, viewer_id: int):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.viewer_id = viewer_id
+        self.page = 0
+        self.total = 0
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.viewer_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} This audit log was opened by someone else.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    def _total_pages(self) -> int:
+        return max(1, -(-self.total // self.PAGE_SIZE))
+
+    async def _build_embed(self) -> discord.Embed:
+        rows, total = PermissionManager.get_audit_log_page(
+            offset=self.page * self.PAGE_SIZE, limit=self.PAGE_SIZE,
+        )
+        self.total = total
+        embed = discord.Embed(
+            title=f"{theme.infoIcon} Permission Audit Log",
+            color=theme.emColor1,
+        )
+        if not rows:
+            embed.description = "*No permission changes have been logged yet.*"
+            return embed
+        action_meta = {
+            "add_admin":      (theme.addIcon,      "Admin Added",       "added"),
+            "set_tier":       (theme.transferIcon, "Tier Changed",      "updated"),
+            "remove_admin":   (theme.trashIcon,    "Admin Removed",     "removed"),
+            "transfer_owner": (theme.crownIcon,    "Owner Transferred", "transferred ownership to"),
+        }
+        blocks = []
+        for r in rows:
+            icon, label, verb = action_meta.get(
+                r['action'], (theme.infoIcon, r['action'], "changed"),
+            )
+            try:
+                ts = int(datetime.fromisoformat(r['timestamp']).timestamp())
+                when = f"<t:{ts}:R>"
+            except Exception:
+                when = r['timestamp']
+            before = _format_audit_state(r['before_state'])
+            after = _format_audit_state(r['after_state'])
+            blocks.append(
+                f"{icon} **{label}** · {when}\n"
+                f"<@{r['actor_id']}> {verb} <@{r['target_id']}>\n"
+                f"{before} → **{after}**"
+            )
+        embed.description = "\n\n".join(blocks)
+        start = self.page * self.PAGE_SIZE + 1
+        end = min(start + self.PAGE_SIZE - 1, total)
+        embed.set_footer(text=f"Entries {start}–{end} of {total}")
+        return embed
+
+    def _build_buttons(self):
+        self.clear_items()
+        total_pages = self._total_pages()
+        prev_btn = discord.ui.Button(
+            label="◀ Prev", style=discord.ButtonStyle.secondary,
+            disabled=(self.page == 0),
+        )
+        prev_btn.callback = self._on_prev
+        page_lbl = discord.ui.Button(
+            label=f"Page {self.page + 1}/{total_pages}",
+            style=discord.ButtonStyle.secondary, disabled=True,
+        )
+        next_btn = discord.ui.Button(
+            label="Next ▶", style=discord.ButtonStyle.secondary,
+            disabled=(self.page >= total_pages - 1),
+        )
+        next_btn.callback = self._on_next
+        self.add_item(prev_btn)
+        self.add_item(page_lbl)
+        self.add_item(next_btn)
+
+    async def render(self, interaction: discord.Interaction):
+        embed = await self._build_embed()
+        self._build_buttons()
+        await interaction.response.send_message(embed=embed, view=self, ephemeral=True)
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        self.page = max(0, self.page - 1)
+        embed = await self._build_embed()
+        self._build_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page = min(self._total_pages() - 1, self.page + 1)
+        embed = await self._build_embed()
+        self._build_buttons()
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 async def _resolve_user_name(bot, user_id: int) -> str:
@@ -1560,6 +1713,7 @@ class AdminContextView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        before_state = PermissionManager.describe_state(self.target_id)
         try:
             PermissionManager.set_tier(
                 self.target_id, self.staged_tier,
@@ -1570,6 +1724,10 @@ class AdminContextView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "set_tier", self.target_id,
+            before_state, PermissionManager.describe_state(self.target_id),
+        )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 
     async def _on_remove(self, interaction):
@@ -1607,6 +1765,7 @@ class AdminContextView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def _do_remove(self, interaction):
+        before_state = PermissionManager.describe_state(self.target_id)
         try:
             PermissionManager.remove_admin(self.target_id)
         except ValueError as e:
@@ -1614,6 +1773,10 @@ class AdminContextView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "remove_admin", self.target_id,
+            before_state, "removed",
+        )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 
     async def _refresh_self(self, interaction):
@@ -1751,6 +1914,7 @@ class AddAdminView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        before_state = PermissionManager.describe_state(self.target_id)
         try:
             PermissionManager.add_admin(
                 self.target_id, tier=self.staged_tier,
@@ -1761,6 +1925,10 @@ class AddAdminView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "add_admin", self.target_id,
+            before_state, PermissionManager.describe_state(self.target_id),
+        )
         # If they auto-became owner (brand-new install path), the parent
         # list view will show them with the crown — no extra messaging needed.
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
@@ -1862,6 +2030,7 @@ class TransferOwnerView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def _do_transfer(self, interaction, target_id):
+        before_target = PermissionManager.describe_state(target_id)
         try:
             PermissionManager.transfer_owner(self.viewer_id, target_id)
         except ValueError as e:
@@ -1869,6 +2038,10 @@ class TransferOwnerView(discord.ui.View):
                 f"{theme.deniedIcon} {e}", ephemeral=True,
             )
             return
+        PermissionManager.log_change(
+            self.viewer_id, "transfer_owner", target_id,
+            before_target, PermissionManager.describe_state(target_id),
+        )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 
     async def _refresh_self(self, interaction):

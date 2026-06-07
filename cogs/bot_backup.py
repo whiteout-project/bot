@@ -84,7 +84,7 @@ class BackupOperations(commands.Cog):
             )
             conn.commit()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.automatic_backup_loop.cancel()
 
     def get_disk_space_info(self):
@@ -183,7 +183,7 @@ class BackupOperations(commands.Cog):
 
             can_backup, reason = self.can_create_backup(save_locally=True)
             if not can_backup:
-                print(f"Automatic backup skipped: {reason}")
+                logger.info(f"Automatic backup skipped: {reason}")
                 for admin_id in global_admins:
                     self.log_backup(str(admin_id[0]), False, "Automatic Backup", "Local", None, reason)
                 return
@@ -246,11 +246,17 @@ class BackupOperations(commands.Cog):
                 f"{theme.documentIcon} **Local Backups:** {len(backup_files)} files\n"
                 f"{auto_line}\n"
                 f"{theme.lowerDivider}\n\n"
-                f"**Operations:**\n"
-                f"• Set backup password\n"
-                f"• Create manual backup\n"
-                f"• View/manage local backups\n"
-                f"• Configure automatic backups"
+                f"**Available Operations**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.lockIcon} **Set Password**\n"
+                f"└ Encrypt future backups with a password\n\n"
+                f"{theme.saveIcon} **Create Backup**\n"
+                f"└ Make a backup now via DM or local save\n\n"
+                f"{theme.settingsIcon} **Auto Backup Settings**\n"
+                f"└ Schedule automatic backups and retention\n\n"
+                f"{theme.listIcon} **View Local Backups**\n"
+                f"└ List and clean up saved backup files\n"
+                f"{theme.lowerDivider}"
             ),
             color=theme.emColor1,
         )

@@ -5,15 +5,19 @@ import discord
 from discord.ext import commands
 import sqlite3
 import logging
+import asyncio
 from datetime import datetime
 import os
 import uuid
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+from .bot_level_mapping import LEVEL_MAPPING as FC_LEVEL_MAPPING
 
 logger = logging.getLogger('bot')
 
 try:
+    import matplotlib
+    matplotlib.use('Agg', force=False)  # non-interactive backend; avoids Tkinter (fatal off the main thread on Windows)
     import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
     
@@ -31,20 +35,6 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
-FC_LEVEL_MAPPING = {
-    31: "30-1", 32: "30-2", 33: "30-3", 34: "30-4",
-    35: "FC 1", 36: "FC 1-1", 37: "FC 1-2", 38: "FC 1-3", 39: "FC 1-4",
-    40: "FC 2", 41: "FC 2-1", 42: "FC 2-2", 43: "FC 2-3", 44: "FC 2-4",
-    45: "FC 3", 46: "FC 3-1", 47: "FC 3-2", 48: "FC 3-3", 49: "FC 3-4",
-    50: "FC 4", 51: "FC 4-1", 52: "FC 4-2", 53: "FC 4-3", 54: "FC 4-4",
-    55: "FC 5", 56: "FC 5-1", 57: "FC 5-2", 58: "FC 5-3", 59: "FC 5-4",
-    60: "FC 6", 61: "FC 6-1", 62: "FC 6-2", 63: "FC 6-3", 64: "FC 6-4",
-    65: "FC 7", 66: "FC 7-1", 67: "FC 7-2", 68: "FC 7-3", 69: "FC 7-4",
-    70: "FC 8", 71: "FC 8-1", 72: "FC 8-2", 73: "FC 8-3", 74: "FC 8-4",
-    75: "FC 9", 76: "FC 9-1", 77: "FC 9-2", 78: "FC 9-3", 79: "FC 9-4",
-    80: "FC 10", 81: "FC 10-1", 82: "FC 10-2", 83: "FC 10-3", 84: "FC 10-4"
-}
-
 EVENT_TYPES = ["Foundry", "Canyon Clash", "Crazy Joe", "Bear Trap", "Castle Battle", "Frostdragon Tyrant", "Other"]
 
 EVENT_TYPE_ICONS = {
@@ -56,6 +46,23 @@ EVENT_TYPE_ICONS = {
     "Frostdragon Tyrant": "🐉",
     "Other": "📋"
 }
+
+# OCR db keys → friendly (label, icon); manual events use EVENT_TYPE_ICONS.
+_OCR_EVENT_DISPLAY = {
+    "foundry_battle": ("Foundry Battle", "🏭"),
+    "canyon_clash": ("Canyon Clash", "⚔️"),
+    "alliance_showdown": ("Alliance Showdown", "🛡️"),
+    "power_rankings": ("Power Rankings", "📊"),
+}
+
+
+def event_type_display(event_type: str) -> tuple:
+    """(label, icon) for an event_type that may be an OCR db key
+    ('foundry_battle') or a manual label ('Crazy Joe')."""
+    if event_type in _OCR_EVENT_DISPLAY:
+        return _OCR_EVENT_DISPLAY[event_type]
+    label = event_type or "Other"
+    return label, EVENT_TYPE_ICONS.get(label, "📋")
 
 # Event types that support legion selection (Legion 1, Legion 2)
 LEGION_EVENT_TYPES = ["Foundry", "Canyon Clash"]
@@ -354,179 +361,121 @@ class ReportSortSelectView(discord.ui.View):
             )
             await interaction.response.edit_message(embed=error_embed, view=None)
 
-class AttendanceView(discord.ui.View):
-    def __init__(self, cog, user_id, guild_id):
+class AttendanceHubView(discord.ui.View):
+    """Alliance-scoped attendance hub. The row-0 dropdown selects the alliance;
+    actions then act on it directly (no per-action picker), and are disabled
+    until one is picked. Settings is always global."""
+
+    _SCOPED_LABELS = ("Mark Attendance", "View Attendance", "Player History", "Screenshot Upload")
+
+    def __init__(self, cog, user_id, guild_id, alliance_id, alliance_name, alliances_with_counts):
         super().__init__(timeout=7200)
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
-        self.admin_result = None
-        self.alliances = None
-    
-    async def initialize_permissions_and_alliances(self):
-        """Initialize permissions and alliances at the view level."""
-        self.admin_result = await self.cog._check_admin_permissions(self.user_id)
-        
-        if self.admin_result:
-            self.alliances, _ = PermissionManager.get_admin_alliances(self.user_id, self.guild_id)
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.alliances = alliances_with_counts  # [(aid, name, count), ...]
+        self._build_select()
+        # Gray out per-alliance actions until an alliance is chosen.
+        if self.alliance_id is None:
+            for item in self.children:
+                if isinstance(item, discord.ui.Button) and item.label in self._SCOPED_LABELS:
+                    item.disabled = True
 
-    async def _handle_permission_check(self, interaction):
-        """Consolidated permission checking using cached results."""
-        if not self.admin_result:
-            error_embed = self.cog._create_error_embed(
-                f"{theme.deniedIcon} Access Denied", 
-                "You do not have permission to use this command."
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the user who opened this menu can use it.",
+                ephemeral=True,
             )
-            back_view = self.cog._create_back_view(lambda i: self.cog.show_attendance_menu(i))
-            await interaction.response.edit_message(embed=error_embed, view=back_view)
-            return None
-            
-        if not self.alliances:
-            error_embed = self.cog._create_error_embed(
-                f"{theme.deniedIcon} No Alliances Found",
-                "No alliances found for your permissions."
+            return False
+        return True
+
+    def _build_select(self):
+        for item in self.children[:]:
+            if isinstance(item, discord.ui.Select):
+                self.remove_item(item)
+        if self.alliance_id is None:
+            choices = self.alliances            # nothing chosen yet → list all
+            placeholder = f"{theme.allianceIcon} Select an alliance…"
+        else:
+            choices = [a for a in self.alliances if a[0] != self.alliance_id]  # switchable
+            placeholder = f"{theme.refreshIcon} Switch alliance…"
+            if not choices:
+                return                          # single alliance → nothing to switch
+        options = [
+            discord.SelectOption(
+                label=name[:50], value=str(aid),
+                description=f"ID: {aid} · {count} member{'s' if count != 1 else ''}"[:100],
+                emoji=theme.allianceIcon,
             )
-            back_view = self.cog._create_back_view(lambda i: self.cog.show_attendance_menu(i))
-            await interaction.response.edit_message(embed=error_embed, view=back_view)
-            return None
-            
-        return self.alliances, self.admin_result[0]
+            for aid, name, count in sorted(choices, key=lambda a: a[1].lower())[:25]
+        ]
+        select = discord.ui.Select(placeholder=placeholder, options=options, row=0)
+        select.callback = self._on_switch
+        self.add_item(select)
 
-    def _get_alliances_with_counts(self, alliances):
-        """Get alliance member counts with optimized single query"""
-        alliance_ids = [aid for aid, _ in alliances]
-        alliances_with_counts = []
-        
-        # Validate that all alliance IDs are integers to prevent SQL injection
-        if alliance_ids and not all(isinstance(aid, int) for aid in alliance_ids):
-            raise ValueError("Invalid alliance IDs detected - all IDs must be integers")
-        
-        if alliance_ids:
-            with sqlite3.connect('db/users.sqlite') as db:
-                cursor = db.cursor()
-                placeholders = ','.join('?' * len(alliance_ids))
-                cursor.execute(f"""
-                    SELECT alliance, COUNT(*) 
-                    FROM users 
-                    WHERE alliance IN ({placeholders}) 
-                    GROUP BY alliance
-                """, [str(aid) for aid in alliance_ids]) # Convert to strings to match database
-                counts = dict(cursor.fetchall())
-            
-            alliances_with_counts = [
-                (aid, name, counts.get(str(aid), 0)) # Use string key for lookup
-                for aid, name in alliances
-            ]
-        
-        return alliances_with_counts
+    async def _on_switch(self, interaction: discord.Interaction):
+        select = next(c for c in self.children if isinstance(c, discord.ui.Select))
+        await self.cog.show_attendance_hub(interaction, int(select.values[0]))
 
-    @discord.ui.button(
-        label="Mark Attendance",
-        emoji=theme.editListIcon,
-        style=discord.ButtonStyle.primary,
-        custom_id="mark_attendance",
-        row=0
-    )
-    async def mark_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_alliance_selection_for_marking(interaction)
+    @discord.ui.button(label="Mark Attendance", emoji=theme.editListIcon,
+                       style=discord.ButtonStyle.primary, row=1)
+    async def mark_attendance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_session_selection_for_marking(interaction, self.alliance_id)
 
-    @discord.ui.button(
-        label="View Attendance",
-        emoji=theme.eyesIcon,
-        style=discord.ButtonStyle.secondary,
-        custom_id="view_attendance",
-        row=0
-    )
-    async def view_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            result = await self._handle_permission_check(interaction)
-            if not result:
-                return
-                
-            alliances, _ = result
+    @discord.ui.button(label="View Attendance", emoji=theme.eyesIcon,
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def view_attendance(self, interaction: discord.Interaction, button: discord.ui.Button):
+        report_cog = self.cog.bot.get_cog("AttendanceReport")
+        if report_cog is None:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Attendance Report module not loaded.", ephemeral=True)
+            return
+        await report_cog.show_session_selection(interaction, self.alliance_id)
 
-            # Get alliance member counts with optimized query
-            alliances_with_counts = self._get_alliances_with_counts(alliances)
-            view = AllianceSelectView(alliances_with_counts, self.cog, is_marking=False)
-            
-            select_embed = discord.Embed(
-                title=f"{theme.eyesIcon} View Attendance - Alliance Selection",
-                description="Please select an alliance to view attendance records:",
-                color=theme.emColor3
-            )
-            
-            await interaction.response.edit_message(embed=select_embed, view=view)
+    @discord.ui.button(label="Player History", emoji=theme.listIcon,
+                       style=discord.ButtonStyle.secondary, row=1)
+    async def player_history(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_player_history_for(interaction, self.alliance_id)
 
-        except Exception as e:
-            error_embed = self.cog._create_error_embed(
-                f"{theme.deniedIcon} Error", 
-                "An error occurred while processing your request."
-            )
-            await interaction.response.edit_message(embed=error_embed, view=None)
+    @discord.ui.button(label="Screenshot Upload", emoji=theme.importIcon,
+                       style=discord.ButtonStyle.success, row=2)
+    async def screenshot_upload(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ocr_cog = self.cog.bot.get_cog("AttendanceOCR")
+        if ocr_cog is None:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Screenshot Upload module not loaded.", ephemeral=True)
+            return
+        await ocr_cog.show_channel_setup_menu(interaction, alliance_id=self.alliance_id)
 
-    @discord.ui.button(
-        label="Settings",
-        emoji=theme.settingsIcon,
-        style=discord.ButtonStyle.secondary,
-        custom_id="attendance_settings",
-        row=1
-    )
-    async def settings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            # Check if user has admin permissions
-            admin_result = await self.cog._check_admin_permissions(interaction.user.id)
-            
-            if not admin_result:
-                error_embed = self.cog._create_error_embed(
-                    f"{theme.deniedIcon} Access Denied", 
-                    "You do not have permission to access settings."
-                )
-                await interaction.response.edit_message(embed=error_embed, view=None)
-                return
+    @discord.ui.button(label="Settings", emoji=theme.settingsIcon,
+                       style=discord.ButtonStyle.secondary, row=2)
+    async def settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title=f"{theme.settingsIcon} Attendance Settings",
+            description=(
+                f"Configure your attendance system preferences:\n\n"
+                f"**Available Settings**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.chartIcon} **Report Type**\n"
+                f"└ Choose between text or visual reports\n\n"
+                f"{theme.refreshIcon} **Sort Order**\n"
+                f"└ Choose how to sort players in the reports\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+        await interaction.response.edit_message(embed=embed, view=AttendanceSettingsView(self.cog))
 
-            settings_view = AttendanceSettingsView(self.cog)
+    @discord.ui.button(label="Main Menu", emoji=theme.homeIcon,
+                       style=discord.ButtonStyle.secondary, row=3)
+    async def main_menu(self, interaction: discord.Interaction, button: discord.ui.Button):
+        main_menu_cog = self.cog.bot.get_cog("MainMenu")
+        if main_menu_cog:
+            await main_menu_cog.show_main_menu(interaction)
 
-            embed = discord.Embed(
-                title=f"{theme.settingsIcon} Attendance Settings",
-                description=(
-                    f"Configure your attendance system preferences:\n\n"
-                    f"**Available Settings**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.chartIcon} **Report Type**\n"
-                    f"└ Choose between text or visual reports\n\n"
-                    f"{theme.refreshIcon} **Sort Order**\n"
-                    f"└ Choose how to sort players in the reports\n"
-                    f"{theme.lowerDivider}"
-                ),
-                color=theme.emColor1
-            )
-
-            await interaction.response.edit_message(embed=embed, view=settings_view)
-
-        except Exception as e:
-            error_embed = self.cog._create_error_embed(
-                f"{theme.deniedIcon} Error", 
-                "An error occurred while loading settings."
-            )
-            await interaction.response.edit_message(embed=error_embed, view=None)
-
-    @discord.ui.button(
-        label="Main Menu", emoji=f"{theme.homeIcon}",
-        style=discord.ButtonStyle.secondary,
-        custom_id="back_to_main_menu",
-        row=1
-    )
-    async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            main_menu_cog = self.cog.bot.get_cog("MainMenu")
-            if main_menu_cog:
-                await main_menu_cog.show_main_menu(interaction)
-        except Exception as e:
-            error_embed = self.cog._create_error_embed(
-                f"{theme.deniedIcon} Error",
-                "An error occurred while returning to Main Menu."
-            )
-            await interaction.response.edit_message(embed=error_embed, view=None)
 
 class EventTypeSelectView(discord.ui.View):
     def __init__(self, session_data, cog, alliance_id, alliance_name):
@@ -695,85 +644,6 @@ class SessionNameModal(discord.ui.Modal, title="Attendance Session"):
         
         await interaction.response.edit_message(embed=embed, view=event_view)
 
-class AllianceSelectView(discord.ui.View):
-    def __init__(self, alliances_with_counts, cog, page=0, is_marking=False):
-        super().__init__(timeout=7200)
-        self.alliances = alliances_with_counts
-        self.cog = cog
-        self.page = page
-        self.max_page = (len(alliances_with_counts) - 1) // 25 if alliances_with_counts else 0
-        self.current_select = None
-        self.is_marking = is_marking
-        self.update_select_menu()
-
-    def update_select_menu(self):
-        for item in self.children[:]:
-            if isinstance(item, discord.ui.Select):
-                self.remove_item(item)
-
-        start_idx = self.page * 25
-        end_idx = min(start_idx + 25, len(self.alliances))
-        current_alliances = self.alliances[start_idx:end_idx]
-
-        select = discord.ui.Select(
-            placeholder=f"{theme.allianceIcon} Select an alliance... (Page {self.page + 1}/{self.max_page + 1})",
-            options=[
-                discord.SelectOption(
-                    label=f"{name[:50]}",
-                    value=str(alliance_id),
-                    description=f"ID: {alliance_id} | Members: {count}",
-                    emoji=theme.allianceIcon
-                ) for alliance_id, name, count in current_alliances
-            ],
-            row=0  # Explicitly set row 0 for dropdown
-        )
-        
-        async def select_callback(interaction: discord.Interaction):
-            self.current_select = select
-            alliance_id = int(select.values[0])
-
-            if self.is_marking:
-                # For marking: show session selection
-                await self.cog.show_session_selection_for_marking(interaction, alliance_id)
-            else:
-                # For viewing: show session selection without defer
-                report_cog = self.cog.bot.get_cog("AttendanceReport")
-                if report_cog:
-                    await report_cog.show_session_selection(interaction, alliance_id)
-
-        select.callback = select_callback
-        self.add_item(select)
-        self.current_select = select
-
-        # Update navigation button states
-        prev_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "◀️"), None)
-        next_button = next((item for item in self.children if hasattr(item, 'label') and item.label == "▶️"), None)
-        
-        if prev_button:
-            prev_button.disabled = self.page == 0
-        if next_button:
-            next_button.disabled = self.page == self.max_page
-
-    @discord.ui.button(label="", emoji=f"{theme.prevIcon}", style=discord.ButtonStyle.secondary, row=1)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = max(0, self.page - 1)
-        self.update_select_menu()
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(label="", emoji=f"{theme.nextIcon}", style=discord.ButtonStyle.secondary, row=1)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        self.page = min(self.max_page, self.page + 1)
-        self.update_select_menu()
-        await interaction.response.edit_message(view=self)
-
-    @discord.ui.button(
-        label="Back", emoji=f"{theme.backIcon}",
-        style=discord.ButtonStyle.secondary,
-        row=1
-    )
-    async def back_to_attendance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.show_attendance_menu(interaction)
-
 class EditEventDetailsView(discord.ui.View):
     def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True, current_event_subtype=None):
         super().__init__(timeout=1800)
@@ -900,6 +770,42 @@ class EditEventDetailsView(discord.ui.View):
     async def edit_date_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         date_modal = EventDateModal(self.current_event_date, self)
         await interaction.response.send_modal(date_modal)
+
+    @discord.ui.button(label="Re-match Unmatched", emoji=theme.refreshIcon, style=discord.ButtonStyle.secondary, row=0)
+    async def rematch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Re-run roster matching (incl. learned aliases) on this event's
+        unmatched OCR rows — e.g. after a player was synced or renamed."""
+        if not self.is_edit:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Save the event first, then re-match.", ephemeral=True)
+            return
+        alliance_id = getattr(self.parent_view, "alliance_id", None)
+        if not alliance_id:
+            with sqlite3.connect("db/attendance.sqlite") as db:
+                row = db.execute(
+                    "SELECT alliance_id FROM attendance_sessions WHERE session_id = ?",
+                    (self.session_id,)).fetchone()
+            alliance_id = int(row[0]) if row and row[0] else None
+        if not alliance_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Couldn't determine the alliance for this event.", ephemeral=True)
+            return
+        from .attendance_ocr_parsers import rematch_unmatched_rows
+        try:
+            resolved = rematch_unmatched_rows(self.session_id, int(alliance_id))
+        except Exception as e:
+            logger.error(f"Re-match unmatched failed for session {self.session_id}: {e}")
+            print(f"Re-match unmatched failed for session {self.session_id}: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Re-match failed — see logs.", ephemeral=True)
+            return
+        if resolved:
+            msg = (f"{theme.verifiedIcon} Re-matched **{resolved}** previously-unmatched "
+                   f"player(s) to the roster.")
+        else:
+            msg = (f"{theme.infoIcon} No unmatched rows could be resolved — the roster "
+                   f"still has no confident match for them.")
+        await interaction.response.send_message(msg, ephemeral=True)
 
     @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.primary, row=3)
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2105,33 +2011,6 @@ class Attendance(commands.Cog):
             result = cursor.fetchone()
             return result[0] if result else "Unknown Alliance"
 
-    async def _handle_permission_check(self, interaction):
-        """Check admin permissions and get alliances for the user."""
-        user_id = interaction.user.id
-        guild_id = interaction.guild_id
-
-        admin_result = await self._check_admin_permissions(user_id)
-        if not admin_result:
-            error_embed = self._create_error_embed(
-                f"{theme.deniedIcon} Access Denied",
-                "You do not have permission to use this command."
-            )
-            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-            await interaction.response.edit_message(embed=error_embed, view=back_view)
-            return None
-
-        alliances, _ = PermissionManager.get_admin_alliances(user_id, guild_id)
-        if not alliances:
-            error_embed = self._create_error_embed(
-                f"{theme.deniedIcon} No Alliances Found",
-                "No alliances found for your permissions."
-            )
-            back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-            await interaction.response.edit_message(embed=error_embed, view=back_view)
-            return None
-
-        return alliances, admin_result[0]
-
     def _get_alliances_with_counts(self, alliances):
         """Get alliance member counts with optimized single query"""
         alliance_ids = [aid for aid, _ in alliances]
@@ -2234,6 +2113,107 @@ class Attendance(commands.Cog):
                     cursor.execute("ALTER TABLE attendance_records ADD COLUMN event_subtype TEXT DEFAULT NULL")
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_event_subtype ON attendance_records(event_subtype)")
 
+                try:
+                    cursor.execute("SELECT was_walk_in FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN was_walk_in INTEGER DEFAULT 0")
+
+                try:
+                    cursor.execute("SELECT alliance_rank FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN alliance_rank INTEGER")
+
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_sessions (
+                        session_id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        event_date TEXT,
+                        event_date_confidence TEXT,
+                        event_subtype TEXT,
+                        alliance_id INTEGER NOT NULL,
+                        awaiting_result INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                        closed_at TEXT
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_alliance "
+                               "ON attendance_sessions(alliance_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_open "
+                               "ON attendance_sessions(awaiting_result, event_type, event_date)")
+                # Matches the OCR session-matching lookups (_find_open_session /
+                # _find_closed_session / _would_be_absent_count) which filter on
+                # alliance + event_type + awaiting_result together.
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_attendance_sessions_lookup "
+                               "ON attendance_sessions(alliance_id, event_type, awaiting_result, event_date)")
+
+                # Scoreboard cards from result mails: each row = one alliance card.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_session_scoreboard (
+                        session_id TEXT NOT NULL,
+                        rank INTEGER NOT NULL,
+                        legion TEXT,
+                        tag TEXT,
+                        name TEXT,
+                        score INTEGER,
+                        is_own_alliance INTEGER DEFAULT 0,
+                        PRIMARY KEY (session_id, rank)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_scoreboard_session "
+                               "ON attendance_session_scoreboard(session_id)")
+
+                # Battle stats from result mails (Total Fuel Used, etc.).
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_session_stats (
+                        session_id TEXT NOT NULL,
+                        stat_key TEXT NOT NULL,
+                        stat_value INTEGER,
+                        PRIMARY KEY (session_id, stat_key)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_stats_session "
+                               "ON attendance_session_stats(session_id)")
+
+                # MVPs per stat — one row per (session, stat). mvp_fid is the
+                # roster fid when fuzzy match succeeds, NULL otherwise.
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS attendance_session_mvps (
+                        session_id TEXT NOT NULL,
+                        stat_key TEXT NOT NULL,
+                        mvp_name TEXT,
+                        mvp_value INTEGER,
+                        mvp_fid TEXT,
+                        PRIMARY KEY (session_id, stat_key)
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_mvps_session "
+                               "ON attendance_session_mvps(session_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_session_mvps_fid "
+                               "ON attendance_session_mvps(mvp_fid)")
+
+                # alliance_rank column on attendance_sessions (the alliance's own
+                # standing in the event, separate from rows in the scoreboard).
+                try:
+                    cursor.execute("SELECT alliance_rank FROM attendance_sessions LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN alliance_rank INTEGER")
+
+                # event_time column on attendance_sessions (HH:MM UTC; the
+                # specific time slot the event ran at, separate from event_date).
+                try:
+                    cursor.execute("SELECT event_time FROM attendance_sessions LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN event_time TEXT")
+
+                # origin column: NULL for legacy manually-marked sessions,
+                # 'ocr' for sessions created via Screenshot Upload. The legacy
+                # Mark Attendance UI redirects 'ocr' sessions to re-upload
+                # instead of trying to edit fields it doesn't understand.
+                try:
+                    cursor.execute("SELECT origin FROM attendance_sessions LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_sessions ADD COLUMN origin TEXT")
+
                 # Create user preferences table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS user_preferences (
@@ -2249,7 +2229,7 @@ class Attendance(commands.Cog):
                 except sqlite3.OperationalError:
                     # Column doesn't exist, add it
                     cursor.execute("ALTER TABLE user_preferences ADD COLUMN sort_preference TEXT DEFAULT 'points_desc'")
-                    print("Added sort_preference column to user_preferences table")
+                    logger.info("Added sort_preference column to user_preferences table")
 
                 attendance_db.commit()
                 
@@ -2257,123 +2237,96 @@ class Attendance(commands.Cog):
             pass
 
     async def show_attendance_menu(self, interaction: discord.Interaction):
-        """Show the main attendance menu"""
-        # Check if used in a server context
+        """Entry point — resolve the admin's alliances and open the hub for one
+        (auto-selected when there's only one; a switch dropdown handles the rest)."""
         if interaction.guild is None:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} This command can only be used in a server, not in DMs.",
                 ephemeral=True
             )
             return
-            
-        embed = discord.Embed(
-            title=f"{theme.listIcon} Attendance System",
-            description=(
-                f"Please select an operation:\n\n"
-                f"**Available Operations**\n"
-                f"{theme.upperDivider}\n"
-                f"{theme.editListIcon} **Mark Attendance**\n"
-                f"└ Create or modify attendance records\n\n"
-                f"{theme.eyesIcon} **View Attendance**\n"
-                f"└ View attendance records and export reports\n\n"
-                f"{theme.settingsIcon} **Settings**\n"
-                f"└ Configure attendance preferences\n"
-                f"{theme.lowerDivider}"
-            ),
-            color=theme.emColor1
-        )
-        
-        view = AttendanceView(self, interaction.user.id, interaction.guild.id)
-        await view.initialize_permissions_and_alliances()
-        
-        # Handle both regular and deferred interactions
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin:
+            error_embed = self._create_error_embed(
+                f"{theme.deniedIcon} Access Denied",
+                "You do not have permission to use this command.")
+            await self._edit_or_send(interaction, embed=error_embed, view=None)
+            return
+        alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
+        if not alliances:
+            error_embed = self._create_error_embed(
+                f"{theme.deniedIcon} No Alliances Found",
+                "No alliances found for your permissions.")
+            await self._edit_or_send(interaction, embed=error_embed, view=None)
+            return
+        # Single alliance → auto-select it; multiple → open with none chosen so
+        # the admin picks from the dropdown (actions stay disabled until then).
+        await self.show_attendance_hub(
+            interaction, alliances[0][0] if len(alliances) == 1 else None)
+
+    async def _edit_or_send(self, interaction, *, embed, view):
         if interaction.response.is_done():
             await interaction.edit_original_response(embed=embed, view=view, attachments=[])
         else:
             await interaction.response.edit_message(embed=embed, view=view, attachments=[])
 
-    async def show_alliance_selection_for_marking(self, interaction: discord.Interaction):
-        """Show alliance selection specifically for marking attendance"""
-        try:
-            # Check if used in a server context
-            if interaction.guild is None:
-                error_embed = self._create_error_embed(
-                    f"{theme.deniedIcon} Error",
-                    "This command can only be used in a server, not in DMs."
-                )
-                await interaction.response.send_message(embed=error_embed, ephemeral=True)
-                return
-                
-            # Get admin permissions using centralized PermissionManager
-            is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
-            if not is_admin:
-                error_embed = self._create_error_embed(
-                    f"{theme.deniedIcon} Access Denied",
-                    "You do not have permission to use this command."
-                )
-                back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-                await interaction.response.edit_message(embed=error_embed, view=back_view)
-                return
+    async def show_attendance_hub(self, interaction: discord.Interaction, alliance_id=None):
+        """Alliance-scoped hub: actions act on `alliance_id` (no per-action
+        picker). `alliance_id=None` opens with them disabled until one is
+        picked. Settings stays global."""
+        if interaction.guild is None:
+            return
+        alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
+        alliances_with_counts = self._get_alliances_with_counts(alliances)
+        alliance_name = await self._get_alliance_name(alliance_id) if alliance_id is not None else None
+        if alliance_id is None:
+            lead = "Select an alliance from the dropdown to begin."
+            title = f"{theme.listIcon} Attendance"
+        else:
+            lead = f"Acting on **{alliance_name}** — use the dropdown to switch alliance."
+            title = f"{theme.listIcon} Attendance · {alliance_name}"
+        embed = discord.Embed(
+            title=title,
+            description=(
+                f"{lead}\n\n"
+                f"**Available Operations**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.editListIcon} **Mark Attendance**\n"
+                f"└ Create or modify attendance records manually\n\n"
+                f"{theme.eyesIcon} **View Attendance**\n"
+                f"└ View attendance records and export reports\n\n"
+                f"{theme.listIcon} **Player History**\n"
+                f"└ One player's participation across all events, with current power\n\n"
+                f"{theme.importIcon} **Screenshot Upload**\n"
+                f"└ Configure this alliance's upload channels; the bot OCRs them\n\n"
+                f"{theme.settingsIcon} **Settings**\n"
+                f"└ Attendance preferences (global)\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1
+        )
+        view = AttendanceHubView(self, interaction.user.id, interaction.guild.id,
+                                 alliance_id, alliance_name, alliances_with_counts)
+        await self._edit_or_send(interaction, embed=embed, view=view)
 
-            guild_id = interaction.guild.id
-
-            # Get alliances based on permissions using centralized PermissionManager
-            alliances, is_global = PermissionManager.get_admin_alliances(interaction.user.id, guild_id)
-
-            if not alliances:
-                error_embed = self._create_error_embed(
-                    f"{theme.deniedIcon} No Alliances Found",
-                    "No alliances found for your permissions."
-                )
-                back_view = self._create_back_view(lambda i: self.show_attendance_menu(i))
-                await interaction.response.edit_message(embed=error_embed, view=back_view)
-                return
-            
-            # Create alliance selection embed
-            select_embed = discord.Embed(
-                title=f"{theme.listIcon} Attendance - Alliance Selection",
+    async def show_player_history_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Open the per-player attendance history picker for one alliance."""
+        from .attendance_history import history_players, HistoryPlayerSelectView
+        alliance_name = await self._get_alliance_name(alliance_id)
+        players = await asyncio.to_thread(history_players, alliance_id)
+        if not players:
+            empty = discord.Embed(
+                title=f"{theme.listIcon} Player History — {alliance_name}",
                 description=(
-                    f"Please select an alliance to mark attendance:\n\n"
-                    f"**Permission Details**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.userIcon} **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
-                    f"{theme.searchIcon} **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
-                    f"{theme.chartIcon} **Available Alliances:** `{len(alliances)}`\n"
-                    f"{theme.lowerDivider}"
-                ),
-                color=theme.emColor1
+                    f"{theme.warnIcon} No attendance history yet for this alliance.\n"
+                    f"Upload event screenshots first so the bot can record participation."),
+                color=theme.emColor2,
             )
-
-            # Get alliance member counts
-            alliance_ids = [a[0] for a in alliances]
-            alliances_with_counts = []
-            
-            if alliance_ids:
-                with sqlite3.connect('db/users.sqlite') as db:
-                    cursor = db.cursor()
-                    placeholders = ','.join('?' * len(alliance_ids))
-                    cursor.execute(f"""
-                        SELECT alliance, COUNT(*) 
-                        FROM users 
-                        WHERE alliance IN ({placeholders}) 
-                        GROUP BY alliance
-                    """, [str(aid) for aid in alliance_ids])
-                    counts = dict(cursor.fetchall())
-                
-                alliances_with_counts = [
-                    (aid, name, counts.get(str(aid), 0))
-                    for aid, name in alliances
-                ]
-            
-            view = AllianceSelectView(alliances_with_counts, self, is_marking=True)
-            await interaction.response.edit_message(embed=select_embed, view=view)
-            
-        except Exception as e:
-            error_embed = self._create_error_embed(
-                f"{theme.deniedIcon} Error", 
-                "An error occurred while showing alliance selection."
-            )
-            await interaction.response.edit_message(embed=error_embed, view=None)
+            back_view = self._create_back_view(lambda i: self.show_attendance_hub(i, alliance_id))
+            await self._edit_or_send(interaction, embed=empty, view=back_view)
+            return
+        view = HistoryPlayerSelectView(self, interaction.user.id, alliance_id, alliance_name, players)
+        await self._edit_or_send(interaction, embed=view.build_embed(), view=view)
 
     async def show_session_selection_for_marking(self, interaction: discord.Interaction, alliance_id: int):
         """Show available sessions for marking/editing attendance"""
@@ -2467,14 +2420,56 @@ class Attendance(commands.Cog):
             if is_edit and session_id:
                 with sqlite3.connect('db/attendance.sqlite') as db:
                     cursor = db.cursor()
+                    # OCR sessions hold rich data the legacy Mark UI can't show;
+                    # reopen them in the post-upload review editor instead.
+                    cursor.execute(
+                        "SELECT origin, event_type FROM attendance_sessions WHERE session_id = ?",
+                        (session_id,)
+                    )
+                    origin_row = cursor.fetchone()
+                    if origin_row and origin_row[0] == 'ocr':
+                        ocr_cog = self.bot.get_cog("AttendanceOCR")
+                        opened = False
+                        if ocr_cog and hasattr(ocr_cog, "open_existing_session_editor"):
+                            opened = await ocr_cog.open_existing_session_editor(
+                                interaction, session_id=session_id,
+                                event_type=origin_row[1], alliance_id=alliance_id)
+                        if opened:
+                            return
+                        # Fallback (parser unavailable): point back to re-upload.
+                        notice = discord.Embed(
+                            title=f"{theme.warnIcon} Edit via Screenshot Upload",
+                            description=(
+                                f"This event was captured via **Screenshot Upload**. "
+                                f"Re-upload any screenshot from the same "
+                                f"event/legion/date in your Screenshot Upload channel "
+                                f"to reopen it in the review editor."
+                            ),
+                            color=theme.emColor2,
+                        )
+                        back_view = self._create_back_view(
+                            lambda i: self.show_session_selection_for_marking(i, alliance_id)
+                        )
+                        if interaction.response.is_done():
+                            await interaction.edit_original_response(embed=notice, view=back_view)
+                        else:
+                            await interaction.response.edit_message(embed=notice, view=back_view)
+                        return
+
                     cursor.execute("""
                         SELECT player_id, status, points, event_type, event_date
                         FROM attendance_records
                         WHERE session_id = ?
                     """, (session_id,))
-                    
+
                     for record in cursor.fetchall():
-                        attendance_records[int(record[0])] = {
+                        try:
+                            pid = int(record[0])
+                        except (TypeError, ValueError):
+                            # Defensive: synthetic placeholder strings from any
+                            # legacy data — skip them so the view doesn't crash.
+                            continue
+                        attendance_records[pid] = {
                             'status': record[1],
                             'points': record[2]
                         }
@@ -2724,11 +2719,11 @@ class SessionSelectView(discord.ui.View):
         if sessions:
             options = []
             for session in sessions[:25]:  # Discord limit
-                event_icon = EVENT_TYPE_ICONS.get(session.get('event_type', 'Other'), '📋')
+                event_label, event_icon = event_type_display(session.get('event_type', 'Other'))
                 event_subtype = session.get('event_subtype')
                 legion_suffix = f" [L{event_subtype[-1]}]" if event_subtype else ""
                 options.append(discord.SelectOption(
-                    label=f"{session['name'][:85]}{legion_suffix} [{session.get('event_type', 'Other')}]",
+                    label=f"{session['name'][:80]}{legion_suffix} [{event_label}]"[:100],
                     value=str(session['session_id']),
                     description=f"{session.get('date', 'Unknown date')} - {session.get('marked_count', 0)}/{session.get('player_count', 0)} marked",
                     emoji=event_icon
@@ -2766,15 +2761,11 @@ class SessionSelectView(discord.ui.View):
         await interaction.response.send_modal(SessionNameModal(self.cog, self.alliance_id))
 
     async def back_button_callback(self, interaction: discord.Interaction):
-        """Go back to appropriate menu"""
-        if self.is_viewing:
-            # For viewing mode, go back to attendance menu
-            attendance_cog = self.cog.bot.get_cog("Attendance")
-            if attendance_cog:
-                await attendance_cog.show_attendance_menu(interaction)
-        else:
-            # For marking mode, go back to alliance selection
-            await self.cog.show_alliance_selection_for_marking(interaction)
+        """Back to the alliance-scoped attendance hub. `self.cog` may be the
+        AttendanceReport cog (viewing mode), so resolve Attendance explicitly."""
+        attendance_cog = self.cog.bot.get_cog("Attendance")
+        if attendance_cog:
+            await attendance_cog.show_attendance_hub(interaction, self.alliance_id)
  
     async def on_select(self, interaction: discord.Interaction):
         """Handle session selection"""

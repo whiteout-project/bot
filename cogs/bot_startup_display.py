@@ -46,7 +46,6 @@ def _get_ready_messages():
             f"{theme.startupBoxingIcon} Ready to rumble like Discord isn't rate limiting us again!",
             f"{theme.startupRocketIcon} Systems nominal. Ethics optional. Proceeding anyway.",
             f"{theme.startupLockIcon} Locked and loaded. Confidence high, accuracy pending.",
-            f"{theme.startupFireIcon} Furnace is lit; gift codes are legit. A haiku, just for you.",
             f"{theme.startupSwordsIcon} Standing by for duty and looking busy, Chief. That's half the job.",
             f"{theme.startupIceIcon} Warmed up and ready to suppress any errors like they never happened.",
             f"{theme.startupCashIcon} Morally bankrupt, but rich in redeemable codes. Let's do this!",
@@ -57,7 +56,6 @@ def _get_ready_messages():
             "🥊 Ready to rumble like Discord isn't rate limiting us again!",
             "🚀 Systems nominal. Ethics optional. Proceeding anyway.",
             "🔒 Locked and loaded. Confidence high, accuracy pending.",
-            "🔥 Furnace is lit; gift codes are legit. A haiku, just for you.",
             "⚔️ Standing by for duty and looking busy, Chief. That's half the job.",
             "🧊 Warmed up and ready to suppress any errors like they never happened.",
             "💸 Morally bankrupt, but rich in redeemable codes. Let's do this!",
@@ -193,12 +191,18 @@ def summary(servers, alliances, members, alliance_details=None):
 
 
 def api_status(name, status, detail=None):
-    """Display API connection status."""
+    """Display API connection status. Overwrites a preceding phase_start line
+    on TTY so a 'Checking …' hourglass becomes the result in place."""
     is_ok = status in ('ok', 'healthy')
     symbol = _OK if is_ok else _FAIL
     verb = "Connected to" if is_ok else "Could not reach"
     detail_str = f" ({detail})" if detail else ""
-    print(f"  {symbol} {verb} {name}{detail_str}")
+    line = f"  {symbol} {verb} {name}{detail_str}"
+    if _IS_TTY:
+        sys.stdout.write(f"\r{line}          \n")
+        sys.stdout.flush()
+    else:
+        print(line)
 
 
 def info(message):
@@ -208,7 +212,7 @@ def info(message):
         icon = theme.chatIcon
     except Exception:
         icon = '💬'
-    print(f"  {icon} {message}")
+    print(f"\n  {icon} {message}")
 
 
 def warn(message):

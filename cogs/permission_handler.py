@@ -13,6 +13,7 @@ Bot Owner anchor:
 
 import sqlite3
 import logging
+from datetime import datetime, timezone
 from typing import Tuple, List, Optional
 
 logger = logging.getLogger('bot')
@@ -410,3 +411,63 @@ class PermissionManager:
             cur.execute("UPDATE admin SET is_owner = 0 WHERE id = ?", (from_user_id,))
             cur.execute("UPDATE admin SET is_owner = 1 WHERE id = ?", (to_user_id,))
             db.commit()
+
+    @staticmethod
+    def describe_state(user_id: int) -> str:
+        """Human-readable admin state for the audit log (e.g. 'Alliance Admin (2 alliances)')."""
+        with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
+            cur = db.cursor()
+            cur.execute("SELECT is_initial, is_owner FROM admin WHERE id = ?", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                return "Not an admin"
+            is_initial, is_owner = row
+            cur.execute("SELECT alliances_id FROM adminserver WHERE admin = ? ORDER BY alliances_id", (user_id,))
+            alliances = [r[0] for r in cur.fetchall()]
+        if is_owner:
+            return "Bot Owner"
+        if is_initial:
+            return "Global Admin"
+        if alliances:
+            count = len(alliances)
+            return f"Alliance Admin ({count} alliance{'s' if count != 1 else ''})"
+        return "Server Admin"
+
+    @staticmethod
+    def log_change(actor_id: int, action: str, target_id: int,
+                   before_state: Optional[str], after_state: Optional[str]) -> None:
+        """Append a row to permission_audit_log. Called by the UI after every admin mutation."""
+        try:
+            with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
+                db.execute(
+                    "INSERT INTO permission_audit_log "
+                    "(actor_id, action, target_id, before_state, after_state, timestamp) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (actor_id, action, target_id, before_state, after_state,
+                     datetime.now(timezone.utc).isoformat()),
+                )
+                db.commit()
+        except Exception as e:
+            logger.error(f"Failed to write permission audit log: {e}")
+            print(f"Failed to write permission audit log: {e}")
+
+    @staticmethod
+    def get_audit_log_page(offset: int = 0, limit: int = 10) -> Tuple[List[dict], int]:
+        """Return (rows, total_count) for the audit log, newest first."""
+        with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
+            cur = db.cursor()
+            cur.execute("SELECT COUNT(*) FROM permission_audit_log")
+            total = int(cur.fetchone()[0])
+            cur.execute(
+                "SELECT actor_id, action, target_id, before_state, after_state, timestamp "
+                "FROM permission_audit_log ORDER BY id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+            rows = [
+                {
+                    'actor_id': r[0], 'action': r[1], 'target_id': r[2],
+                    'before_state': r[3], 'after_state': r[4], 'timestamp': r[5],
+                }
+                for r in cur.fetchall()
+            ]
+        return rows, total

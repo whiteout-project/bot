@@ -17,6 +17,7 @@ from .login_handler import LoginHandler
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .process_queue import MEMBER_ADD, PreemptedException
+from .bot_level_mapping import LEVEL_MAPPING
 
 logger = logging.getLogger('alliance')
 
@@ -74,6 +75,21 @@ def fix_rtl(text):
     return _isolate_rtl(text)
 
 
+def _compact_power(n) -> str:
+    """Short power display (120.5M / 45.1B) for dense member lists."""
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        return "—"
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.2f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
+
+
 class MemberFilterModal(discord.ui.Modal):
     def __init__(self, parent_view: "MemberListView"):
         super().__init__(title="Filter Members")
@@ -117,8 +133,8 @@ class MemberListView(discord.ui.View):
     SORTS = [
         ("FC \u2193",      lambda m: (-m['furnace_lv'], m['nickname'].casefold()), False),
         ("FC \u2191",      lambda m: (m['furnace_lv'], m['nickname'].casefold()),  False),
-        ("Name A\u2192Z",  lambda m: m['nickname'].casefold(),                      False),
-        ("Name Z\u2192A",  lambda m: m['nickname'].casefold(),                      True),
+        ("Name A→Z",  lambda m: m['nickname'].casefold(),                      False),
+        ("Name Z→A",  lambda m: m['nickname'].casefold(),                      True),
         ("ID \u2191",      lambda m: m['fid'],                                       False),
         ("State \u2191",   lambda m: (m['kid'], -m['furnace_lv']),                  False),
     ]
@@ -139,7 +155,29 @@ class MemberListView(discord.ui.View):
         self.filter_name = ""
         self.filter_id = ""
         self.filter_state = ""
+        self._load_power()
         self._build_components()
+
+    def _load_power(self):
+        """Merge Power / Combat Power (+ timestamps) onto each member by fid (may be None)."""
+        for m in self.all_members:
+            m['power'] = m['combat_power'] = None
+            m['power_updated_at'] = m['combat_power_updated_at'] = None
+        try:
+            with sqlite3.connect('db/users.sqlite') as db:
+                rows = db.execute(
+                    "SELECT fid, power, power_updated_at, combat_power, "
+                    "combat_power_updated_at FROM users WHERE alliance = ?",
+                    (self.alliance_id,),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return
+        by_fid = {r[0]: r for r in rows}
+        for m in self.all_members:
+            r = by_fid.get(m['fid'])
+            if r:
+                (_, m['power'], m['power_updated_at'],
+                 m['combat_power'], m['combat_power_updated_at']) = r
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -251,8 +289,8 @@ class MemberListView(discord.ui.View):
 
         header = [
             f"{theme.upperDivider}",
-            (f"{theme.chartIcon} **Total:** `{all_count}`  \u00B7  "
-             f"**Highest:** `{max_label}`  \u00B7  **Avg:** `{avg_label}`"),
+            (f"{theme.chartIcon} **Total:** `{all_count}`  ·  "
+             f"**Highest:** `{max_label}`  ·  **Avg:** `{avg_label}`"),
             f"{theme.listIcon} **Sort:** `{self.SORTS[self.sort_idx][0]}`",
         ]
         if self._has_filter():
@@ -264,7 +302,7 @@ class MemberListView(discord.ui.View):
             if self.filter_state:
                 parts.append(f"state=`{self.filter_state}`")
             header.append(
-                f"{theme.searchIcon} **Filter:** {' \u00B7 '.join(parts)}  \u2192  `{total}` match"
+                f"{theme.searchIcon} **Filter:** {' · '.join(parts)}  →  `{total}` match"
             )
         header.append(f"{theme.lowerDivider}")
 
@@ -277,8 +315,16 @@ class MemberListView(discord.ui.View):
                 raw_nick = m['nickname'] or "(no name)"
                 nick = _isolate_rtl(raw_nick)
                 line1 = _ltr_line(f"`{offset:>3}.` {theme.userIcon} **{nick}**")
-                line2 = f"     `{level}` \u00B7 `ID {m['fid']}` \u00B7 `State {m['kid']}`"
-                rows.append(f"{line1}\n{line2}")
+                line2 = f"     `{level}` · `ID {m['fid']}` · `State {m['kid']}`"
+                row_lines = [line1, line2]
+                if m.get('power') is not None or m.get('combat_power') is not None:
+                    pwr = []
+                    if m.get('power') is not None:
+                        pwr.append(f"{theme.chartIcon} {_compact_power(m['power'])}")
+                    if m.get('combat_power') is not None:
+                        pwr.append(f"{theme.shieldIcon} {_compact_power(m['combat_power'])}")
+                    row_lines.append("     " + " · ".join(pwr))
+                rows.append("\n".join(row_lines))
             body = "\n".join(rows)
 
         embed = discord.Embed(
@@ -796,19 +842,7 @@ class AllianceMemberOperations(commands.Cog):
         self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
         self.c_users = self.conn_users.cursor()
         
-        self.level_mapping = {
-            31: "F30 - 1", 32: "F30 - 2", 33: "F30 - 3", 34: "F30 - 4",
-            35: "FC 1", 36: "FC 1 - 1", 37: "FC 1 - 2", 38: "FC 1 - 3", 39: "FC 1 - 4",
-            40: "FC 2", 41: "FC 2 - 1", 42: "FC 2 - 2", 43: "FC 2 - 3", 44: "FC 2 - 4",
-            45: "FC 3", 46: "FC 3 - 1", 47: "FC 3 - 2", 48: "FC 3 - 3", 49: "FC 3 - 4",
-            50: "FC 4", 51: "FC 4 - 1", 52: "FC 4 - 2", 53: "FC 4 - 3", 54: "FC 4 - 4",
-            55: "FC 5", 56: "FC 5 - 1", 57: "FC 5 - 2", 58: "FC 5 - 3", 59: "FC 5 - 4",
-            60: "FC 6", 61: "FC 6 - 1", 62: "FC 6 - 2", 63: "FC 6 - 3", 64: "FC 6 - 4",
-            65: "FC 7", 66: "FC 7 - 1", 67: "FC 7 - 2", 68: "FC 7 - 3", 69: "FC 7 - 4",
-            70: "FC 8", 71: "FC 8 - 1", 72: "FC 8 - 2", 73: "FC 8 - 3", 74: "FC 8 - 4",
-            75: "FC 9", 76: "FC 9 - 1", 77: "FC 9 - 2", 78: "FC 9 - 3", 79: "FC 9 - 4",
-            80: "FC 10", 81: "FC 10 - 1", 82: "FC 10 - 2", 83: "FC 10 - 3", 84: "FC 10 - 4"
-        }
+        self.level_mapping = LEVEL_MAPPING
 
         self.fl_emojis = {
             range(35, 40): "<:fc1:1326751863764156528>",
@@ -841,6 +875,34 @@ class AllianceMemberOperations(commands.Cog):
     async def show_add_members_for(self, interaction: discord.Interaction, alliance_id: int):
         """Open the Add Members modal for a known alliance (no picker step)."""
         await interaction.response.send_modal(AddMemberModal(alliance_id))
+
+    async def show_power_rankings_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Show the alliance roster sorted by Power (highest first) with last-updated timestamps."""
+        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+            row = alliance_db.execute(
+                "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+            ).fetchone()
+        if not row:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Alliance not found.", ephemeral=True
+            )
+            return
+        alliance_name = row[0]
+
+        with sqlite3.connect('db/users.sqlite') as users_db:
+            members = users_db.execute(
+                "SELECT fid, nickname, power, power_updated_at, "
+                "combat_power, combat_power_updated_at "
+                "FROM users WHERE alliance = ?",
+                (alliance_id,),
+            ).fetchall()
+
+        view = AlliancePowerRankingsView(
+            members, alliance_id, alliance_name, self, interaction.user.id,
+        )
+        await safe_edit_message(
+            interaction, embed=view.build_embed(), view=view, content=None,
+        )
 
     async def show_view_members_for(self, interaction: discord.Interaction, alliance_id: int):
         """Build the Member List directly for a known alliance (no picker step).
@@ -1082,10 +1144,8 @@ class AllianceMemberOperations(commands.Cog):
                                             await ch.send(embed=log_embed)
                                     except Exception as e:
                                         logger.error(f"Alliance Log Sending Error: {e}")
-                                        print(f"Alliance Log Sending Error: {e}")
                         except Exception as e:
                             logger.error(f"Log record error: {e}")
-                            print(f"Log record error: {e}")
 
                         success_embed = discord.Embed(
                             title=f"{theme.verifiedIcon} Members Deleted",
@@ -1171,10 +1231,8 @@ class AllianceMemberOperations(commands.Cog):
                                         await ch.send(embed=log_embed)
                                 except Exception as e:
                                     logger.error(f"Alliance Log Sending Error: {e}")
-                                    print(f"Alliance Log Sending Error: {e}")
                     except Exception as e:
                         logger.error(f"Log record error: {e}")
-                        print(f"Log record error: {e}")
 
                     success_embed = discord.Embed(
                         title=f"{theme.verifiedIcon} Members Deleted",
@@ -1521,7 +1579,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Source callback error: {e}")
-                    print(f"Source callback error: {e}")
                     await source_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred. Please try again.",
                         ephemeral=True
@@ -1546,14 +1603,20 @@ class AllianceMemberOperations(commands.Cog):
         embed = discord.Embed(
             title=f"{theme.userIcon} Alliance Member Operations",
             description=(
-                "Please select an operation from below:\n\n"
-                "**Available Operations:**\n"
-                f"{theme.newIcon} `Add Members` - Add new members (supports IDs, CSV/TSV imports)\n"
-                f"{theme.refreshIcon} `Transfer Members` - Transfer members to another alliance\n"
-                f"{theme.minusIcon} `Remove Members` - Remove members from alliance\n"
-                f"{theme.userIcon} `View Members` - View alliance member list\n"
-                f"{theme.chartIcon} `Export Members` - Export member data to CSV/TSV\n"
-                f"{theme.backIcon} `Back` - Return to Alliances"
+                "Add, remove, move, view and export your alliance members here.\n\n"
+                "**Available Operations**\n"
+                f"{theme.upperDivider}\n"
+                f"{theme.addIcon} **Add Members**\n"
+                f"└ Add new members by ID or CSV/TSV import\n\n"
+                f"{theme.minusIcon} **Remove Members**\n"
+                f"└ Remove members from an alliance\n\n"
+                f"{theme.retryIcon} **Transfer Members**\n"
+                f"└ Move members to another alliance\n\n"
+                f"{theme.membersIcon} **View Members**\n"
+                f"└ Browse the alliance member list\n\n"
+                f"{theme.chartIcon} **Export Members**\n"
+                f"└ Save member data to a CSV or TSV file\n"
+                f"{theme.lowerDivider}"
             ),
             color=theme.emColor1
         )
@@ -1624,7 +1687,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Error in add_member_button: {e}")
-                    print(f"Error in add_member_button: {e}")
                     await button_interaction.response.send_message(
                         "An error occurred while processing your request.", 
                         ephemeral=True
@@ -1797,10 +1859,8 @@ class AllianceMemberOperations(commands.Cog):
                                                             await alliance_log_channel.send(embed=log_embed)
                                                     except Exception as e:
                                                         logger.error(f"Alliance Log Sending Error: {e}")
-                                                        print(f"Alliance Log Sending Error: {e}")
                                         except Exception as e:
                                             logger.error(f"Log record error: {e}")
-                                            print(f"Log record error: {e}")
                                         
                                         success_embed = discord.Embed(
                                             title=f"{theme.verifiedIcon} Members Deleted",
@@ -1870,10 +1930,8 @@ class AllianceMemberOperations(commands.Cog):
                                                         await alliance_log_channel.send(embed=log_embed)
                                                 except Exception as e:
                                                     logger.error(f"Alliance Log Sending Error: {e}")
-                                                    print(f"Alliance Log Sending Error: {e}")
                                     except Exception as e:
                                         logger.error(f"Log record error: {e}")
-                                        print(f"Log record error: {e}")
 
                                     success_embed = discord.Embed(
                                         title=f"{theme.verifiedIcon} Members Deleted",
@@ -1913,7 +1971,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Error in remove_member_button: {e}")
-                    print(f"Error in remove_member_button: {e}")
                     await button_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred during the member deletion process.",
                         ephemeral=True
@@ -2014,7 +2071,6 @@ class AllianceMemberOperations(commands.Cog):
 
                 except Exception as e:
                     logger.error(f"Error in view_members_button: {e}")
-                    print(f"Error in view_members_button: {e}")
                     if not button_interaction.response.is_done():
                         await button_interaction.response.send_message(
                             f"{theme.deniedIcon} An error occurred while displaying the member list.",
@@ -2649,7 +2705,6 @@ class AllianceMemberOperations(commands.Cog):
                 return is_admin
         except Exception as e:
             logger.error(f"Error in admin check: {e}")
-            print(f"Error in admin check: {e}")
             return False
 
     @commands.Cog.listener()
@@ -2661,7 +2716,7 @@ class AllianceMemberOperations(commands.Cog):
         else:
             logger.error("AllianceMemberOps: ProcessQueue cog not found, member_add operations will not work")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         self.conn_users.close()
         self.conn_alliance.close()
 
@@ -2877,7 +2932,6 @@ class AllianceMemberOperations(commands.Cog):
                 )
         except Exception as e:
             logger.error(f"Menu navigation error in member operations: {e}")
-            print(f"Menu navigation error in member operations: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error occurred while returning to menu.",
@@ -3006,7 +3060,6 @@ class AllianceSelectView(discord.ui.View):
             await interaction.response.send_modal(modal)
         except Exception as e:
             logger.error(f"ID button error: {e}")
-            print(f"ID button error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error has occurred. Please try again.",
                 ephemeral=True
@@ -3271,7 +3324,6 @@ class IDSearchModal(discord.ui.Modal):
 
         except Exception as e:
             logger.error(f"Error in IDSearchModal on_submit: {e.__class__.__name__}: {e}")
-            print(f"Error details: {str(e.__class__.__name__)}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} An error has occurred. Please try again.",
@@ -3339,46 +3391,56 @@ class ExportColumnSelectView(discord.ui.View):
             'id': True,
             'name': True,
             'fc_level': True,
-            'state': True
+            'state': True,
+            'power': True,
+            'combat_power': True,
         }
-        
+
         # Add alliance column if needed
         if include_alliance:
             self.selected_columns['alliance'] = True
             alliance_btn = discord.ui.Button(
-                label=f"{theme.verifiedIcon} Alliance", 
-                style=discord.ButtonStyle.primary, 
-                custom_id="toggle_alliance", 
+                label=f"{theme.verifiedIcon} Alliance",
+                style=discord.ButtonStyle.primary,
+                custom_id="toggle_alliance",
                 row=0
             )
             alliance_btn.callback = self.toggle_alliance_button
             self.add_item(alliance_btn)
-        
-        # Add other column buttons
+
+        # Add other column buttons (row 0 = identity, row 1 = power, row 2 = actions)
         id_btn = discord.ui.Button(label=f"{theme.verifiedIcon} ID", style=discord.ButtonStyle.primary, custom_id="toggle_id", row=0)
         id_btn.callback = self.toggle_id_button
         self.add_item(id_btn)
-        
+
         name_btn = discord.ui.Button(label=f"{theme.verifiedIcon} Name", style=discord.ButtonStyle.primary, custom_id="toggle_name", row=0)
         name_btn.callback = self.toggle_name_button
         self.add_item(name_btn)
-        
-        fc_btn = discord.ui.Button(label=f"{theme.verifiedIcon} FC Level", style=discord.ButtonStyle.primary, custom_id="toggle_fc", row=0 if not include_alliance else 1)
+
+        fc_btn = discord.ui.Button(label=f"{theme.verifiedIcon} FC Level", style=discord.ButtonStyle.primary, custom_id="toggle_fc", row=0)
         fc_btn.callback = self.toggle_fc_button
         self.add_item(fc_btn)
-        
-        state_btn = discord.ui.Button(label=f"{theme.verifiedIcon} State", style=discord.ButtonStyle.primary, custom_id="toggle_state", row=0 if not include_alliance else 1)
+
+        state_btn = discord.ui.Button(label=f"{theme.verifiedIcon} State", style=discord.ButtonStyle.primary, custom_id="toggle_state", row=0)
         state_btn.callback = self.toggle_state_button
         self.add_item(state_btn)
-        
-        next_btn = discord.ui.Button(label="Next", emoji=theme.forwardIcon, style=discord.ButtonStyle.success, custom_id="next_step", row=1 if not include_alliance else 2)
+
+        power_btn = discord.ui.Button(label=f"{theme.verifiedIcon} Power", style=discord.ButtonStyle.primary, custom_id="toggle_power", row=1)
+        power_btn.callback = self.toggle_power_button
+        self.add_item(power_btn)
+
+        cp_btn = discord.ui.Button(label=f"{theme.verifiedIcon} Combat Power", style=discord.ButtonStyle.primary, custom_id="toggle_combat_power", row=1)
+        cp_btn.callback = self.toggle_combat_power_button
+        self.add_item(cp_btn)
+
+        next_btn = discord.ui.Button(label="Next", emoji=theme.forwardIcon, style=discord.ButtonStyle.success, custom_id="next_step", row=2)
         next_btn.callback = self.next_button
         self.add_item(next_btn)
-        
-        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel", row=1 if not include_alliance else 2)
+
+        cancel_btn = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel", row=2)
         cancel_btn.callback = self.cancel_button
         self.add_item(cancel_btn)
-        
+
         self.update_buttons()
     
     def update_buttons(self):
@@ -3400,6 +3462,12 @@ class ExportColumnSelectView(discord.ui.View):
                 elif item.custom_id == 'toggle_state':
                     item.style = discord.ButtonStyle.primary if self.selected_columns['state'] else discord.ButtonStyle.secondary
                     item.label = f"{theme.verifiedIcon} State" if self.selected_columns['state'] else f"{theme.deniedIcon} State"
+                elif item.custom_id == 'toggle_power':
+                    item.style = discord.ButtonStyle.primary if self.selected_columns['power'] else discord.ButtonStyle.secondary
+                    item.label = f"{theme.verifiedIcon} Power" if self.selected_columns['power'] else f"{theme.deniedIcon} Power"
+                elif item.custom_id == 'toggle_combat_power':
+                    item.style = discord.ButtonStyle.primary if self.selected_columns['combat_power'] else discord.ButtonStyle.secondary
+                    item.label = f"{theme.verifiedIcon} Combat Power" if self.selected_columns['combat_power'] else f"{theme.deniedIcon} Combat Power"
 
     async def toggle_alliance_button(self, interaction: discord.Interaction):
         if self.include_alliance:
@@ -3461,7 +3529,7 @@ class ExportColumnSelectView(discord.ui.View):
     async def toggle_state_button(self, interaction: discord.Interaction):
         self.selected_columns['state'] = not self.selected_columns['state']
         self.update_buttons()
-        
+
         if not any(self.selected_columns.values()):
             self.selected_columns['state'] = True
             self.update_buttons()
@@ -3471,7 +3539,26 @@ class ExportColumnSelectView(discord.ui.View):
             )
         else:
             await interaction.response.edit_message(view=self)
-    
+
+    async def _toggle(self, interaction: discord.Interaction, key: str):
+        self.selected_columns[key] = not self.selected_columns[key]
+        self.update_buttons()
+        if not any(self.selected_columns.values()):
+            self.selected_columns[key] = True
+            self.update_buttons()
+            await interaction.response.edit_message(
+                content=f"{theme.warnIcon} At least one column must be selected!",
+                view=self
+            )
+        else:
+            await interaction.response.edit_message(view=self)
+
+    async def toggle_power_button(self, interaction: discord.Interaction):
+        await self._toggle(interaction, 'power')
+
+    async def toggle_combat_power_button(self, interaction: discord.Interaction):
+        await self._toggle(interaction, 'combat_power')
+
     async def next_button(self, interaction: discord.Interaction):
         # Build selected columns list
         columns = []
@@ -3485,6 +3572,12 @@ class ExportColumnSelectView(discord.ui.View):
             columns.append(('furnace_lv', 'FC Level'))
         if self.selected_columns['state']:
             columns.append(('kid', 'State'))
+        if self.selected_columns.get('power'):
+            columns.append(('power', 'Power'))
+            columns.append(('power_updated_at', 'Power Updated'))
+        if self.selected_columns.get('combat_power'):
+            columns.append(('combat_power', 'Combat Power'))
+            columns.append(('combat_power_updated_at', 'Combat Power Updated'))
         
         # Show format selection
         format_embed = discord.Embed(
@@ -3797,7 +3890,6 @@ class MemberSelectView(discord.ui.View):
 
             except Exception as e:
                 logger.error(f"Select callback error: {e}")
-                print(f"Select callback error: {e}")
                 error_embed = discord.Embed(
                     title=f"{theme.deniedIcon} Error",
                     description="An error occurred while selecting members. Please try again.",
@@ -3878,7 +3970,6 @@ class MemberSelectView(discord.ui.View):
             await interaction.response.send_modal(IDMultiSelectModal(self))
         except Exception as e:
             logger.error(f"ID button error: {e}")
-            print(f"ID button error: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error has occurred. Please try again.",
                 ephemeral=True
@@ -3934,6 +4025,143 @@ class DeleteAllConfirmView(discord.ui.View):
             color=theme.emColor4
         )
         await interaction.response.edit_message(embed=cancel_embed, view=None)
+
+class AlliancePowerRankingsView(discord.ui.View):
+    """Paginated power-rankings view for one alliance. Sorted desc by power, with last-updated <t:R> stamps."""
+
+    PAGE_SIZE = 20
+
+    def __init__(self, members, alliance_id: int, alliance_name: str,
+                 cog, user_id: int):
+        super().__init__(timeout=7200)
+        self.members = sorted(
+            members,
+            key=lambda m: (m[2] if m[2] is not None else -1),
+            reverse=True,
+        )
+        self.alliance_id = alliance_id
+        self.alliance_name = alliance_name
+        self.cog = cog
+        self.user_id = user_id
+        self.current_page = 0
+        self._build_components()
+
+    def _total_pages(self) -> int:
+        if not self.members:
+            return 1
+        return (len(self.members) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+
+    def _build_components(self):
+        self.clear_items()
+        total = self._total_pages()
+
+        prev_btn = discord.ui.Button(
+            label="Prev", emoji=theme.prevIcon,
+            style=discord.ButtonStyle.secondary,
+            disabled=self.current_page == 0, row=0,
+        )
+        prev_btn.callback = self._prev
+        self.add_item(prev_btn)
+
+        page_btn = discord.ui.Button(
+            label=f"{self.current_page + 1} / {total}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True, row=0,
+        )
+        self.add_item(page_btn)
+
+        next_btn = discord.ui.Button(
+            label="Next", emoji=theme.nextIcon,
+            style=discord.ButtonStyle.secondary,
+            disabled=self.current_page >= total - 1, row=0,
+        )
+        next_btn.callback = self._next
+        self.add_item(next_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=1,
+        )
+        back_btn.callback = self._back
+        self.add_item(back_btn)
+
+    @staticmethod
+    def _format_power(power) -> str:
+        if power is None:
+            return "—"
+        try:
+            return f"{int(power):,}"
+        except (TypeError, ValueError):
+            return "—"
+
+    @staticmethod
+    def _relative(ts_iso) -> str:
+        if not ts_iso:
+            return ""
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+            return f" · <t:{int(dt.timestamp())}:R>"
+        except (TypeError, ValueError):
+            return ""
+
+    def build_embed(self) -> discord.Embed:
+        start = self.current_page * self.PAGE_SIZE
+        end = start + self.PAGE_SIZE
+        page = self.members[start:end]
+
+        lines = [
+            f"**Name** (`ID`) — **Power** — `CP` **Combat Power** · "
+            f"times shown are last-updated.",
+            f"{theme.upperDivider}",
+        ]
+        if not page:
+            lines.append(f"{theme.warnIcon} No members in this alliance yet.")
+        else:
+            for idx, (fid, nickname, power, power_at, cp, cp_at) in enumerate(page, start=start + 1):
+                name = _isolate_rtl(nickname or '?')
+                head = f"`{idx:>3}` **{name}** (`{fid}`)"
+                if power is None:
+                    lines.append(_ltr_line(f"{head} — *no power data yet*"))
+                else:
+                    lines.append(_ltr_line(
+                        f"{head} — {self._format_power(power)}{self._relative(power_at)}"))
+                    if cp is not None:
+                        lines.append(_ltr_line(
+                            f"      `CP` {self._format_power(cp)}{self._relative(cp_at)}"))
+        lines.append(f"{theme.lowerDivider}")
+        return discord.Embed(
+            title=f"{theme.allianceIcon} {self.alliance_name} — Power Rankings",
+            description="\n".join(lines),
+            color=theme.emColor1,
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the user who opened this menu can use it.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _prev(self, interaction: discord.Interaction):
+        if self.current_page > 0:
+            self.current_page -= 1
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _next(self, interaction: discord.Interaction):
+        if self.current_page < self._total_pages() - 1:
+            self.current_page += 1
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _back(self, interaction: discord.Interaction):
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu and hasattr(main_menu, "show_alliance_hub"):
+            await main_menu.show_alliance_hub(interaction, self.alliance_id)
+
 
 async def setup(bot):
     await bot.add_cog(AllianceMemberOperations(bot))

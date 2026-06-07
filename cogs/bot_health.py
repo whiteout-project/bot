@@ -19,6 +19,7 @@ from packaging.version import parse as parse_version
 import re
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
+from .bot_restart import is_container, restart_process
 
 
 # Health status constants
@@ -30,30 +31,6 @@ STATUS_ERROR = "error"
 DB_SIZE_WARNING_MB = 100
 
 
-def is_container() -> bool:
-    """Check if running in a container (Docker, Kubernetes, Podman, LXC, systemd-nspawn)"""
-    # Docker, Kubernetes, Podman - simple marker file checks
-    marker_files = ["/.dockerenv", "/var/run/secrets/kubernetes.io", "/run/.containerenv"]
-    if any(os.path.exists(path) for path in marker_files):
-        return True
-
-    # LXC - check init process environment
-    try:
-        with open("/proc/1/environ", "r") as f:
-            if "container=lxc" in f.read():
-                return True
-    except (IOError, OSError):
-        pass
-
-    # Systemd-nspawn - check container type file
-    try:
-        with open("/run/systemd/container", "r") as f:
-            if f.read().strip() == "systemd-nspawn":
-                return True
-    except (IOError, OSError):
-        pass
-
-    return False
 DB_SIZE_ERROR_MB = 500
 WAL_SIZE_WARNING_MB = 1
 WAL_SIZE_ERROR_MB = 10
@@ -94,6 +71,7 @@ HELPER_FILES = [
     'pimp_my_bot_editor',      # Theme editor utilities
     'pimp_my_bot_preview',     # Theme preview utilities
     'onnx_lifecycle',          # OCR model lazy-load + eviction (explicit safelist)
+    'bot_restart',             # Shared platform-aware restart helper
     '__init__',                # Package init file
 ]
 
@@ -111,6 +89,30 @@ LEGACY_FILES = ['autoupdateinfo.txt']
 # itself cleans these on success, so finding them means an aborted run.
 UPDATE_ARTIFACTS_DIRS = ['update', 'cogs.bak']
 UPDATE_ARTIFACTS_FILES = ['package.zip', 'main.py.bak', 'requirements.old']
+
+
+def _active_work_summary(bot) -> str | None:
+    """Describe in-flight work that would be disrupted by reload/restart, or None if idle."""
+    parts = []
+    pq = bot.get_cog("ProcessQueue")
+    if pq is not None:
+        try:
+            info = pq.get_queue_info()
+            if info.get('is_processing'):
+                parts.append("a process queue operation is running")
+            queue_size = info.get('queue_size', 0)
+            if queue_size > 0:
+                parts.append(f"{queue_size} queued operation(s) waiting")
+        except Exception:
+            pass
+    try:
+        from cogs import onnx_lifecycle
+        ocr_active = sum(1 for m in onnx_lifecycle._REGISTRY.values() if m._refcount > 0)
+        if ocr_active:
+            parts.append(f"{ocr_active} OCR session(s) in flight")
+    except Exception:
+        pass
+    return " and ".join(parts) if parts else None
 
 
 class BotHealth(commands.Cog):
@@ -141,12 +143,19 @@ class BotHealth(commands.Cog):
         self.api_status_loop.start()
         self.logger.info("[HEALTH] Bot Health cog initialized")
 
+    def _db(self, path: str, timeout: float = 30.0) -> sqlite3.Connection:
+        """Open a sqlite connection with project-standard pragmas (WAL + thread-safe)."""
+        conn = sqlite3.connect(path, timeout=timeout, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
     def _setup_database(self):
         """Create/update health_config and restart_marker tables."""
         os.makedirs('db', exist_ok=True)
         os.makedirs(self.archive_path, exist_ok=True)
 
-        conn = sqlite3.connect(self.settings_db_path, timeout=30.0)
+        conn = self._db(self.settings_db_path)
         cursor = conn.cursor()
 
         # Check if old table exists and migrate
@@ -205,7 +214,7 @@ class BotHealth(commands.Cog):
 
     def get_config(self) -> dict:
         """Retrieve current health configuration"""
-        conn = sqlite3.connect(self.settings_db_path, timeout=30.0)
+        conn = self._db(self.settings_db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM health_config WHERE id = 1")
@@ -258,7 +267,7 @@ class BotHealth(commands.Cog):
         if not kwargs:
             return
 
-        conn = sqlite3.connect(self.settings_db_path, timeout=30.0)
+        conn = self._db(self.settings_db_path)
         cursor = conn.cursor()
 
         set_clauses = ", ".join([f"{k} = ?" for k in kwargs.keys()])
@@ -744,8 +753,8 @@ class BotHealth(commands.Cog):
             }
 
     def get_overall_status(self, db_health: dict, log_health: dict, system_health: dict,
-                           wos_api: dict = None, gift_api: dict = None,
-                           requirements: dict = None) -> str:
+                           wos_api: dict | None = None, gift_api: dict | None = None,
+                           requirements: dict | None = None) -> str:
         """Determine overall health status"""
         statuses = [
             db_health['status'], log_health['status'], system_health['latency_status'],
@@ -791,6 +800,7 @@ class BotHealth(commands.Cog):
             'logs_archived': 0,
             'legacy_artifacts_removed': [],
             'legacy_packages_removed': [],
+            'requirements_cleaned': [],
             'errors': []
         }
 
@@ -822,6 +832,12 @@ class BotHealth(commands.Cog):
             results['errors'].append(f"Legacy packages: {e}")
             self.logger.error(f"Cleanup legacy packages error: {e}")
 
+        try:
+            results['requirements_cleaned'] = self._strip_obsolete_requirements()
+        except Exception as e:
+            results['errors'].append(f"Requirements cleanup: {e}")
+            self.logger.error(f"Cleanup requirements error: {e}")
+
         self.update_config(last_cleanup_date=datetime.now(timezone.utc).date().isoformat())
 
         return results
@@ -849,16 +865,29 @@ class BotHealth(commands.Cog):
 
         # Stale db.bak / db.bak_<timestamp> created by the update flow.
         # Only remove if older than 7 days so a recent backup is still recoverable.
+        # Skip symlinks — `db.bak → ../something_important` would otherwise be followed.
         cutoff = datetime.now(timezone.utc).timestamp() - 7 * 86400
         for entry in os.listdir('.'):
             if entry == 'db.bak' or entry.startswith('db.bak_'):
                 full = os.path.abspath(entry)
                 try:
+                    if os.path.islink(full):
+                        continue
                     if os.path.getmtime(full) < cutoff and os.path.isdir(full):
                         shutil.rmtree(full, onerror=self._on_rmtree_error)
                         removed.append(entry)
                 except Exception as e:
                     self.logger.warning(f"Could not remove {entry}: {e}")
+
+        # Developer-only `tests/` dir: export-ignored from releases, so it should
+        # never be in a production install. Remove it there, but leave it alone
+        # in a git checkout (presence of `.git`) so developers keep their tests.
+        if os.path.isdir("tests") and not os.path.isdir(".git"):
+            try:
+                shutil.rmtree("tests", onerror=self._on_rmtree_error)
+                removed.append("tests")
+            except Exception as e:
+                self.logger.warning(f"Could not remove tests dir: {e}")
 
         return removed
 
@@ -901,6 +930,36 @@ class BotHealth(commands.Cog):
                 self.logger.warning(f"Could not uninstall {pkg}: {e}")
 
         return removed
+
+    def _strip_obsolete_requirements(self) -> list:
+        """Remove any LEGACY_PACKAGES_TO_REMOVE entries from requirements.txt so
+        a later reinstall won't pull them back. Rewrites the file only when it
+        actually changes. Returns the package names that were stripped."""
+        path = "requirements.txt"
+        if not os.path.isfile(path):
+            return []
+
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        legacy = {p.lower() for p in LEGACY_PACKAGES_TO_REMOVE}
+        kept, stripped = [], []
+        for line in lines:
+            bare = line.strip()
+            if bare and not bare.startswith("#"):
+                name = bare
+                for sep in ("==", ">=", "<=", "~=", "!="):
+                    name = name.split(sep)[0]
+                if name.strip().lower() in legacy:
+                    stripped.append(name.strip().lower())
+                    continue
+            kept.append(line)
+
+        if stripped:
+            with open(path, "w", encoding="utf-8") as f:
+                f.writelines(kept)
+
+        return stripped
 
     async def _checkpoint_all_databases(self) -> list:
         """Checkpoint all databases"""
@@ -1165,7 +1224,7 @@ class BotHealth(commands.Cog):
         except Exception as e:
             self.logger.error(f"Failed to notify user {user_id}: {e}")
 
-    def cog_unload(self):
+    async def cog_unload(self):
         """Cleanup when cog is unloaded"""
         self.maintenance_loop.cancel()
         if self.update_bot_footprint_loop.is_running():
@@ -1264,7 +1323,7 @@ class BotHealth(commands.Cog):
         else:
             title = f"{theme.refreshIcon} Restarting..."
             description = "The bot is restarting. Please wait a moment."
-        print(f"  {title.replace(chr(10), ' ')}")
+        self.logger.info(title.replace(chr(10), ' '))
 
         # Send confirmation message before restart
         try:
@@ -1281,7 +1340,7 @@ class BotHealth(commands.Cog):
 
         # Persist where to update the message once the new bot is ready
         try:
-            with sqlite3.connect(self.settings_db_path, timeout=30.0) as conn:
+            with self._db(self.settings_db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "REPLACE INTO restart_marker (id, channel_id, message_id, initiated_at) "
@@ -1296,39 +1355,8 @@ class BotHealth(commands.Cog):
         # Give Discord a moment to send the message
         await asyncio.sleep(1)
 
-        # Filter --no-update when relaunching for an update
-        relaunch_args = list(sys.argv)
-        if allow_update:
-            relaunch_args = [a for a in relaunch_args if a != "--no-update"]
-
-        if is_container():
-            self.logger.info("Exiting for container restart...")
-            sys.exit(0)
-
-        if is_windows_host:
-            # Print clear restart instructions for the host operator and exit.
-            venv_python = os.path.join("bot_venv", "Scripts", "python.exe")
-            cmd_parts = [
-                venv_python if os.path.exists(venv_python) else "python",
-                *sys.argv,
-            ]
-            if allow_update and "--no-update" in cmd_parts:
-                cmd_parts = [a for a in cmd_parts if a != "--no-update"]
-            print()
-            print("=" * 60)
-            print("  Bot stopped. To restart, run:")
-            print(f"    {' '.join(cmd_parts)}")
-            print("=" * 60)
-            print()
-            sys.exit(0)
-
         self.logger.info("Self-restarting...")
-        try:
-            os.execl(sys.executable, sys.executable, *relaunch_args)
-        except Exception as e:
-            self.logger.error(f"Self-restart failed: {e}")
-            print(f"Self-restart failed: {e}")
-            sys.exit(1)
+        restart_process(allow_update=allow_update)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -1341,7 +1369,7 @@ class BotHealth(commands.Cog):
     async def _consume_restart_marker(self):
         """Read and clear the restart marker, then update the original embed."""
         try:
-            with sqlite3.connect(self.settings_db_path, timeout=30.0) as conn:
+            with self._db(self.settings_db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT channel_id, message_id, initiated_at FROM restart_marker WHERE id = 1"
@@ -1439,7 +1467,7 @@ class BotHealth(commands.Cog):
 
     def _build_health_embed(self, overall: str, wos_api: dict, gift_api: dict,
                             db_health: dict, log_health: dict, system_health: dict,
-                            requirements: dict = None) -> discord.Embed:
+                            requirements: dict | None = None) -> discord.Embed:
         """Build the health dashboard embed."""
         from . import onnx_lifecycle
 
@@ -1601,6 +1629,17 @@ class HealthMenuView(discord.ui.View):
         self._confirming_restart = False
         self._build_components()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Re-check per interaction: the menu-open gate doesn't cover button clicks.
+        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not (is_admin and is_global):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only global admins can use the Bot Health menu.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     def _build_components(self):
         self.clear_items()
         if self._confirming_restart:
@@ -1729,6 +1768,10 @@ class HealthMenuView(discord.ui.View):
         if pkgs:
             result_parts.append(f"Uninstalled legacy package(s): {', '.join(pkgs)}")
 
+        reqs = results.get('requirements_cleaned') or []
+        if reqs:
+            result_parts.append(f"Removed obsolete requirements entries: {', '.join(reqs)}")
+
         if results['errors']:
             result_parts.append(f"\n{theme.warnIcon} Some issues: {', '.join(results['errors'][:2])}")
 
@@ -1803,6 +1846,13 @@ class HealthMenuView(discord.ui.View):
         )
 
     async def _on_restart_request(self, interaction: discord.Interaction):
+        busy = _active_work_summary(self.cog.bot)
+        if busy:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Restart blocked: {busy}. Wait for it to finish, then try again.",
+                ephemeral=True,
+            )
+            return
         self._confirming_restart = True
         self._build_components()
         await interaction.response.edit_message(
@@ -1847,6 +1897,16 @@ class CleanCogsConfirmView(discord.ui.View):
         self.cog = cog
         self.unused_files = unused_files
         self.parent_view = parent_view
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not (is_admin and is_global):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only global admins can confirm this action.",
+                ephemeral=True,
+            )
+            return False
+        return True
 
     @discord.ui.button(
         label="Archive Files",
@@ -1941,6 +2001,16 @@ class ReloadCogsView(discord.ui.View):
         self.page = 0
         self.max_page = max(0, (len(loaded_cogs) - 1) // self.PAGE_SIZE)
         self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not (is_admin and is_global):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only global admins can reload cogs.",
+                ephemeral=True,
+            )
+            return False
+        return True
 
     def _page_slice(self) -> list:
         start = self.page * self.PAGE_SIZE
@@ -2068,6 +2138,13 @@ class ReloadCogsView(discord.ui.View):
 
     async def _perform_reload(self, interaction: discord.Interaction, cogs_to_reload: list):
         """Perform the actual reload operation"""
+        busy = _active_work_summary(self.cog.bot)
+        if busy:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Reload blocked: {busy}. Wait for it to finish, then try again.",
+                ephemeral=True,
+            )
+            return
         await interaction.response.defer()
 
         # Show progress

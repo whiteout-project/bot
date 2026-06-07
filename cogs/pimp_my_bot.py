@@ -157,7 +157,8 @@ async def check_interaction_user(interaction: discord.Interaction, expected_user
 
 
 async def safe_edit_message(interaction: discord.Interaction, embed: discord.Embed = None,
-                            view: discord.ui.View = None, content: str = None):
+                            view: discord.ui.View = None, content: str = None,
+                            clear_attachments: bool = False):
     """
     Safely edit an interaction message, handling all response states.
     Use this instead of manually checking interaction.response.is_done().
@@ -167,14 +168,18 @@ async def safe_edit_message(interaction: discord.Interaction, embed: discord.Emb
         embed: Optional embed to display
         view: Optional view with components
         content: Optional text content (use None to clear existing content)
+        clear_attachments: Pass True when navigating away from a message that
+            had a file/image attached (e.g. a chart) so the stale attachment
+            doesn't persist under the new content.
     """
+    extra = {"attachments": []} if clear_attachments else {}
     try:
         if not interaction.response.is_done():
-            await interaction.response.edit_message(embed=embed, view=view, content=content)
+            await interaction.response.edit_message(embed=embed, view=view, content=content, **extra)
         else:
-            await interaction.edit_original_response(embed=embed, view=view, content=content)
+            await interaction.edit_original_response(embed=embed, view=view, content=content, **extra)
     except discord.InteractionResponded:
-        await interaction.edit_original_response(embed=embed, view=view, content=content)
+        await interaction.edit_original_response(embed=embed, view=view, content=content, **extra)
 
 
 def build_divider(start, pattern, end, length, max_length=99):
@@ -251,7 +256,6 @@ class ThemeManager:
             return {e.id for e in app_emojis}
         except Exception as e:
             logger.warning(f"Could not fetch application emojis: {e}")
-            print(f"Could not fetch application emojis: {e}")
             return set()
 
     def _validate_emojis(self, accessible_emoji_ids: set = None):
@@ -280,7 +284,6 @@ class ThemeManager:
                 # If bot can't access this emoji, set to empty string (hidden)
                 if emoji_id not in accessible_emoji_ids:
                     logger.warning(f"Theme emoji '{icon_name}' (:{emoji_name}:{emoji_id}) is inaccessible - hiding it")
-                    print(f"[WARNING] Theme emoji '{icon_name}' (:{emoji_name}:{emoji_id}) is inaccessible - hiding it")
                     setattr(self, icon_name, "")
 
     def _set_defaults(self):
@@ -507,7 +510,6 @@ class ThemeManager:
                 """)
                 conn.commit()
                 logger.info("Theme database created with default theme.")
-                print("Theme database created with default theme.")
 
     def load(self):
         """Load theme from database. Safe to call multiple times."""
@@ -544,7 +546,6 @@ class ThemeManager:
 
         except Exception as e:
             logger.warning(f"Could not load theme settings: {e}")
-            print(f"Warning: Could not load theme settings: {e}")
 
     def _apply_theme(self, theme_dict):
         """Apply theme data from database row dictionary."""
@@ -636,7 +637,6 @@ class ThemeManager:
 
         except Exception as e:
             logger.warning(f"Could not load theme for guild {guild_id}: {e}")
-            print(f"Warning: Could not load theme for guild {guild_id}: {e}")
 
     def get_server_theme_name(self, guild_id: int) -> str:
         """Get the theme name for a specific server (or global if no override)."""

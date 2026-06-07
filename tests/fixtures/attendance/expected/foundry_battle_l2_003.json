@@ -1,0 +1,15 @@
+{
+  "description": "Foundry Battle Legion 2 — Personal Arsenal Points page 1 (rank 1-8 visible cleanly)",
+  "event_type": "foundry_battle",
+  "legion": null,
+  "header_date": null,
+  "min_rows": 6,
+  "expected_rows": [
+    {"name": "vtr",          "value": 512315, "expected_fid": 10001, "min_status": "auto"},
+    {"name": "H&N",          "value": 433354, "expected_fid": 10031, "min_status": "likely"},
+    {"name": "Trololololol", "value": 362242, "expected_fid": 10006, "min_status": "likely"},
+    {"name": "Noura",        "value": 317994, "expected_fid": 10019, "min_status": "auto"},
+    {"name": "AlejoCAT",     "value": 268340, "expected_fid": 10003, "min_status": "likely"},
+    {"name": "LittleWitch",  "value": 187391, "expected_fid": 10041, "min_status": "likely"}
+  ]
+}

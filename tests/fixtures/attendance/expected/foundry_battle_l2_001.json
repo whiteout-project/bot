@@ -1,0 +1,7 @@
+{
+  "description": "Foundry Battle Legion 2 — header (date + legion + Imperial Foundry Control). No PAP rows yet.",
+  "event_type": "foundry_battle",
+  "legion": "Legion 2",
+  "header_date": "2026-05-03",
+  "min_rows": 0
+}

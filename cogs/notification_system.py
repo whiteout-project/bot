@@ -57,6 +57,90 @@ def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str |
             )
     return None
 
+class QuarantinedNotificationActionView(discord.ui.View):
+    # custom_id separator is `|` because ISO timestamps contain `:`.
+    # (ts_iso, guild_id) uniquely identifies a batch — no channel_id needed.
+    def __init__(self, cog, ts_iso: str, guild_id: int):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.ts_iso = ts_iso
+        self.guild_id = guild_id
+        reenable_btn = discord.ui.Button(
+            label="Re-enable", style=discord.ButtonStyle.success,
+            emoji=theme.verifiedIcon,
+            custom_id=f"notif_q|re|{ts_iso}|{guild_id}",
+        )
+        reenable_btn.callback = self._on_reenable
+        self.add_item(reenable_btn)
+        delete_btn = discord.ui.Button(
+            label="Delete Permanently", style=discord.ButtonStyle.danger,
+            emoji=theme.trashIcon,
+            custom_id=f"notif_q|del|{ts_iso}|{guild_id}",
+        )
+        delete_btn.callback = self._on_delete
+        self.add_item(delete_btn)
+
+    async def _ensure_admin(self, interaction: discord.Interaction) -> bool:
+        try:
+            with sqlite3.connect('db/settings.sqlite') as db:
+                row = db.cursor().execute(
+                    "SELECT 1 FROM admin WHERE id = ?", (interaction.user.id,)
+                ).fetchone()
+        except Exception:
+            row = None
+        if row is None:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only bot admins can act on this notice.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _on_reenable(self, interaction: discord.Interaction):
+        if not await self._ensure_admin(interaction):
+            return
+        try:
+            self.cog.cursor.execute(
+                "UPDATE bear_notifications SET is_enabled = 1, auto_disabled_at = NULL "
+                "WHERE auto_disabled_at = ? AND guild_id = ? AND is_enabled = 0",
+                (self.ts_iso, self.guild_id),
+            )
+            affected = self.cog.cursor.rowcount
+            self.cog.conn.commit()
+        except Exception as e:
+            logger.error(f"Re-enable paused notifications failed: {e}")
+            print(f"[NOTIFICATIONS] Could not re-enable paused notifications: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Could not re-enable: {e}", ephemeral=True)
+            return
+        msg = (f"{theme.verifiedIcon} Re-enabled **{affected}** notification(s)."
+               if affected else
+               f"{theme.infoIcon} Already resolved — nothing matched.")
+        await interaction.response.edit_message(content=msg, embed=None, view=None)
+
+    async def _on_delete(self, interaction: discord.Interaction):
+        if not await self._ensure_admin(interaction):
+            return
+        try:
+            self.cog.cursor.execute(
+                "DELETE FROM bear_notifications "
+                "WHERE auto_disabled_at = ? AND guild_id = ? AND is_enabled = 0",
+                (self.ts_iso, self.guild_id),
+            )
+            affected = self.cog.cursor.rowcount
+            self.cog.conn.commit()
+        except Exception as e:
+            logger.error(f"Delete paused notifications failed: {e}")
+            print(f"[NOTIFICATIONS] Could not delete paused notifications: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Could not delete: {e}", ephemeral=True)
+            return
+        msg = (f"{theme.verifiedIcon} Permanently deleted **{affected}** notification(s)."
+               if affected else
+               f"{theme.infoIcon} Already resolved — nothing matched.")
+        await interaction.response.edit_message(content=msg, embed=None, view=None)
+
+
 class NotificationSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -214,6 +298,8 @@ class NotificationSystem(commands.Cog):
 
         self.notification_task = asyncio.create_task(self.check_notifications())
         self.deletion_task = asyncio.create_task(self.check_message_deletions())
+        self._register_quarantine_views()
+        asyncio.create_task(self._sweep_orphaned_notifications())
 
     async def cog_unload(self):
 
@@ -227,140 +313,146 @@ class NotificationSystem(commands.Cog):
             self.conn.close()
 
     async def auto_disable_notification(self, channel_id: int):
-        """Auto-disable notifications after their channel has been confirmed missing for a sustained period."""
         now = time.time()
-
         if channel_id not in self.channel_missing_since:
             self.channel_missing_since[channel_id] = now
             return
-
-        elapsed = now - self.channel_missing_since[channel_id]
-        if elapsed < self.CHANNEL_MISSING_THRESHOLD:
+        if now - self.channel_missing_since[channel_id] < self.CHANNEL_MISSING_THRESHOLD:
             return
 
-        # Channel has been missing from cache long enough — confirm via API before disabling
         try:
             await self.bot.fetch_channel(channel_id)
-            # Channel still exists (maybe bot just reconnected) — reset tracker
             self.channel_missing_since.pop(channel_id, None)
             return
         except discord.NotFound:
-            # Channel is confirmed deleted — proceed with disabling
-            pass
+            reason = "channel_deleted"
         except discord.Forbidden:
-            # Channel exists but bot lost access — notify admins but don't disable
-            self.channel_missing_since.pop(channel_id, None)
-            await self.notify_admins_channel_issue(channel_id, "lost access")
-            return
+            reason = "channel_forbidden"
         except Exception:
-            # Transient error (rate limit, network) — keep waiting
-            return
+            return  # transient (rate limit, network) — keep waiting
 
-        # Disable all notifications for this channel
+        self.channel_missing_since.pop(channel_id, None)
+        await self._pause_and_notify(channel_id=channel_id, reason=reason)
+
+    async def _pause_and_notify(self, *, channel_id: int | None = None,
+                                guild_id: int | None = None, reason: str):
+        if channel_id is not None:
+            where_sql, where_params = "channel_id = ?", (channel_id,)
+        elif guild_id is not None:
+            where_sql, where_params = "guild_id = ?", (guild_id,)
+        else:
+            return 0
         try:
             self.cursor.execute(
-                "SELECT id, description FROM bear_notifications WHERE channel_id = ? AND is_enabled = 1",
-                (channel_id,)
+                f"SELECT id, description, guild_id FROM bear_notifications "
+                f"WHERE {where_sql} AND is_enabled = 1",
+                where_params,
             )
             affected = self.cursor.fetchall()
-
             if not affected:
-                self.channel_missing_since.pop(channel_id, None)
-                return
-
+                return 0
+            gid = affected[0][2]
+            ts_iso = datetime.now(pytz.UTC).isoformat()
             self.cursor.execute(
-                "UPDATE bear_notifications SET is_enabled = 0 WHERE channel_id = ? AND is_enabled = 1",
-                (channel_id,)
+                f"UPDATE bear_notifications SET is_enabled = 0, auto_disabled_at = ? "
+                f"WHERE {where_sql} AND is_enabled = 1",
+                (ts_iso, *where_params),
             )
             self.conn.commit()
-            self.channel_missing_since.pop(channel_id, None)
-
-            print(f"[AUTO-DISABLE] {len(affected)} notification(s) disabled — channel {channel_id} confirmed deleted after {int(elapsed)}s")
-            await self.notify_admins_channel_disabled(channel_id, affected)
-
+            print(f"[NOTIFICATIONS] Paused {len(affected)} notification(s) — {reason}")
+            await self._send_quarantine_dm(
+                ts_iso=ts_iso, guild_id=gid, channel_id=channel_id,
+                reason=reason, affected=[(r[0], r[1]) for r in affected],
+            )
+            return len(affected)
         except Exception as e:
-            logger.error(f"Error auto-disabling notifications for channel {channel_id}: {e}")
-            print(f"[AUTO-DISABLE] Error disabling notifications for channel {channel_id}: {e}")
+            logger.error(f"Pause+notify failed ({reason}): {e}")
+            print(f"[NOTIFICATIONS] Could not pause notifications: {e}")
+            return 0
 
-    async def notify_admins_channel_disabled(self, channel_id: int, affected: list):
-        """Send a DM to global admins when notifications are auto-disabled due to a deleted channel."""
+    async def _send_quarantine_dm(self, *, ts_iso, guild_id, channel_id,
+                                  reason, affected):
         try:
             with sqlite3.connect('db/settings.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
-                admins = cursor.fetchall()
-
+                admins = db.cursor().execute(
+                    "SELECT id FROM admin WHERE is_initial = 1"
+                ).fetchall()
             if not admins:
                 return
-
-            notif_list = []
-            for notif_id, description in affected:
-                desc = description[:50] + "..." if len(description) > 50 else description
-                if "EMBED_MESSAGE:" in desc:
-                    desc = "(Embed notification)"
-                notif_list.append(f"- **ID {notif_id}:** {desc}")
-
+            guild = self.bot.get_guild(guild_id)
+            guild_label = f"**{guild.name}**" if guild else f"guild `{guild_id}`"
+            scope = (f"channel `{channel_id}` in {guild_label}"
+                     if channel_id else guild_label)
+            reason_phrase = {
+                "channel_deleted": "the channel was deleted",
+                "channel_forbidden": "the bot lost access to the channel",
+                "guild_kicked": "the bot was removed from the server",
+                "startup_sweep": "the bot is no longer in the server",
+            }.get(reason, reason)
+            notif_lines = []
+            for nid, desc in affected[:10]:
+                short = (desc[:50] + "...") if len(desc) > 50 else desc
+                if "EMBED_MESSAGE:" in short:
+                    short = "(Embed notification)"
+                notif_lines.append(f"- **ID {nid}:** {short}")
+            more = (f"\n*…and {len(affected) - 10} more*"
+                    if len(affected) > 10 else "")
             embed = discord.Embed(
-                title=f"{theme.warnIcon} Notifications Auto-Disabled",
+                title=f"{theme.warnIcon} Notifications Paused",
                 description=(
-                    f"**{len(affected)}** notification(s) were automatically disabled because their "
-                    f"channel has gone missing. Have you seen it anywhere?\n\n"
-                    f"**Channel ID:** `{channel_id}`\n\n"
-                    + "\n".join(notif_list[:10])
-                    + (f"\n*...and {len(affected) - 10} more*" if len(affected) > 10 else "")
-                    + "\n\nYou can re-enable them after setting a valid channel."
+                    f"**{len(affected)}** notification(s) in {scope} were paused "
+                    f"because {reason_phrase}.\n\n"
+                    + "\n".join(notif_lines) + more
+                    + "\n\nPick **Re-enable** if access is restored, or "
+                    "**Delete Permanently** if you don't want these anymore. "
+                    "They stay paused until you choose."
                 ),
-                color=theme.emColor2
+                color=theme.emColor2,
             )
-
+            view = QuarantinedNotificationActionView(self, ts_iso, guild_id)
             for (admin_id,) in admins:
                 try:
                     user = await self.bot.fetch_user(admin_id)
                     if user:
-                        await user.send(embed=embed)
+                        await user.send(embed=embed, view=view)
                 except Exception:
                     pass
         except Exception as e:
-            logger.error(f"Error notifying admins about disabled notifications: {e}")
-            print(f"[AUTO-DISABLE] Error notifying admins: {e}")
+            logger.error(f"Quarantine DM failed: {e}")
+            print(f"[NOTIFICATIONS] Could not DM admins about paused notifications: {e}")
 
-    async def notify_admins_channel_issue(self, channel_id: int, issue: str):
-        """Send a DM to global admins when the bot has lost access to a notification channel."""
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        await self._pause_and_notify(guild_id=guild.id, reason="guild_kicked")
+
+    async def _sweep_orphaned_notifications(self):
+        # Catches guilds the bot was kicked from while offline.
+        await self.bot.wait_until_ready()
         try:
-            with sqlite3.connect('db/settings.sqlite') as db:
-                cursor = db.cursor()
-                cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
-                admins = cursor.fetchall()
-
-            if not admins:
-                return
-
             self.cursor.execute(
-                "SELECT COUNT(*) FROM bear_notifications WHERE channel_id = ? AND is_enabled = 1",
-                (channel_id,)
+                "SELECT DISTINCT guild_id FROM bear_notifications WHERE is_enabled = 1"
             )
-            count = self.cursor.fetchone()[0]
-
-            embed = discord.Embed(
-                title=f"{theme.warnIcon} Notification Channel Issue",
-                description=(
-                    f"The bot has **{issue}** to a channel with **{count}** active notification(s).\n\n"
-                    f"**Channel ID:** `{channel_id}`\n\n"
-                    f"Notifications have **not** been disabled. Please check the channel permissions."
-                ),
-                color=theme.emColor2
-            )
-
-            for (admin_id,) in admins:
-                try:
-                    user = await self.bot.fetch_user(admin_id)
-                    if user:
-                        await user.send(embed=embed)
-                except Exception:
-                    pass
+            guild_ids = [row[0] for row in self.cursor.fetchall()]
         except Exception as e:
-            logger.error(f"Error notifying admins about channel issue: {e}")
-            print(f"[AUTO-DISABLE] Error notifying admins about channel issue: {e}")
+            logger.error(f"Stale-notification check failed: {e}")
+            print(f"[NOTIFICATIONS] Could not check for stale notifications: {e}")
+            return
+        for gid in guild_ids:
+            if self.bot.get_guild(gid) is None:
+                await self._pause_and_notify(guild_id=gid, reason="startup_sweep")
+
+    def _register_quarantine_views(self):
+        # Re-attach the DM buttons after a bot restart so they keep working.
+        try:
+            self.cursor.execute(
+                "SELECT DISTINCT auto_disabled_at, guild_id FROM bear_notifications "
+                "WHERE is_enabled = 0 AND auto_disabled_at IS NOT NULL"
+            )
+            for ts, gid in self.cursor.fetchall():
+                self.bot.add_view(QuarantinedNotificationActionView(self, ts, gid))
+        except Exception as e:
+            logger.error(f"Reload paused-notification buttons failed: {e}")
+            print(f"[NOTIFICATIONS] Could not reload paused-notification buttons: {e}")
 
     async def save_notification(self, guild_id: int, channel_id: int, start_date: datetime,
                                 hour: int, minute: int, timezone: str, description: str,
@@ -1160,7 +1252,7 @@ class NotificationSystem(commands.Cog):
                         if len(parts) > 1:
                             desc_preview = parts[1][:50]
 
-                    print(f"[INFO] Notification {id} - {event_display} {time_str} ({desc_preview}) was disabled since it is not set to repeat")
+                    logger.info(f"Notification {id} - {event_display} {time_str} ({desc_preview}) was disabled since it is not set to repeat")
 
                     self.cursor.execute("""
                         UPDATE bear_notifications
@@ -1207,6 +1299,7 @@ class NotificationSystem(commands.Cog):
         except Exception as e:
             notif_id = id if id is not None else "unknown"
             error_msg = f"[ERROR] Error processing notification {notif_id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
+            logger.error(error_msg)
             print(error_msg)
 
     async def get_notifications(self, guild_id: int) -> list:
@@ -1251,6 +1344,7 @@ class NotificationSystem(commands.Cog):
 
             return True
         except Exception as e:
+            logger.error(f"Error deleting notification {notification_id}: {e}")
             print(f"[ERROR] Error deleting notification {notification_id}: {e}")
             return False
 
@@ -3075,6 +3169,7 @@ class BearTrapView(discord.ui.View):
 
         except Exception as e:
             error_msg = f"[ERROR] Error in set time button: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"
+            logger.error(error_msg)
             print(error_msg)
 
             try:
@@ -3089,6 +3184,7 @@ class BearTrapView(discord.ui.View):
                         ephemeral=True
                     )
             except Exception as notify_error:
+                logger.error(f"Failed to notify user about error: {notify_error}")
                 print(f"[ERROR] Failed to notify user about error: {notify_error}")
 
     @discord.ui.button(
@@ -3559,6 +3655,7 @@ class BearTrapView(discord.ui.View):
                                     )
 
                             except Exception as e:
+                                logger.error(f"Exception in PreviewButton: {e}")
                                 print(f"[ERROR] Exception in PreviewButton: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while fetching the preview.", ephemeral=True)
@@ -3706,12 +3803,12 @@ class BearTrapView(discord.ui.View):
                                             await interaction.followup.send(f"{theme.verifiedIcon} Successfully deleted.", ephemeral=True)
 
                                         else:
-                                            print(f"[DEBUG] Deletion failed for notification_id {self.notification_id}")
                                             await interaction.response.send_message(
                                                 f"{theme.deniedIcon} Failed to delete the notification.", ephemeral=True
                                             )
 
                                     except Exception as e:
+                                        logger.error(f"Exception in confirm_callback: {e}")
                                         print(f"[ERROR] Exception in confirm_callback: {e}")
                                         await interaction.response.send_message(
                                             f"{theme.deniedIcon} An error occurred while deleting the notification.", ephemeral=True
@@ -3732,6 +3829,7 @@ class BearTrapView(discord.ui.View):
                                             view=view
                                         )
                                     except Exception as e:
+                                        logger.error(f"Exception in cancel callback: {e}")
                                         print(f"[ERROR] Exception in cancel callback: {e}")
 
                                 confirm_button.callback = confirm_callback
@@ -3745,6 +3843,7 @@ class BearTrapView(discord.ui.View):
                                 )
 
                             except Exception as e:
+                                logger.error(f"Exception in DeleteButton callback: {e}")
                                 print(f"[ERROR] Exception in DeleteButton callback: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while attempting to delete the notification.",
@@ -3815,6 +3914,7 @@ class BearTrapView(discord.ui.View):
                                                                             ephemeral=True)
 
                             except Exception as e:
+                                logger.error(f"Exception in ToggleButton callback: {e}")
                                 print(f"[ERROR] Exception in ToggleButton callback: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred while toggling notification!", ephemeral=True
@@ -3879,6 +3979,7 @@ class BearTrapView(discord.ui.View):
                                         )
 
                                     except Exception as e:
+                                        logger.error(f"Error updating channel: {e}")
                                         print(f"[ERROR] Error updating channel: {e}")
                                         await select_interaction.response.send_message(
                                             f"{theme.deniedIcon} An error occurred while updating the channel.",
@@ -3896,6 +3997,7 @@ class BearTrapView(discord.ui.View):
                                 )
 
                             except Exception as e:
+                                logger.error(f"Exception in ChangeChannelButton callback: {e}")
                                 print(f"[ERROR] Exception in ChangeChannelButton callback: {e}")
                                 await interaction.response.send_message(
                                     f"{theme.deniedIcon} An error occurred!",
@@ -3943,6 +4045,7 @@ class BearTrapView(discord.ui.View):
                     )
 
                 except Exception as e:
+                    logger.error(f"Error in select callback: {e}")
                     print(f"[ERROR] Error in select callback: {e}")
                     await select_interaction.response.send_message(
                         f"{theme.deniedIcon} An error occurred while editing notification!",
@@ -3965,6 +4068,7 @@ class BearTrapView(discord.ui.View):
             )
 
         except Exception as e:
+            logger.error(f"Error in manage_notification button: {e}")
             print(f"[ERROR] Error in manage_notification button: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while starting the edit process!",
@@ -3992,6 +4096,7 @@ class BearTrapView(discord.ui.View):
                     ephemeral=True
                 )
         except Exception as e:
+            logger.error(f"Error in schedule boards button: {e}")
             print(f"[ERROR] Error in schedule boards button: {e}")
             traceback.print_exc()
             await interaction.response.send_message(

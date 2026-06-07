@@ -45,6 +45,10 @@ class LoginHandler:
         self.rate_limit_per_api = 30
         self.rate_limit_window = 60  # seconds
         self.last_api_used = 1
+
+        # Retry transient failures (timeouts, 5xx) before reporting an error
+        self.max_retries = 3
+        self.retry_delay = 3.0
         
         # API availability
         self.dual_api_mode = False
@@ -73,7 +77,7 @@ class LoginHandler:
             self.alliance_locks[alliance_id] = asyncio.Lock()
         return self.alliance_locks[alliance_id]
     
-    async def check_apis_availability(self, test_fid: str = "46765089") -> Dict[str, bool]:
+    async def check_apis_availability(self, test_fid: str = "45379845") -> Dict[str, bool]:
         """
         Check which login APIs are available
         Returns: dict with api1_available, api2_available
@@ -195,7 +199,7 @@ class LoginHandler:
         wait_time2 = self.rate_limit_window - (now - self.api2_requests[0]) if self.api2_requests else 0
         return max(0, min(wait_time1, wait_time2))
     
-    async def fetch_player_data(self, fid: str, use_proxy: Optional[str] = None) -> Dict:
+    async def fetch_player_data(self, fid: str, use_proxy: Optional[str] = None, retry: bool = True) -> Dict:
         """
         Fetch player login data (nickname, furnace level, kid, etc.)
         
@@ -233,86 +237,91 @@ class LoginHandler:
         # Get the API to use
         api_num = api_result if isinstance(api_result, int) else api_result
         api_url = self.api1_url if api_num == 1 else self.api2_url
-        
+
         # Prepare request
         current_time = int(time.time() * 1000)
         form = f"fid={fid}&time={current_time}"
         sign = hashlib.md5((form + self.secret).encode('utf-8')).hexdigest()
         form = f"sign={sign}&{form}"
         headers = get_headers(api_url.rsplit('/api/', 1)[0])
-        
-        try:
-            # Use proxy if provided and main request fails
-            if use_proxy:
-                from aiohttp_socks import ProxyConnector
-                connector = ProxyConnector.from_url(use_proxy, ssl=self.ssl_context)
-            else:
-                connector = aiohttp.TCPConnector(ssl=self.ssl_context)
-            
-            async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
-                async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                    # Record the API request
-                    self._record_api_request(api_num)
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Check if we have valid data
-                        if data.get('data'):
+
+        last_error = 'Unknown error'
+        attempts = self.max_retries if retry else 1
+        for attempt in range(attempts):
+            try:
+                if use_proxy:
+                    from aiohttp_socks import ProxyConnector
+                    connector = ProxyConnector.from_url(use_proxy, ssl=self.ssl_context)
+                else:
+                    connector = aiohttp.TCPConnector(ssl=self.ssl_context)
+
+                async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
+                    async with session.post(api_url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=15)) as response:
+                        self._record_api_request(api_num)
+
+                        if response.status == 200:
+                            data = await response.json()
+
+                            if data.get('data'):
+                                return {
+                                    'status': 'success',
+                                    'data': data['data'],
+                                    'api_used': api_num,
+                                    'error_message': None
+                                }
+
+                            elif data.get('err_code') == 40004 or (data.get('err_code') == 40001 and 'role not exist' in str(data.get('msg', '')).lower()):
+                                return {
+                                    'status': 'not_found',
+                                    'data': None,
+                                    'api_used': api_num,
+                                    'error_message': 'Player does not exist (role not exist)',
+                                    'err_code': data.get('err_code')
+                                }
+
+                            else:
+                                err_code = data.get('err_code', 'unknown')
+                                err_msg = data.get('msg', 'Unknown error')
+                                return {
+                                    'status': 'error',
+                                    'data': None,
+                                    'api_used': api_num,
+                                    'error_message': f'API Error {err_code}: {err_msg}',
+                                    'err_code': err_code
+                                }
+                        elif response.status == 429:
                             return {
-                                'status': 'success',
-                                'data': data['data'],
-                                'api_used': api_num,
-                                'error_message': None
-                            }
-                        
-                        # Check if this is a "player not found" error (40004 or 40001 with "role not exist")
-                        elif data.get('err_code') == 40004 or (data.get('err_code') == 40001 and 'role not exist' in str(data.get('msg', '')).lower()):
-                            return {
-                                'status': 'not_found',
+                                'status': 'rate_limited',
                                 'data': None,
                                 'api_used': api_num,
-                                'error_message': 'Player does not exist (role not exist)',
-                                'err_code': data.get('err_code')
+                                'error_message': 'Unexpected rate limit'
                             }
-                        
-                        # Other cases where data is empty but not error 40004
+                        elif response.status >= 500:
+                            # Transient upstream/server error - retry
+                            last_error = f'HTTP {response.status}'
                         else:
-                            err_code = data.get('err_code', 'unknown')
-                            err_msg = data.get('msg', 'Unknown error')
                             return {
                                 'status': 'error',
                                 'data': None,
                                 'api_used': api_num,
-                                'error_message': f'API Error {err_code}: {err_msg}',
-                                'err_code': err_code
+                                'error_message': f'HTTP {response.status}'
                             }
-                    elif response.status == 429:
-                        # This shouldn't happen with our rate limiting, but handle it
-                        return {
-                            'status': 'rate_limited',
-                            'data': None,
-                            'api_used': api_num,
-                            'error_message': 'Unexpected rate limit'
-                        }
-                    else:
-                        return {
-                            'status': 'error',
-                            'data': None,
-                            'api_used': api_num,
-                            'error_message': f'HTTP {response.status}'
-                        }
-                        
-        except Exception as e:
-            err_desc = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
-            logger.error(f"Error fetching player data for ID {fid}: {err_desc}")
-            return {
-                'status': 'error',
-                'data': None,
-                'api_used': api_num,
-                'error_message': err_desc,
-            }
-    
+
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+
+            # Transient failure - back off and retry unless this was the last attempt
+            if attempt < attempts - 1:
+                await asyncio.sleep(self.retry_delay)
+
+        logger.error(f"Error fetching player data for ID {fid} after {attempts} attempt(s): {last_error}")
+        return {
+            'status': 'error',
+            'data': None,
+            'api_used': api_num,
+            'error_message': last_error,
+        }
+
     async def fetch_player_batch(self, fids: List[str], progress_callback: Optional[Callable] = None, 
                                alliance_id: Optional[str] = None) -> List[Dict]:
         """

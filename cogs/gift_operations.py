@@ -192,9 +192,9 @@ class GiftOperations(commands.Cog):
             self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
             result = self.settings_cursor.fetchone()
             if not result:
-                self.settings_cursor.execute("INSERT INTO test_fid_settings (test_fid) VALUES (?)", ("244886619",))
+                self.settings_cursor.execute("INSERT INTO test_fid_settings (test_fid) VALUES (?)", ("45379845",))
                 self.settings_conn.commit()
-                self.logger.info("Initialized default test ID (244886619) in database")
+                self.logger.info("Initialized default test ID (45379845) in database")
         except Exception as e:
             self.logger.exception(f"Error setting up test ID table: {e}")
 
@@ -212,10 +212,10 @@ class GiftOperations(commands.Cog):
                 else:
                     raise
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if hasattr(self, 'periodic_validation_loop') and self.periodic_validation_loop.is_running():
             self.periodic_validation_loop.cancel()
-        for conn_name in ['settings_conn', 'alliance_conn']:
+        for conn_name in ['conn', 'settings_conn', 'alliance_conn']:
             if hasattr(self, conn_name):
                 try:
                     getattr(self, conn_name).close()
@@ -416,7 +416,7 @@ class GiftOperations(commands.Cog):
                 f"└ Redeem gift code(s) for one or more alliances\n\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Set up a gift code channel, configure auto redemption, and more...\n\n"
-                f"{theme.deniedIcon} **Delete Gift Code**\n"
+                f"{theme.trashIcon} **Delete Gift Code**\n"
                 f"└ Remove existing codes (rarely needed)\n"
                 f"{theme.lowerDivider}"
             ),

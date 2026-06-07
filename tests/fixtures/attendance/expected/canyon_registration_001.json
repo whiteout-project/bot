@@ -1,0 +1,15 @@
+{
+  "description": "Canyon Registration — Legion 1 invitation mail, page 1 (header + first combatants).",
+  "event_type": "canyon_clash",
+  "kind": "registration",
+  "legion": "Legion 1",
+  "header_date": "2026-05-15",
+  "min_rows": 5,
+  "expected_rows": [
+    {"name": "AlejoRoll",      "value": 807300000, "expected_fid": 10004, "min_status": "auto"},
+    {"name": "Virlix",         "value": 747800000, "expected_fid": 10032, "min_status": "likely"},
+    {"name": "Just me",        "value": 515000000, "expected_fid": 10013, "min_status": "likely"},
+    {"name": "MADO",           "value": 1000000000, "expected_fid": 10002, "min_status": "auto"},
+    {"name": "HusseinAlshekh", "value": 952900000, "expected_fid": 10035, "min_status": "likely"}
+  ]
+}

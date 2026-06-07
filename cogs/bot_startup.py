@@ -302,7 +302,7 @@ class BotStartup(commands.Cog):
             "timestamp": None
         }
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if hasattr(self, 'conn'):
             self.conn.close()
 
@@ -407,9 +407,11 @@ class BotStartup(commands.Cog):
                     status_embed.add_field(
                         name=f"{theme.pinIcon} Community & Support",
                         value=(
+                            f"**Documentation:** [Wiki](https://github.com/whiteout-project/bot/wiki)\n"
                             f"**GitHub Repository:** [Whiteout Project](https://github.com/whiteout-project/bot)\n"
                             f"**Discord Community:** [Join our Discord](https://discord.gg/apYByj6K2m)\n"
-                            f"**Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n"
+                            f"**Bug Reports:** [GitHub Issues](https://github.com/whiteout-project/bot/issues)\n\n"
+                            f"☕ **Like the bot?** [Buy me a coffee](https://buymeacoffee.com/justncodes)\n"
                             f"{theme.lowerDivider}"
                         ),
                         inline=False

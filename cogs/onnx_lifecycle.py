@@ -154,9 +154,24 @@ class OnnxLifecycle(commands.Cog):
         self.bot = bot
         self.sweeper.start()
 
-    def cog_unload(self):
+    async def cog_unload(self):
         if self.sweeper.is_running():
             self.sweeper.cancel()
+        # Force-evict idle models on unload so memory is freed before reload. Active models left alone.
+        for model in list(_REGISTRY.values()):
+            try:
+                async with model._lock:
+                    if model._model is not None and model._refcount == 0:
+                        model._model = None
+                        model._unload_pending_since = None
+                        logger.info(f"OCR model force-unloaded on cog unload: {model.name}")
+            except Exception as e:
+                logger.warning(f"Force-unload error ({model.name}): {e}")
+        try:
+            await asyncio.to_thread(lambda: None)
+        except Exception:
+            pass
+        gc.collect()
 
     @tasks.loop(seconds=SWEEP_INTERVAL_SECONDS)
     async def sweeper(self):

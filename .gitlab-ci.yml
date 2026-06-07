@@ -195,10 +195,10 @@ test-bot-docker-update:
         fi
         
         # Check for success indicators
-        if grep -q "✓ All requirements satisfied" $LOG_FILE && \
-           grep -q "✓ All core imports successful" $LOG_FILE && \
-           grep -q "Logged in as" $LOG_FILE && \
-           grep -q "Activation messages sent to admin user." $LOG_FILE; then
+        if grep -q "Dependencies satisfied" $LOG_FILE && \
+           grep -q "modules loaded" $LOG_FILE && \
+           grep -q "Connected to Discord as" $LOG_FILE && \
+           grep -q "Run /settings in Discord to configure the bot." $LOG_FILE; then
           echo "Bot initialization successful!"
           sleep 5  # Let it run a bit more
           kill $BOT_PID 2>/dev/null || true
@@ -218,7 +218,7 @@ test-bot-docker-update:
       ./check_bot_success.sh
   after_script:
     - echo "=== Gift Solver Log ==="
-    - cat log/gift_solver.txt || true
+    - cat log/gift.txt || true
   <<: *test_artifacts
   <<: *common_rules
 
@@ -286,7 +286,7 @@ test-bot-linux-update:
           cat bot_error.log || true
           
           # Check if the bot completed its update process
-          if grep -q "Update completed successfully from GitHub" bot_output.log; then
+          if grep -q "Update completed" bot_output.log; then
             echo "Bot successfully updated but failed to restart - this is a known issue with the CI environment"
             exit 0
           fi
@@ -332,8 +332,8 @@ test-bot-linux-update:
         fi
         
         # Check for successful bot startup (may happen before or after update)
-        if grep -q "Logged in as" bot_output.log && \
-           grep -q "Activation messages sent to admin user." bot_output.log; then
+        if grep -q "Connected to Discord as" bot_output.log && \
+           grep -q "Run /settings in Discord to configure the bot." bot_output.log; then
           echo "Bot initialization successful!"
           # Allow extra time to ensure bot is stable
           sleep 5
@@ -352,8 +352,8 @@ test-bot-linux-update:
       done
       
       echo "=== Bot started successfully ==="
-      grep "Logged in as" bot_output.log
-      grep "Activation messages" bot_output.log
+      grep "Connected to Discord as" bot_output.log
+      grep "Run /settings" bot_output.log
   after_script:
     - *cleanup_bot_processes
     - echo "=== Final Logs (STDOUT) ==="
@@ -361,7 +361,7 @@ test-bot-linux-update:
     - echo "=== Error Log (STDERR) ==="
     - cat bot_error.log || true
     - echo "=== Gift Solver Log ==="
-    - cat log/gift_solver.txt || true
+    - cat log/gift.txt || true
   <<: *shell_artifacts
   <<: *common_rules
 
@@ -425,11 +425,11 @@ test-bot-docker-no-update:
         fi
         
         # Check for success indicators
-        if grep -q "Update check skipped due to --no-update flag" $LOG_FILE && \
-           grep -q "✓ All requirements satisfied" $LOG_FILE && \
-           grep -q "✓ All core imports successful" $LOG_FILE && \
-           grep -q "Logged in as" $LOG_FILE && \
-           grep -q "Activation messages sent to admin user." $LOG_FILE; then
+        if grep -q "Update check skipped" $LOG_FILE && \
+           grep -q "Dependencies satisfied" $LOG_FILE && \
+           grep -q "modules loaded" $LOG_FILE && \
+           grep -q "Connected to Discord as" $LOG_FILE && \
+           grep -q "Run /settings in Discord to configure the bot." $LOG_FILE; then
           echo "Bot initialization successful!"
           sleep 5  # Let it run a bit more
           kill $BOT_PID 2>/dev/null || true
@@ -449,7 +449,7 @@ test-bot-docker-no-update:
       ./check_bot_success.sh
   after_script:
     - echo "=== Gift Solver Log ==="
-    - cat log/gift_solver.txt || true
+    - cat log/gift.txt || true
   <<: *test_artifacts
   <<: *common_rules
 
@@ -505,11 +505,11 @@ test-bot-linux-no-update:
           exit 1
         fi
         
-        if grep -q "Update check skipped due to --no-update flag" bot_output.log && \
-           grep -q "✓ All requirements satisfied" bot_output.log && \
-           grep -q "✓ All core imports successful" bot_output.log && \
-           grep -q "Logged in as" bot_output.log && \
-           grep -q "Activation messages sent to admin user." bot_output.log; then
+        if grep -q "Update check skipped" bot_output.log && \
+           grep -q "Dependencies satisfied" bot_output.log && \
+           grep -q "modules loaded" bot_output.log && \
+           grep -q "Connected to Discord as" bot_output.log && \
+           grep -q "Run /settings in Discord to configure the bot." bot_output.log; then
           echo "Bot initialization successful!"
           # Kill the tail process first
           kill $TAIL_PID 2>/dev/null || true
@@ -530,14 +530,14 @@ test-bot-linux-no-update:
       done
       
       echo "=== Bot started successfully ==="
-      grep "Logged in as" bot_output.log
-      grep "Activation messages" bot_output.log
+      grep "Connected to Discord as" bot_output.log
+      grep "Run /settings" bot_output.log
       grep "Update check skipped" bot_output.log
   after_script:
     - *cleanup_bot_processes
     - echo "=== Final Logs (STDOUT) ==="
     - cat bot_output.log || true
     - echo "=== Gift Solver Log ==="
-    - cat log/gift_solver.txt || true
+    - cat log/gift.txt || true
   <<: *test_artifacts
   <<: *common_rules

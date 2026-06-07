@@ -1,0 +1,13 @@
+{
+  "_comment": "Source: Screenshot_20260430-225508.png. Chinese Simplified UI. The 'ch' RapidOCR engine emits full-width commas (U+FF0C '，') as the thousands separator; repair_ocr_digits normalises them to ASCII so the formatted-number regex sees them.",
+  "language": "chinese_simplified",
+  "screen_type": "rank_top",
+  "event_id": "20260430_2130_trap1",
+  "trap": "1",
+  "expected_rows": [
+    {"damage": 26776216324, "match": {"fid": 45379845, "min_status": "auto"}},
+    {"damage": 23739615741, "match": {"fid": 45379845, "min_status": "likely"}},
+    {"damage": 23578101931, "match": {"fid": 44348649, "min_status": "auto"}},
+    {"damage": 19903598834, "match": {"fid": 99999991, "min_status": "likely", "allow_unmatched": true}}
+  ]
+}

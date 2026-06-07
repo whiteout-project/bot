@@ -1,0 +1,15 @@
+{
+  "description": "Foundry Registration — Legion 1 combatants list page 1.",
+  "event_type": "foundry_battle",
+  "kind": "registration",
+  "legion": "Legion 1",
+  "header_date": null,
+  "min_rows": 5,
+  "expected_rows": [
+    {"name": "AlejoRoll",   "value": 7577, "expected_fid": 10004, "min_status": "auto"},
+    {"name": "Just me",     "value": 6323, "expected_fid": 10013, "min_status": "likely"},
+    {"name": "Virlix",      "value": 4657, "expected_fid": 10032, "min_status": "likely"},
+    {"name": "MIMOUN",      "value": 8762, "expected_fid": 10007, "min_status": "auto"},
+    {"name": "Lukaku",      "value": 8199, "expected_fid": 10008, "min_status": "auto"}
+  ]
+}
