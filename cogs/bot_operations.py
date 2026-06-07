@@ -159,7 +159,7 @@ class BotOperations(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     f"{theme.warnIcon} The bot-wide toggle was replaced by a per-alliance "
-                    f"\"Show Sync Messages\" setting under Sync Settings.",
+                    f"\"Show Sync Messages\" setting under the alliance's Settings.",
                     ephemeral=True,
                 )
             return
@@ -359,7 +359,7 @@ class BotOperations(commands.Cog):
             return None, None, [], False
     
     async def show_control_settings_menu(self, interaction: discord.Interaction):
-        """Show the per-alliance Sync Settings menu (with alliance picker)."""
+        """Show the per-alliance Settings menu (with alliance picker)."""
         try:
             if interaction.guild is None:
                 await interaction.response.send_message(f"{theme.deniedIcon} This command must be used in a server.", ephemeral=True)
@@ -387,7 +387,7 @@ class BotOperations(commands.Cog):
                 )
 
     async def show_control_settings_for(self, interaction: discord.Interaction, alliance_id: int):
-        """Hub-context entry: open Sync Settings for a known alliance (no picker)."""
+        """Hub-context entry: open Settings for a known alliance (no picker)."""
         try:
             with sqlite3.connect('db/alliance.sqlite') as db:
                 cursor = db.cursor()
@@ -567,7 +567,7 @@ class SyncSettingsView(discord.ui.View):
             )
 
             embed = discord.Embed(
-                title=f"{theme.settingsIcon} Sync Settings · {alliance_name}",
+                title=f"{theme.settingsIcon} Settings · {alliance_name}",
                 description=(
                     f"{theme.upperDivider}\n"
                     f"**Schedule**\n"
@@ -585,7 +585,7 @@ class SyncSettingsView(discord.ui.View):
             )
         else:
             embed = discord.Embed(
-                title=f"{theme.settingsIcon} Sync Settings",
+                title=f"{theme.settingsIcon} Settings",
                 description=(
                     "Pick an alliance from the dropdown to configure:\n"
                     "• Whether the bot posts a sync progress message\n"

@@ -308,8 +308,8 @@ class MainMenu(commands.Cog):
                     f"└ View, add, transfer, export and remove members\n\n"
                     f"{theme.announceIcon} **Channel Setup**\n"
                     f"└ Configure alliance channels: ID, Sync, Log\n\n"
-                    f"{theme.refreshIcon} **Sync Settings**\n"
-                    f"└ Sync interval, start time and other options\n\n"
+                    f"{theme.settingsIcon} **Settings**\n"
+                    f"└ Sync interval, auto-removal on transfer, notifications, logs\n\n"
                     f"{theme.editListIcon} **Edit Name**\n"
                     f"└ Rename this alliance\n\n"
                     f"{theme.listIcon} **History**\n"
@@ -780,11 +780,12 @@ class AllianceManagementEntryView(discord.ui.View):
 
 
 class AllianceHubView(discord.ui.View):
-    """Per-alliance hub. Lean layout:
+    """Per-alliance hub. Layout:
       row 0: alliance switch dropdown
-      row 1: Manage Members | History
-      row 2: Channel Setup | Sync Settings | Edit Name
-      row 3: Back | Delete Alliance
+      row 1: Manage Members | Channel Setup
+      row 2: Settings | Edit Name
+      row 3: History | Power Rankings
+      row 4: Back | Delete Alliance
     """
 
     def __init__(self, cog, alliance_id: int, alliance_name: str,
@@ -853,7 +854,7 @@ class AllianceHubView(discord.ui.View):
 
     # ── Secondary actions (row 2) ──
 
-    @discord.ui.button(label="Sync Settings", emoji=theme.refreshIcon,
+    @discord.ui.button(label="Settings", emoji=theme.settingsIcon,
                        style=discord.ButtonStyle.primary, row=2)
     async def sync_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
