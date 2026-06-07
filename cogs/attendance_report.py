@@ -1468,36 +1468,15 @@ class AttendanceReport(commands.Cog):
                 # Add back button
                 back_view = discord.ui.View(timeout=7200)
                 back_button = discord.ui.Button(
-                    label="Back to Alliance Selection", emoji=f"{theme.backIcon}",
+                    label="Back", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
                 )
-                
+
                 async def back_callback(back_interaction: discord.Interaction):
                     attendance_cog = self.bot.get_cog("Attendance")
                     if attendance_cog:
-                        try:
-                            result = await attendance_cog._handle_permission_check(back_interaction)
-                            if not result:
-                                return
+                        await attendance_cog.show_attendance_hub(back_interaction, alliance_id)
 
-                            alliances, _ = result
-                            alliances_with_counts = attendance_cog._get_alliances_with_counts(alliances)
-
-                            from .attendance import AllianceSelectView
-                            view = AllianceSelectView(alliances_with_counts, attendance_cog, is_marking=False)
-
-                            select_embed = discord.Embed(
-                                title="👀 View Attendance - Alliance Selection",
-                                description="Please select an alliance to view attendance records:",
-                                color=theme.emColor3
-                            )
-
-                            await back_interaction.response.edit_message(embed=select_embed, view=view)
-                        except Exception as e:
-                            logger.error(f"Error going back to alliance selection: {e}")
-                            print(f"Error going back to alliance selection: {e}")
-                            await attendance_cog.show_attendance_menu(back_interaction)
-                
                 back_button.callback = back_callback
                 back_view.add_item(back_button)
                 

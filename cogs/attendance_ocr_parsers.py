@@ -133,11 +133,8 @@ def detect_kind(event_type: str, ocr_text: str) -> Optional[str]:
 def classify_event(ocr_text: str, enabled_events: list[str],
                    keywords_by_event: dict[str, list[str]] | None = None
                    ) -> Optional[tuple[str, str]]:
-    """Fingerprint-first classifier returning `(event_type, kind)` or None.
-
-    Keywords (when configured for an event) act as an optional prefilter; the
-    fingerprint regex makes the final decision.
-    """
+    """Classify text to `(event_type, kind)` or None: configured keywords are an
+    optional prefilter, the per-kind fingerprint regex decides."""
     if not ocr_text or not enabled_events:
         return None
     text_lower = ocr_text.lower()
@@ -206,18 +203,9 @@ EVENT_TIME_SLOTS: dict[str, tuple[str, ...]] = {
 
 
 def _parse_compact_int(token: str) -> Optional[int]:
-    """Convert various number formats to int. Returns None on failure.
-
-    Supports:
-      - Compact suffix: '19.9M', '3.7K', '1.0B' (dot is the decimal separator)
-      - Comma thousands: '1,234', '12,345,678'
-      - EU dot thousands: '1.234' = 1234, '12.345.678' = 12345678
-      - Bare integer: '430', '999999'
-
-    The EU thousands case is identified by every dot being followed by
-    exactly 3 digits (with a non-digit or end-of-string after the group),
-    distinguishing it from a true decimal like '1.5' which is rejected.
-    """
+    """Parse compact ('19.9M'), comma ('12,345'), EU-dot ('1.234'), or bare
+    integers to int; None on failure. EU thousands = every dot followed by
+    exactly 3 digits, so a real decimal like '1.5' is rejected."""
     token = token.strip()
 
     # Compact suffix branch — dot is the decimal separator.
@@ -251,22 +239,9 @@ def extract_legion(ocr_text: str) -> Optional[str]:
 # ── result-mail extras: scoreboard, stats, MVPs ───────────────────────────
 
 def _clean_scoreboard_name(raw: str, tag: str) -> str:
-    """Clean a name captured between `[TAG]` markers in the result-mail OCR.
-
-    OCR linearises the screenshot text by reading order, so when an
-    alliance name wraps to a second visual line (e.g. 'BestRoyalFami|ly'),
-    the wrap fragment ('ly') often lands far from its origin and gets
-    attached to the wrong alliance card. This cleaner removes the obvious
-    noise without trying to repair the truncation (that would need
-    bounding-box data from the OCR engine):
-
-    1. Strip a leading duplicate of the bracketed tag. For '[LMN]LMN ly'
-       the raw is 'LMN ly' — drop the redundant leading 'LMN'.
-    2. Drop trailing short lowercase wrap-fragments. For 'bluCATs ance'
-       (orphaned 'ance' from 'WarriorsAlliance'), drop 'ance' → 'bluCATs'.
-    3. If nothing useful is left, fall back to the tag itself so the
-       embed at least shows `[LMN]LMN` instead of `[LMN]` alone.
-    """
+    """Clean an alliance name captured between `[TAG]` markers: drop a leading
+    duplicate of the tag and trailing short lowercase line-wrap fragments,
+    falling back to the tag itself when nothing usable remains."""
     name = raw.strip(" ,.")
     if tag and name.upper().startswith(tag.upper()):
         rest = name[len(tag):]
@@ -284,13 +259,9 @@ def _clean_scoreboard_name(raw: str, tag: str) -> str:
 
 
 def _parse_alliance_scoreboard(text: str) -> list[dict]:
-    """Extract the 3-alliance scoreboard from a result mail header.
-
-    OCR emits the cards column-wise: N alliance IDs, then N legion labels,
-    then N tag/name chunks, then N scores. Pairs them positionally and
-    tolerates missing legion / messy names — only the alliance ID and the
-    score are load-bearing.
-    """
+    """Extract the 3-alliance scoreboard from a result-mail header. OCR emits
+    it column-wise (IDs, legions, names, scores); pair positionally — only the
+    alliance ID and score are load-bearing."""
     # Slice between "battle details" and "Stats" so we don't pick up player rows.
     lower = text.lower()
     start = 0
@@ -376,11 +347,9 @@ def _is_non_name_text(text: str) -> bool:
 
 
 def _parse_alliance_scoreboard_spatial(blocks: list) -> list[dict]:
-    """Box-aware scoreboard parser. Groups OCR text chunks by alliance card
-    (clustered around each `[TAG]` anchor's x-position), then bounds each
-    card vertically by its score so the Stats/MVP/footer text below the
-    scoreboard cards never leaks into a name.
-    """
+    """Box-aware scoreboard parser: cluster chunks into alliance cards by each
+    `[TAG]`'s x-position, bounded vertically by the score so footer/stats text
+    can't leak into a name."""
     if not blocks:
         return []
     enriched = []
@@ -487,12 +456,9 @@ def _parse_stats_panel(text: str) -> dict[str, int]:
 
 
 def _parse_mvps(text: str) -> list[dict]:
-    """Extract MVP entries paired to each stat. Returns list of {stat_key, name, value}.
-
-    Strategy: identify the spans the stat labels (and their values) occupy,
-    then find every `<name>: <value>` pair OUTSIDE those spans. Pair each
-    stat with the nearest non-overlapping pair within ±150 chars.
-    """
+    """Extract per-stat MVP entries as `{stat_key, name, value}`: find every
+    `<name>: <value>` pair outside the stat-label spans and pair each stat with
+    the nearest one within ±150 chars."""
     # 1) Mark stat-label spans (label + its own value) so we don't capture
     #    sub-tokens of "Total Fuel Used: 19.9M" as an MVP name.
     stat_spans: list[tuple[int, int, str]] = []
@@ -550,7 +516,8 @@ def _parse_mvps(text: str) -> list[dict]:
 _FORMATTED_NUMBER_RE = re.compile(
     r"\d+(?:\.\d+)?[KkMmBb]\b"        # 807.3M, 1.0B, 3K
     r"|\d{1,3}(?:[,\.]\d{3})+"        # 1,234,567 or 1.234.567 (EU thousands)
-    r"|\d{4,}"                          # bare 12345
+    r"|(?<![A-Za-z0-9])\d{4,}(?![A-Za-z0-9])"  # bare 12345, not digits glued to
+                                               # letters ('lord235342323' is a name)
 )
 _RANK_PREFIX_RE = re.compile(r"^\s*(\d{1,4})\b")
 
@@ -583,6 +550,23 @@ _END_MARKERS = (
     "Expert Bonus",
 )
 
+# Markers identifying a result mail's header page (scoreboard/tally/rewards),
+# whose alliance-level totals must not be parsed as player rows.
+_RESULT_HEADER_MARKERS = (
+    "congratulations", "legion tally", "control rewards", "gathering rewards",
+    "loot rewards", "ko rewards", "sieges by mercenaries",
+)
+_RESULT_LEADERBOARD_MARKERS = ("personal arsenal points", "personal point ranking")
+
+
+def _is_result_header_page(text: str) -> bool:
+    """True for a result mail's header page (header markers, no leaderboard
+    marker) — skip row parsing there. Leaderboard and continuation pages
+    return False."""
+    tl = text.lower()
+    return (not any(m in tl for m in _RESULT_LEADERBOARD_MARKERS)
+            and any(m in tl for m in _RESULT_HEADER_MARKERS))
+
 
 def _trim_to_data_section(text: str) -> str:
     """Trim start to the rightmost section marker and end to the earliest
@@ -602,12 +586,6 @@ def _trim_to_data_section(text: str) -> str:
         if idx != -1 and idx < best_end:
             best_end = idx
     return text[best_start:best_end]
-
-
-async def ocr_attachment(attachment: discord.Attachment) -> str:
-    from . import bear_track
-    data = await attachment.read()
-    return await bear_track.ocr_bytes(data, lang=bear_track.DEFAULT_OCR_LANG)
 
 
 async def ocr_attachment_with_boxes(attachment: discord.Attachment) -> list:
@@ -639,14 +617,17 @@ def _alliance_ocr_langs(alliance_id, names) -> tuple[str, list]:
     return primary, fbs
 
 
-async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None):
-    """OCR (name, value) rows with multi-language fallback for names the primary
-    engine can't read (Cyrillic/Arabic/CJK). Returns (rows, primary_text)."""
+async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None, parse=None):
+    """OCR (name, value) rows with multi-language fallback for non-Latin names;
+    returns (rows, primary_text). `parse` overrides the row parser (Power
+    Rankings passes `_parse_power_rows`)."""
     from . import bear_track
+    if parse is None:
+        parse = _parse_player_value_rows
     primary, fallbacks = _alliance_ocr_langs(alliance_id, [n for _f, n in (roster or [])])
     if not fallbacks or not roster:
         text = await bear_track.ocr_bytes(image_bytes, lang=primary, session=session)
-        rows = _parse_player_value_rows(bear_track.repair_ocr_digits(text)) if text.strip() else []
+        rows = parse(bear_track.repair_ocr_digits(text)) if text.strip() else []
         return rows, text
 
     def is_unfilled(r):
@@ -681,7 +662,7 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
 
     return await bear_track.ocr_rows_with_fallback(
         image_bytes, primary_lang=primary, fallback_langs=fallbacks,
-        parse=_parse_player_value_rows, is_unfilled=is_unfilled, merge=merge,
+        parse=parse, is_unfilled=is_unfilled, merge=merge,
         session=session)
 
 
@@ -695,12 +676,9 @@ def find_formatted_numbers(text: str) -> list[tuple[int, int, int]]:
 
 
 def _parse_player_value_rows(text: str) -> list[dict]:
-    """Walk through every number in the OCR text; the chunk before each number
-    contains the player's name (possibly preceded by a rank digit or rank
-    sticker). OCR usually flattens screenshots to a single line, so this is
-    position-based, not line-based. The text is first trimmed to the data
-    section to skip header / column-label junk.
-    """
+    """Parse (name, value) rows position-based, not line-based: OCR flattens the
+    screenshot to one line, so the name is the chunk before each number (data
+    section only)."""
     rows = []
     text = _trim_to_data_section(text)
     prev_end = 0
@@ -711,8 +689,11 @@ def _parse_player_value_rows(text: str) -> list[dict]:
         chunk = re.sub(r"\s+\d{1,3}\s*$", "", chunk)
         # Strip alliance-rank sticker tokens like "R4"
         chunk = re.sub(r"\bR\d+\b", "", chunk)
-        # Detach trailing punctuation from header words ("Points:" → "Points")
-        chunk = re.sub(r"[:;,.!?]+", " ", chunk)
+        # Detach trailing punctuation from header words ("Points:" → "Points").
+        # Keep ',' and '.' — they're thousands separators, so splitting them
+        # would shatter an OCR-garbled power value ("A36,17o,548") that the
+        # number regex missed, hiding the row boundary it marks.
+        chunk = re.sub(r"[:;!?]+", " ", chunk)
         tokens = [
             t for t in chunk.split()
             if t.lower() not in _PARSE_STOPWORDS
@@ -721,8 +702,10 @@ def _parse_player_value_rows(text: str) -> list[dict]:
         ]
         if not tokens:
             continue
-        # Last 1-3 tokens form the name (most game names are 1-2 words).
-        name = " ".join(tokens[-3:]).strip()
+        # Keep the full trailing name (no last-3 cap that dropped "Bow" from
+        # "Bow to thy Lord"), but split off any previous-row bleed at a garbled
+        # number boundary.
+        name = _name_from_tokens(tokens)
         if len(name) < 2:
             continue
         rows.append({"name": name, "value": value})
@@ -734,14 +717,46 @@ def _name_noise(name: str) -> int:
     return sum(1 for t in (name or "").split() if any(c.isdigit() for c in t))
 
 
+def _cleaner_name(new: str, old: str) -> bool:
+    """True if `new` is a better OCR capture than `old`: fewer digit-noise
+    tokens first, then the longer (more complete) name."""
+    nn, on = _name_noise(new), _name_noise(old)
+    if nn != on:
+        return nn < on
+    return len(new or "") > len(old or "")
+
+
+_LETTERS_THEN_DIGITS_RE = re.compile(r"^[A-Za-z]+\d+$")
+
+
+def _looks_like_garbled_number(token: str) -> bool:
+    """A garbled power value (long, digit-majority). A clean letters-then-digits
+    token (the 'lord235342323' default name) is always a name, never a number."""
+    if _LETTERS_THEN_DIGITS_RE.match(token):
+        return False
+    digits = sum(c.isdigit() for c in token)
+    return len(token) >= 5 and digits * 2 >= len(token)
+
+
+def _name_from_tokens(tokens: list[str]) -> str:
+    """The name is the trailing run of tokens after the last garbled-number
+    token — when a power isn't detected as a row separator the chunk bleeds in
+    from the previous row(s)."""
+    cut = 0
+    for idx, t in enumerate(tokens):
+        if _looks_like_garbled_number(t):
+            cut = idx + 1
+    name_tokens = tokens[cut:]
+    # After bleed, drop a leading rank-sticker artifact (R1–R5 OCR'd as 'Rs'/'Re').
+    if cut and len(name_tokens) > 1 and len(name_tokens[0]) == 2 and name_tokens[0][0] in "Rr":
+        name_tokens = name_tokens[1:]
+    return " ".join(name_tokens).strip()
+
+
 def _dedup_into(target: list[dict], new_row: dict) -> None:
-    """Append new_row to target with smart dedup. When values match and the
-    OCR'd names share a substring (one contains the other after normalization),
-    treat as the same player and keep the better capture: fewer digit-noise
-    tokens first, then the longer (more complete) name. This drops junk like
-    '48Z lII Moly' → 'Moly' while keeping legit prefixes ('Bow to thy Lord'
-    is no longer truncated to 'to thy Lord').
-    """
+    """Append with smart dedup: same value + overlapping (substring) names means
+    the same player — keep the cleaner capture (fewer digit-noise tokens, then
+    the longer name)."""
     new_name_norm = _normalize_for_match(new_row.get("name") or "")
     new_val = new_row.get("value")
     for i, r in enumerate(target):
@@ -787,10 +802,9 @@ def _skeleton(s: str) -> str:
 
 
 def _normalize_for_match(s: str) -> str:
-    """Fold homoglyphs to Latin, lowercase, and drop non-alphanumeric noise
-    (OCR decorative chars, emoji, punctuation). Folding lets a decorated name
-    like 'ROγAL' match the roster's 'ROYAL'. Genuine non-Latin scripts (Arabic,
-    CJK) have no Latin lookalike and pass through unchanged."""
+    """Fold homoglyphs to Latin, lowercase, drop non-alphanumeric noise — so a
+    decorated 'ROγAL' matches 'ROYAL'. Genuine non-Latin scripts (Arabic, CJK)
+    have no Latin lookalike and pass through unchanged."""
     return re.sub(r"[^\w]", "", _skeleton(s), flags=re.UNICODE).casefold()
 
 
@@ -823,25 +837,41 @@ def _pair_similarity(detected_norm: str, nick_norm: str) -> float:
 def fuzzy_match_candidates(detected: str, roster: list[tuple[int, str]],
                            *, limit: int = 5, alliance_id: Optional[int] = None
                            ) -> list[tuple[int, str, float, str]]:
-    """Top-N fuzzy matches as `[(fid, nickname, score, status), ...]` sorted by
-    score descending. Used by callers that need to dedup multiple rows
-    competing for the same roster fid — they pool all candidates and greedily
-    assign by score so each fid lands on its best-matching row, with losers
-    falling back to their next-best candidate (or unmatched).
-
-    Only viable candidates (≥ review threshold) are returned. Empty list
-    means no roster entry was close enough.
-
-    When `alliance_id` is given and no direct match is confident (auto), a
-    learned manual-match alias can supply the answer — but a strong direct
-    match always wins (collision guard).
-    """
+    """Top-N viable fuzzy matches `[(fid, nickname, score, status), ...]`, score
+    descending (empty if none ≥ review threshold). A learned alias fills in when
+    no direct match is confident, but a strong direct match always wins."""
     if not detected:
         return []
+    scored = _score_against_roster(detected, roster)
+
+    if alliance_id is not None and (not scored or scored[0][3] != "auto"):
+        alias_fid = alias_lookup(alliance_id, detected, roster)
+        if alias_fid is not None:
+            nick = next((n for f, n in roster if f == alias_fid), "")
+            scored = [(alias_fid, nick, 1.0, "auto")] + [c for c in scored if c[0] != alias_fid]
+
+    # Previous-row bleed lands the real name as a trailing sub-phrase
+    # ("L6 Morte2" → "Morte2", "SPAFDRT Leoz" → "Leoz"). Only when the full
+    # string didn't match confidently, retry the trailing suffixes (longest
+    # first) and adopt the first that matches at the strict `auto` threshold —
+    # so a junk prefix doesn't sink an otherwise-real row.
+    if not scored or scored[0][3] != "auto":
+        tokens = detected.split()
+        for start in range(1, len(tokens)):
+            sub = _score_against_roster(" ".join(tokens[start:]), roster)
+            if sub and sub[0][3] == "auto":
+                return sub[:limit]
+
+    return scored[:limit]
+
+
+def _score_against_roster(detected: str, roster: list[tuple[int, str]]
+                          ) -> list[tuple[int, str, float, str]]:
+    """Score one name against every roster nick; viable candidates sorted by
+    score descending."""
     detected_norm = _normalize_for_match(detected)
     if not detected_norm:
         return []
-
     scored: list[tuple[int, str, float, str]] = []
     for fid, nick in roster:
         nick_norm = _normalize_for_match(nick)
@@ -853,31 +883,15 @@ def fuzzy_match_candidates(detected: str, roster: list[tuple[int, str]],
             continue
         scored.append((fid, nick, score, status))
     scored.sort(key=lambda c: -c[2])
-
-    if alliance_id is not None and (not scored or scored[0][3] != "auto"):
-        alias_fid = alias_lookup(alliance_id, detected, roster)
-        if alias_fid is not None:
-            nick = next((n for f, n in roster if f == alias_fid), "")
-            scored = [(alias_fid, nick, 1.0, "auto")] + [c for c in scored if c[0] != alias_fid]
-
-    return scored[:limit]
+    return scored
 
 
 def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]],
                        *, alliance_id: Optional[int] = None) -> list[dict]:
-    """Greedy global fid assignment across multiple rows competing for
-    the same roster entries.
-
-    Each input row must have `name` and `value` keys. Returns enriched rows
-    with `fid` / `nickname` / `status` / `candidates` added. Higher-value
-    rows get priority on ties so the bigger contributor lands the matched
-    fid; losing rows fall back to their next-best unassigned candidate or
-    become unmatched (status='no_match', fid=None).
-
-    Handles the duplicate-name case: two rows named 'Trololololol' with a
-    roster containing two players of that name get assigned to TWO distinct
-    fids. Mirrors bear_track's `_resolve_unique_assignments`.
-    """
+    """Greedy global fid assignment across rows competing for the same roster
+    entries. Rows (need `name`/`value`) come back enriched with
+    `fid`/`nickname`/`status`/`candidates`; higher-value rows win ties, and
+    distinct same-named players resolve to distinct fids."""
     nick_by_fid = {f: n for f, n in roster}
     enriched: list[dict] = []
     for raw in raw_rows:
@@ -918,19 +932,9 @@ def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]],
 
 def fuzzy_match_name(detected: str, roster: list[tuple[int, str]],
                      *, alliance_id: Optional[int] = None) -> tuple[Optional[int], str]:
-    """Single-best fuzzy match against the alliance roster.
-
-    Convenience wrapper around `fuzzy_match_candidates` for callers that
-    don't need multi-candidate dedup. Returns `(fid, status)` where status
-    is 'auto' / 'likely' / 'review' / 'no_match' / 'no_name'.
-
-    Uses SequenceMatcher (Ratcliff-Obershelp) rather than character-set
-    overlap — the latter scores 'AlejoCAT' vs 'Caramelo' at 0.75 because
-    the letter sets overlap heavily, even though the strings are obviously
-    different. Normalisation strips OCR decorative chars so a nickname
-    like 'Trololololol' matches even when OCR captured it as
-    '0g$Trololololol8e'.
-    """
+    """Single-best fuzzy match against the roster as `(fid, status)` — a
+    convenience wrapper over `fuzzy_match_candidates` for callers that don't
+    need multi-candidate dedup."""
     if not detected:
         return None, "no_name"
     if not _normalize_for_match(detected):
@@ -1049,11 +1053,9 @@ def alias_lookup(alliance_id, detected, roster) -> Optional[int]:
 
 
 def rematch_unmatched_rows(session_id: str, alliance_id: int) -> int:
-    """Re-run name matching on this session's unmatched rows (non-positive
-    player_id placeholders) against the current roster, including learned
-    aliases. Reattributes any that now match a roster member confidently and
-    isn't already taken in this session; leaves the rest untouched. Returns the
-    number resolved. Useful after a roster sync adds/renames a player."""
+    """Re-match this session's unmatched (placeholder) rows against the current
+    roster + aliases, reattributing those that now match confidently and aren't
+    already taken. Returns the count resolved (use after a roster sync)."""
     roster = load_alliance_roster(alliance_id)
     if not roster:
         return 0
@@ -1122,10 +1124,8 @@ def _find_closed_session(*, event_type, event_date, event_subtype, alliance_id) 
 
 
 def _find_open_session(*, event_type, event_date, event_subtype, alliance_id) -> Optional[str]:
-    """Return the session_id of an OPEN session matching this event, or None.
-    Used at review time so a result upload visually picks up the registered
-    roster from the matching open registration session. Mirrors the match
-    semantics of `_find_or_create_session` but read-only."""
+    """Read-only lookup of an OPEN session_id matching this event (or None), so a
+    result upload picks up the registered roster from its registration session."""
     if event_date is None:
         return None
     with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
@@ -1502,10 +1502,9 @@ class OcrUploadSession:
 
 
 async def _safe_defer(interaction: discord.Interaction) -> None:
-    """Ack the interaction, but never let a slow/expired ack abort the action.
-    When the bot is busy parsing + deleting screenshots, the 3s interaction
-    window can lapse before the callback runs; `finalize`/`cancel` edit the
-    progress message directly, so they still complete without a live ack."""
+    """Best-effort interaction ack: the 3s window can lapse while parsing, and
+    `finalize`/`cancel` edit the progress message directly, so a failed ack must
+    never abort the action."""
     try:
         await interaction.response.defer()
     except (discord.HTTPException, discord.InteractionResponded):
@@ -1566,98 +1565,79 @@ class _ProgressView(discord.ui.View):
 
 # ── shared review/summary embed ───────────────────────────────────────────
 
-async def _send_summary(session, title, *, matched, unmatched, value_label,
-                        absent=None, extra_lines=None):
-    lines = []
-    if extra_lines:
-        lines.extend(extra_lines)
-    if absent is not None:
-        lines.append(f"**{theme.deniedIcon} Marked Absent:** `{len(absent)}`")
-    if matched:
-        lines.append(f"\n**{theme.membersIcon} Players ({value_label}):**")
-        for r in matched[:15]:
-            display = r.get("matched_nickname") or r.get("name") or "?"
-            lines.append(f"  {theme.verifiedIcon} `{display}` — {r['value']:,}")
-        if len(matched) > 15:
-            lines.append(f"  • …and {len(matched) - 15} more")
-    if unmatched:
-        lines.append(f"\n**{theme.warnIcon} Unmatched names:**")
-        for r in unmatched[:5]:
-            lines.append(f"  • `{r['name']}` — {r['value']:,}")
-        if len(unmatched) > 5:
-            lines.append(f"  • …and {len(unmatched) - 5} more")
-    if absent and absent[:5]:
-        lines.append(f"\n**{theme.deniedIcon} Absent (no submission seen):**")
-        for a in absent[:5]:
-            lines.append(f"  • `{a['name']}` (fid {a['fid']})")
-        if len(absent) > 5:
-            lines.append(f"  • …and {len(absent) - 5} more")
-    embed = discord.Embed(
-        title=f"{theme.verifiedIcon} {title}",
-        description="\n".join(lines) if lines else f"{theme.warnIcon} No data parsed.",
-        color=theme.emColor3 if not unmatched else theme.emColor4,
-    )
-    if session.progress_message:
-        try:
-            await session.progress_message.edit(embed=embed, view=None)
-        except discord.NotFound:
-            pass
-    session.cog.end_session(session.channel.id, session.uploader_id)
-
-
 # ── Power Rankings session ────────────────────────────────────────────────
 
 class PowerRankingsSession(OcrUploadSession):
-    """Power Rankings parser. Stitches paginated scroll screenshots and writes Power to users.
+    """Power Rankings: stitch scroll screenshots, read Power (multi-language),
+    then route through the shared review as a power snapshot (writes users.power,
+    no attendance). Dedup keys on the power value (unique per player), which also
+    collapses the uploader's own row that the game pins at the list bottom."""
 
-    Dedup key is (name, power) since the top 3 ranks render as medal icons in
-    the screenshot and the OCR can't pick up their rank digits.
-    """
+    db_event_type = "power_rankings"
+    registration_value_label = "Power"   # unused — no sign-up phase
+    result_value_label = "Power"
+    simple_results = True                # no registration / present-absent concept
+    power_only_snapshot = True           # Submit updates users.power, writes no attendance
 
     def __init__(self, *, alliance_id: int, **kwargs):
         super().__init__(**kwargs)
         self.alliance_id = alliance_id
-        self.rows: dict[tuple[str, int], dict] = {}
+        self.rows: dict[int, dict] = {}
+        self.result_rows: list[dict] = []
+        self.registered_rows: list[dict] = []
+        # A power snapshot reflects the roster's power right now — default to
+        # today (editable via Set Date); the screens carry no event date.
+        self.detected_date = datetime.now(timezone.utc).date()
+        self.detected_legion = None
+        self.detected_time = None
+        self.date_confidence = None
+        self.alliance_rank: Optional[int] = None
+        # Empty so the shared review/persist treats this as a plain result-only
+        # event (no scoreboard / battle stats / MVPs).
+        self.alliance_scores: list = []
+        self.stats: dict = {}
+        self.mvps: list = []
 
     async def _process_attachments(self, attachments: list[discord.Attachment]):
+        roster = load_alliance_roster(self.alliance_id)
         for att in attachments:
             self.current_image_idx = self.processed_images + 1
             await self.render_progress()
             try:
-                text = await ocr_attachment(att)
+                data = await att.read()
+                rows, _text = await ocr_value_rows(
+                    data, roster=roster, alliance_id=self.alliance_id,
+                    parse=_parse_power_rows)
             except Exception:
                 self.processed_images += 1
                 continue
-            for row in _parse_power_rows(text):
-                key = (row["name"].casefold(), row["power"])
-                if key not in self.rows:
-                    self.rows[key] = row
+            for row in rows:
+                existing = self.rows.get(row["power"])
+                if existing is None or _cleaner_name(row["name"], existing["name"]):
+                    self.rows[row["power"]] = row
             self.processed_images += 1
             await self.render_progress()
+        # Sorted by power desc — the canonical ranking — for the review.
+        self.result_rows = [
+            {"name": r["name"], "value": r["power"]}
+            for r in sorted(self.rows.values(), key=lambda r: -r["power"])
+        ]
 
     def extra_progress_lines(self) -> str:
         return f"**{theme.listIcon} Players parsed so far:** `{len(self.rows)}`\n"
 
     async def render_review(self, *, timed_out: bool):
-        roster = load_alliance_roster(self.alliance_id)
-        matched, unmatched = [], []
-        # Sort by power desc — the canonical ranking
-        for row in sorted(self.rows.values(), key=lambda r: -r["power"]):
-            fid, status = fuzzy_match_name(row.get("name", ""), roster, alliance_id=self.alliance_id)
-            row["matched_fid"] = fid
-            row["match_status"] = status
-            row["value"] = row["power"]
-            (matched if fid else unmatched).append(row)
-
-        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        for row in matched:
-            update_users_power(row["matched_fid"], row["power"], ts)
-
-        await _send_summary(
-            self, "Power Rankings recorded",
-            matched=matched, unmatched=unmatched, value_label="Power",
-            extra_lines=[f"**{theme.listIcon} Total rows seen:** `{len(self.rows)}`"],
+        from .attendance_ocr_review import EventReviewView
+        view = EventReviewView(
+            self,
+            registration_value_label=self.registration_value_label,
+            result_value_label=self.result_value_label,
         )
+        if self.progress_message:
+            try:
+                await self.progress_message.edit(embed=view.build_embed(), view=view)
+            except discord.NotFound:
+                pass
 
 
 def _parse_power_rows(text: str) -> list[dict]:
@@ -1692,10 +1672,14 @@ def _parse_power_rows(text: str) -> list[dict]:
         ]
         if not tokens:
             continue
-        name = " ".join(tokens[-3:]).strip()
+        # Full trailing name (no last-3 cap), with previous-row bleed split off
+        # at a garbled-number boundary.
+        name = _name_from_tokens(tokens)
         if len(name) < 2:
             continue
-        rows.append({"rank": rank, "name": name, "power": value})
+        # `value` mirrors `power` so the shared OCR fallback merge/match (keyed on
+        # name+value) works; `power` is kept for the session's dedup + persistence.
+        rows.append({"rank": rank, "name": name, "power": value, "value": value})
     return rows
 
 
@@ -1752,10 +1736,14 @@ class _PointsSession(OcrUploadSession):
                 self.detected_legion = extract_legion(text)
 
             target = self.result_rows if kind == "result" else self.registered_rows
+            header_page = False
             if kind == "result":
                 self._merge_result_metadata(text, blocks=blocks)
-            for row in _parse_player_value_rows(text):
-                _dedup_into(target, row)
+                header_page = _is_result_header_page(text)
+            # Header pages would yield bogus rows from alliance-level totals.
+            if not header_page:
+                for row in _parse_player_value_rows(text):
+                    _dedup_into(target, row)
             self.processed_images += 1
             await self.render_progress()
 
@@ -1768,6 +1756,9 @@ class _PointsSession(OcrUploadSession):
                     self.alliance_rank = int(m.group(1))
                 except ValueError:
                     pass
+            else:
+                # Foundry has no "ranked No. N" — derive 1/2 from win/loss wording.
+                self.alliance_rank = _foundry_rank_from_outcome(text)
         if not self.alliance_scores:
             scoreboard = []
             if blocks:
@@ -1878,10 +1869,9 @@ class _PointsSession(OcrUploadSession):
         self.result_rows = merged
 
     def _merge_open_registration(self, existing: dict):
-        """Result mail arriving for an event whose registration is already on
-        file: pull the registered roster + header fields from the DB so the
-        review shows the complete picture and submit closes the existing
-        session rather than creating a parallel one."""
+        """A result mail for an event with registration already on file: pull the
+        registered roster + header fields from the DB so the review is complete
+        and submit closes that session instead of forking a parallel one."""
         if self.alliance_rank is None:
             self.alliance_rank = existing.get("alliance_rank")
         if self.detected_time is None:
@@ -1918,13 +1908,23 @@ _ALLIANCE_RANK_RE = re.compile(
     r"(?:rank(?:ed|ing)?\s+No\.?\s+|Alliance\s+Rank(?:ing)?[:\s]+)(\d{1,3})",
     re.IGNORECASE,
 )
+_FOUNDRY_WIN_RE = re.compile(r"\b(?:prevailed|victory|congratulations)\b", re.IGNORECASE)
+_FOUNDRY_LOSS_RE = re.compile(r"\b(?:defeat(?:ed)?|unfortunately|better\s+luck)\b", re.IGNORECASE)
+
+
+def _foundry_rank_from_outcome(text: str):
+    """Foundry has no 'ranked No. N' line — win=1, loss=2, None if neither."""
+    if _FOUNDRY_WIN_RE.search(text):
+        return 1
+    if _FOUNDRY_LOSS_RE.search(text):
+        return 2
+    return None
 
 
 class AllianceShowdownSession(OcrUploadSession):
-    """Alliance Showdown final-rankings parser. Parses per-player points +
-    alliance rank, then routes through the shared review (result-only mode) so
-    unmatched rows can be fixed before save and edited later in the attendance
-    UI — same lifecycle as Foundry/Canyon."""
+    """Alliance Showdown final-rankings parser: per-player points, routed through
+    the shared review (result-only) for the same fix-at-upload + edit-later
+    lifecycle as Foundry/Canyon."""
 
     db_event_type = "alliance_showdown"
     registration_value_label = "Power"        # unused — Showdown has no sign-up phase

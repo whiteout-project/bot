@@ -12,6 +12,7 @@ from .attendance_ocr_parsers import (
     build_session,
     classify_event,
     OcrUploadSession,
+    _load_existing_session_data,
 )
 from .attendance_ocr_setup import (
     get_channel_settings,
@@ -233,16 +234,9 @@ class AttendanceOCR(commands.Cog):
     async def _classify_first_image(
         self, channel_id: int, attachment: discord.Attachment
     ) -> tuple[Optional[tuple[str, str]], str]:
-        """Fingerprint-first event classification.
-
-        For each event_type enabled on this channel, the configured keywords
-        (if any) act as an optional prefilter. The per-kind fingerprint regex
-        decides — it's specific enough to tell registration apart from
-        results within the same event family without keyword help.
-
-        Returns `((event_type, kind) or None, ocr_text)` so the caller can
-        log the OCR'd text when classification fails.
-        """
+        """Classify an upload by per-kind fingerprint regex (keywords are an
+        optional prefilter). Returns `((event_type, kind) or None, ocr_text)`;
+        the text is returned so the caller can log a classification miss."""
         try:
             from . import bear_track
             data = await attachment.read()
@@ -261,7 +255,54 @@ class AttendanceOCR(commands.Cog):
     def end_session(self, channel_id: int, uploader_id: int) -> None:
         self.active_sessions.pop((channel_id, uploader_id), None)
 
-    async def show_channel_setup_menu(self, interaction: discord.Interaction) -> None:
+    async def open_existing_session_editor(self, interaction: discord.Interaction, *,
+                                           session_id: str, event_type: str,
+                                           alliance_id: int) -> bool:
+        """Reopen a saved OCR session in the post-upload review editor (edit
+        without re-uploading); Submit updates it in place. Returns False if the
+        event type has no parser, so the caller can fall back."""
+        from .attendance_ocr_review import EventReviewView
+
+        session = build_session(
+            event_type, cog=self, channel=interaction.channel,
+            uploader=interaction.user, alliance_id=int(alliance_id),
+        )
+        if session is None:
+            return False
+
+        data = _load_existing_session_data(session_id)
+        session.detected_date = data.get("event_date")
+        session.detected_legion = data.get("event_subtype")
+        session.detected_time = data.get("event_time")
+        session.alliance_rank = data.get("alliance_rank")
+        session.alliance_scores = data.get("alliance_scores", [])
+        session.stats = data.get("stats", {})
+        session.mvps = data.get("mvps", [])
+        session.result_rows = [
+            {"name": r.get("name") or "", "value": int(r.get("value") or 0)}
+            for r in data.get("rows", [])
+        ]
+        session.registered_rows = [
+            {"name": r.get("name") or "", "value": int(r.get("value") or 0)}
+            for r in data.get("registered_rows", [])
+        ]
+
+        view = EventReviewView(
+            session,
+            registration_value_label=session.registration_value_label,
+            result_value_label=session.result_value_label,
+            existing_session_id=session_id,
+            edit_mode=True,
+        )
+        embed = view.build_embed()
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=view, attachments=[])
+        else:
+            await interaction.response.edit_message(embed=embed, view=view, attachments=[])
+        return True
+
+    async def show_channel_setup_menu(self, interaction: discord.Interaction,
+                                      alliance_id: int | None = None) -> None:
         is_admin, _ = PermissionManager.is_admin(interaction.user.id)
         if not is_admin:
             await interaction.response.edit_message(
@@ -273,8 +314,8 @@ class AttendanceOCR(commands.Cog):
                 view=None,
             )
             return
-        embed = build_overview_embed(interaction.user.id, interaction.guild.id)
-        view = OCRChannelListView(self, interaction.user.id, interaction.guild.id)
+        embed = build_overview_embed(interaction.user.id, interaction.guild.id, alliance_id)
+        view = OCRChannelListView(self, interaction.user.id, interaction.guild.id, alliance_id)
         await interaction.response.edit_message(embed=embed, view=view)
 
 

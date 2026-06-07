@@ -1,8 +1,7 @@
 """Review UI for unified Foundry/Canyon sessions: registration, result, or both.
 
-EventReviewView auto-detects mode from which row lists are populated. Submit
-persists to attendance_*; partial sessions stay open so a later upload of the
-missing half enriches the same record.
+EventReviewView auto-detects mode from which row lists are populated; partial
+sessions stay open so a later upload of the missing half enriches the record.
 """
 from __future__ import annotations
 import logging
@@ -14,6 +13,8 @@ from typing import Optional
 import discord
 
 from .pimp_my_bot import theme
+from .bear_track import _isolate_rtl, _ltr_line
+from .login_handler import LoginHandler
 from .attendance_ocr_parsers import (
     EVENT_TYPES,
     _STAT_LABELS,
@@ -121,9 +122,13 @@ class EventReviewView(discord.ui.View):
                  registration_value_label: str,
                  result_value_label: str,
                  existing_session_id: Optional[str] = None,
-                 enriching_open_session_id: Optional[str] = None):
+                 enriching_open_session_id: Optional[str] = None,
+                 edit_mode: bool = False):
         super().__init__(timeout=7200)
         self.session = session
+        # Opened from the settings/Mark flow to edit a saved session: each edit
+        # autosaves, so we show Back instead of Submit/Cancel.
+        self.edit_mode = edit_mode
         # "Simple" events (e.g. Alliance Showdown) have no registration and no
         # present/absent concept — everyone takes part; we only record who scored.
         # Suppresses the registration/absent framing in the review.
@@ -272,6 +277,11 @@ class EventReviewView(discord.ui.View):
 
     def _status_banner(self) -> str:
         scope = self._event_scope_phrase()
+        if getattr(self.session, "power_only_snapshot", False):
+            return (
+                f"{theme.infoIcon} **Power snapshot** — Submit updates each matched "
+                f"player's Power. Unmatched rows are skipped; no attendance is recorded."
+            )
         if self.simple:
             return (
                 f"{theme.infoIcon} **Scored players** — everyone in the alliance "
@@ -431,23 +441,20 @@ class EventReviewView(discord.ui.View):
             i = start + offset + 1  # global row number, stable across pages
             icon = _STATUS_ICON.get(r["status"], "")
             if r["status"] in ("auto", "manual") and r["fid"]:
-                player = f"`{r['nickname']}` · `{r['fid']}`"
+                player = f"`{_isolate_rtl(r['nickname'])}` · `{r['fid']}`"
             elif r["status"] in ("likely", "review") and r["fid"]:
-                player = f"`{r['nickname']}` ({r['status']}) · `{r['fid']}`"
+                player = f"`{_isolate_rtl(r['nickname'])}` ({r['status']}) · `{r['fid']}`"
             else:
-                player = f"`{r['name']}` — no match"
-            line = f"**#{i}** {icon} {player} — `{_format_int(r['value'])}`"
+                player = f"`{_isolate_rtl(r['name'])}` — no match"
+            line = _ltr_line(f"**#{i}** {icon} {player} — `{_format_int(r['value'])}`")
             if budget_remaining - len(line) - 1 < 0:
                 break  # rest is on the next page — pagination, not a truncation note
             desc_lines.append(line)
             budget_remaining -= len(line) + 1
 
     def _append_merged_player_lines(self, desc_lines: list[str]) -> None:
-        """One row per player, written directly into the description so it
-        flows as a single block (no inter-field whitespace). Sorted
-        present → needs-review → absent. Truncates with a hint if the table
-        would push the 4096-char description budget over.
-        """
+        """One row per player into the description (present → needs-review →
+        absent), truncating with a hint near the 4096-char budget."""
         merged = self._build_merged_view()
         if not merged:
             return
@@ -471,7 +478,7 @@ class EventReviewView(discord.ui.View):
         for offset, r in enumerate(page_rows):
             i = start + offset + 1
             att = _ATTENDANCE_ICON.get(r["attendance"], "")
-            display = r["nickname"] or r["name"] or "?"
+            display = _isolate_rtl(r["nickname"] or r["name"] or "?")
             ms = r["match_status"]
             if not r["fid"] or r["fid"] < 0:
                 qual = " *(unmatched)*"
@@ -488,7 +495,7 @@ class EventReviewView(discord.ui.View):
                 bits.append(f"`{_format_compact(r['result_value'])}` Pts")
             elif r["attendance"] == "absent":
                 bits.append("`Absent`")
-            line = " · ".join(bits)
+            line = _ltr_line(" · ".join(bits))
             if budget_remaining - len(line) - 1 < 0:
                 desc_lines.append(f"_…and {len(page_rows) - rendered} more on this "
                                   "page — open Edit a player row to see all_")
@@ -512,7 +519,7 @@ class EventReviewView(discord.ui.View):
         page_rows = entries[start:start + self.ROWS_PER_PAGE]
         budget_remaining = 4096 - sum(len(l) + 1 for l in desc_lines) - 120
         for offset, (kind, _key, row, _um) in enumerate(page_rows):
-            name = row.get("nickname") or row.get("name") or "(unreadable)"
+            name = _isolate_rtl(row.get("nickname") or row.get("name") or "(unreadable)")
             if kind == "merged":
                 vbits = []
                 if row.get("registered_value") is not None:
@@ -522,7 +529,7 @@ class EventReviewView(discord.ui.View):
                 tail = " · ".join(vbits) if vbits else "—"
             else:
                 tail = f"`{_format_int(row['value'])}`"
-            line = f"{theme.deniedIcon} `{name}` — {tail}"
+            line = _ltr_line(f"{theme.deniedIcon} `{name}` — {tail}")
             if budget_remaining - len(line) - 1 < 0:
                 desc_lines.append(
                     f"_…and {total - (start + offset)} more — use the dropdown_"
@@ -603,10 +610,9 @@ class EventReviewView(discord.ui.View):
         return sum(1 for r in self.all_rows if self._fid_unmatched(r.get("fid")))
 
     def _edit_entries(self) -> list[tuple]:
-        """Editable rows in display order, honoring the Unmatched-only filter.
-        Each entry is (kind, key, row, unmatched) where 'kind:key' is the
-        dropdown value that maps back to the underlying row (so editing always
-        targets the right row, filtered or not)."""
+        """Editable rows in display order (honoring the Unmatched-only filter)
+        as (kind, key, row, unmatched); 'kind:key' is the dropdown value mapping
+        back to the underlying row."""
         out = []
         if self.mode == "complete":
             for idx, mr in enumerate(self._build_merged_view()):
@@ -647,7 +653,7 @@ class EventReviewView(discord.ui.View):
                     name_part = row["nickname"] or row["name"] or "(unreadable)"
                     tag = " (unmatched)" if um else (
                         " (unsure)" if row["match_status"] in ("likely", "review") else "")
-                    label = f"#{key + 1} {name_part}{tag}"[:100]
+                    label = _ltr_line(f"#{key + 1} {name_part}{tag}")[:100]
                     desc_bits = []
                     if row["registered_value"] is not None:
                         desc_bits.append(f"{_format_compact(row['registered_value'])} Pwr")
@@ -664,7 +670,7 @@ class EventReviewView(discord.ui.View):
                     name_part = row["nickname"] or row["name"] or "(unreadable)"
                     fid_part = f" · {row['fid']}" if row.get("fid") else ""
                     tag = " (unmatched)" if um else ""
-                    label = f"#{local_idx + 1} {name_part}{fid_part}{tag}"[:100]
+                    label = _ltr_line(f"#{local_idx + 1} {name_part}{fid_part}{tag}")[:100]
                     desc = f"{_format_int(row['value'])} · {row['status']}"[:100]
                     options.append(discord.SelectOption(
                         label=label, value=f"raw:{key}", description=desc,
@@ -726,19 +732,26 @@ class EventReviewView(discord.ui.View):
             )
             toggle.callback = self._on_toggle_unmatched
             self.add_item(toggle)
+        # A power snapshot has no event fields but the date — label it plainly.
+        header_label = ("Set Date" if getattr(self.session, "power_only_snapshot", False)
+                        else "Edit Event Info")
         for label, emoji, style, cb in (
             ("Add Row", theme.addIcon, discord.ButtonStyle.secondary, self._on_add_row),
-            ("Edit Event Info", theme.editListIcon, discord.ButtonStyle.secondary, self._on_edit_header),
+            (header_label, theme.editListIcon, discord.ButtonStyle.secondary, self._on_edit_header),
         ):
             btn = discord.ui.Button(label=label, emoji=emoji, style=style, row=2)
             btn.callback = cb
             self.add_item(btn)
 
-        # Row 3: Submit / Cancel
-        for label, emoji, style, cb in (
-            ("Submit", theme.verifiedIcon, discord.ButtonStyle.success, self._on_submit),
-            ("Cancel", theme.deniedIcon, discord.ButtonStyle.danger, self._on_cancel),
-        ):
+        # Row 3: Back (edit mode autosaves) — or Submit / Cancel (upload review).
+        if self.edit_mode:
+            row3 = [("Back", theme.backIcon, discord.ButtonStyle.secondary, self._on_back_edit)]
+        else:
+            row3 = [
+                ("Submit", theme.verifiedIcon, discord.ButtonStyle.success, self._on_submit),
+                ("Cancel", theme.deniedIcon, discord.ButtonStyle.danger, self._on_cancel),
+            ]
+        for label, emoji, style, cb in row3:
             btn = discord.ui.Button(label=label, emoji=emoji, style=style, row=3)
             btn.callback = cb
             self.add_item(btn)
@@ -860,6 +873,29 @@ class EventReviewView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
         self.session.cog.end_session(self.session.channel.id, self.session.uploader_id)
 
+    async def _on_back_edit(self, interaction: discord.Interaction):
+        """Edit-mode exit — edits already autosaved, so just return to the list."""
+        attendance_cog = self.session.cog.bot.get_cog("Attendance")
+        if attendance_cog:
+            await attendance_cog.show_session_selection_for_marking(
+                interaction, self.session.alliance_id)
+
+    async def _save_edit(self, interaction: discord.Interaction):
+        """Refresh the embed, then persist immediately when editing a saved
+        session (so edits stick without a Submit step). Used by the row/header
+        edit modals, not by pagination/toggle."""
+        await self.refresh(interaction)
+        if self.edit_mode:
+            try:
+                self._persist()
+            except Exception as e:
+                logger.exception("Attendance edit autosave failed")
+                try:
+                    await interaction.followup.send(
+                        f"{theme.deniedIcon} Couldn't save the edit: {e}", ephemeral=True)
+                except Exception:
+                    pass
+
     async def _on_submit(self, interaction: discord.Interaction):
         try:
             session_id, absent_rows = self._persist()
@@ -869,7 +905,10 @@ class EventReviewView(discord.ui.View):
                 f"{theme.deniedIcon} Submit failed: {e}", ephemeral=True,
             )
             return
-        embed = self._build_scoreboard_embed(session_id, absent_rows)
+        if getattr(self.session, "power_only_snapshot", False):
+            embed = self._build_power_snapshot_embed()
+        else:
+            embed = self._build_scoreboard_embed(session_id, absent_rows)
         await interaction.response.edit_message(embed=embed, view=None)
         self.session.cog.end_session(self.session.channel.id, self.session.uploader_id)
 
@@ -886,17 +925,20 @@ class EventReviewView(discord.ui.View):
     # ── persistence ───────────────────────────────────────────────────────
 
     def _persist(self) -> tuple[str, list[dict]]:
-        """Write session + scoreboard + stats + MVPs + players, branching by mode.
-
-        Returns (session_id, absent_rows). Registration-only leaves the session
-        open; result-only and complete close it after marking absentees.
-        """
+        """Write session + scoreboard + stats + MVPs + players by mode, returning
+        (session_id, absent_rows). Registration-only stays open; result-only and
+        complete close after marking absentees."""
         update_fn = (
             update_users_combat_power
             if self.session.db_event_type == "foundry_battle"
             else update_users_power
         )
         ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        # Power Rankings is a power snapshot, not an event — write users.power for
+        # matched rows and record no attendance.
+        if getattr(self.session, "power_only_snapshot", False):
+            return self._persist_power_snapshot(ts), []
 
         if self.mode == "registration":
             return self._persist_registration_only(update_fn, ts), []
@@ -971,6 +1013,18 @@ class EventReviewView(discord.ui.View):
         _close_session(session_id)
         return session_id, absent_rows
 
+    def _persist_power_snapshot(self, ts: str) -> Optional[str]:
+        """Power Rankings: update users.power for each matched row, learn the
+        alias, and record NO attendance. Returns None (there is no session)."""
+        count = 0
+        for r in self.result_rows:
+            if r["fid"]:
+                update_users_power(r["fid"], r["value"], ts)
+                learn_name_alias(self.session.alliance_id, r["name"], r["fid"])
+                count += 1
+        self._power_updated_count = count
+        return None
+
     def _persist_registration_only(self, update_fn, ts: str) -> str:
         session_id = _find_or_create_session(
             event_type=self.session.db_event_type,
@@ -991,10 +1045,9 @@ class EventReviewView(discord.ui.View):
 
     def _write_registered_rows(self, session_id: str, update_fn, ts: str
                                 ) -> dict[str, list[int]]:
-        """Wipe + reinsert registered rows. Returns a normalized-name → list
-        of placeholder negative-fids assigned to unmatched reg rows so the
-        result-row pass can fold unmatched results onto the same row by name
-        match (mirroring the review's merged view)."""
+        """Wipe + reinsert registered rows; return normalized-name → placeholder
+        negative-fids for unmatched reg rows, so the result pass can fold
+        unmatched results onto the same row by name."""
         with sqlite3.connect("db/attendance.sqlite", timeout=30.0) as conn:
             conn.execute(
                 "DELETE FROM attendance_records WHERE session_id = ? AND status = 'registered'",
@@ -1122,6 +1175,28 @@ class EventReviewView(discord.ui.View):
                 (prior[0],),
             ).fetchone()
             return int(row[0]) if row and row[0] is not None else None
+
+    def _build_power_snapshot_embed(self) -> discord.Embed:
+        cfg = EVENT_TYPES.get(self.session.event_type)
+        label = cfg.label if cfg else self.session.event_type
+        updated = getattr(self, "_power_updated_count", 0)
+        unmatched = [r for r in self.result_rows if not r["fid"]]
+        desc = [
+            f"{theme.upperDivider}",
+            f"{theme.chartIcon} **Power updated for `{updated}` player"
+            f"{'s' if updated != 1 else ''}.**",
+        ]
+        if unmatched:
+            desc.append(
+                f"{theme.warnIcon} `{len(unmatched)}` unmatched row"
+                f"{'s' if len(unmatched) != 1 else ''} skipped — re-upload to assign them."
+            )
+        desc.append(f"{theme.lowerDivider}")
+        return discord.Embed(
+            title=f"{theme.verifiedIcon} {label} — Power Recorded",
+            description="\n".join(desc),
+            color=theme.emColor1,
+        )
 
     def _build_scoreboard_embed(self, session_id: str, absent_rows: list[dict]) -> discord.Embed:
         cfg = EVENT_TYPES.get(self.session.event_type)
@@ -1273,20 +1348,68 @@ class EventReviewView(discord.ui.View):
 
 # ── modals ────────────────────────────────────────────────────────────────
 
-def _resolve_player_field(view: "EventReviewView", text: str):
-    """Resolve a single combined Player field — ID digits or a name — to
-    (fid, nickname, status). One field for both, matching bear track. Name
-    matching is alias-aware via fuzzy_match_name."""
+async def _resolve_player_field(interaction: discord.Interaction,
+                                view: "EventReviewView", text: str):
+    """Resolve an ID or name to (fid, nickname, status, note). An ID not in the
+    roster is looked up via the player API (like /w); `note` is an ephemeral
+    message for the caller to surface."""
     text = (text or "").strip()
     if text.isdigit():
         fid = int(text)
         nick = view._lookup_nickname(fid)
-        return fid, nick, ("manual" if nick else "no_match")
+        if nick:
+            return fid, nick, "manual", f"{theme.verifiedIcon} Matched ID `{fid}` to **{_isolate_rtl(nick)}**."
+        # Not in the roster — pull the name from the player API.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        try:
+            result = await LoginHandler().fetch_player_data(str(fid))
+        except Exception as e:
+            logger.error(f"Attendance player lookup failed for {fid}: {e}")
+            print(f"[ERROR] Attendance player lookup failed for {fid}: {e}")
+            return fid, None, "no_match", f"{theme.deniedIcon} Lookup failed for ID `{fid}` — try again shortly."
+        if result.get("status") == "success" and result.get("data"):
+            nick = result["data"].get("nickname") or str(fid)
+            state = _ensure_player_in_alliance(fid, result["data"], view.session.alliance_id)
+            view.roster = load_alliance_roster(view.session.alliance_id)
+            disp = _isolate_rtl(nick)
+            if state == "added":
+                note = f"{theme.verifiedIcon} Added **{disp}** (ID `{fid}`) to the alliance and matched the row."
+            elif state == "other_alliance":
+                note = f"{theme.warnIcon} Matched ID `{fid}` to **{disp}** — already in another alliance, not moved."
+            else:
+                note = f"{theme.verifiedIcon} Matched ID `{fid}` to **{disp}**."
+            return fid, nick, "manual", note
+        reason = {"rate_limited": "API rate limit reached — try again shortly.",
+                  "not_found": f"No player found with ID `{fid}`."}.get(
+            result.get("status") or "", "Lookup failed.")
+        return fid, None, "no_match", f"{theme.deniedIcon} {reason}"
     if text:
         f, st = fuzzy_match_name(text, view.roster, alliance_id=view.session.alliance_id)
         if f is not None:
-            return f, view._lookup_nickname(f), st
-    return None, None, "no_match"
+            nick = view._lookup_nickname(f)
+            return f, nick, st, f"{theme.verifiedIcon} Matched to **{_isolate_rtl(nick or text)}**."
+        return None, None, "no_match", (
+            f"{theme.warnIcon} No player matched `{text}` — left unmatched.")
+    return None, None, "no_match", None
+
+
+def _ensure_player_in_alliance(fid: int, data: dict, alliance_id) -> str:
+    """Add a looked-up player to this alliance if untracked. Returns 'added',
+    'exists', or 'other_alliance' — never moves a player from another alliance."""
+    nick = data.get("nickname") or str(fid)
+    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+        row = conn.execute("SELECT alliance FROM users WHERE fid = ?", (fid,)).fetchone()
+        if row is not None:
+            return "exists" if str(row[0]) == str(alliance_id) else "other_alliance"
+        conn.execute(
+            "INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (fid, nick, data.get("stove_lv", 0), str(data.get("kid", "")),
+             data.get("stove_lv_content", ""), str(alliance_id)),
+        )
+        conn.commit()
+        return "added"
 
 
 class _EditMergedRowModal(discord.ui.Modal):
@@ -1332,10 +1455,11 @@ class _EditMergedRowModal(discord.ui.Modal):
             for bucket, idx in self._underlying_targets():
                 if idx is not None and idx < len(bucket):
                     del bucket[idx]
-            await self.view.refresh(interaction)
+            await self.view._save_edit(interaction)
             return
 
-        fid, nickname, status = _resolve_player_field(self.view, self.player_input.value)
+        fid, nickname, status, note = await _resolve_player_field(
+            interaction, self.view, self.player_input.value)
         # Update in place so each row keeps its original OCR name (the alias DB
         # learns from it) and _kind; we only re-resolve the player + value.
         if self.reg_idx is not None and self.reg_value_input is not None:
@@ -1352,7 +1476,9 @@ class _EditMergedRowModal(discord.ui.Modal):
                 res_val = 0
             self.view.result_rows[self.res_idx].update(
                 {"value": res_val, "fid": fid, "nickname": nickname, "status": status})
-        await self.view.refresh(interaction)
+        await self.view._save_edit(interaction)
+        if note:
+            await interaction.followup.send(note, ephemeral=True)
 
     def _underlying_targets(self) -> list[tuple[list[dict], Optional[int]]]:
         return [
@@ -1392,7 +1518,7 @@ class _EditRowModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         if not self.player_input.value.strip():
             del self.bucket[self.local_idx]
-            await self.view.refresh(interaction)
+            await self.view._save_edit(interaction)
             return
         try:
             value = int(re.sub(r"[^\d]", "", self.value_input.value))
@@ -1402,11 +1528,14 @@ class _EditRowModal(discord.ui.Modal):
             )
             return
 
-        fid, nickname, status = _resolve_player_field(self.view, self.player_input.value)
+        fid, nickname, status, note = await _resolve_player_field(
+            interaction, self.view, self.player_input.value)
         # Update in place so the original OCR name (alias key) and _kind survive.
         self.bucket[self.local_idx].update(
             {"value": value, "fid": fid, "nickname": nickname, "status": status})
-        await self.view.refresh(interaction)
+        await self.view._save_edit(interaction)
+        if note:
+            await interaction.followup.send(note, ephemeral=True)
 
 
 class _AddRowModal(discord.ui.Modal):
@@ -1445,7 +1574,8 @@ class _AddRowModal(discord.ui.Modal):
             )
             return
 
-        fid, nickname, status = _resolve_player_field(self.view, player_text)
+        fid, nickname, status, note = await _resolve_player_field(
+            interaction, self.view, player_text)
         new_row = {
             "name": nickname or player_text,
             "value": value,
@@ -1457,7 +1587,9 @@ class _AddRowModal(discord.ui.Modal):
         bucket = (self.view.registered_rows if self.kind == "registration"
                   else self.view.result_rows)
         bucket.append(new_row)
-        await self.view.refresh(interaction)
+        await self.view._save_edit(interaction)
+        if note:
+            await interaction.followup.send(note, ephemeral=True)
 
 
 class _AddRowBucketView(discord.ui.View):
@@ -1493,11 +1625,12 @@ class _EditEventInfoModal(discord.ui.Modal):
     events that have them. Simple events (e.g. Showdown) get a date-only form."""
 
     def __init__(self, view: EventReviewView):
-        super().__init__(title="Edit Event Info")
-        self.view = view
         session = view.session
+        power_only = getattr(session, "power_only_snapshot", False)
+        super().__init__(title="Set Date" if power_only else "Edit Event Info")
+        self.view = view
         self.date_input = discord.ui.TextInput(
-            label="Event date (YYYY-MM-DD)",
+            label="Snapshot date (YYYY-MM-DD)" if power_only else "Event date (YYYY-MM-DD)",
             default=session.detected_date.isoformat() if session.detected_date else "",
             required=False, max_length=10,
         )
@@ -1548,7 +1681,7 @@ class _EditEventInfoModal(discord.ui.Modal):
             elif not rank_raw:
                 session.alliance_rank = None
 
-        await self.view.refresh(interaction)
+        await self.view._save_edit(interaction)
 
 
 class _TimeSlotPickerView(discord.ui.View):

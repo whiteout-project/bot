@@ -180,3 +180,28 @@ def test_rematch_skips_fid_already_in_session(rematch_db):
 def test_rematch_no_unmatched_is_noop(rematch_db):
     _insert_rows(rematch_db, "s4", [("200", "Saeed", "present")])
     assert parsers.rematch_unmatched_rows("s4", ALLIANCE) == 0
+
+
+# ---------------------------------------------------------------------------
+# Trailing-suffix recovery — a real row with a bled-in junk prefix
+# ("L6 Morte2", "SPAFDRT Leoz") matches on its trailing name.
+# ---------------------------------------------------------------------------
+
+_SUFFIX_ROSTER = [(1, "Morte2"), (2, "Leoz"), (3, "Joseph")]
+
+
+def test_leading_junk_matched_by_trailing_suffix():
+    assert parsers.fuzzy_match_name("L6 Morte2", _SUFFIX_ROSTER) == (1, "auto")
+    assert parsers.fuzzy_match_name("SPAFDRT Leoz", _SUFFIX_ROSTER) == (2, "auto")
+
+
+def test_suffix_retry_skipped_when_full_name_matches():
+    # A clean single-word name still matches directly (suffix path not needed).
+    assert parsers.fuzzy_match_name("Joseph", _SUFFIX_ROSTER) == (3, "auto")
+
+
+def test_suffix_retry_no_false_positive():
+    # Junk + a name not in the roster stays unmatched — the strict auto
+    # threshold prevents a stray suffix from matching the wrong player.
+    fid, _status = parsers.fuzzy_match_name("SPAFDRT Leoz", [(1, "Morte2")])
+    assert fid is None

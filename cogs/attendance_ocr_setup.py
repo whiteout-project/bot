@@ -322,8 +322,11 @@ def _summarize_events(channel_id: int) -> str:
     return ", ".join(EVENT_TYPES[et].label for et in enabled)
 
 
-def build_overview_embed(user_id: int, guild_id: int) -> discord.Embed:
-    alliance_ids = _admin_alliance_ids(user_id, guild_id)
+def build_overview_embed(user_id: int, guild_id: int, alliance_id: int | None = None) -> discord.Embed:
+    if alliance_id is not None:
+        alliance_ids = [alliance_id]
+    else:
+        alliance_ids = _admin_alliance_ids(user_id, guild_id)
     channels = _all_configured_channels(alliance_ids)
 
     intro = (
@@ -358,8 +361,11 @@ def build_overview_embed(user_id: int, guild_id: int) -> discord.Embed:
     else:
         lines.append("Use **Add Channel** to register your first channel.")
 
+    title = f"{theme.importIcon} Screenshot Upload"
+    if alliance_id is not None:
+        title += f" · {_alliance_name(alliance_id)}"
     return discord.Embed(
-        title=f"{theme.importIcon} Screenshot Upload",
+        title=title,
         description="\n".join(lines),
         color=theme.emColor1,
     )
@@ -368,11 +374,12 @@ def build_overview_embed(user_id: int, guild_id: int) -> discord.Embed:
 # ── admin views ───────────────────────────────────────────────────────────
 
 class OCRChannelListView(discord.ui.View):
-    def __init__(self, cog, user_id: int, guild_id: int):
+    def __init__(self, cog, user_id: int, guild_id: int, alliance_id: int | None = None):
         super().__init__(timeout=7200)
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
+        self.alliance_id = alliance_id  # scoped to one alliance, or None = guild-wide
         self._build_components()
 
     def _channel_label(self, channel_id: int) -> str:
@@ -382,7 +389,8 @@ class OCRChannelListView(discord.ui.View):
 
     def _build_components(self):
         self.clear_items()
-        alliance_ids = _admin_alliance_ids(self.user_id, self.guild_id)
+        alliance_ids = ([self.alliance_id] if self.alliance_id is not None
+                        else _admin_alliance_ids(self.user_id, self.guild_id))
         channels = _all_configured_channels(alliance_ids)
 
         if channels:
@@ -425,7 +433,8 @@ class OCRChannelListView(discord.ui.View):
         return True
 
     async def _add_new(self, interaction: discord.Interaction):
-        view = _ChannelPickerView(self.cog, self.user_id, self.guild_id, parent=self)
+        view = _ChannelPickerView(self.cog, self.user_id, self.guild_id, parent=self,
+                                  alliance_id=self.alliance_id)
         embed = discord.Embed(
             title=f"{theme.importIcon} Add Screenshot Upload Channel",
             description="Pick the channel where event screenshots will be uploaded.",
@@ -450,17 +459,49 @@ class OCRChannelListView(discord.ui.View):
 
     async def _back(self, interaction: discord.Interaction):
         attendance_cog = self.cog.bot.get_cog("Attendance")
-        if attendance_cog:
+        if not attendance_cog:
+            return
+        if self.alliance_id is not None:
+            await attendance_cog.show_attendance_hub(interaction, self.alliance_id)
+        else:
             await attendance_cog.show_attendance_menu(interaction)
 
 
+async def _assign_channel_to_alliance(cog, interaction, *, user_id, guild_id,
+                                      channel_id, alliance_id, parent):
+    """Reserve a channel for an alliance, enable all events, post the info
+    message, and open its edit view. Shared by the scoped + guild-wide add flows."""
+    conflict = find_conflicting_channel_owner(channel_id, alliance_id)
+    if conflict is not None:
+        embed = discord.Embed(
+            title=f"{theme.deniedIcon} Channel already in use",
+            description=format_channel_conflict(conflict, f"<#{channel_id}>"),
+            color=theme.emColor4,
+        )
+        parent._build_components()
+        await interaction.response.edit_message(embed=embed, view=parent)
+        return
+    upsert_channel_settings(channel_id, alliance_id,
+                            post_info_message=False, pin_info_message=False)
+    for et in EVENT_TYPES:
+        enable_event_for_channel(channel_id, et)
+    await cog.refresh_info_message(channel_id)
+    view = OCRChannelEditView(
+        cog, user_id, guild_id,
+        channel_id=channel_id, alliance_id=alliance_id, parent=parent,
+    )
+    await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+
 class _ChannelPickerView(discord.ui.View):
-    def __init__(self, cog, user_id: int, guild_id: int, parent: OCRChannelListView):
+    def __init__(self, cog, user_id: int, guild_id: int, parent: OCRChannelListView,
+                 alliance_id: int | None = None):
         super().__init__(timeout=300)
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
         self.parent = parent
+        self.alliance_id = alliance_id  # pre-selected when scoped → skip the picker
 
         select = discord.ui.ChannelSelect(
             channel_types=[discord.ChannelType.text],
@@ -482,6 +523,11 @@ class _ChannelPickerView(discord.ui.View):
 
     async def _picked(self, interaction: discord.Interaction):
         channel_id = int(interaction.data["values"][0])
+        if self.alliance_id is not None:
+            await _assign_channel_to_alliance(
+                self.cog, interaction, user_id=self.user_id, guild_id=self.guild_id,
+                channel_id=channel_id, alliance_id=self.alliance_id, parent=self.parent)
+            return
         view = _AlliancePickerView(
             self.cog, self.user_id, self.guild_id,
             channel_id=channel_id, parent=self.parent,
@@ -496,7 +542,7 @@ class _ChannelPickerView(discord.ui.View):
     async def _cancel(self, interaction: discord.Interaction):
         self.parent._build_components()
         await interaction.response.edit_message(
-            embed=build_overview_embed(self.user_id, self.guild_id),
+            embed=build_overview_embed(self.user_id, self.guild_id, self.parent.alliance_id),
             view=self.parent,
         )
 
@@ -536,39 +582,14 @@ class _AlliancePickerView(discord.ui.View):
 
     async def _picked(self, interaction: discord.Interaction):
         alliance_id = int(interaction.data["values"][0])
-
-        # Reservation check: refuse if another alliance already owns this
-        # channel for Bear Tracking or Screenshot Upload.
-        conflict = find_conflicting_channel_owner(self.channel_id, alliance_id)
-        if conflict is not None:
-            embed = discord.Embed(
-                title=f"{theme.deniedIcon} Channel already in use",
-                description=format_channel_conflict(conflict, f"<#{self.channel_id}>"),
-                color=theme.emColor4,
-            )
-            self.parent._build_components()
-            await interaction.response.edit_message(embed=embed, view=self.parent)
-            return
-
-        upsert_channel_settings(self.channel_id, alliance_id,
-                                post_info_message=False, pin_info_message=False)
-        # Enable every supported event by default — admin can disable individual ones
-        # afterwards. No keywords installed: the fingerprint regex classifies on its own.
-        for et in EVENT_TYPES:
-            enable_event_for_channel(self.channel_id, et)
-        # Post + pin the info message immediately so the toggle state matches reality.
-        await self.cog.refresh_info_message(self.channel_id)
-
-        view = OCRChannelEditView(
-            self.cog, self.user_id, self.guild_id,
-            channel_id=self.channel_id, alliance_id=alliance_id, parent=self.parent,
-        )
-        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+        await _assign_channel_to_alliance(
+            self.cog, interaction, user_id=self.user_id, guild_id=self.guild_id,
+            channel_id=self.channel_id, alliance_id=alliance_id, parent=self.parent)
 
     async def _cancel(self, interaction: discord.Interaction):
         self.parent._build_components()
         await interaction.response.edit_message(
-            embed=build_overview_embed(self.user_id, self.guild_id),
+            embed=build_overview_embed(self.user_id, self.guild_id, self.parent.alliance_id),
             view=self.parent,
         )
 
@@ -815,14 +836,14 @@ class OCRChannelEditView(discord.ui.View):
         delete_channel_settings(self.channel_id)
         self.parent._build_components()
         await interaction.response.edit_message(
-            embed=build_overview_embed(self.user_id, self.guild_id),
+            embed=build_overview_embed(self.user_id, self.guild_id, self.parent.alliance_id),
             view=self.parent,
         )
 
     async def _back(self, interaction: discord.Interaction):
         self.parent._build_components()
         await interaction.response.edit_message(
-            embed=build_overview_embed(self.user_id, self.guild_id),
+            embed=build_overview_embed(self.user_id, self.guild_id, self.parent.alliance_id),
             view=self.parent,
         )
 
