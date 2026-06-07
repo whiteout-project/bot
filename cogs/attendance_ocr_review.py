@@ -30,6 +30,7 @@ from .attendance_ocr_parsers import (
     _record_session,
     _unmatched_id_floor,
     _normalize_for_match,
+    learn_name_alias,
 )
 
 logger = logging.getLogger("alliance")
@@ -123,6 +124,10 @@ class EventReviewView(discord.ui.View):
                  enriching_open_session_id: Optional[str] = None):
         super().__init__(timeout=7200)
         self.session = session
+        # "Simple" events (e.g. Alliance Showdown) have no registration and no
+        # present/absent concept — everyone takes part; we only record who scored.
+        # Suppresses the registration/absent framing in the review.
+        self.simple = bool(getattr(session, "simple_results", False))
         self.registration_value_label = registration_value_label
         self.result_value_label = result_value_label
         # Set when re-uploading screenshots for a CLOSED event — Submit
@@ -140,10 +145,13 @@ class EventReviewView(discord.ui.View):
         # Invalidated in refresh(), which runs after every row-mutating edit.
         self._merged_cache: Optional[list[dict]] = None
         self.page = 0
+        # When on, the dropdown + visible list show only rows still needing a
+        # player assigned — so admins can fix a big roster without paging all.
+        self.show_unmatched_only = False
         self._build_components()
 
     def _enrich_rows(self, raw_rows: list[dict], *, kind: str) -> list[dict]:
-        enriched = assign_unique_fids(raw_rows, self.roster)
+        enriched = assign_unique_fids(raw_rows, self.roster, alliance_id=self.session.alliance_id)
         for r in enriched:
             r["_kind"] = kind
         return enriched
@@ -264,6 +272,12 @@ class EventReviewView(discord.ui.View):
 
     def _status_banner(self) -> str:
         scope = self._event_scope_phrase()
+        if self.simple:
+            return (
+                f"{theme.infoIcon} **Scored players** — everyone in the alliance "
+                f"takes part; this records who actually scored. Players who didn't "
+                f"score simply aren't listed."
+            )
         if self.enriching_open_session_id:
             return (
                 f"{theme.verifiedIcon} **Matched existing event registration** — "
@@ -302,13 +316,18 @@ class EventReviewView(discord.ui.View):
                 date_part += f" {self.session.detected_time} UTC"
             title_bits.append(f"· {date_part}")
 
+        if self.simple:
+            legend = (f"• Icons: {theme.verifiedIcon} matched · "
+                      f"{theme.warnIcon} check · {theme.deniedIcon} unmatched")
+        else:
+            legend = f"• Icons: {theme.verifiedIcon} present · {theme.deniedIcon} absent"
         desc_lines = [
             f"{theme.upperDivider}",
             self._status_banner(),
             "",
             "• Edit any rows that need fixing, then Submit.",
             "• Empty the Name field on edit to delete a row.",
-            f"• Icons: {theme.verifiedIcon} present · {theme.deniedIcon} absent",
+            legend,
         ]
         if self.existing_session_id is not None:
             desc_lines.append(
@@ -322,6 +341,13 @@ class EventReviewView(discord.ui.View):
                     f"\n{theme.warnIcon} **Event time not set** — use the "
                     f"**Time** button to pick a UTC slot ({', '.join(allowed)})."
                 )
+        # Status counts up top where they're actually seen (was an easily-missed
+        # footer). Lists what still needs the admin's attention before submit.
+        attention = self._build_footer_bits()
+        if attention:
+            desc_lines.append(f"\n**{theme.warnIcon} Needs attention**")
+            desc_lines.extend(f"• {bit}" for bit in attention)
+
         if self.session.alliance_rank is not None:
             desc_lines.append(
                 f"\n**{theme.crownIcon} Alliance ranked No. {self.session.alliance_rank}**"
@@ -359,10 +385,15 @@ class EventReviewView(discord.ui.View):
                         for name, stats in by_name.items()]
             desc_lines.append(f"\n**{theme.crownIcon} MVPs:** " + " · ".join(mvp_bits))
 
-        # Complete mode inlines the merged player table into the description
-        # so there's no inter-field gap (and we get 4096 chars instead of 1024).
-        if self.mode == "complete":
+        # The visible list: filtered view when the Unmatched-only toggle is on;
+        # otherwise complete mode inlines the merged table into the description
+        # (4096 chars vs a 1024 field), and other modes use the fields below.
+        if self.show_unmatched_only:
+            self._append_filtered_lines(desc_lines)
+        elif self.mode == "complete":
             self._append_merged_player_lines(desc_lines)
+        else:
+            self._append_section_lines(desc_lines)
 
         desc_lines.append(f"{theme.lowerDivider}")
 
@@ -372,34 +403,32 @@ class EventReviewView(discord.ui.View):
             color=theme.emColor3,
         )
 
-        if self.mode != "complete":
-            self._add_player_section(
-                embed, self.registered_rows,
-                label=f"{theme.userIcon} Registered ({self.registration_value_label})",
-            )
-            self._add_player_section(
-                embed, self.result_rows,
-                label=f"{theme.chartIcon} Results ({self.result_value_label})",
-            )
-
         if not self.all_rows:
             embed.add_field(
                 name="Players",
                 value="*No player rows detected. Use Add Row to add manually.*",
                 inline=False,
             )
-
-        footer_bits = self._build_footer_bits()
-        if footer_bits:
-            embed.set_footer(text=" · ".join(footer_bits))
         return embed
 
-    def _add_player_section(self, embed: discord.Embed, rows: list[dict],
-                            *, label: str) -> None:
+    def _append_section_lines(self, desc_lines: list[str]) -> None:
+        """Non-complete mode shows exactly one populated section (registered XOR
+        result). Rendered into the description (4096 budget) so a full page fits
+        without the awkward mid-page '(truncated)' — pagination shows the rest."""
+        if self.has_registration:
+            rows = self.registered_rows
+            label = f"{theme.userIcon} Registered ({self.registration_value_label})"
+        else:
+            rows = self.result_rows
+            label = f"{theme.chartIcon} Results ({self.result_value_label})"
         if not rows:
             return
-        lines = []
-        for i, r in enumerate(rows, start=1):
+        start = self.page * self.ROWS_PER_PAGE
+        page_rows = rows[start:start + self.ROWS_PER_PAGE]
+        desc_lines.append(f"\n**{label} · {len(rows)}**")
+        budget_remaining = 4096 - sum(len(l) + 1 for l in desc_lines) - 120
+        for offset, r in enumerate(page_rows):
+            i = start + offset + 1  # global row number, stable across pages
             icon = _STATUS_ICON.get(r["status"], "")
             if r["status"] in ("auto", "manual") and r["fid"]:
                 player = f"`{r['nickname']}` · `{r['fid']}`"
@@ -407,12 +436,11 @@ class EventReviewView(discord.ui.View):
                 player = f"`{r['nickname']}` ({r['status']}) · `{r['fid']}`"
             else:
                 player = f"`{r['name']}` — no match"
-            lines.append(f"**#{i}** {icon} {player} — `{_format_int(r['value'])}`")
-
-        value = "\n".join(lines)
-        if len(value) > 1024:
-            value = value[:1010] + "\n…(truncated)"
-        embed.add_field(name=f"{label} · {len(rows)}", value=value, inline=False)
+            line = f"**#{i}** {icon} {player} — `{_format_int(r['value'])}`"
+            if budget_remaining - len(line) - 1 < 0:
+                break  # rest is on the next page — pagination, not a truncation note
+            desc_lines.append(line)
+            budget_remaining -= len(line) + 1
 
     def _append_merged_player_lines(self, desc_lines: list[str]) -> None:
         """One row per player, written directly into the description so it
@@ -435,9 +463,13 @@ class EventReviewView(discord.ui.View):
             f"\n**Players · {len(merged)} ({' · '.join(header_bits)})**"
         )
 
+        # Page the visible list to match the dropdown so Prev/Next move through it.
+        start = self.page * self.ROWS_PER_PAGE
+        page_rows = merged[start:start + self.ROWS_PER_PAGE]
         rendered = 0
         budget_remaining = 4096 - sum(len(l) + 1 for l in desc_lines) - 100
-        for i, r in enumerate(merged, start=1):
+        for offset, r in enumerate(page_rows):
+            i = start + offset + 1
             att = _ATTENDANCE_ICON.get(r["attendance"], "")
             display = r["nickname"] or r["name"] or "?"
             ms = r["match_status"]
@@ -458,12 +490,46 @@ class EventReviewView(discord.ui.View):
                 bits.append("`Absent`")
             line = " · ".join(bits)
             if budget_remaining - len(line) - 1 < 0:
-                desc_lines.append(f"_…and {len(merged) - rendered} more — open "
-                                  "Edit a player row to see all_")
+                desc_lines.append(f"_…and {len(page_rows) - rendered} more on this "
+                                  "page — open Edit a player row to see all_")
                 return
             desc_lines.append(line)
             budget_remaining -= len(line) + 1
             rendered += 1
+
+    def _append_filtered_lines(self, desc_lines: list[str]) -> None:
+        """Render the Unmatched-only list (page slice) into the description.
+        Names only — the admin matches by name via the dropdown."""
+        entries = self._edit_entries()  # already filtered to unmatched
+        total = len(entries)
+        desc_lines.append(f"\n**{theme.deniedIcon} Unmatched rows · {total}**")
+        if total == 0:
+            desc_lines.append(
+                f"{theme.verifiedIcon} All rows are matched — nothing to assign."
+            )
+            return
+        start = self.page * self.ROWS_PER_PAGE
+        page_rows = entries[start:start + self.ROWS_PER_PAGE]
+        budget_remaining = 4096 - sum(len(l) + 1 for l in desc_lines) - 120
+        for offset, (kind, _key, row, _um) in enumerate(page_rows):
+            name = row.get("nickname") or row.get("name") or "(unreadable)"
+            if kind == "merged":
+                vbits = []
+                if row.get("registered_value") is not None:
+                    vbits.append(f"{_format_compact(row['registered_value'])} Pwr")
+                if row.get("result_value") is not None:
+                    vbits.append(f"{_format_compact(row['result_value'])} Pts")
+                tail = " · ".join(vbits) if vbits else "—"
+            else:
+                tail = f"`{_format_int(row['value'])}`"
+            line = f"{theme.deniedIcon} `{name}` — {tail}"
+            if budget_remaining - len(line) - 1 < 0:
+                desc_lines.append(
+                    f"_…and {total - (start + offset)} more — use the dropdown_"
+                )
+                return
+            desc_lines.append(line)
+            budget_remaining -= len(line) + 1
 
     def _build_footer_bits(self) -> list[str]:
         bits = []
@@ -525,60 +591,88 @@ class EventReviewView(discord.ui.View):
 
     # ── components ────────────────────────────────────────────────────────
 
-    def _dropdown_count(self) -> int:
-        """Count behind pagination. In complete mode one option = one merged
-        player so the user never sees pagination over 'identical pages' just
-        because reg+result split the raw row count in two."""
+    @staticmethod
+    def _fid_unmatched(fid) -> bool:
+        return not fid or fid < 0
+
+    def _unmatched_total(self) -> int:
+        """How many rows still need a player assigned (across the whole list)."""
         if self.mode == "complete":
-            return len(self._build_merged_view())
-        return len(self.all_rows)
+            return sum(1 for mr in self._build_merged_view()
+                       if self._fid_unmatched(mr["fid"]))
+        return sum(1 for r in self.all_rows if self._fid_unmatched(r.get("fid")))
+
+    def _edit_entries(self) -> list[tuple]:
+        """Editable rows in display order, honoring the Unmatched-only filter.
+        Each entry is (kind, key, row, unmatched) where 'kind:key' is the
+        dropdown value that maps back to the underlying row (so editing always
+        targets the right row, filtered or not)."""
+        out = []
+        if self.mode == "complete":
+            for idx, mr in enumerate(self._build_merged_view()):
+                um = self._fid_unmatched(mr["fid"])
+                if self.show_unmatched_only and not um:
+                    continue
+                out.append(("merged", idx, mr, um))
+        else:
+            for gi in range(len(self.all_rows)):
+                bucket, li = self._global_to_local(gi)
+                r = bucket[li]
+                um = self._fid_unmatched(r.get("fid"))
+                if self.show_unmatched_only and not um:
+                    continue
+                out.append(("raw", gi, r, um))
+        return out
+
+    def _dropdown_count(self) -> int:
+        """Count behind pagination — the filtered visible entries."""
+        return len(self._edit_entries())
 
     def _total_pages(self) -> int:
         return max(1, (self._dropdown_count() + self.ROWS_PER_PAGE - 1) // self.ROWS_PER_PAGE)
 
     def _build_components(self):
         self.clear_items()
-        total = self._dropdown_count()
+        # Clamp the page in case the filtered list shrank under the cursor
+        # (e.g. the last unmatched row on this page was just assigned).
+        self.page = max(0, min(self.page, self._total_pages() - 1))
+        entries = self._edit_entries()
+        total = len(entries)
         if total:
             start = self.page * self.ROWS_PER_PAGE
             end = min(start + self.ROWS_PER_PAGE, total)
             options = []
-            if self.mode == "complete":
-                merged = self._build_merged_view()
-                for idx in range(start, end):
-                    mr = merged[idx]
-                    name_part = mr["nickname"] or mr["name"] or "(unreadable)"
-                    tag = ""
-                    if not mr["fid"] or mr["fid"] < 0:
-                        tag = " (unmatched)"
-                    elif mr["match_status"] in ("likely", "review"):
-                        tag = " (unsure)"
-                    label = f"#{idx + 1} {name_part}{tag}"[:100]
+            for kind, key, row, um in entries[start:end]:
+                if kind == "merged":
+                    name_part = row["nickname"] or row["name"] or "(unreadable)"
+                    tag = " (unmatched)" if um else (
+                        " (unsure)" if row["match_status"] in ("likely", "review") else "")
+                    label = f"#{key + 1} {name_part}{tag}"[:100]
                     desc_bits = []
-                    if mr["registered_value"] is not None:
-                        desc_bits.append(f"{_format_compact(mr['registered_value'])} Pwr")
-                    if mr["result_value"] is not None:
-                        desc_bits.append(f"{_format_compact(mr['result_value'])} Pts")
-                    elif mr["attendance"] == "absent":
+                    if row["registered_value"] is not None:
+                        desc_bits.append(f"{_format_compact(row['registered_value'])} Pwr")
+                    if row["result_value"] is not None:
+                        desc_bits.append(f"{_format_compact(row['result_value'])} Pts")
+                    elif row["attendance"] == "absent":
                         desc_bits.append("Absent")
                     desc = " · ".join(desc_bits)[:100]
                     options.append(discord.SelectOption(
-                        label=label, value=f"merged:{idx}", description=desc,
+                        label=label, value=f"merged:{key}", description=desc,
                     ))
-            else:
-                for global_idx in range(start, end):
-                    bucket, local_idx = self._global_to_local(global_idx)
-                    r = bucket[local_idx]
-                    kind_word = "Reg" if r["_kind"] == "registration" else "Result"
-                    name_part = r["nickname"] or r["name"] or "(unreadable)"
-                    fid_part = f" · {r['fid']}" if r.get("fid") else ""
-                    label = f"{kind_word} #{local_idx + 1} {name_part}{fid_part}"[:100]
-                    desc = f"{_format_int(r['value'])} · {r['status']}"[:100]
+                else:
+                    _bucket, local_idx = self._global_to_local(key)
+                    name_part = row["nickname"] or row["name"] or "(unreadable)"
+                    fid_part = f" · {row['fid']}" if row.get("fid") else ""
+                    tag = " (unmatched)" if um else ""
+                    label = f"#{local_idx + 1} {name_part}{fid_part}{tag}"[:100]
+                    desc = f"{_format_int(row['value'])} · {row['status']}"[:100]
                     options.append(discord.SelectOption(
-                        label=label, value=f"raw:{global_idx}", description=desc,
+                        label=label, value=f"raw:{key}", description=desc,
                     ))
+            placeholder = ("Edit an unmatched row…" if self.show_unmatched_only
+                           else "Edit a player row…")
             select = discord.ui.Select(
-                placeholder="Edit a player row…", options=options, row=0,
+                placeholder=placeholder, options=options, row=0,
             )
             select.callback = self._on_edit_row
             self.add_item(select)
@@ -619,6 +713,19 @@ class EventReviewView(discord.ui.View):
             )
             time_btn.callback = self._on_set_time
             self.add_item(time_btn)
+        # Unmatched-only filter — shown when there's something to filter (or the
+        # filter is already on, so you can switch back).
+        um_total = self._unmatched_total()
+        if um_total or self.show_unmatched_only:
+            on = self.show_unmatched_only
+            label = f"Unmatched: {'On' if on else 'Off'}"
+            toggle = discord.ui.Button(
+                label=label, emoji=theme.eyeIcon,
+                style=discord.ButtonStyle.success if on else discord.ButtonStyle.secondary,
+                row=2,
+            )
+            toggle.callback = self._on_toggle_unmatched
+            self.add_item(toggle)
         for label, emoji, style, cb in (
             ("Add Row", theme.addIcon, discord.ButtonStyle.secondary, self._on_add_row),
             ("Edit Event Info", theme.editListIcon, discord.ButtonStyle.secondary, self._on_edit_header),
@@ -739,6 +846,11 @@ class EventReviewView(discord.ui.View):
             self.page += 1
         await self.refresh(interaction)
 
+    async def _on_toggle_unmatched(self, interaction: discord.Interaction):
+        self.show_unmatched_only = not self.show_unmatched_only
+        self.page = 0
+        await self.refresh(interaction)
+
     async def _on_cancel(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title=f"{theme.deniedIcon} Upload cancelled",
@@ -831,6 +943,7 @@ class EventReviewView(discord.ui.View):
             if r["fid"]:
                 present_fids.add(r["fid"])
                 update_fn(r["fid"], r["value"], ts)
+                learn_name_alias(self.session.alliance_id, r["name"], r["fid"])
                 row_fid: int = r["fid"]
             else:
                 norm = _normalize_for_match(r["name"])
@@ -893,6 +1006,7 @@ class EventReviewView(discord.ui.View):
         for r in self.registered_rows:
             if r["fid"]:
                 update_fn(r["fid"], r["value"], ts)
+                learn_name_alias(self.session.alliance_id, r["name"], r["fid"])
                 row_fid: int = r["fid"]
             else:
                 row_fid = next_unmatched
@@ -967,7 +1081,7 @@ class EventReviewView(discord.ui.View):
             (session_id,),
         )
         for mvp in self.session.mvps:
-            fid, _status = fuzzy_match_name(mvp["name"], self.roster)
+            fid, _status = fuzzy_match_name(mvp["name"], self.roster, alliance_id=self.session.alliance_id)
             conn.execute(
                 "INSERT OR REPLACE INTO attendance_session_mvps "
                 "(session_id, stat_key, mvp_name, mvp_value, mvp_fid) "
@@ -1159,6 +1273,22 @@ class EventReviewView(discord.ui.View):
 
 # ── modals ────────────────────────────────────────────────────────────────
 
+def _resolve_player_field(view: "EventReviewView", text: str):
+    """Resolve a single combined Player field — ID digits or a name — to
+    (fid, nickname, status). One field for both, matching bear track. Name
+    matching is alias-aware via fuzzy_match_name."""
+    text = (text or "").strip()
+    if text.isdigit():
+        fid = int(text)
+        nick = view._lookup_nickname(fid)
+        return fid, nick, ("manual" if nick else "no_match")
+    if text:
+        f, st = fuzzy_match_name(text, view.roster, alliance_id=view.session.alliance_id)
+        if f is not None:
+            return f, view._lookup_nickname(f), st
+    return None, None, "no_match"
+
+
 class _EditMergedRowModal(discord.ui.Modal):
     """Edit a player across both reg and result buckets at once. Used in
     complete mode so the dropdown can show one option per merged player.
@@ -1173,16 +1303,11 @@ class _EditMergedRowModal(discord.ui.Modal):
         self.reg_idx = merged_row.get("_reg_idx")
         self.res_idx = merged_row.get("_res_idx")
 
-        self.name_input = discord.ui.TextInput(
-            label="Player name (clear to delete)",
-            default=display, required=False, max_length=40,
+        self.player_input = discord.ui.TextInput(
+            label="Player (ID or name — blank to delete)",
+            default=display, required=False, max_length=80,
         )
-        fid_val = merged_row.get("fid")
-        self.fid_input = discord.ui.TextInput(
-            label="FID (optional — overrides name lookup)",
-            default=str(fid_val) if fid_val and fid_val > 0 else "",
-            required=False, max_length=20,
-        )
+        self.add_item(self.player_input)
         if self.reg_idx is not None:
             self.reg_value_input: Optional[discord.ui.TextInput] = discord.ui.TextInput(
                 label=f"Reg power ({view.registration_value_label})"[:45],
@@ -1201,52 +1326,32 @@ class _EditMergedRowModal(discord.ui.Modal):
             self.add_item(self.res_value_input)
         else:
             self.res_value_input = None
-        self.add_item(self.name_input)
-        self.add_item(self.fid_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        name = self.name_input.value.strip()
-        fid_raw = self.fid_input.value.strip()
-        if not name and not fid_raw:
+        if not self.player_input.value.strip():
             for bucket, idx in self._underlying_targets():
                 if idx is not None and idx < len(bucket):
                     del bucket[idx]
             await self.view.refresh(interaction)
             return
 
-        fid: Optional[int] = None
-        nickname: Optional[str] = None
-        status = "no_match"
-        if fid_raw.isdigit():
-            fid = int(fid_raw)
-            nickname = self.view._lookup_nickname(fid)
-            status = "manual" if nickname else "no_match"
-        if fid is None and name:
-            f, st = fuzzy_match_name(name, self.view.roster)
-            if f is not None:
-                fid, status = f, st
-                nickname = self.view._lookup_nickname(fid)
-
+        fid, nickname, status = _resolve_player_field(self.view, self.player_input.value)
+        # Update in place so each row keeps its original OCR name (the alias DB
+        # learns from it) and _kind; we only re-resolve the player + value.
         if self.reg_idx is not None and self.reg_value_input is not None:
             try:
                 reg_val = int(re.sub(r"[^\d]", "", self.reg_value_input.value or "0"))
             except ValueError:
                 reg_val = 0
-            self.view.registered_rows[self.reg_idx] = {
-                "name": name or nickname or "", "value": reg_val,
-                "fid": fid, "nickname": nickname, "status": status,
-                "_kind": "registration",
-            }
+            self.view.registered_rows[self.reg_idx].update(
+                {"value": reg_val, "fid": fid, "nickname": nickname, "status": status})
         if self.res_idx is not None and self.res_value_input is not None:
             try:
                 res_val = int(re.sub(r"[^\d]", "", self.res_value_input.value or "0"))
             except ValueError:
                 res_val = 0
-            self.view.result_rows[self.res_idx] = {
-                "name": name or nickname or "", "value": res_val,
-                "fid": fid, "nickname": nickname, "status": status,
-                "_kind": "result",
-            }
+            self.view.result_rows[self.res_idx].update(
+                {"value": res_val, "fid": fid, "nickname": nickname, "status": status})
         await self.view.refresh(interaction)
 
     def _underlying_targets(self) -> list[tuple[list[dict], Optional[int]]]:
@@ -1271,28 +1376,21 @@ class _EditRowModal(discord.ui.Modal):
                        if row["_kind"] == "registration"
                        else view.result_value_label)
 
-        self.name_input = discord.ui.TextInput(
-            label="Player name (clear to delete)",
+        self.player_input = discord.ui.TextInput(
+            label="Player (ID or name — blank to delete)",
             default=row.get("nickname") or row.get("name") or "",
-            required=False, max_length=40,
-        )
-        self.fid_input = discord.ui.TextInput(
-            label="FID (optional — overrides name lookup)",
-            default=str(row["fid"]) if row.get("fid") else "",
-            required=False, max_length=20,
+            required=False, max_length=80,
         )
         self.value_input = discord.ui.TextInput(
             label=f"Value ({value_label})"[:45],
             default=str(row.get("value") or 0),
             required=True, max_length=15,
         )
-        self.add_item(self.name_input)
-        self.add_item(self.fid_input)
+        self.add_item(self.player_input)
         self.add_item(self.value_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        name = self.name_input.value.strip()
-        if not name and not self.fid_input.value.strip():
+        if not self.player_input.value.strip():
             del self.bucket[self.local_idx]
             await self.view.refresh(interaction)
             return
@@ -1304,29 +1402,10 @@ class _EditRowModal(discord.ui.Modal):
             )
             return
 
-        fid: Optional[int] = None
-        nickname: Optional[str] = None
-        status = "no_match"
-        fid_raw = self.fid_input.value.strip()
-        if fid_raw.isdigit():
-            fid = int(fid_raw)
-            nickname = self.view._lookup_nickname(fid)
-            status = "manual" if nickname else "no_match"
-        if fid is None and name:
-            f, st = fuzzy_match_name(name, self.view.roster)
-            if f is not None:
-                fid, status = f, st
-                nickname = self.view._lookup_nickname(fid)
-
-        kind = self.bucket[self.local_idx]["_kind"]
-        self.bucket[self.local_idx] = {
-            "name": name or nickname or "",
-            "value": value,
-            "fid": fid,
-            "nickname": nickname,
-            "status": status,
-            "_kind": kind,
-        }
+        fid, nickname, status = _resolve_player_field(self.view, self.player_input.value)
+        # Update in place so the original OCR name (alias key) and _kind survive.
+        self.bucket[self.local_idx].update(
+            {"value": value, "fid": fid, "nickname": nickname, "status": status})
         await self.view.refresh(interaction)
 
 
@@ -1340,28 +1419,22 @@ class _AddRowModal(discord.ui.Modal):
         value_label = (view.registration_value_label
                        if kind == "registration"
                        else view.result_value_label)
-        self.name_input = discord.ui.TextInput(
-            label="Player name (or leave blank if using FID)",
-            required=False, max_length=40,
-        )
-        self.fid_input = discord.ui.TextInput(
-            label="FID (optional)",
-            required=False, max_length=20,
+        self.player_input = discord.ui.TextInput(
+            label="Player (ID or name)",
+            required=True, max_length=80,
         )
         self.value_input = discord.ui.TextInput(
             label=f"Value ({value_label})"[:45],
             required=True, max_length=15,
         )
-        self.add_item(self.name_input)
-        self.add_item(self.fid_input)
+        self.add_item(self.player_input)
         self.add_item(self.value_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        name = self.name_input.value.strip()
-        fid_raw = self.fid_input.value.strip()
-        if not name and not fid_raw:
+        player_text = self.player_input.value.strip()
+        if not player_text:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} Provide a name or FID.", ephemeral=True,
+                f"{theme.deniedIcon} Provide a player ID or name.", ephemeral=True,
             )
             return
         try:
@@ -1372,21 +1445,9 @@ class _AddRowModal(discord.ui.Modal):
             )
             return
 
-        fid: Optional[int] = None
-        nickname: Optional[str] = None
-        status = "no_match"
-        if fid_raw.isdigit():
-            fid = int(fid_raw)
-            nickname = self.view._lookup_nickname(fid)
-            status = "manual" if nickname else "no_match"
-        if fid is None and name:
-            f, st = fuzzy_match_name(name, self.view.roster)
-            if f is not None:
-                fid, status = f, st
-                nickname = self.view._lookup_nickname(fid)
-
+        fid, nickname, status = _resolve_player_field(self.view, player_text)
         new_row = {
-            "name": name or nickname or "",
+            "name": nickname or player_text,
             "value": value,
             "fid": fid,
             "nickname": nickname,
@@ -1428,7 +1489,8 @@ class _AddRowBucketView(discord.ui.View):
 
 
 class _EditEventInfoModal(discord.ui.Modal):
-    """Edit event-level fields: date, legion, alliance rank. (Time has its own picker.)"""
+    """Edit event-level fields: date (always), plus legion + alliance rank for
+    events that have them. Simple events (e.g. Showdown) get a date-only form."""
 
     def __init__(self, view: EventReviewView):
         super().__init__(title="Edit Event Info")
@@ -1439,19 +1501,23 @@ class _EditEventInfoModal(discord.ui.Modal):
             default=session.detected_date.isoformat() if session.detected_date else "",
             required=False, max_length=10,
         )
-        self.legion_input = discord.ui.TextInput(
-            label="Legion (1 or 2)",
-            default=session.detected_legion.replace("Legion ", "") if session.detected_legion else "",
-            required=False, max_length=2,
-        )
-        self.rank_input = discord.ui.TextInput(
-            label="Alliance rank (No. ?)",
-            default=str(session.alliance_rank) if session.alliance_rank is not None else "",
-            required=False, max_length=3,
-        )
         self.add_item(self.date_input)
-        self.add_item(self.legion_input)
-        self.add_item(self.rank_input)
+        # Legion / alliance rank don't apply to simple events — date only.
+        self.legion_input = None
+        self.rank_input = None
+        if not view.simple:
+            self.legion_input = discord.ui.TextInput(
+                label="Legion (1 or 2)",
+                default=session.detected_legion.replace("Legion ", "") if session.detected_legion else "",
+                required=False, max_length=2,
+            )
+            self.rank_input = discord.ui.TextInput(
+                label="Alliance rank (No. ?)",
+                default=str(session.alliance_rank) if session.alliance_rank is not None else "",
+                required=False, max_length=3,
+            )
+            self.add_item(self.legion_input)
+            self.add_item(self.rank_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         session = self.view.session
@@ -1468,17 +1534,19 @@ class _EditEventInfoModal(discord.ui.Modal):
         else:
             session.detected_date = None
 
-        legion_raw = self.legion_input.value.strip()
-        if legion_raw in ("1", "2"):
-            session.detected_legion = f"Legion {legion_raw}"
-        elif not legion_raw:
-            session.detected_legion = None
+        if self.legion_input is not None:
+            legion_raw = self.legion_input.value.strip()
+            if legion_raw in ("1", "2"):
+                session.detected_legion = f"Legion {legion_raw}"
+            elif not legion_raw:
+                session.detected_legion = None
 
-        rank_raw = self.rank_input.value.strip()
-        if rank_raw.isdigit():
-            session.alliance_rank = int(rank_raw)
-        elif not rank_raw:
-            session.alliance_rank = None
+        if self.rank_input is not None:
+            rank_raw = self.rank_input.value.strip()
+            if rank_raw.isdigit():
+                session.alliance_rank = int(rank_raw)
+            elif not rank_raw:
+                session.alliance_rank = None
 
         await self.view.refresh(interaction)
 

@@ -617,6 +617,74 @@ async def ocr_attachment_with_boxes(attachment: discord.Attachment) -> list:
     return await bear_track.ocr_bytes_with_boxes(data, lang=bear_track.DEFAULT_OCR_LANG)
 
 
+def _alliance_ocr_langs(alliance_id, names) -> tuple[str, list]:
+    """Primary + fallback OCR languages for the alliance. Shared with Bear
+    Tracking's OCR-language setting (one place per alliance). Fallbacks are
+    auto-derived from `names` when auto-manage is on, else the manual config."""
+    from . import bear_track
+    default = bear_track.DEFAULT_OCR_LANG
+    try:
+        with sqlite3.connect("db/alliance.sqlite", timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT bear_ocr_lang FROM alliancesettings WHERE alliance_id = ?",
+                (alliance_id,)).fetchone()
+    except Exception:
+        return default, []
+    if not row:
+        return default, []
+    primary = (row[0] or default).strip() or default
+    if primary not in bear_track.OCR_LANG_CODES:
+        primary = default
+    fbs = bear_track.auto_managed_fallbacks(alliance_id, names, primary=primary)
+    return primary, fbs
+
+
+async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None):
+    """OCR (name, value) rows with multi-language fallback for names the primary
+    engine can't read (Cyrillic/Arabic/CJK). Returns (rows, primary_text)."""
+    from . import bear_track
+    primary, fallbacks = _alliance_ocr_langs(alliance_id, [n for _f, n in (roster or [])])
+    if not fallbacks or not roster:
+        text = await bear_track.ocr_bytes(image_bytes, lang=primary, session=session)
+        rows = _parse_player_value_rows(bear_track.repair_ocr_digits(text)) if text.strip() else []
+        return rows, text
+
+    def is_unfilled(r):
+        fid, _ = fuzzy_match_name(r.get("name") or "", roster, alliance_id=alliance_id)
+        return fid is None
+
+    def merge(rows, fb_rows, fb_text, _lang):
+        # Cheap value-merge first (works when the fallback engine happens to read
+        # the number too).
+        fb_by_value = {fr["value"]: fr for fr in fb_rows}
+        for r in rows:
+            if not is_unfilled(r):
+                continue
+            fr = fb_by_value.get(r["value"])
+            if fr and fr.get("name"):
+                fid, _ = fuzzy_match_name(fr["name"], roster, alliance_id=alliance_id)
+                if fid is not None:
+                    r["name"] = fr["name"]
+        # Non-Latin engines read names well but mangle numbers, so value-merge
+        # usually misses them. Fall back to bear's anchor-based position fill
+        # (Latin names from the primary pass anchor the script substrings). It
+        # sorts on 'damage' and mutates 'name', so alias 'damage' to our value.
+        if any(is_unfilled(r) for r in rows):
+            for r in rows:
+                r["damage"] = r["value"]
+            try:
+                bear_track.fill_unfilled_by_position(
+                    {r["value"]: r for r in rows}, fb_text, _lang, "attendance", roster)
+            finally:
+                for r in rows:
+                    r.pop("damage", None)
+
+    return await bear_track.ocr_rows_with_fallback(
+        image_bytes, primary_lang=primary, fallback_langs=fallbacks,
+        parse=_parse_player_value_rows, is_unfilled=is_unfilled, merge=merge,
+        session=session)
+
+
 def find_formatted_numbers(text: str) -> list[tuple[int, int, int]]:
     out = []
     for m in _FORMATTED_NUMBER_RE.finditer(text):
@@ -661,11 +729,18 @@ def _parse_player_value_rows(text: str) -> list[dict]:
     return rows
 
 
+def _name_noise(name: str) -> int:
+    """Count digit-bearing tokens — a proxy for OCR junk like '48Z' or 'lII3'."""
+    return sum(1 for t in (name or "").split() if any(c.isdigit() for c in t))
+
+
 def _dedup_into(target: list[dict], new_row: dict) -> None:
     """Append new_row to target with smart dedup. When values match and the
     OCR'd names share a substring (one contains the other after normalization),
-    treat as the same player and keep whichever name is shorter — partial
-    cross-page captures like '48Z lII Moly' get replaced by the cleaner 'Moly'.
+    treat as the same player and keep the better capture: fewer digit-noise
+    tokens first, then the longer (more complete) name. This drops junk like
+    '48Z lII Moly' → 'Moly' while keeping legit prefixes ('Bow to thy Lord'
+    is no longer truncated to 'to thy Lord').
     """
     new_name_norm = _normalize_for_match(new_row.get("name") or "")
     new_val = new_row.get("value")
@@ -678,7 +753,11 @@ def _dedup_into(target: list[dict], new_row: dict) -> None:
         if (new_name_norm == existing_norm
                 or new_name_norm in existing_norm
                 or existing_norm in new_name_norm):
-            if len(new_row["name"]) < len(r["name"]):
+            new_noise = _name_noise(new_row["name"])
+            old_noise = _name_noise(r["name"])
+            if (new_noise < old_noise
+                    or (new_noise == old_noise
+                        and len(new_row["name"]) > len(r["name"]))):
                 target[i] = new_row
             return
     target.append(new_row)
@@ -693,11 +772,26 @@ def load_alliance_roster(alliance_id: int) -> list[tuple[int, str]]:
     return [(int(fid), nick or "") for fid, nick in rows if fid]
 
 
+_skeleton_fn = None
+
+
+def _skeleton(s: str) -> str:
+    """Fold decorated-gamertag homoglyphs (Greek/Cyrillic/styled lookalikes) to
+    their Latin equivalents, reusing bear_track's table so the two stay in sync.
+    Bound lazily to respect the module's deferred bear_track import."""
+    global _skeleton_fn
+    if _skeleton_fn is None:
+        from . import bear_track
+        _skeleton_fn = bear_track._skeleton
+    return _skeleton_fn(s)
+
+
 def _normalize_for_match(s: str) -> str:
-    """Lowercase + strip whitespace + drop non-alphanumeric noise (OCR
-    decorative chars, emoji, punctuation). Keeps letters/digits from any
-    script (Latin, Arabic, CJK)."""
-    return re.sub(r"[^\w]", "", s, flags=re.UNICODE).casefold()
+    """Fold homoglyphs to Latin, lowercase, and drop non-alphanumeric noise
+    (OCR decorative chars, emoji, punctuation). Folding lets a decorated name
+    like 'ROγAL' match the roster's 'ROYAL'. Genuine non-Latin scripts (Arabic,
+    CJK) have no Latin lookalike and pass through unchanged."""
+    return re.sub(r"[^\w]", "", _skeleton(s), flags=re.UNICODE).casefold()
 
 
 def _score_status(score: float) -> Optional[str]:
@@ -727,7 +821,8 @@ def _pair_similarity(detected_norm: str, nick_norm: str) -> float:
 
 
 def fuzzy_match_candidates(detected: str, roster: list[tuple[int, str]],
-                           *, limit: int = 5) -> list[tuple[int, str, float, str]]:
+                           *, limit: int = 5, alliance_id: Optional[int] = None
+                           ) -> list[tuple[int, str, float, str]]:
     """Top-N fuzzy matches as `[(fid, nickname, score, status), ...]` sorted by
     score descending. Used by callers that need to dedup multiple rows
     competing for the same roster fid — they pool all candidates and greedily
@@ -736,6 +831,10 @@ def fuzzy_match_candidates(detected: str, roster: list[tuple[int, str]],
 
     Only viable candidates (≥ review threshold) are returned. Empty list
     means no roster entry was close enough.
+
+    When `alliance_id` is given and no direct match is confident (auto), a
+    learned manual-match alias can supply the answer — but a strong direct
+    match always wins (collision guard).
     """
     if not detected:
         return []
@@ -754,10 +853,18 @@ def fuzzy_match_candidates(detected: str, roster: list[tuple[int, str]],
             continue
         scored.append((fid, nick, score, status))
     scored.sort(key=lambda c: -c[2])
+
+    if alliance_id is not None and (not scored or scored[0][3] != "auto"):
+        alias_fid = alias_lookup(alliance_id, detected, roster)
+        if alias_fid is not None:
+            nick = next((n for f, n in roster if f == alias_fid), "")
+            scored = [(alias_fid, nick, 1.0, "auto")] + [c for c in scored if c[0] != alias_fid]
+
     return scored[:limit]
 
 
-def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]]) -> list[dict]:
+def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]],
+                       *, alliance_id: Optional[int] = None) -> list[dict]:
     """Greedy global fid assignment across multiple rows competing for
     the same roster entries.
 
@@ -774,7 +881,7 @@ def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]]) -> l
     nick_by_fid = {f: n for f, n in roster}
     enriched: list[dict] = []
     for raw in raw_rows:
-        cands = fuzzy_match_candidates(raw["name"], roster)
+        cands = fuzzy_match_candidates(raw["name"], roster, alliance_id=alliance_id)
         enriched.append({
             **raw,
             "candidates": cands,
@@ -809,7 +916,8 @@ def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]]) -> l
     return enriched
 
 
-def fuzzy_match_name(detected: str, roster: list[tuple[int, str]]) -> tuple[Optional[int], str]:
+def fuzzy_match_name(detected: str, roster: list[tuple[int, str]],
+                     *, alliance_id: Optional[int] = None) -> tuple[Optional[int], str]:
     """Single-best fuzzy match against the alliance roster.
 
     Convenience wrapper around `fuzzy_match_candidates` for callers that
@@ -827,7 +935,7 @@ def fuzzy_match_name(detected: str, roster: list[tuple[int, str]]) -> tuple[Opti
         return None, "no_name"
     if not _normalize_for_match(detected):
         return None, "no_name"
-    candidates = fuzzy_match_candidates(detected, roster, limit=1)
+    candidates = fuzzy_match_candidates(detected, roster, limit=1, alliance_id=alliance_id)
     if not candidates:
         return None, "no_match"
     fid, _nick, _score, status = candidates[0]
@@ -855,6 +963,129 @@ def update_users_combat_power(fid: int, combat_power: int, ts_iso: str) -> None:
 # ── attendance session DB helpers ─────────────────────────────────────────
 
 _ATT_DB = "db/attendance.sqlite"
+
+# Min similarity to reuse a stored alias key when OCR drifts between screenshots.
+_OCR_ALIAS_FUZZY_MIN = 0.92
+
+
+def _init_ocr_alias_table() -> None:
+    """Learned OCR→player aliases: maps the normalized OCR text of a name the
+    bot can't read (decorated/homoglyph gamertags) to the player an admin
+    resolved it to, so it only has to be fixed by hand once."""
+    try:
+        with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ocr_name_alias (
+                    alliance_id INTEGER NOT NULL,
+                    ocr_key     TEXT    NOT NULL,
+                    fid         INTEGER NOT NULL,
+                    raw_name    TEXT,
+                    updated_at  TEXT,
+                    PRIMARY KEY (alliance_id, ocr_key)
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"AttendanceOCR: could not init ocr_name_alias table: {e}")
+
+
+_init_ocr_alias_table()
+
+
+def learn_name_alias(alliance_id, ocr_name, fid) -> None:
+    """Remember that this alliance's OCR text `ocr_name` resolves to `fid`, so a
+    decorated name only has to be matched by hand once. No-op for blank/short
+    keys or non-roster (placeholder/negative) fids."""
+    if not alliance_id or not fid or int(fid) <= 0 or not ocr_name:
+        return
+    key = _normalize_for_match(ocr_name)
+    if len(key) < 2:  # too little signal to key on reliably
+        return
+    try:
+        with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+            conn.execute("""
+                INSERT INTO ocr_name_alias (alliance_id, ocr_key, fid, raw_name, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(alliance_id, ocr_key) DO UPDATE SET
+                    fid = excluded.fid,
+                    raw_name = excluded.raw_name,
+                    updated_at = excluded.updated_at
+            """, (int(alliance_id), key, int(fid), ocr_name,
+                  datetime.now(timezone.utc).isoformat(timespec="seconds")))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"AttendanceOCR: could not learn alias for {ocr_name!r}: {e}")
+
+
+def alias_lookup(alliance_id, detected, roster) -> Optional[int]:
+    """A learned alias for `detected` → fid, or None. Exact key first, then a
+    fuzzy pass over this alliance's keys (OCR drifts slightly between
+    screenshots). Only returns members still on the roster."""
+    if not alliance_id or not detected:
+        return None
+    key = _normalize_for_match(detected)
+    if len(key) < 2:
+        return None
+    roster_fids = {f for f, _ in roster}
+    try:
+        with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+            rows = conn.execute(
+                "SELECT ocr_key, fid FROM ocr_name_alias WHERE alliance_id = ?",
+                (int(alliance_id),)).fetchall()
+    except Exception as e:
+        logger.warning(f"AttendanceOCR: alias lookup failed: {e}")
+        return None
+    for ocr_key, fid in rows:
+        if ocr_key == key and fid in roster_fids:
+            return fid
+    best_fid, best_score = None, 0.0
+    for ocr_key, fid in rows:
+        if fid not in roster_fids:
+            continue
+        score = difflib.SequenceMatcher(None, key, ocr_key).ratio()
+        if score > best_score:
+            best_fid, best_score = fid, score
+    return best_fid if best_score >= _OCR_ALIAS_FUZZY_MIN else None
+
+
+def rematch_unmatched_rows(session_id: str, alliance_id: int) -> int:
+    """Re-run name matching on this session's unmatched rows (non-positive
+    player_id placeholders) against the current roster, including learned
+    aliases. Reattributes any that now match a roster member confidently and
+    isn't already taken in this session; leaves the rest untouched. Returns the
+    number resolved. Useful after a roster sync adds/renames a player."""
+    roster = load_alliance_roster(alliance_id)
+    if not roster:
+        return 0
+    resolved = 0
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        rows = conn.execute(
+            "SELECT player_id, player_name FROM attendance_records WHERE session_id = ?",
+            (session_id,)).fetchall()
+        taken: set[int] = set()
+        unmatched: list[tuple[str, str]] = []
+        for pid, pname in rows:
+            try:
+                ipid = int(pid)
+            except (TypeError, ValueError):
+                continue
+            if ipid > 0:
+                taken.add(ipid)
+            else:
+                unmatched.append((pid, pname or ""))
+        for pid, pname in unmatched:
+            fid, status = fuzzy_match_name(pname, roster, alliance_id=alliance_id)
+            if fid is None or status != "auto" or fid in taken:
+                continue  # only reattribute on a confident, unambiguous match
+            nick = next((n for f, n in roster if f == fid), None)
+            conn.execute(
+                "UPDATE attendance_records SET player_id = ?, player_name = ? "
+                "WHERE session_id = ? AND player_id = ?",
+                (str(fid), nick or pname, session_id, pid))
+            taken.add(fid)
+            resolved += 1
+        conn.commit()
+    return resolved
 
 
 def _record_session(*, session_id, event_type, event_date, date_confidence,
@@ -1182,7 +1413,10 @@ class OcrUploadSession:
         self.finalized = True
         self.stop_timer()
         try:
-            await self.render_review(timed_out=timed_out)
+            # Wait for any in-flight batch so we render the full parsed set, not a
+            # partial one (e.g. Done clicked while a second batch is still OCRing).
+            async with self._lock:
+                await self.render_review(timed_out=timed_out)
         except Exception:
             logger.exception("OcrUploadSession: failed to render review")
 
@@ -1267,6 +1501,17 @@ class OcrUploadSession:
         raise NotImplementedError
 
 
+async def _safe_defer(interaction: discord.Interaction) -> None:
+    """Ack the interaction, but never let a slow/expired ack abort the action.
+    When the bot is busy parsing + deleting screenshots, the 3s interaction
+    window can lapse before the callback runs; `finalize`/`cancel` edit the
+    progress message directly, so they still complete without a live ack."""
+    try:
+        await interaction.response.defer()
+    except (discord.HTTPException, discord.InteractionResponded):
+        pass
+
+
 class _ProgressView(discord.ui.View):
     def __init__(self, session: OcrUploadSession):
         # Long timeout so the Done Uploading button stays clickable while
@@ -1286,13 +1531,13 @@ class _ProgressView(discord.ui.View):
     @discord.ui.button(label="Done Uploading", style=discord.ButtonStyle.success,
                        emoji=f"{theme.verifiedIcon}")
     async def done(self, interaction: discord.Interaction, _button: discord.ui.Button):
-        await interaction.response.defer()
+        await _safe_defer(interaction)
         await self.session.finalize(timed_out=False)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger,
                        emoji=f"{theme.deniedIcon}")
     async def cancel(self, interaction: discord.Interaction, _button: discord.ui.Button):
-        await interaction.response.defer()
+        await _safe_defer(interaction)
         await self.session.cancel(by_user=True)
 
     async def on_timeout(self):
@@ -1398,7 +1643,7 @@ class PowerRankingsSession(OcrUploadSession):
         matched, unmatched = [], []
         # Sort by power desc — the canonical ranking
         for row in sorted(self.rows.values(), key=lambda r: -r["power"]):
-            fid, status = fuzzy_match_name(row.get("name", ""), roster)
+            fid, status = fuzzy_match_name(row.get("name", ""), roster, alliance_id=self.alliance_id)
             row["matched_fid"] = fid
             row["match_status"] = status
             row["value"] = row["power"]
@@ -1676,22 +1921,41 @@ _ALLIANCE_RANK_RE = re.compile(
 
 
 class AllianceShowdownSession(OcrUploadSession):
-    """Alliance Showdown final-rankings parser. Records per-player points + alliance rank."""
+    """Alliance Showdown final-rankings parser. Parses per-player points +
+    alliance rank, then routes through the shared review (result-only mode) so
+    unmatched rows can be fixed before save and edited later in the attendance
+    UI — same lifecycle as Foundry/Canyon."""
+
+    db_event_type = "alliance_showdown"
+    registration_value_label = "Power"        # unused — Showdown has no sign-up phase
+    result_value_label = "Showdown Points"
+    simple_results = True                      # no registration / present-absent concept
 
     def __init__(self, *, alliance_id: int, **kwargs):
         super().__init__(**kwargs)
         self.alliance_id = alliance_id
-        self.rows: list[dict] = []
+        self.registered_rows: list[dict] = []
+        self.result_rows: list[dict] = []
         self.detected_date = None
+        self.detected_legion = None
+        self.detected_time = None
         self.date_confidence = None
         self.alliance_rank: Optional[int] = None
+        # Empty so the shared review/persist treats this as a plain result-only
+        # event (no scoreboard / battle stats / MVPs).
+        self.alliance_scores: list = []
+        self.stats: dict = {}
+        self.mvps: list = []
 
     async def _process_attachments(self, attachments: list[discord.Attachment]):
+        roster = load_alliance_roster(self.alliance_id)
         for att in attachments:
             self.current_image_idx = self.processed_images + 1
             await self.render_progress()
             try:
-                text = await ocr_attachment(att)
+                data = await att.read()
+                rows, text = await ocr_value_rows(
+                    data, roster=roster, alliance_id=self.alliance_id)
             except Exception:
                 self.processed_images += 1
                 continue
@@ -1699,58 +1963,31 @@ class AllianceShowdownSession(OcrUploadSession):
                 d = extract_header_date(text)
                 if d:
                     self.detected_date, self.date_confidence = resolve_event_date(d, self.event_type)
-            if self.alliance_rank is None:
-                m = _ALLIANCE_RANK_RE.search(text)
-                if m:
-                    try:
-                        self.alliance_rank = int(m.group(1))
-                    except ValueError:
-                        pass
-            for row in _parse_player_value_rows(text):
-                _dedup_into(self.rows, row)
+            # NOTE: the mail's "ranking No. N" is the *recipient's* personal rank,
+            # not an alliance-vs-alliance rank — irrelevant, so we don't capture it.
+            for row in rows:
+                _dedup_into(self.result_rows, row)
             self.processed_images += 1
             await self.render_progress()
 
     def extra_progress_lines(self) -> str:
-        bits = [f"**{theme.listIcon} Players parsed:** `{len(self.rows)}`"]
-        if self.alliance_rank is not None:
-            bits.append(f"**{theme.shieldIcon} Alliance rank:** `{self.alliance_rank}`")
+        bits = [f"**{theme.listIcon} Players parsed:** `{len(self.result_rows)}`"]
         if self.detected_date:
             bits.append(f"**{theme.calendarIcon} Event date:** `{self.detected_date.isoformat()}`")
         return "\n".join(bits) + "\n"
 
     async def render_review(self, *, timed_out: bool):
-        roster = load_alliance_roster(self.alliance_id)
-        matched, unmatched = [], []
-        for row in self.rows:
-            fid, status = fuzzy_match_name(row["name"], roster)
-            row["matched_fid"] = fid
-            row["match_status"] = status
-            (matched if fid else unmatched).append(row)
-
-        session_id = str(uuid.uuid4())
-        _record_session(
-            session_id=session_id, event_type="alliance_showdown",
-            event_date=self.detected_date, date_confidence=self.date_confidence,
-            event_subtype=None, alliance_id=self.alliance_id, awaiting_result=0,
+        from .attendance_ocr_review import EventReviewView
+        view = EventReviewView(
+            self,
+            registration_value_label=self.registration_value_label,
+            result_value_label=self.result_value_label,
         )
-        for row in matched:
-            _record_attendance_row(
-                session_id=session_id, event_type="alliance_showdown",
-                event_date=self.detected_date, event_subtype=None,
-                alliance_id=self.alliance_id, fid=row["matched_fid"],
-                name=row["name"], status="present", points=row["value"],
-                alliance_rank=self.alliance_rank,
-            )
-
-        extra = []
-        if self.alliance_rank is not None:
-            extra.append(f"**{theme.shieldIcon} Alliance rank:** `{self.alliance_rank}`")
-        await _send_summary(
-            self, "Alliance Showdown recorded",
-            matched=matched, unmatched=unmatched, value_label="Showdown Points",
-            extra_lines=extra,
-        )
+        if self.progress_message:
+            try:
+                await self.progress_message.edit(embed=view.build_embed(), view=view)
+            except discord.NotFound:
+                pass
 
 
 # ── factory ───────────────────────────────────────────────────────────────

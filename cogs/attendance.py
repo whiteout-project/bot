@@ -916,6 +916,42 @@ class EditEventDetailsView(discord.ui.View):
         date_modal = EventDateModal(self.current_event_date, self)
         await interaction.response.send_modal(date_modal)
 
+    @discord.ui.button(label="Re-match Unmatched", emoji=theme.refreshIcon, style=discord.ButtonStyle.secondary, row=0)
+    async def rematch_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Re-run roster matching (incl. learned aliases) on this event's
+        unmatched OCR rows — e.g. after a player was synced or renamed."""
+        if not self.is_edit:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Save the event first, then re-match.", ephemeral=True)
+            return
+        alliance_id = getattr(self.parent_view, "alliance_id", None)
+        if not alliance_id:
+            with sqlite3.connect("db/attendance.sqlite") as db:
+                row = db.execute(
+                    "SELECT alliance_id FROM attendance_sessions WHERE session_id = ?",
+                    (self.session_id,)).fetchone()
+            alliance_id = int(row[0]) if row and row[0] else None
+        if not alliance_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Couldn't determine the alliance for this event.", ephemeral=True)
+            return
+        from .attendance_ocr_parsers import rematch_unmatched_rows
+        try:
+            resolved = rematch_unmatched_rows(self.session_id, int(alliance_id))
+        except Exception as e:
+            logger.error(f"Re-match unmatched failed for session {self.session_id}: {e}")
+            print(f"Re-match unmatched failed for session {self.session_id}: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Re-match failed — see logs.", ephemeral=True)
+            return
+        if resolved:
+            msg = (f"{theme.verifiedIcon} Re-matched **{resolved}** previously-unmatched "
+                   f"player(s) to the roster.")
+        else:
+            msg = (f"{theme.infoIcon} No unmatched rows could be resolved — the roster "
+                   f"still has no confident match for them.")
+        await interaction.response.send_message(msg, ephemeral=True)
+
     @discord.ui.button(label="💾 Save", style=discord.ButtonStyle.primary, row=3)
     async def save_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:

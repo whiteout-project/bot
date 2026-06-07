@@ -992,3 +992,29 @@ def test_parse_mvps_simple_pairs():
     assert by_key["squads_defeated"]["value"] == 122
     assert by_key["buildings"]["name"] == "AlejoCAT"
     assert by_key["buildings"]["value"] == 25
+
+
+# ---------------------------------------------------------------------------
+# _dedup_into — same-value name merge prefers the cleaner / more complete name
+# ---------------------------------------------------------------------------
+
+def _dedup(names_vals):
+    target = []
+    for name, val in names_vals:
+        parsers._dedup_into(target, {"name": name, "value": val})
+    return [r["name"] for r in target]
+
+
+def test_dedup_keeps_legit_prefix_not_truncated():
+    # 'Bow to thy Lord' split across pages must not collapse to 'to thy Lord'.
+    assert _dedup([("to thy Lord", 1477213), ("Bow to thy Lord", 1477213)]) == ["Bow to thy Lord"]
+    assert _dedup([("Bow to thy Lord", 1477213), ("to thy Lord", 1477213)]) == ["Bow to thy Lord"]
+
+
+def test_dedup_drops_ocr_noise_prefix():
+    # Digit-noise prefix capture is still dropped in favour of the clean name.
+    assert _dedup([("48Z lII Moly", 999), ("Moly", 999)]) == ["Moly"]
+
+
+def test_dedup_keeps_distinct_values():
+    assert _dedup([("Alpha", 1), ("Beta", 2)]) == ["Alpha", "Beta"]

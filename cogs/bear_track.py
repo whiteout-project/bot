@@ -397,9 +397,6 @@ def _get_ocr_semaphore() -> asyncio.Semaphore:
         _ocr_semaphore = asyncio.Semaphore(MAX_CONCURRENT_OCR)
     return _ocr_semaphore
 
-# Min runs (with 0 fills) before auto-prune strips a fallback.
-AUTOPRUNE_MIN_RUNS = 10
-
 # Latin-only recognition models.
 _LATIN_ONLY_LANGS = {"en", "latin"}
 
@@ -616,10 +613,14 @@ def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
     when the engine returned an unrecognised result format."""
     if engine is None or not image_bytes:
         return []
-    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-    if max(image.size) > MAX_OCR_DIM:
-        image.thumbnail((MAX_OCR_DIM, MAX_OCR_DIM), Image.LANCZOS)
-    result = engine(np.array(image))
+    with Image.open(io.BytesIO(image_bytes)) as src:
+        image = src.convert('RGB')
+    try:
+        if max(image.size) > MAX_OCR_DIM:
+            image.thumbnail((MAX_OCR_DIM, MAX_OCR_DIM), Image.LANCZOS)
+        result = engine(np.array(image))
+    finally:
+        image.close()
     if not result:
         return []
     # Newer RapidOCR returns an object with .txts and .boxes parallel lists.
@@ -650,6 +651,122 @@ async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
         return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
     async with model.use() as engine:
         return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+
+
+async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
+                                 fallback_langs, parse, is_unfilled, merge,
+                                 session=None):
+    """Generic primary+fallback OCR loop, shared across OCR features.
+
+    Runs the primary engine, then — only if some parsed rows are still unread —
+    retries each fallback-language engine, validating the output is actually in
+    that script, de-duping identical passes, reversing RTL, and stopping on the
+    budget or once everything's filled. The caller supplies the domain bits:
+      parse(text) -> rows ; is_unfilled(row) -> bool ;
+      merge(primary_rows, fallback_rows, fb_text, lang) -> mutate primary_rows.
+    Returns (primary_rows, primary_text). Bear/attendance plug in their own
+    parse/match/merge; the orchestration lives here once.
+    """
+    text = await ocr_bytes(image_bytes, lang=primary_lang, session=session)
+    if not text.strip():
+        return [], ""
+    repaired = repair_ocr_digits(text)
+    logger.info(f"OCR [{primary_lang}]: {repaired!r}")
+    rows = parse(repaired)
+    fallback_langs = [l for l in (fallback_langs or []) if l and l != primary_lang]
+    if not fallback_langs or not any(is_unfilled(r) for r in rows):
+        return rows, text
+
+    seen = {repaired}
+    attempts = 0
+    for fb in fallback_langs:
+        if attempts >= MAX_FALLBACK_ATTEMPTS or not any(is_unfilled(r) for r in rows):
+            break
+        try:
+            fb_text = await ocr_bytes(image_bytes, lang=fb, session=session)
+        except Exception as e:
+            logger.warning(f"OCR fallback {fb} failed: {e}")
+            continue
+        if not fb_text.strip():
+            continue
+        fb_repaired = repair_ocr_digits(fb_text)
+        if fb_repaired in seen:
+            continue
+        seen.add(fb_repaired)
+        if not _output_matches_lang_script(fb_repaired, fb):
+            logger.info(f"OCR fallback [{fb}] rejected: no {fb}-script chars")
+            continue
+        attempts += 1
+        logger.info(f"OCR fallback [{fb}]: {fb_repaired!r}")
+        fb_rows = parse(fb_repaired)
+        if fb in _RTL_LANGS:
+            for fr in fb_rows:
+                if fr.get("name"):
+                    fr["name"] = _reverse_for_rtl(fr["name"], fb)
+        merge(rows, fb_rows, fb_repaired, fb)
+    return rows, text
+
+
+def detect_fallback_langs(names, *, primary: str = "en") -> list[str]:
+    """Derive the OCR fallback engines an alliance needs from its member names.
+    A member's screenshot name is their synced in-game name, so the roster's
+    scripts predict exactly which non-Latin engines OCR will need. Greek and
+    plain Latin need nothing (homoglyph folding handles decorated Latin)."""
+    needed: set[str] = set()
+    has_kana = has_hangul = has_han = False
+    for name in names:
+        for ch in name or "":
+            cp = ord(ch)
+            if 0x0400 <= cp <= 0x052F:
+                needed.add("cyrillic")
+            elif 0x0600 <= cp <= 0x077F:
+                needed.add("arabic")
+            elif 0x0900 <= cp <= 0x097F:
+                needed.add("devanagari")
+            elif 0xAC00 <= cp <= 0xD7A3 or 0x1100 <= cp <= 0x11FF:
+                has_hangul = True
+            elif 0x3040 <= cp <= 0x30FF:
+                has_kana = True
+            elif 0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF:
+                has_han = True
+    if has_hangul:
+        needed.add("korean")
+    if has_kana:
+        needed.add("japan")        # japan engine covers kana + han
+    elif has_han:
+        needed.add("ch")           # han-only → Simplified (+Latin); cht is a manual override
+    needed.discard(primary)
+    return sorted(needed)
+
+
+def auto_managed_fallbacks(alliance_id, names, *, primary: str = "en",
+                           db_path: str = "db/alliance.sqlite") -> list[str]:
+    """Auto-manage on → derive fallback langs from member names, persisting them
+    when the set changes (so the UI/dashboard stay accurate without writing every
+    upload). Auto-manage off → the admin's manual fallbacks, untouched. Shared by
+    bear + attendance so an alliance's languages are managed in one place."""
+    try:
+        with sqlite3.connect(db_path, timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT bear_ocr_auto_manage, bear_ocr_fallback_langs "
+                "FROM alliancesettings WHERE alliance_id = ?", (alliance_id,)).fetchone()
+            if not row:
+                return []
+            auto_manage = row[0] if row[0] is not None else 1
+            stored = [c.strip() for c in (row[1] or "").split(",")
+                      if c.strip() in OCR_LANG_CODES and c.strip() != primary]
+            if not auto_manage:
+                return stored
+            detected = detect_fallback_langs(names, primary=primary)
+            if set(detected) != set(stored):
+                conn.execute(
+                    "UPDATE alliancesettings SET bear_ocr_fallback_langs = ? "
+                    "WHERE alliance_id = ?", (",".join(detected), alliance_id))
+                conn.commit()
+            return detected
+    except Exception as e:
+        logger.warning(f"auto_managed_fallbacks failed (alliance {alliance_id}): {e}")
+        return []
 
 
 _SCRIPT_TAGS = (
@@ -1898,6 +2015,44 @@ def bear_player_history_embed(*, alliance_name: str, fid: int, nickname: str,
 
 
 # ---------------------------------------------------------------------------
+# Bear channel info message — pinned "what to upload" helper
+# ---------------------------------------------------------------------------
+
+# Substrings that identify a bot-authored bear info message across versions.
+# Only exact matches count as "ours", so unrelated pins are never touched.
+_BEAR_INFO_FINGERPRINTS = (
+    "Upload your Bear Hunt results here",
+)
+
+
+def render_bear_info_message() -> str:
+    """The pinned helper text for a bear score channel. Bear is single-event,
+    so the content is static — it just tells members which mail to upload."""
+    return "\n".join([
+        f"{theme.importIcon} **Upload your Bear Hunt results here**",
+        "",
+        f"{theme.listIcon} **What to upload**",
+        f"{theme.upperDivider}",
+        "• The **Bear Hunt result mail** — the one headed **\"Battle Overview\"** "
+        "with **Rallies** and **Total Alliance Damage**, followed by the "
+        "**Damage Ranking** list.",
+        f"{theme.lowerDivider}",
+        "",
+        f"{theme.deniedIcon} **Not these**",
+        f"{theme.upperDivider}",
+        f"{theme.deniedIcon} The live in-trap damage list (the rally screen) — it has no totals.",
+        f"{theme.deniedIcon} The personal rewards-only mail.",
+        f"{theme.lowerDivider}",
+        "",
+        f"{theme.infoIcon} **Tips**",
+        "• Drop **multiple screenshots** to capture a long ranking — the bot "
+        "stitches them into one hunt.",
+        "• Set your in-game language to **English** for the best reading.",
+        "• The bot reads each upload automatically and posts the parsed damage here.",
+    ])
+
+
+# ---------------------------------------------------------------------------
 # BearTrack cog
 # ---------------------------------------------------------------------------
 
@@ -1930,9 +2085,13 @@ class BearTrack(commands.Cog):
             "bear_ocr_lang": "TEXT DEFAULT 'en'",
             "bear_ocr_fallback_langs": "TEXT DEFAULT ''",
             "bear_ocr_autoprune": "INTEGER DEFAULT 0",
+            "bear_ocr_auto_manage": "INTEGER DEFAULT 1",
             "bear_session_timeout_min": "INTEGER DEFAULT 15",
             "bear_auto_delete_screenshots": "INTEGER DEFAULT 1",
             "bear_match_all_history": "INTEGER DEFAULT 0",
+            "bear_post_info_message": "INTEGER DEFAULT 1",
+            "bear_pin_info_message": "INTEGER DEFAULT 1",
+            "bear_info_message_id": "INTEGER",
         }
         for col_name, col_type in new_columns.items():
             if col_name not in columns:
@@ -1942,13 +2101,14 @@ class BearTrack(commands.Cog):
 
         self.alliance_conn.commit()
 
-        # Pre-register engines for every language any alliance has configured
-        # (primary or fallback) so they all show up in the Bot Health dashboard
-        # from boot, not just after a screenshot has actually triggered them.
+        # Pre-register engines for languages configured by alliances that
+        # actually have a bear channel — so the Bot Health dashboard reflects
+        # only usable engines (registration is lazy; no weights load here).
         if OCR_AVAILABLE:
             try:
                 self.alliance_cursor.execute(
-                    "SELECT bear_ocr_lang, bear_ocr_fallback_langs FROM alliancesettings"
+                    "SELECT bear_ocr_lang, bear_ocr_fallback_langs FROM alliancesettings "
+                    "WHERE bear_score_channel IS NOT NULL"
                 )
                 configured = set()
                 for primary, fallbacks_raw in self.alliance_cursor.fetchall():
@@ -2101,42 +2261,22 @@ class BearTrack(commands.Cog):
         )
         self.alliance_conn.commit()
 
-    def get_ocr_autoprune(self, alliance_id) -> bool:
+    def get_ocr_auto_manage(self, alliance_id) -> bool:
+        """When on, the bot derives fallback OCR languages from the roster."""
         self.alliance_cursor.execute(
-            "SELECT bear_ocr_autoprune FROM alliancesettings WHERE alliance_id = ?",
+            "SELECT bear_ocr_auto_manage FROM alliancesettings WHERE alliance_id = ?",
             (alliance_id,),
         )
         row = self.alliance_cursor.fetchone()
-        return bool(row and row[0])
+        # Default on when unset (new system; opt-out via the toggle).
+        return bool(row[0]) if row and row[0] is not None else True
 
-    def set_ocr_autoprune(self, alliance_id, enabled: bool) -> None:
+    def set_ocr_auto_manage(self, alliance_id, enabled: bool) -> None:
         self.alliance_cursor.execute(
-            "UPDATE alliancesettings SET bear_ocr_autoprune = ? WHERE alliance_id = ?",
+            "UPDATE alliancesettings SET bear_ocr_auto_manage = ? WHERE alliance_id = ?",
             (1 if enabled else 0, alliance_id),
         )
         self.alliance_conn.commit()
-
-    def autoprune_dead_fallbacks(self, alliance_id) -> list[str]:
-        """Strip fallbacks with >= AUTOPRUNE_MIN_RUNS and 0 fills.
-        Returns the removed lang codes. Caller checks `get_ocr_autoprune`."""
-        fallbacks = self.get_ocr_language_settings(alliance_id)[1]
-        if not fallbacks:
-            return []
-        stats = {(s['lang'], s['role']): s for s in get_ocr_lang_stats(alliance_id)}
-        to_remove = [
-            lang for lang in fallbacks
-            if (s := stats.get((lang, 'fallback'))) is not None
-            and s['runs'] >= AUTOPRUNE_MIN_RUNS
-            and s['rows_filled'] == 0
-        ]
-        if to_remove:
-            kept = [lang for lang in fallbacks if lang not in to_remove]
-            self.set_ocr_language_settings(alliance_id, fallbacks=kept)
-            logger.info(
-                f"Bear OCR autoprune (alliance {alliance_id}): removed "
-                f"{to_remove} (>= {AUTOPRUNE_MIN_RUNS} runs, 0 rows filled)"
-            )
-        return to_remove
 
     # -------------------------------------------------------------------
     # Settings helpers (column-based, not JSON)
@@ -2148,7 +2288,8 @@ class BearTrack(commands.Cog):
             "SELECT bear_score_channel, bear_keywords, bear_damage_range, "
             "bear_admin_only_view, bear_admin_only_add, "
             "bear_session_timeout_min, bear_auto_delete_screenshots, "
-            "bear_match_all_history "
+            "bear_match_all_history, bear_post_info_message, "
+            "bear_pin_info_message, bear_info_message_id "
             "FROM alliancesettings WHERE alliance_id = ?",
             (alliance_id,)
         )
@@ -2163,6 +2304,9 @@ class BearTrack(commands.Cog):
                 "session_timeout_min": 15,
                 "auto_delete_screenshots": 1,
                 "match_all_history": 0,
+                "post_info_message": 1,
+                "pin_info_message": 1,
+                "info_message_id": None,
             }
         return {
             "channel_id": row[0],
@@ -2173,6 +2317,9 @@ class BearTrack(commands.Cog):
             "session_timeout_min": row[5] if row[5] is not None else 15,
             "auto_delete_screenshots": row[6] if row[6] is not None else 1,
             "match_all_history": row[7] or 0,
+            "post_info_message": row[8] if row[8] is not None else 1,
+            "pin_info_message": row[9] if row[9] is not None else 1,
+            "info_message_id": row[10],
         }
 
     def update_bear_setting(self, alliance_id: int, column: str, value):
@@ -2180,7 +2327,8 @@ class BearTrack(commands.Cog):
         allowed = {"bear_score_channel", "bear_keywords", "bear_damage_range",
                     "bear_admin_only_view", "bear_admin_only_add",
                     "bear_session_timeout_min", "bear_auto_delete_screenshots",
-                    "bear_match_all_history"}
+                    "bear_match_all_history", "bear_post_info_message",
+                    "bear_pin_info_message", "bear_info_message_id"}
         if column not in allowed:
             return
         self.alliance_cursor.execute(
@@ -2188,6 +2336,101 @@ class BearTrack(commands.Cog):
             (value, alliance_id)
         )
         self.alliance_conn.commit()
+
+    # -------------------------------------------------------------------
+    # Channel info message ("what to upload" pinned helper)
+    # -------------------------------------------------------------------
+
+    def _looks_like_bear_info_message(self, msg: discord.Message) -> bool:
+        """True if this is a bot-authored bear info message (any version)."""
+        if msg.author.id != self.bot.user.id:
+            return False
+        content = msg.content or ""
+        return any(fp in content for fp in _BEAR_INFO_FINGERPRINTS)
+
+    async def _find_bear_info_messages(self, channel) -> list:
+        """Bot-authored info messages sitting pinned in the channel (current or
+        stale). Pinned-only, where every version of the message has lived."""
+        try:
+            pins = await channel.pins()
+        except (discord.Forbidden, discord.HTTPException):
+            return []
+        return [m for m in pins if self._looks_like_bear_info_message(m)]
+
+    async def refresh_bear_info_message(self, alliance_id: int) -> None:
+        """Post/edit/pin (or remove) the bear channel's info message to match
+        the alliance's post/pin settings. Self-heals duplicates and stale pins."""
+        settings = self.get_bear_settings(alliance_id)
+        channel_id = settings.get("channel_id")
+        if not channel_id:
+            return
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            return
+
+        ours = await self._find_bear_info_messages(channel)
+        tracked_id = settings.get("info_message_id")
+        if tracked_id and not any(m.id == tracked_id for m in ours):
+            try:
+                tracked_msg = await channel.fetch_message(tracked_id)
+                if self._looks_like_bear_info_message(tracked_msg):
+                    ours.append(tracked_msg)
+            except (discord.NotFound, discord.Forbidden):
+                pass
+
+        # Toggled off → remove every one we found and clear the stored id.
+        if not settings.get("post_info_message"):
+            for m in ours:
+                try:
+                    await m.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+            if tracked_id:
+                self.update_bear_setting(alliance_id, "bear_info_message_id", None)
+            return
+
+        content = render_bear_info_message()
+
+        # Keep exactly one — prefer the tracked one, else the most recent.
+        keep = None
+        if tracked_id:
+            keep = next((m for m in ours if m.id == tracked_id), None)
+        if keep is None and ours:
+            keep = max(ours, key=lambda m: m.created_at)
+        for m in ours:
+            if keep is None or m.id != keep.id:
+                try:
+                    await m.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+
+        if keep is None:
+            try:
+                keep = await channel.send(content)
+            except discord.Forbidden:
+                logger.warning(f"BearTrack: cannot post info message in channel {channel_id}")
+                return
+            self.update_bear_setting(alliance_id, "bear_info_message_id", keep.id)
+        else:
+            try:
+                await keep.edit(content=content)
+            except discord.Forbidden:
+                return
+            if keep.id != tracked_id:
+                self.update_bear_setting(alliance_id, "bear_info_message_id", keep.id)
+
+        if settings.get("pin_info_message"):
+            try:
+                if not keep.pinned:
+                    await keep.pin(reason="Bear score channel info message")
+            except discord.Forbidden:
+                pass
+        else:
+            try:
+                if keep.pinned:
+                    await keep.unpin(reason="Bear info message pin toggled off")
+            except discord.Forbidden:
+                pass
 
     async def get_keywords_for_channel(self, channel_id: int) -> list:
         """Return keywords list for the alliance that has this bear channel."""
@@ -2373,7 +2616,12 @@ class BearTrack(commands.Cog):
             _hist = bool(self.get_bear_settings(alliance_id).get("match_all_history"))
             roster = self.get_match_roster(
                 alliance_id, as_of_date=_today, include_history=_hist)
-            primary_lang, fallback_langs = self.get_ocr_language_settings(alliance_id)
+            primary_lang, _stored_fb = self.get_ocr_language_settings(alliance_id)
+            # Auto-manage on → fallbacks derived from roster names (persist-on-change);
+            # off → the stored manual fallbacks. auto_managed_fallbacks handles both.
+            roster_names = [e[-1] for e in roster if len(e) >= 2]
+            fallback_langs = auto_managed_fallbacks(
+                alliance_id, roster_names, primary=primary_lang)
             fallback_langs = sorted(fallback_langs, key=lambda l: l in _LATIN_ONLY_LANGS)
             timeout_min, auto_delete = self.get_session_settings(alliance_id)
 
@@ -2531,12 +2779,6 @@ class BearTrack(commands.Cog):
                     if name_match_score(r.get('name') or '', roster) > pre_scores.get(dmg, 0)
                 )
                 record_ocr_lang_run(alliance_id, fb_lang, 'fallback', rows_improved)
-
-        if alliance_id and self.get_ocr_autoprune(alliance_id):
-            try:
-                self.autoprune_dead_fallbacks(alliance_id)
-            except Exception as e:
-                logger.warning(f"Bear OCR autoprune failed (alliance {alliance_id}): {e}")
 
         result.rows = img_rows
         return result
@@ -5507,7 +5749,15 @@ class BearSettingsView(discord.ui.View):
         history_btn.callback = self._toggle_history_callback
         self.add_item(history_btn)
 
-        back_btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=2)
+        info_btn = discord.ui.Button(label="Toggle Info Message", style=discord.ButtonStyle.primary, emoji=theme.documentIcon, row=2, disabled=not has_alliance)
+        info_btn.callback = self._toggle_info_message_callback
+        self.add_item(info_btn)
+
+        pin_btn = discord.ui.Button(label="Toggle Pin Info", style=discord.ButtonStyle.primary, emoji=theme.pinIcon, row=2, disabled=not has_alliance)
+        pin_btn.callback = self._toggle_pin_info_callback
+        self.add_item(pin_btn)
+
+        back_btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=3)
         back_btn.callback = self._back_callback
         self.add_item(back_btn)
 
@@ -5527,7 +5777,9 @@ class BearSettingsView(discord.ui.View):
                 f"└ Who can add hunts and view saved data\n\n"
                 f"{theme.listIcon} **Toggle Full Name History Match**\n"
                 f"└ Whether to match players by all their past names\n"
-                f"└ Their current & event-date names are always matched\n"
+                f"└ Their current & event-date names are always matched\n\n"
+                f"{theme.documentIcon} **Toggle Info Message / Pin Info**\n"
+                f"└ Pinned helper in the bear channel explaining which mail to upload\n"
                 f"{theme.lowerDivider}"
             ),
             color=theme.emColor1
@@ -5540,12 +5792,19 @@ class BearSettingsView(discord.ui.View):
             timeout_min = settings["session_timeout_min"]
             auto_delete_text = "On" if settings["auto_delete_screenshots"] else "Off"
             history_text = "On" if settings["match_all_history"] else "Off"
+            if settings["post_info_message"] and settings["pin_info_message"]:
+                info_text = "On (Pinned)"
+            elif settings["post_info_message"]:
+                info_text = "On"
+            else:
+                info_text = "Off"
 
             current_settings = (
                 f"{theme.upperDivider}\n"
                 f"**Session Timeout:** {timeout_min} min\n"
                 f"**Auto-Delete Screenshots:** {auto_delete_text}\n"
                 f"**Full Name History Match:** {history_text}\n"
+                f"**Info Message:** {info_text}\n"
                 f"**Add Permission:** {add_text}\n"
                 f"**View Permission:** {view_text}\n"
                 f"{theme.lowerDivider}"
@@ -5600,6 +5859,46 @@ class BearSettingsView(discord.ui.View):
         on_off = "On" if new_value else "Off"
         embed.description += f"\n{theme.verifiedIcon} Full Name History Match is now **{on_off}**."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
+
+    async def _toggle_info_message_callback(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        if not await self.cog.check_bear_permission(interaction, self.alliance_id, "manage"):
+            return
+        settings = self.cog.get_bear_settings(self.alliance_id)
+        new_value = 0 if settings["post_info_message"] else 1
+        self.cog.update_bear_setting(self.alliance_id, "bear_post_info_message", new_value)
+        note = await self._apply_info_refresh(settings["channel_id"])
+        embed = self._build_embed()
+        on_off = "On" if new_value else "Off"
+        embed.description += f"\n{theme.verifiedIcon} Info message is now **{on_off}**.{note}"
+        await safe_edit_message(interaction, embed=embed, view=self, content=None)
+
+    async def _toggle_pin_info_callback(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        if not await self.cog.check_bear_permission(interaction, self.alliance_id, "manage"):
+            return
+        settings = self.cog.get_bear_settings(self.alliance_id)
+        new_value = 0 if settings["pin_info_message"] else 1
+        self.cog.update_bear_setting(self.alliance_id, "bear_pin_info_message", new_value)
+        note = await self._apply_info_refresh(settings["channel_id"])
+        embed = self._build_embed()
+        on_off = "On" if new_value else "Off"
+        embed.description += f"\n{theme.verifiedIcon} Pin info is now **{on_off}**.{note}"
+        await safe_edit_message(interaction, embed=embed, view=self, content=None)
+
+    async def _apply_info_refresh(self, channel_id) -> str:
+        """Refresh the channel's info message; return a short note if no channel
+        is configured yet (so the toggle still saves but the admin knows why
+        nothing was posted)."""
+        if not channel_id:
+            return " (set a bear channel first to post it)"
+        try:
+            await self.cog.refresh_bear_info_message(self.alliance_id)
+        except Exception as e:
+            logger.warning(f"Could not refresh bear info message: {e}")
+        return ""
 
     async def _toggle_add_callback(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
@@ -5658,7 +5957,7 @@ class BearOcrLanguagesView(discord.ui.View):
     def _build(self):
         self.clear_items()
         primary, fallbacks = self.cog.get_ocr_language_settings(self.alliance_id)
-        autoprune = self.cog.get_ocr_autoprune(self.alliance_id)
+        auto_manage = self.cog.get_ocr_auto_manage(self.alliance_id)
 
         def _cost_description(code: str) -> str:
             fp = _OCR_LANG_FOOTPRINT_MB.get(code)
@@ -5691,21 +5990,24 @@ class BearOcrLanguagesView(discord.ui.View):
         ]
         if fb_opts:
             fb_select = discord.ui.Select(
-                placeholder="Fallback languages (optional, pick any number)",
+                placeholder=("Fallbacks auto-managed from your roster"
+                             if auto_manage
+                             else "Fallback languages (optional, pick any number)"),
                 options=fb_opts,
                 min_values=0, max_values=len(fb_opts), row=1,
+                disabled=auto_manage,  # bot-managed → read-only; toggle off to edit
             )
             fb_select.callback = self._on_fallbacks_change
             self.add_item(fb_select)
 
-        autoprune_btn = discord.ui.Button(
-            label=f"Auto-Prune: {'On' if autoprune else 'Off'}",
+        manage_btn = discord.ui.Button(
+            label=f"Auto-manage: {'On' if auto_manage else 'Off'}",
             emoji=theme.cleanIcon,
-            style=discord.ButtonStyle.success if autoprune else discord.ButtonStyle.secondary,
+            style=discord.ButtonStyle.success if auto_manage else discord.ButtonStyle.secondary,
             row=2,
         )
-        autoprune_btn.callback = self._on_autoprune_toggle
-        self.add_item(autoprune_btn)
+        manage_btn.callback = self._on_auto_manage_toggle
+        self.add_item(manage_btn)
 
         back = discord.ui.Button(
             label="Back", style=discord.ButtonStyle.secondary,
@@ -5728,10 +6030,11 @@ class BearOcrLanguagesView(discord.ui.View):
             f"└ Runs first on every screenshot.\n\n"
             f"**Fallbacks:** {', '.join(fb_labels) if fb_labels else '*(none)*'}\n"
             f"└ Re-OCR rows the primary couldn't read (mixed-script alliances).\n\n"
-            f"{theme.cleanIcon} **Auto-Prune**\n"
-            f"└ Drops fallbacks from this alliance's list if they run "
-            f"{AUTOPRUNE_MIN_RUNS}+ times without filling any rows. Engine "
-            f"files stay on disk; other alliances are unaffected.\n"
+            f"{theme.cleanIcon} **Auto-manage**\n"
+            f"└ On: the bot picks fallback engines automatically from your "
+            f"members' name scripts — Cyrillic, Arabic, etc. enabled only when a "
+            f"member actually uses them, and dropped when they leave. Turn off to "
+            f"choose fallbacks manually.\n"
             f"{theme.lowerDivider}\n"
         )
         description += self._build_effectiveness_section(primary, fallbacks)
@@ -5793,7 +6096,9 @@ class BearOcrLanguagesView(discord.ui.View):
             stale = [s for s in fallback_stats
                      if s['lang'] in configured
                      and s['runs'] >= 5 and s['rows_filled'] == 0]
-            if stale:
+            # Only actionable in manual mode — auto-manage already drops langs no
+            # member uses.
+            if stale and not self.cog.get_ocr_auto_manage(self.alliance_id):
                 names = ", ".join(f"`{s['lang']}`" for s in stale)
                 lines.append(
                     f"\n{theme.warnIcon} *Consider removing: {names} — "
@@ -5837,11 +6142,11 @@ class BearOcrLanguagesView(discord.ui.View):
         self._build()
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
-    async def _on_autoprune_toggle(self, interaction):
+    async def _on_auto_manage_toggle(self, interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        new_value = not self.cog.get_ocr_autoprune(self.alliance_id)
-        self.cog.set_ocr_autoprune(self.alliance_id, new_value)
+        new_value = not self.cog.get_ocr_auto_manage(self.alliance_id)
+        self.cog.set_ocr_auto_manage(self.alliance_id, new_value)
         self._build()
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
@@ -6094,6 +6399,12 @@ class BearChannelSelect(discord.ui.ChannelSelect):
                 channel_id
             )
 
+            # Post/refresh the "what to upload" info message in the new channel.
+            try:
+                await self.parent_view.cog.refresh_bear_info_message(self.parent_view.alliance_id)
+            except Exception as e:
+                logger.warning(f"Could not refresh bear info message: {e}")
+
             await interaction.response.edit_message(
                 content=f"{theme.verifiedIcon} Bear score channel set to {selected_channel.mention}",
                 view=None
@@ -6331,6 +6642,7 @@ class DataSubmit:
                 )
                 return
 
+            learned: list[tuple] = []  # (name, fid) — learned AFTER commit
             if player_rows:
                 for r in player_rows:
                     fid = r.get('fid')
@@ -6344,13 +6656,21 @@ class DataSubmit:
                     )
                     if fid:
                         matched += 1
-                        learn_alias(alliance_id, r.get('name'), fid)
+                        if r.get('name'):
+                            learned.append((r['name'], fid))
                     else:
                         unmatched += 1
             self.bear_conn.commit()
         except Exception:
             self.bear_conn.rollback()
             raise
+
+        # Learn aliases only AFTER the hunt is committed. learn_alias opens its
+        # own connection to bear_data.sqlite; doing it inside the transaction
+        # above deadlocks on the write lock (30s busy-timeout per row, which
+        # freezes the event loop).
+        for name, fid in learned:
+            learn_alias(alliance_id, name, fid)
 
         title_suffix = "Latest Submission"
         if player_rows:
