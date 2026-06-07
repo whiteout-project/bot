@@ -487,7 +487,11 @@ class AllianceSync(commands.Cog):
                                         if admin_data:
                                             user = await self.bot.fetch_user(admin_data[0])
                                             if user:
-                                                await user.send(f"{theme.deniedIcon} {old_nickname} `{fid}` was removed from the users table due to state transfer.")
+                                                await user.send(
+                                                    f"{theme.deniedIcon} {old_nickname} `{fid}` was removed from "
+                                                    f"**{alliance_name}** due to state transfer "
+                                                    f"(State {old_kid} {theme.forwardIcon} {new_kid})."
+                                                )
                                 else:
                                     # Just update kid without removing (default behavior)
                                     self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))
