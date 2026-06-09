@@ -522,6 +522,7 @@ class SyncSettingsView(discord.ui.View):
         self.notify_on_transfer = False
         self.keep_control_log = False
         self.show_sync_message = True
+        self.silent_notifications = False
         self.setup_components()
 
     def setup_components(self):
@@ -581,6 +582,15 @@ class SyncSettingsView(discord.ui.View):
             self.keep_log_button.callback = self.toggle_keep_control_log
             self.add_item(self.keep_log_button)
 
+            self.silent_button = discord.ui.Button(
+                label=f"Silent Posts: {'On' if self.silent_notifications else 'Off'}",
+                style=discord.ButtonStyle.success if self.silent_notifications else discord.ButtonStyle.secondary,
+                emoji=f"{theme.muteIcon}",
+                row=2,
+            )
+            self.silent_button.callback = self.toggle_silent_notifications
+            self.add_item(self.silent_button)
+
             self.auto_remove_button = discord.ui.Button(
                 label=f"Auto-Removal: {'On' if self.auto_remove else 'Off'}",
                 style=discord.ButtonStyle.success if self.auto_remove else discord.ButtonStyle.secondary,
@@ -614,7 +624,7 @@ class SyncSettingsView(discord.ui.View):
             alliance_name = next((name for aid, name in self.alliances if aid == self.selected_alliance), "Unknown")
             self.alliance_cursor.execute("""
                 SELECT auto_remove_on_transfer, notify_on_transfer, keep_control_log,
-                       show_sync_message, interval, start_time
+                       show_sync_message, interval, start_time, silent_notifications
                 FROM alliancesettings
                 WHERE alliance_id = ?
             """, (self.selected_alliance,))
@@ -625,9 +635,11 @@ class SyncSettingsView(discord.ui.View):
             self.show_sync_message = bool(result[3]) if result and len(result) > 3 and result[3] is not None else True
             self.interval = int(result[4]) if result and len(result) > 4 and result[4] is not None else 0
             self.start_time = result[5] if result and len(result) > 5 and result[5] else None
+            self.silent_notifications = bool(result[6]) if result and len(result) > 6 and result[6] is not None else False
 
             show_emoji = theme.verifiedIcon if self.show_sync_message else theme.deniedIcon
             log_emoji = theme.verifiedIcon if self.keep_control_log else theme.trashIcon
+            silent_emoji = theme.muteIcon if self.silent_notifications else theme.bellIcon
             status_emoji = theme.verifiedIcon if self.auto_remove else theme.deniedIcon
             notify_emoji = theme.bellIcon if self.notify_on_transfer else theme.muteIcon
 
@@ -635,6 +647,11 @@ class SyncSettingsView(discord.ui.View):
                 "Keep the message after sync finishes"
                 if self.keep_control_log
                 else "Delete the message after sync finishes"
+            )
+            silent_line = (
+                "Change alerts post silently — no channel notification"
+                if self.silent_notifications
+                else "Change alerts trigger normal channel notifications"
             )
             log_suffix = "" if self.show_sync_message else " _(turn on Show progress first)_"
             notify_suffix = "" if self.auto_remove else " _(turn on Auto-Removal first)_"
@@ -656,7 +673,8 @@ class SyncSettingsView(discord.ui.View):
                     f"{theme.pinIcon} Start Time: {start_time_display}\n\n"
                     f"**Sync Channel Messages**\n"
                     f"{show_emoji} Show progress message during sync\n"
-                    f"{log_emoji} {log_line}{log_suffix}\n\n"
+                    f"{log_emoji} {log_line}{log_suffix}\n"
+                    f"{silent_emoji} {silent_line}\n\n"
                     f"**State Transfer**\n"
                     f"{status_emoji} Auto-remove members who transfer states\n"
                     f"{notify_emoji} Notify admin when an auto-removal happens{notify_suffix}\n"
@@ -671,6 +689,7 @@ class SyncSettingsView(discord.ui.View):
                     "Pick an alliance from the dropdown to configure:\n"
                     "• Whether the bot posts a sync progress message\n"
                     "• Whether that message is kept or deleted after the sync\n"
+                    "• Whether change alerts post silently (no channel notification)\n"
                     "• Auto-removal of members who transfer states\n"
                     "• Admin notifications for those removals"
                 ),
@@ -791,6 +810,23 @@ class SyncSettingsView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error toggling show_sync_message: {e}")
             print(f"Error toggling show_sync_message: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} An error occurred while updating the setting.",
+                ephemeral=True,
+            )
+
+    async def toggle_silent_notifications(self, interaction: discord.Interaction):
+        try:
+            new_value = not self.silent_notifications
+            self.alliance_cursor.execute(
+                "UPDATE alliancesettings SET silent_notifications = ? WHERE alliance_id = ?",
+                (1 if new_value else 0, self.selected_alliance),
+            )
+            self.alliance_db.commit()
+            await self.update_view(interaction)
+        except Exception as e:
+            logger.error(f"Error toggling silent_notifications: {e}")
+            print(f"Error toggling silent_notifications: {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} An error occurred while updating the setting.",
                 ephemeral=True,

@@ -169,6 +169,16 @@ class AllianceSync(commands.Cog):
         result = self.cursor_alliance.fetchone()
         return result[0] if result and result[0] is not None else 1
 
+    def get_silent_notifications_setting(self, alliance_id):
+        """Get the silent_notifications setting for a specific alliance (0 = off)."""
+        self.cursor_alliance.execute("""
+            SELECT silent_notifications
+            FROM alliancesettings
+            WHERE alliance_id = ?
+        """, (alliance_id,))
+        result = self.cursor_alliance.fetchone()
+        return result[0] if result and result[0] is not None else 0
+
     def increment_invalid_counter(self, fid: str, alliance_id: str, nickname: str) -> int:
         """Increment the 40004 error counter for a player. Returns new fail_count."""
         self.cursor_settings.execute(
@@ -333,7 +343,9 @@ class AllianceSync(commands.Cog):
             )
             row = self.cursor_alliance.fetchone()
             auto_value = row[0] if row and row[0] is not None else 1
-        
+
+        silent = bool(self.get_silent_notifications_setting(alliance_id))
+
         embed = discord.Embed(
             title=f"{theme.allianceIcon} {alliance_name} Alliance Sync",
             description=f"{theme.searchIcon} Checking for changes in member status...",
@@ -365,7 +377,7 @@ class AllianceSync(commands.Cog):
                 message = None
 
         if message is None and auto_value == 1:
-            message = await channel.send(embed=embed)
+            message = await channel.send(embed=embed, silent=silent)
             # Checkpoint the message id so if this run gets interrupted and
             # recovered, the next attempt can re-use the same message.
             if process_id is not None and message is not None:
@@ -588,7 +600,8 @@ class AllianceSync(commands.Cog):
                     title=f"{theme.levelIcon} **{alliance_name}** Furnace Level Changes",
                     description=safe_list(furnace_changes),
                     color=discord.Color.orange(),
-                    footer=f"{theme.chartIcon} Total Changes: {len(furnace_changes)}"
+                    footer=f"{theme.chartIcon} Total Changes: {len(furnace_changes)}",
+                    silent=silent
                 )
 
             if nickname_changes:
@@ -597,7 +610,8 @@ class AllianceSync(commands.Cog):
                     title=f"{theme.editListIcon} **{alliance_name}** Nickname Changes",
                     description=safe_list(nickname_changes),
                     color=theme.emColor1,
-                    footer=f"{theme.chartIcon} Total Changes: {len(nickname_changes)}"
+                    footer=f"{theme.chartIcon} Total Changes: {len(nickname_changes)}",
+                    silent=silent
                 )
 
             if kid_changes:
@@ -606,7 +620,8 @@ class AllianceSync(commands.Cog):
                     title=f"{theme.stateIcon} **{alliance_name}** State Transfer Notifications",
                     description=safe_list(kid_changes),
                     color=theme.emColor3,
-                    footer=f"{theme.chartIcon} Total Changes: {len(kid_changes)}"
+                    footer=f"{theme.chartIcon} Total Changes: {len(kid_changes)}",
+                    silent=silent
                 )
 
             if check_fail_list:
@@ -622,7 +637,8 @@ class AllianceSync(commands.Cog):
                     title=f"{theme.deniedIcon} **{alliance_name}** Invalid Members Detected",
                     description=safe_list(check_fail_list),
                     color=theme.emColor2,
-                    footer=footer_text
+                    footer=footer_text,
+                    silent=silent
                 )
 
             # Isolated connection issues are logged but not posted; only alert when widespread.
@@ -779,7 +795,7 @@ class AllianceSync(commands.Cog):
             self.logger.warning(f"Could not DM bot owner: {e}")
             return False
 
-    async def send_embed(self, channel, title, description, color, footer):
+    async def send_embed(self, channel, title, description, color, footer, silent=False):
         if isinstance(description, str):
             description = [description]
 
@@ -796,7 +812,7 @@ class AllianceSync(commands.Cog):
                     color=color
                 )
                 embed.set_footer(text="Alliance Sync System")
-                await channel.send(embed=embed)
+                await channel.send(embed=embed, silent=silent)
                 current_chunk = [desc]
                 current_length = desc_length
             else:
@@ -810,7 +826,7 @@ class AllianceSync(commands.Cog):
                 color=color
             )
             embed.set_footer(text=footer)
-            await channel.send(embed=embed)
+            await channel.send(embed=embed, silent=silent)
 
     def _calculate_initial_delay(self, start_time: str, interval: int) -> int:
         """Calculate seconds until next scheduled run based on start_time.

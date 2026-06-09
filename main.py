@@ -1125,6 +1125,14 @@ if __name__ == "__main__":
                     "ALTER TABLE alliancesettings ADD COLUMN ocr_upload_admin_only INTEGER DEFAULT 0"
                 )
 
+            # Per-alliance toggle for @silent sync posts (0 = ring, 1 = no notification ping).
+            try:
+                conn_alliance.execute("SELECT silent_notifications FROM alliancesettings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_alliance.execute(
+                    "ALTER TABLE alliancesettings ADD COLUMN silent_notifications INTEGER DEFAULT 0"
+                )
+
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
                 alliance_id INTEGER PRIMARY KEY,
                 name TEXT,
