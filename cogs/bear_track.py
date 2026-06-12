@@ -3604,14 +3604,18 @@ class BearHuntReviewView(discord.ui.View):
             seen_fids.add(r['fid'])
 
         try:
-            await self.data_submit.process_full_submission(
+            submitted = await self.data_submit.process_full_submission(
                 interaction,
                 hunt_meta=self.hunt_meta,
                 player_rows=self.rows,
                 alliance_id=self.alliance_id,
                 alliance_name=self.alliance_name,
             )
-            await self._notify_tracker_submit()
+            if submitted:
+                await self._notify_tracker_submit()
+                # Resolve the review so its timeout can't later overwrite the
+                # posted hunt with a false "Review Expired" notice.
+                self.stop()
         except Exception as e:
             logger.error(f"Error in bear review submit: {e}")
             print(f"[ERROR] Error in bear review submit: {e}")
@@ -3631,6 +3635,7 @@ class BearHuntReviewView(discord.ui.View):
         )
         await interaction.response.edit_message(content=None, embed=embed, view=None)
         await self._notify_tracker_cancel()
+        self.stop()
 
     async def on_timeout(self):
         for item in self.children:
@@ -6586,8 +6591,8 @@ class DataSubmit:
         """Persist a reviewed bear hunt: hunt summary + every player row.
         Rows with `fid is None` are saved with NULL fid so the raw OCR'd
         name and damage are preserved for later resolution from the
-        records UI."""
-        await self._persist_hunt_and_render(
+        records UI. Returns True once the hunt is persisted."""
+        return await self._persist_hunt_and_render(
             interaction,
             date=hunt_meta['date'],
             hunting_trap=hunt_meta['hunting_trap'],
@@ -6617,7 +6622,7 @@ class DataSubmit:
                     f"{theme.deniedIcon} This channel is not configured as a bear score channel.",
                     ephemeral=True,
                 )
-                return
+                return False
             alliance_id = int(row[0])
         if alliance_name is None:
             self.alliance_cursor.execute(
@@ -6648,7 +6653,7 @@ class DataSubmit:
                     f"{theme.warnIcon} This alliance already submitted this trap for that date.",
                     ephemeral=True,
                 )
-                return
+                return False
 
             learned: list[tuple] = []  # (name, fid) — learned AFTER commit
             if player_rows:
@@ -6729,7 +6734,7 @@ class DataSubmit:
             msg = (f"{theme.deniedIcon} Data saved ({saved_total} player rows) but chart generation failed."
                    if saved_total else f"{theme.deniedIcon} Error generating graph.")
             await interaction.followup.send(msg, ephemeral=True)
-            return
+            return True  # hunt was persisted; the review is resolved even if the chart failed
 
         if unmatched:
             embed.set_footer(
@@ -6775,6 +6780,7 @@ class DataSubmit:
         except Exception as e:
             logger.error(f"Failed to edit submission message: {e}")
             print(f"[ERROR] Failed to edit submission message: {e}")
+        return True
 
     async def process_view(self, *, alliance_id: int, hunting_trap,
                            from_date: str | None = None, to_date: str | None = None,
