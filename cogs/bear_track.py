@@ -63,9 +63,7 @@ if PIL_AVAILABLE:
         OCR_AVAILABLE = True
         logger.info("Bear track OCR ready (engines load on demand per language).")
     except Exception as e:
-        # Catch broader than ImportError and log the REAL cause — e.g. OpenCV's
-        # "libGL.so.1: cannot open shared object file" on headless Linux, which
-        # a generic "not installed" message hides.
+        # log the real cause (e.g. OpenCV's missing libGL.so.1), not "not installed"
         OCR_IMPORT_ERROR = f"{type(e).__name__}: {e}"
         logger.warning(f"OCR disabled — could not import rapidocr: {OCR_IMPORT_ERROR}")
         print(f"[WARNING] OCR disabled — could not import rapidocr: {OCR_IMPORT_ERROR}")
@@ -3552,6 +3550,19 @@ class BearHuntReviewView(discord.ui.View):
         else:
             await interaction.response.edit_message(embed=embed, view=self)
 
+    async def reapply_to_message(self, message):
+        """Re-render the review on its own message (for the ephemeral add-confirm)."""
+        self._resolve_unique_assignments()
+        self._sort_rows()
+        total_pages = self._total_pages()
+        if self.page >= total_pages:
+            self.page = total_pages - 1
+        self._build_components()
+        try:
+            await message.edit(embed=self.build_embed(), view=self)
+        except discord.HTTPException:
+            pass
+
     # ---------- button callbacks ----------
 
     async def _on_row_selected(self, interaction):
@@ -4800,6 +4811,15 @@ class BearDamageEditView(discord.ui.View):
         self._build_components()
         await safe_edit_message(interaction, embed=self.build_record_embed(), view=self, content=None)
 
+    async def reapply_to_message(self, message):
+        """Re-render this view on its own message (for the ephemeral add-confirm)."""
+        self._load_players()
+        self._build_components()
+        try:
+            await message.edit(embed=self.build_record_embed(), view=self)
+        except discord.HTTPException:
+            pass
+
     async def _on_row_selected(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
@@ -5139,9 +5159,7 @@ def _write_match_to_row(view, *, row_id, fid, nick, damage, rank, raw_name=None)
     that row is freed back to unmatched first (the match 'moves' to this row).
     row_id=None inserts a new row instead of updating. When `raw_name` is given,
     the OCR text → fid mapping is learned so it auto-matches next time.
-
-    The live pre-save review (no hunt_id) keeps rows in memory; apply there
-    instead of the DB so its edit/add path shares this exact logic."""
+    The live pre-save review (no hunt_id) applies the match in-memory, not the DB."""
     if getattr(view, "hunt_id", None) is None:
         rows = view.rows
         for i, r in enumerate(rows):  # free any other row holding this fid
@@ -5217,7 +5235,8 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
             await interaction.response.send_message(
                 f"{theme.deniedIcon} ID `{fid}` is already in this hunt.", ephemeral=True)
             return
-        roster_nick = next((n for f, n in view.roster if f == fid), None)
+        # roster entries may be 2- or 4-tuples; fid first, display nick last
+        roster_nick = next((e[-1] for e in view.roster if e[0] == fid), None)
         if roster_nick is not None:
             if _write_match_to_row(view, row_id=row_id, fid=fid, nick=roster_nick,
                                    damage=damage, rank=rank, raw_name=raw_name):
@@ -5276,18 +5295,20 @@ async def _offer_api_add(interaction, view, *, row_id, fid, damage, rank, raw_na
         await interaction.followup.send(f"{theme.deniedIcon} {reason}", ephemeral=True)
         return
     data = result['data']
+    parent_message = await interaction.original_response()  # the review/editor message to refresh on confirm
     confirm = PlayerAddConfirmView(
-        view=view, row_id=row_id, fid=fid, player_data=data,
+        view=view, parent_message=parent_message, row_id=row_id, fid=fid, player_data=data,
         damage=damage, rank=rank, raw_name=raw_name)
-    await interaction.edit_original_response(embed=confirm.build_embed(), view=confirm)
+    await interaction.followup.send(embed=confirm.build_embed(), view=confirm, ephemeral=True)
 
 
 class PlayerAddConfirmView(discord.ui.View):
     """Confirm adding a looked-up player to the alliance and matching the row."""
 
-    def __init__(self, *, view, row_id, fid, player_data, damage, rank, raw_name):
+    def __init__(self, *, view, parent_message, row_id, fid, player_data, damage, rank, raw_name):
         super().__init__(timeout=120)
         self.parent = view
+        self.parent_message = parent_message
         self.original_user_id = view.original_user_id
         self.row_id = row_id
         self.fid = fid
@@ -5364,12 +5385,20 @@ class PlayerAddConfirmView(discord.ui.View):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Player added, but matching the row failed.", ephemeral=True)
             return
-        await self.parent.refresh(interaction)
+        await self.parent.reapply_to_message(self.parent_message)  # refresh review in place
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                description=f"{theme.verifiedIcon} Added **{_isolate_rtl(nick)}** and matched the row.",
+                color=theme.emColor3),
+            view=None)
 
     async def _on_cancel(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
-        await self.parent.refresh(interaction)
+        await interaction.response.edit_message(
+            embed=discord.Embed(description=f"{theme.deniedIcon} Cancelled — no player added.",
+                                color=theme.emColor2),
+            view=None)
 
 
 class EditSavedPlayerModal(discord.ui.Modal):
