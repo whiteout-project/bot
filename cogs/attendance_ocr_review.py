@@ -771,6 +771,9 @@ class EventReviewView(discord.ui.View):
         """Replace the big review embed with a small expiry notice so the
         channel doesn't keep a stale table sitting around after a walked-away
         review."""
+        # Skip if the review was already resolved (submitted/cancelled).
+        if (self.session.channel.id, self.session.uploader_id) not in self.session.cog.active_sessions:
+            return
         if self.session.progress_message:
             try:
                 await self.session.progress_message.edit(
@@ -872,6 +875,7 @@ class EventReviewView(discord.ui.View):
         )
         await interaction.response.edit_message(embed=embed, view=None)
         self.session.cog.end_session(self.session.channel.id, self.session.uploader_id)
+        self.stop()
 
     async def _on_back_edit(self, interaction: discord.Interaction):
         """Edit-mode exit — edits already autosaved, so just return to the list."""
@@ -911,6 +915,7 @@ class EventReviewView(discord.ui.View):
             embed = self._build_scoreboard_embed(session_id, absent_rows)
         await interaction.response.edit_message(embed=embed, view=None)
         self.session.cog.end_session(self.session.channel.id, self.session.uploader_id)
+        self.stop()
 
     async def refresh(self, interaction: discord.Interaction):
         # A row-mutating edit happened before refresh — drop the cached merged

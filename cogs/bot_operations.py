@@ -212,19 +212,24 @@ class BotOperations(commands.Cog):
 
     async def show_bot_presence(self, interaction: discord.Interaction):
         """Open the Bot Presence settings view. Global Admin only."""
-        _, is_global = PermissionManager.is_admin(interaction.user.id)
-        if not is_global:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Only Global Admins can change the bot's presence.",
-                ephemeral=True,
-            )
-            return
-        view = BotPresenceView(self)
         try:
+            _, is_global = PermissionManager.is_admin(interaction.user.id)
+            if not is_global:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Only Global Admins can change the bot's presence.",
+                    ephemeral=True,
+                )
+                return
+            view = BotPresenceView(self)
             await safe_edit_message(interaction, embed=view.build_embed(), view=view, content=None)
         except Exception as e:
             logger.error(f"Error showing bot presence: {e}")
             print(f"Error showing bot presence: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.warnIcon} Couldn't open Bot Presence settings. Please try again.",
+                    ephemeral=True,
+                )
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):

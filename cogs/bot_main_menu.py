@@ -314,6 +314,8 @@ class MainMenu(commands.Cog):
                     f"└ Rename this alliance\n\n"
                     f"{theme.listIcon} **History**\n"
                     f"└ Furnace level and nickname change history per member\n\n"
+                    f"{theme.chartIcon} **Power Rankings**\n"
+                    f"└ Members ranked by power, with combat power and attendance\n\n"
                     f"{theme.trashIcon} **Delete Alliance**\n"
                     f"└ Permanently remove this alliance and all related data\n"
                     f"{theme.lowerDivider}"

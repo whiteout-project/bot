@@ -1302,14 +1302,9 @@ class Alliance(commands.Cog):
             
             async def confirm_callback(button_interaction: discord.Interaction):
                 try:
-                    self.c.execute("DELETE FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                    alliance_count = self.c.rowcount
-                    
-                    self.c.execute("DELETE FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
-                    admin_settings_count = self.c.rowcount
-                    
-                    self.conn.commit()
-
+                    # Delete dependents first and the alliance row LAST. The DBs
+                    # aren't a single transaction, so if a step fails the alliance
+                    # still exists and its members stay valid instead of orphaned.
                     self.c_users.execute("DELETE FROM users WHERE alliance = ?", (alliance_id,))
                     users_count_deleted = self.c_users.rowcount
                     self.conn_users.commit()
@@ -1330,8 +1325,16 @@ class Alliance(commands.Cog):
 
                     self.c_giftcode.execute("DELETE FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
                     gift_code_control_count = self.c_giftcode.rowcount
-                    
+
                     self.conn_giftcode.commit()
+
+                    self.c.execute("DELETE FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
+                    admin_settings_count = self.c.rowcount
+
+                    self.c.execute("DELETE FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                    alliance_count = self.c.rowcount
+
+                    self.conn.commit()
 
                     cleanup_embed = discord.Embed(
                         title=f"{theme.verifiedIcon} Alliance Successfully Deleted",

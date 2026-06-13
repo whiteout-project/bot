@@ -2758,7 +2758,7 @@ class SessionSelectView(discord.ui.View):
     
     async def new_session_callback(self, interaction: discord.Interaction):
         """Create a new session"""
-        await interaction.response.send_modal(SessionNameModal(self.cog, self.alliance_id))
+        await interaction.response.send_modal(SessionNameModal(self.alliance_id, self.cog))
 
     async def back_button_callback(self, interaction: discord.Interaction):
         """Back to the alliance-scoped attendance hub. `self.cog` may be the
@@ -2816,32 +2816,6 @@ class SessionSelectView(discord.ui.View):
                 view=None
             )
 
-class SessionNameModal(discord.ui.Modal):
-    def __init__(self, cog, alliance_id):
-        super().__init__(title="Create New Session")
-        self.cog = cog
-        self.alliance_id = alliance_id
-        
-        self.session_name = discord.ui.TextInput(
-            label="Session Name",
-            placeholder="Enter session name (e.g., 'Bear Tuesday', 'Canyon Sunday')",
-            min_length=1,
-            max_length=100,
-            required=True
-        )
-        self.add_item(self.session_name)
-    
-    async def on_submit(self, interaction: discord.Interaction):
-        session_name = self.session_name.value.strip()
-        alliance_name = await self.cog._get_alliance_name(self.alliance_id)
-        
-        await self.cog.show_attendance_marking(
-            interaction,
-            self.alliance_id,
-            alliance_name,
-            session_name,
-            is_edit=False
-        )
 async def setup(bot):
     try:
         cog = Attendance(bot)

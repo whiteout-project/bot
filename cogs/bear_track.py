@@ -3613,9 +3613,7 @@ class BearHuntReviewView(discord.ui.View):
             )
             if submitted:
                 await self._notify_tracker_submit()
-                # Resolve the review so its timeout can't later overwrite the
-                # posted hunt with a false "Review Expired" notice.
-                self.stop()
+                self.stop()  # resolve so a stale timeout can't deface the posted hunt
         except Exception as e:
             logger.error(f"Error in bear review submit: {e}")
             print(f"[ERROR] Error in bear review submit: {e}")
@@ -3625,6 +3623,7 @@ class BearHuntReviewView(discord.ui.View):
                 )
             except Exception:
                 pass
+            self.stop()  # resolve so a stale timeout can't later deface the message
 
     async def _on_cancel(self, interaction):
         if not await check_interaction_user(interaction, self.original_user_id):
@@ -6678,12 +6677,12 @@ class DataSubmit:
             self.bear_conn.rollback()
             raise
 
-        # Learn aliases only AFTER the hunt is committed. learn_alias opens its
-        # own connection to bear_data.sqlite; doing it inside the transaction
-        # above deadlocks on the write lock (30s busy-timeout per row, which
-        # freezes the event loop).
+        # Learn aliases only AFTER the hunt is committed.
         for name, fid in learned:
-            learn_alias(alliance_id, name, fid)
+            try:
+                learn_alias(alliance_id, name, fid)
+            except Exception as e:
+                logger.warning(f"Bear OCR: post-commit learn_alias failed for {name!r}: {e}")
 
         title_suffix = "Latest Submission"
         if player_rows:
@@ -6734,7 +6733,7 @@ class DataSubmit:
             msg = (f"{theme.deniedIcon} Data saved ({saved_total} player rows) but chart generation failed."
                    if saved_total else f"{theme.deniedIcon} Error generating graph.")
             await interaction.followup.send(msg, ephemeral=True)
-            return True  # hunt was persisted; the review is resolved even if the chart failed
+            return True  # hunt persisted; resolved even if the chart failed
 
         if unmatched:
             embed.set_footer(

@@ -903,6 +903,10 @@ class AllianceMemberOperations(commands.Cog):
         await safe_edit_message(
             interaction, embed=view.build_embed(), view=view, content=None,
         )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            pass
 
     async def show_view_members_for(self, interaction: discord.Interaction, alliance_id: int):
         """Build the Member List directly for a known alliance (no picker step).
@@ -1846,7 +1850,7 @@ class AllianceMemberOperations(commands.Cog):
                                                             "**Removed Members:**\n"
                                                             "```\n" + 
                                                             "\n".join([f"ID{idx+1}: {fid}" for idx, (fid, _) in enumerate(removed_members[:20])]) +
-                                                            (f"\n... ve {len(removed_members) - 20} ID more" if len(removed_members) > 20 else "") +
+                                                            (f"\n... and {len(removed_members) - 20} more" if len(removed_members) > 20 else "") +
                                                             "\n```"
                                                         ),
                                                         color=theme.emColor2
@@ -2282,13 +2286,19 @@ class AllianceMemberOperations(commands.Cog):
         fids_to_process = []
         
         for fid in ids_list:
-            self.c_users.execute("SELECT nickname FROM users WHERE fid=?", (fid,))
+            self.c_users.execute("SELECT nickname, alliance FROM users WHERE fid=?", (fid,))
             existing = self.c_users.fetchone()
             if existing:
-                # Member already exists in database
-                already_in_db.append((fid, existing[0]))
+                alliance_val = existing[1]
+                self.c_alliance.execute("SELECT 1 FROM alliance_list WHERE alliance_id=?", (alliance_val,))
+                if alliance_val and self.c_alliance.fetchone() is None:
+                    # Orphan (alliance deleted): drop stale row so the ID can be re-added.
+                    self.c_users.execute("DELETE FROM users WHERE fid=?", (fid,))
+                    self.conn_users.commit()
+                    fids_to_process.append(fid)
+                else:
+                    already_in_db.append((fid, existing[0]))
             else:
-                # Member doesn't exist at all
                 fids_to_process.append(fid)
         
         total_users = len(ids_list)
@@ -4044,7 +4054,17 @@ class AlliancePowerRankingsView(discord.ui.View):
         self.cog = cog
         self.user_id = user_id
         self.current_page = 0
+        self.message = None
         self._build_components()
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
     def _total_pages(self) -> int:
         if not self.members:
@@ -4161,6 +4181,11 @@ class AlliancePowerRankingsView(discord.ui.View):
         main_menu = self.cog.bot.get_cog("MainMenu")
         if main_menu and hasattr(main_menu, "show_alliance_hub"):
             await main_menu.show_alliance_hub(interaction, self.alliance_id)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} The alliance menu is unavailable right now.",
+                ephemeral=True,
+            )
 
 
 async def setup(bot):

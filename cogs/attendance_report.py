@@ -630,11 +630,15 @@ class AttendanceReport(commands.Cog):
             print(f"Error showing attendance report: {e}")
             import traceback
             traceback.print_exc()
-            await interaction.edit_original_response(
-                content=f"{theme.deniedIcon} An error occurred while generating attendance report.",
-                embed=None,
-                view=None
-            )
+            # May fail before any response was made, so branch on response state.
+            msg = f"{theme.deniedIcon} An error occurred while generating attendance report."
+            try:
+                if interaction.response.is_done():
+                    await interaction.edit_original_response(content=msg, embed=None, view=None)
+                else:
+                    await interaction.response.send_message(msg, ephemeral=True)
+            except Exception:
+                pass
 
     async def show_matplotlib_report(self, interaction: discord.Interaction, alliance_id: int, session_name: str,
                                    is_preview=False, selected_players=None, session_id=None, marking_view=None):
