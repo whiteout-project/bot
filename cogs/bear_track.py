@@ -5249,9 +5249,12 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
         other = view.cog.users_cursor.execute(
             "SELECT nickname, alliance FROM users WHERE fid = ?", (fid,)).fetchone()
         if other and other[1] and str(other[1]) != str(view.alliance_id):
+            arow = view.cog.alliance_cursor.execute(
+                "SELECT name FROM alliance_list WHERE alliance_id = ?", (other[1],)).fetchone()
+            other_alliance = f"**{arow[0]}**" if arow else f"ID `{other[1]}`"
             await interaction.response.send_message(
-                f"{theme.deniedIcon} ID `{fid}` (`{other[0]}`) belongs to another alliance "
-                f"on the bot. Moving members between alliances isn't enabled.",
+                f"{theme.deniedIcon} ID `{fid}` (`{other[0]}`) is already in alliance {other_alliance}. "
+                f"Move them here first via Manage Members → Transfer.",
                 ephemeral=True)
             return
         await _offer_api_add(interaction, view, row_id=row_id, fid=fid,
