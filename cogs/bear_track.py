@@ -45,6 +45,7 @@ from . import onnx_lifecycle
 # RapidOCR setup. Engines are lazy-loaded per language via onnx_lifecycle and
 # unloaded ~2 min after the last bear session finalises.
 OCR_AVAILABLE = False
+OCR_IMPORT_ERROR = None  # real reason OCR is off (e.g. missing libGL.so.1), for admin diagnostics
 
 # Above ~1800px ONNXRuntime hits 'bad allocation' on the 2nd-3rd image.
 MAX_OCR_DIM = 1600
@@ -61,9 +62,13 @@ if PIL_AVAILABLE:
             pass
         OCR_AVAILABLE = True
         logger.info("Bear track OCR ready (engines load on demand per language).")
-    except ImportError:
-        logger.warning("rapidocr not installed. OCR will be disabled.")
-        print("[WARNING] rapidocr not installed. Bear track OCR disabled.")
+    except Exception as e:
+        # Catch broader than ImportError and log the REAL cause — e.g. OpenCV's
+        # "libGL.so.1: cannot open shared object file" on headless Linux, which
+        # a generic "not installed" message hides.
+        OCR_IMPORT_ERROR = f"{type(e).__name__}: {e}"
+        logger.warning(f"OCR disabled — could not import rapidocr: {OCR_IMPORT_ERROR}")
+        print(f"[WARNING] OCR disabled — could not import rapidocr: {OCR_IMPORT_ERROR}")
     except Exception as e:
         logger.error(f"Failed to initialize RapidOCR: {e}")
         print(f"[ERROR] Failed to initialize RapidOCR: {e}")
@@ -2038,16 +2043,10 @@ def render_bear_info_message() -> str:
         "**Damage Ranking** list.",
         f"{theme.lowerDivider}",
         "",
-        f"{theme.deniedIcon} **Not these**",
-        f"{theme.upperDivider}",
-        f"{theme.deniedIcon} The live in-trap damage list (the rally screen) — it has no totals.",
-        f"{theme.deniedIcon} The personal rewards-only mail.",
-        f"{theme.lowerDivider}",
-        "",
         f"{theme.infoIcon} **Tips**",
-        "• Drop **multiple screenshots** to capture a long ranking — the bot "
-        "stitches them into one hunt.",
-        "• Set your in-game language to **English** for the best reading.",
+        "• Live in-trap damage list or personal rewards-only mail won't work.",
+        "• Drop **multiple screenshots** to capture the full ranking",
+        "• Set your in-game language to **English** for the best results.",
         "• The bot reads each upload automatically and posts the parsed damage here.",
     ])
 

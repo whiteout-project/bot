@@ -175,8 +175,8 @@ class AttendanceOCR(commands.Cog):
             await self._maybe_delete_source(message, settings)
             return
 
-        classification, ocr_text = await self._classify_first_image(
-            message.channel.id, images[0]
+        classification, ocr_text = await self._classify_images(
+            message.channel.id, images
         )
         event_type = classification[0] if classification else None
         if event_type is None:
@@ -231,26 +231,32 @@ class AttendanceOCR(commands.Cog):
             # Forbidden = bot lacks Manage Messages; nothing actionable.
             pass
 
-    async def _classify_first_image(
-        self, channel_id: int, attachment: discord.Attachment
+    async def _classify_images(
+        self, channel_id: int, images: list[discord.Attachment]
     ) -> tuple[Optional[tuple[str, str]], str]:
-        """Classify an upload by per-kind fingerprint regex (keywords are an
-        optional prefilter). Returns `((event_type, kind) or None, ocr_text)`;
-        the text is returned so the caller can log a classification miss."""
-        try:
-            from . import bear_track
-            data = await attachment.read()
-            text = await bear_track.ocr_bytes(data, lang=bear_track.DEFAULT_OCR_LANG)
-        except Exception:
-            logger.exception("AttendanceOCR: classify-step OCR failed")
-            return None, ""
-
-        classification = classify_event(
-            text,
-            enabled_events=get_enabled_events(channel_id),
-            keywords_by_event=get_channel_keywords(channel_id),
-        )
-        return classification, text
+        """OCR each uploaded image until one classifies — users drop the batch
+        in any order, so the event can be on any image, not just the first.
+        Returns `((event_type, kind) or None, ocr_text)`; the text is the first
+        image's read, kept for logging a miss."""
+        from . import bear_track
+        enabled = get_enabled_events(channel_id)
+        keywords = get_channel_keywords(channel_id)
+        first_text = ""
+        for attachment in images:
+            try:
+                data = await attachment.read()
+                text = await bear_track.ocr_bytes(data, lang=bear_track.DEFAULT_OCR_LANG)
+            except Exception:
+                logger.exception("AttendanceOCR: classify-step OCR failed")
+                continue
+            if not first_text:
+                first_text = text
+            classification = classify_event(
+                text, enabled_events=enabled, keywords_by_event=keywords,
+            )
+            if classification:
+                return classification, text
+        return None, first_text
 
     def end_session(self, channel_id: int, uploader_id: int) -> None:
         self.active_sessions.pop((channel_id, uploader_id), None)

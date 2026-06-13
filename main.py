@@ -445,6 +445,38 @@ def check_and_install_requirements():
     startup.phase_ok("Dependencies satisfied")
     return True
 
+def ensure_opencv_headless():
+    """RapidOCR pulls in the full `opencv-python`, whose cv2 needs system GUI
+    libs (libGL.so.1) that headless servers lack — which silently disables OCR.
+    Swap to `opencv-python-headless`, which the bot's image processing uses fine
+    and needs no system libs. No-op once only the headless build is present."""
+    try:
+        from importlib.metadata import distributions
+        installed = {(d.metadata.get("Name") or "").lower().replace("_", "-")
+                     for d in distributions()}
+    except Exception:
+        return
+    if not ({"opencv-python", "opencv-contrib-python"} & installed):
+        return  # already headless-only (or no opencv) — nothing to do
+    startup.phase_start("Switching OpenCV to headless")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "uninstall", "-y",
+             "opencv-python", "opencv-contrib-python", "opencv-python-headless"],
+            timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "opencv-python-headless"]
+        if break_system_packages_arg():
+            cmd.append("--break-system-packages")
+        subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        startup.phase_ok("OpenCV set to headless")
+    except Exception as e:
+        startup.phase_fail(
+            "OpenCV headless switch failed", details=[str(e)],
+            fix="pip uninstall -y opencv-python opencv-contrib-python && pip install opencv-python-headless",
+        )
+
+
 def setup_dependencies(beta_mode=False):
     """Main function to set up all dependencies."""
     startup.phase_start("Checking dependencies")
@@ -457,7 +489,8 @@ def setup_dependencies(beta_mode=False):
     if not check_and_install_requirements():
         startup.phase_fail("Dependencies failed", fix="pip install -r requirements.txt")
         return False
-    
+
+    ensure_opencv_headless()
     return True
 
 beta_mode = "--beta" in sys.argv
