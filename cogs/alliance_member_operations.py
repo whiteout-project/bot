@@ -684,7 +684,7 @@ class ManageMembersView(MemberListView):
                         ),
                         color=theme.emColor3,
                     ),
-                    view=_TransferDoneView(),
+                    view=None,
                 )
                 if parent_view.message:
                     try:
@@ -727,27 +727,6 @@ class ManageMembersView(MemberListView):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Main Menu module not found.", ephemeral=True
             )
-
-
-class _TransferDoneView(discord.ui.View):
-    """One-button view shown on the Transfer Members success ephemeral.
-    The Manage Members list (parent ephemeral) has already been refreshed
-    in place; this just lets the user dismiss the success dialog cleanly."""
-
-    def __init__(self):
-        super().__init__(timeout=60)
-
-    @discord.ui.button(label="Close", emoji=theme.verifiedIcon,
-                       style=discord.ButtonStyle.secondary)
-    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.defer()
-            await interaction.delete_original_response()
-        except Exception:
-            try:
-                await interaction.response.edit_message(view=None)
-            except Exception:
-                pass
 
 
 class _RemoveSelectedConfirmView(discord.ui.View):

@@ -588,13 +588,6 @@ def _trim_to_data_section(text: str) -> str:
     return text[best_start:best_end]
 
 
-async def ocr_attachment_with_boxes(attachment: discord.Attachment) -> list:
-    """Like `ocr_attachment` but returns [(text, box), ...] preserving spatial info."""
-    from . import bear_track
-    data = await attachment.read()
-    return await bear_track.ocr_bytes_with_boxes(data, lang=bear_track.DEFAULT_OCR_LANG)
-
-
 def _alliance_ocr_langs(alliance_id, names) -> tuple[str, list]:
     """Primary + fallback OCR languages for the alliance. Shared with Bear
     Tracking's OCR-language setting (one place per alliance). Fallbacks are
@@ -617,16 +610,17 @@ def _alliance_ocr_langs(alliance_id, names) -> tuple[str, list]:
     return primary, fbs
 
 
-async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None, parse=None):
+async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None, parse=None, primary_text: str | None = None):
     """OCR (name, value) rows with multi-language fallback for non-Latin names;
     returns (rows, primary_text). `parse` overrides the row parser (Power
-    Rankings passes `_parse_power_rows`)."""
+    Rankings passes `_parse_power_rows`). `primary_text` reuses a primary read
+    the caller already did, avoiding a redundant primary OCR pass."""
     from . import bear_track
     if parse is None:
         parse = _parse_player_value_rows
     primary, fallbacks = _alliance_ocr_langs(alliance_id, [n for _f, n in (roster or [])])
     if not fallbacks or not roster:
-        text = await bear_track.ocr_bytes(image_bytes, lang=primary, session=session)
+        text = primary_text if primary_text is not None else await bear_track.ocr_bytes(image_bytes, lang=primary, session=session)
         rows = parse(bear_track.repair_ocr_digits(text)) if text.strip() else []
         return rows, text
 
@@ -663,7 +657,7 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
     return await bear_track.ocr_rows_with_fallback(
         image_bytes, primary_lang=primary, fallback_langs=fallbacks,
         parse=parse, is_unfilled=is_unfilled, merge=merge,
-        session=session)
+        session=session, primary_text=primary_text)
 
 
 def find_formatted_numbers(text: str) -> list[tuple[int, int, int]]:
@@ -1711,11 +1705,15 @@ class _PointsSession(OcrUploadSession):
         self.mvps: list[dict] = []
 
     async def _process_attachments(self, attachments: list[discord.Attachment]):
+        from . import bear_track
+        roster = load_alliance_roster(self.alliance_id)
         for att in attachments:
             self.current_image_idx = self.processed_images + 1
             await self.render_progress()
             try:
-                blocks = await ocr_attachment_with_boxes(att)
+                data = await att.read()
+                blocks = await bear_track.ocr_bytes_with_boxes(
+                    data, lang=bear_track.DEFAULT_OCR_LANG)
                 text = " ".join(t for t, _ in blocks)
             except Exception:
                 self.processed_images += 1
@@ -1742,7 +1740,16 @@ class _PointsSession(OcrUploadSession):
                 header_page = _is_result_header_page(text)
             # Header pages would yield bogus rows from alliance-level totals.
             if not header_page:
-                for row in _parse_player_value_rows(text):
+                # Multi-language fallback so non-Latin names (e.g. Arabic) read
+                # correctly instead of OCRing as garbage that splits one player
+                # into duplicate unmatched rows across overlapping screenshots.
+                try:
+                    rows, _ = await ocr_value_rows(
+                        data, roster=roster, alliance_id=self.alliance_id,
+                        primary_text=text)
+                except Exception:
+                    rows = _parse_player_value_rows(text)
+                for row in rows:
                     _dedup_into(target, row)
             self.processed_images += 1
             await self.render_progress()

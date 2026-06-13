@@ -658,7 +658,7 @@ async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
 
 async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
                                  fallback_langs, parse, is_unfilled, merge,
-                                 session=None):
+                                 session=None, primary_text: str | None = None):
     """Generic primary+fallback OCR loop, shared across OCR features.
 
     Runs the primary engine, then — only if some parsed rows are still unread —
@@ -670,7 +670,9 @@ async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
     Returns (primary_rows, primary_text). Bear/attendance plug in their own
     parse/match/merge; the orchestration lives here once.
     """
-    text = await ocr_bytes(image_bytes, lang=primary_lang, session=session)
+    # Reuse a primary read the caller already has (Foundry/Canyon does a boxed
+    # pass for the scoreboard) so the primary engine isn't run twice per image.
+    text = primary_text if primary_text is not None else await ocr_bytes(image_bytes, lang=primary_lang, session=session)
     if not text.strip():
         return [], ""
     repaired = repair_ocr_digits(text)
