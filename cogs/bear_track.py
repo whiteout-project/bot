@@ -3989,17 +3989,16 @@ class EditRowModal(discord.ui.Modal):
             del self.review_view.rows[self.row_idx]
             await self.review_view.refresh(interaction)
             return
-        parsed, err = _parse_row_inputs(
-            self.player_input.value, self.damage_input.value,
-            self.rank_input.value, self.review_view.roster,
-        )
+        damage, rank, err = _parse_damage_rank(self.damage_input.value, self.rank_input.value)
         if err:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} {err}", ephemeral=True,
-            )
+            await interaction.response.send_message(f"{theme.deniedIcon} {err}", ephemeral=True)
             return
-        self.review_view.rows[self.row_idx].update(parsed)
-        await self.review_view.refresh(interaction)
+        # Shared resolver: roster match, or game-API lookup + add-to-alliance for an unknown ID.
+        await _resolve_and_apply(
+            interaction, self.review_view, row_id=self.row_idx,
+            text=self.player_input.value, damage=damage, rank=rank,
+            raw_name=self.review_view.rows[self.row_idx].get('name'),
+        )
 
 
 class AddRowModal(discord.ui.Modal):
@@ -4022,17 +4021,20 @@ class AddRowModal(discord.ui.Modal):
         self.add_item(self.rank_input)
 
     async def on_submit(self, interaction):
-        parsed, err = _parse_row_inputs(
-            self.player_input.value, self.damage_input.value,
-            self.rank_input.value, self.review_view.roster,
-        )
-        if err:
+        text = self.player_input.value.strip()
+        if not text:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} {err}", ephemeral=True,
-            )
+                f"{theme.deniedIcon} Player is required.", ephemeral=True)
             return
-        self.review_view.rows.append(parsed)
-        await self.review_view.refresh(interaction)
+        damage, rank, err = _parse_damage_rank(self.damage_input.value, self.rank_input.value)
+        if err:
+            await interaction.response.send_message(f"{theme.deniedIcon} {err}", ephemeral=True)
+            return
+        # Shared resolver: roster match, or game-API lookup + add-to-alliance for an unknown ID.
+        await _resolve_and_apply(
+            interaction, self.review_view, row_id=None,
+            text=text, damage=damage, rank=rank, raw_name=text,
+        )
 
 
 def _resolve_player(text, roster):
@@ -4054,32 +4056,23 @@ def _resolve_player(text, roster):
     return fid, nick, matches
 
 
-def _parse_row_inputs(player_text, damage_text, rank_text, roster):
-    """Returns (row_dict, error_message); exactly one is non-None."""
-    text = (player_text or '').strip()
-    if not text:
-        return None, "Player is required."
-    fid, nick, candidates = _resolve_player(text, roster)
-    if fid is None:
-        return None, f"No roster match for `{text}`. Try an ID or a closer spelling."
+def _parse_damage_rank(damage_text, rank_text):
+    """(damage, rank, error) — error is None on success. Player resolution is
+    handled separately by `_resolve_and_apply` (roster + game-API add)."""
     try:
         damage = bear_damage(damage_text)
         if damage <= 0:
             raise ValueError()
     except Exception:
-        return None, "Invalid damage value."
+        return None, None, "Invalid damage value."
     rank = None
     rank_clean = (rank_text or '').strip()
     if rank_clean:
         try:
             rank = int(rank_clean)
         except ValueError:
-            return None, "Rank must be a whole number."
-    return {
-        'fid': fid, 'nickname': nick, 'name': nick,
-        'damage': damage, 'rank': rank,
-        'candidates': candidates, 'status': 'manual',
-    }, None
+            return None, None, "Rank must be a whole number."
+    return damage, rank, None
 
 
 # ---------------------------------------------------------------------------
@@ -5145,7 +5138,25 @@ def _write_match_to_row(view, *, row_id, fid, nick, damage, rank, raw_name=None)
     """Persist a player match. If another row in the hunt already holds this fid,
     that row is freed back to unmatched first (the match 'moves' to this row).
     row_id=None inserts a new row instead of updating. When `raw_name` is given,
-    the OCR text → fid mapping is learned so it auto-matches next time."""
+    the OCR text → fid mapping is learned so it auto-matches next time.
+
+    The live pre-save review (no hunt_id) keeps rows in memory; apply there
+    instead of the DB so its edit/add path shares this exact logic."""
+    if getattr(view, "hunt_id", None) is None:
+        rows = view.rows
+        for i, r in enumerate(rows):  # free any other row holding this fid
+            if i != row_id and r.get("fid") == fid:
+                r.update({"fid": None, "nickname": None, "status": "unmatched"})
+        match = {"fid": fid, "nickname": nick, "damage": damage, "rank": rank,
+                 "candidates": [(fid, nick, 100)], "status": "manual"}
+        if row_id is not None and row_id < len(rows):
+            rows[row_id].update(match)
+        else:
+            rows.append({"name": nick, **match})
+        if raw_name:
+            learn_alias(view.alliance_id, raw_name, fid)
+        return True
+
     cur = view.cog.bear_cursor
     conn = view.cog.bear_conn
     try:
@@ -5178,6 +5189,8 @@ def _write_match_to_row(view, *, row_id, fid, nick, damage, rank, raw_name=None)
 
 def _fid_in_hunt(view, fid) -> bool:
     """True if any row of the current hunt already holds this fid."""
+    if getattr(view, "hunt_id", None) is None:  # live pre-save review — in-memory rows
+        return any(r.get("fid") == fid for r in getattr(view, "rows", []))
     row = view.cog.bear_cursor.execute(
         "SELECT 1 FROM bear_player_damage WHERE hunt_id=? AND fid=? LIMIT 1",
         (view.hunt_id, fid)).fetchone()
