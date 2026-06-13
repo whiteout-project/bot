@@ -824,7 +824,7 @@ if __name__ == "__main__":
                         with open("version", "w") as f:
                             f.write(latest_tag)
 
-                        startup.phase_ok(f"Update completed (v{latest_tag} from {source_name})")
+                        startup.phase_ok(f"Update completed ({latest_tag} from {source_name})")
 
                         restart_process()
                     else:
