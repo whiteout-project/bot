@@ -521,6 +521,8 @@ _FORMATTED_NUMBER_RE = re.compile(
                                                # letters ('lord235342323' is a name)
 )
 _RANK_PREFIX_RE = re.compile(r"^\s*(\d{1,4})\b")
+# A lone "0" (a 0-point scorer), not part of a larger number.
+_LONE_ZERO_RE = re.compile(r"(?<![A-Za-z0-9.,])0(?![A-Za-z0-9.,])")
 
 _PARSE_STOPWORDS = frozenset({
     "mail", "delete", "ranking", "rankings", "personal", "arsenal",
@@ -680,8 +682,14 @@ def _parse_player_value_rows(text: str) -> list[dict]:
     section only)."""
     rows = []
     text = _trim_to_data_section(text)
+    nums = find_formatted_numbers(text)
+    # 0-point players rank last and show a lone "0" the number regex skips —
+    # anchor them from the tail so they're captured (and flagged absent), not lost.
+    last_end = nums[-1][1] if nums else 0
+    for m in _LONE_ZERO_RE.finditer(text[last_end:]):
+        nums.append((last_end + m.start(), last_end + m.end(), 0))
     prev_end = 0
-    for start, end, value in find_formatted_numbers(text):
+    for start, end, value in nums:
         chunk = text[prev_end:start].strip()
         prev_end = end
         # Trailing rank digit (e.g., "AlejoCAT 5" → "AlejoCAT")

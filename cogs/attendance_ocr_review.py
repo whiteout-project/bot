@@ -1551,6 +1551,7 @@ class _EditMergedRowModal(discord.ui.Modal):
         self.merged_row = merged_row
         self.reg_idx = merged_row.get("_reg_idx")
         self.res_idx = merged_row.get("_res_idx")
+        self._orig_player = display
 
         self.player_input = discord.ui.TextInput(
             label="Player (ID or name — blank to delete)",
@@ -1600,7 +1601,8 @@ class _EditMergedRowModal(discord.ui.Modal):
                         _parse_value_input(self.res_value_input.value) or 0,
                         "result", fid, nickname, status, name)
         await self.view._save_edit(interaction)
-        if note:
+        # Only surface the match note when the player was actually changed.
+        if note and name != self._orig_player:
             await interaction.followup.send(note, ephemeral=True)
 
     @staticmethod
@@ -1634,9 +1636,10 @@ class _EditRowModal(discord.ui.Modal):
                        if row["_kind"] == "registration"
                        else view.result_value_label)
 
+        self._orig_player = row.get("nickname") or row.get("name") or ""
         self.player_input = discord.ui.TextInput(
             label="Player (ID or name — blank to delete)",
-            default=row.get("nickname") or row.get("name") or "",
+            default=self._orig_player,
             required=False, max_length=80,
         )
         self.value_input = discord.ui.TextInput(
@@ -1665,7 +1668,8 @@ class _EditRowModal(discord.ui.Modal):
         self.bucket[self.local_idx].update(
             {"value": value, "fid": fid, "nickname": nickname, "status": status})
         await self.view._save_edit(interaction)
-        if note:
+        # Only surface the match note when the player was actually changed.
+        if note and self.player_input.value.strip() != self._orig_player:
             await interaction.followup.send(note, ephemeral=True)
 
 
