@@ -521,9 +521,6 @@ _FORMATTED_NUMBER_RE = re.compile(
                                                # letters ('lord235342323' is a name)
 )
 _RANK_PREFIX_RE = re.compile(r"^\s*(\d{1,4})\b")
-# A lone 0-point value (a 0-scorer), not part of a larger number. Tolerates the
-# common OCR 0->O misread since these rows show a bare "0".
-_LONE_ZERO_RE = re.compile(r"(?<![A-Za-z0-9.,])[0O](?![A-Za-z0-9.,])")
 
 _PARSE_STOPWORDS = frozenset({
     "mail", "delete", "ranking", "rankings", "personal", "arsenal",
@@ -683,14 +680,8 @@ def _parse_player_value_rows(text: str) -> list[dict]:
     section only)."""
     rows = []
     text = _trim_to_data_section(text)
-    nums = find_formatted_numbers(text)
-    # 0-point players rank last and show a lone "0" the number regex skips —
-    # anchor them from the tail so they're captured (and flagged absent), not lost.
-    last_end = nums[-1][1] if nums else 0
-    for m in _LONE_ZERO_RE.finditer(text[last_end:]):
-        nums.append((last_end + m.start(), last_end + m.end(), 0))
     prev_end = 0
-    for start, end, value in nums:
+    for start, end, value in find_formatted_numbers(text):
         chunk = text[prev_end:start].strip()
         prev_end = end
         # Trailing rank digit (e.g., "AlejoCAT 5" → "AlejoCAT")
@@ -717,6 +708,36 @@ def _parse_player_value_rows(text: str) -> list[dict]:
         if len(name) < 2:
             continue
         rows.append({"name": name, "value": value})
+    # Trailing 0-scorers the value-anchored loop misses (their value is a lone 0
+    # or OCR-dropped, leaving only "Name Rank").
+    rows.extend(_parse_tail_rows(text[prev_end:]))
+    return rows
+
+
+def _parse_tail_rows(tail: str) -> list[dict]:
+    """Trailing 'Name Rank [Value]' rows whose value OCR read as 0 or dropped.
+    Rank-ordered mails list 0-scorers last, so a missing value means 0 (absent)."""
+    tail = re.sub(r"\bR\d+\b", "", tail)  # drop alliance-rank stickers
+    rows = []
+    name_toks: list[str] = []
+    toks = tail.split()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t.isdigit():
+            if name_toks:  # first number after a name is its rank
+                value = 0
+                if i + 1 < len(toks) and toks[i + 1].isdigit():
+                    value = int(toks[i + 1])
+                    i += 1
+                name = _name_from_tokens(name_toks)
+                if len(name) >= 2:
+                    rows.append({"name": name, "value": value})
+                name_toks = []
+        elif (len(t) >= 2 and any(c.isalpha() for c in t)
+              and t.lower() not in _PARSE_STOPWORDS):
+            name_toks.append(t)
+        i += 1
     return rows
 
 
