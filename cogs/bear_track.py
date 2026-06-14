@@ -1939,9 +1939,10 @@ def _render_damage_chart(dates, values, *, title, ylabel="Damage", series=None):
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from matplotlib.ticker import MaxNLocator, FuncFormatter
+    fig = None
     try:
         plt.style.use("fivethirtyeight")
-        plt.figure(figsize=(10, 7), facecolor="#1a1a2d")
+        fig = plt.figure(figsize=(10, 7), facecolor="#1a1a2d")
         for label, s_dates, s_values in series:
             if not s_dates:
                 continue
@@ -1967,13 +1968,15 @@ def _render_damage_chart(dates, values, *, title, ylabel="Damage", series=None):
         plt.tight_layout()
         buffer = io.BytesIO()
         plt.savefig(buffer, format="png", dpi=200, transparent=True)
-        plt.close()
         buffer.seek(0)
         return discord.File(buffer, filename="plot.png")
     except Exception as e:
         logger.error(f"Failed to generate chart: {e}")
         print(f"[ERROR] Failed to generate chart: {e}")
         return None
+    finally:
+        if fig is not None:
+            plt.close(fig)
 
 
 def bear_player_history_embed(*, alliance_name: str, fid: int, nickname: str,
@@ -4459,9 +4462,12 @@ class BearDamageView(discord.ui.View):
         await self.cog.show_bear_track_menu(interaction)
 
     async def try_redraw(self, interaction: discord.Interaction):
+        # Chart render (matplotlib) can exceed the 3s ack window — defer first.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         self._build_components()
         if not self.alliance_id:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=_bear_viewer_embed(), attachments=[], view=self,
             )
             return
@@ -4483,11 +4489,11 @@ class BearDamageView(discord.ui.View):
                 ),
                 color=theme.emColor2,
             )
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 embed=empty, attachments=[], view=self,
             )
             return
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=embed, attachments=[file] if file else [], view=self,
         )
 
@@ -4965,6 +4971,9 @@ class BearDamageEditView(discord.ui.View):
         if not (self.alliance_id and self.selected_record_id and self.can_manage):
             return
         try:
+            # FK cascade is off (pragma never set), so clear child rows explicitly.
+            self.cog.bear_cursor.execute(
+                "DELETE FROM bear_player_damage WHERE hunt_id = ?", (self.selected_record_id,))
             self.cog.bear_cursor.execute(
                 "DELETE FROM bear_hunts WHERE id = ?", (self.selected_record_id,))
             self.cog.bear_conn.commit()
@@ -5211,7 +5220,7 @@ def _write_match_to_row(view, *, row_id, fid, nick, damage, rank, raw_name=None)
         rows = view.rows
         for i, r in enumerate(rows):  # free any other row holding this fid
             if i != row_id and r.get("fid") == fid:
-                r.update({"fid": None, "nickname": None, "status": "unmatched"})
+                r.update({"fid": None, "nickname": None, "status": "none"})
         match = {"fid": fid, "nickname": nick, "damage": damage, "rank": rank,
                  "candidates": [(fid, nick, 100)], "status": "manual"}
         if row_id is not None and row_id < len(rows):
@@ -5808,8 +5817,11 @@ class PlayerHistoryView(discord.ui.View):
         return _cb
 
     async def render(self, interaction: discord.Interaction):
-        embed, file = self.build()
-        await interaction.response.edit_message(
+        # Chart render can exceed the 3s ack window and blocks the loop — defer + off-thread.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
+        embed, file = await asyncio.to_thread(self.build)
+        await interaction.edit_original_response(
             embed=embed, view=self, attachments=[file] if file else [])
 
     async def _on_back(self, interaction: discord.Interaction):
@@ -6930,7 +6942,8 @@ class DataSubmit:
         total_damages = [int(r[2]) if r[2] else 0 for r in filtered_rows]
 
         try:
-            embed, file = bear_data_embed(
+            embed, file = await asyncio.to_thread(
+                bear_data_embed,
                 alliance_id=alliance_id,
                 alliance_name=alliance_name,
                 hunting_trap=hunting_trap,
@@ -6987,7 +7000,8 @@ class DataSubmit:
             return None, None
 
         try:
-            embed, file = bear_data_embed_combined(
+            embed, file = await asyncio.to_thread(
+                bear_data_embed_combined,
                 alliance_id=alliance_id,
                 alliance_name=alliance_name,
                 trap_series=trap_series,

@@ -223,6 +223,11 @@ class EventReviewView(discord.ui.View):
     def all_rows(self) -> list[dict]:
         return self.registered_rows + self.result_rows
 
+    @property
+    def zero_is_absent(self) -> bool:
+        """0-point result = absent (Foundry/Canyon); not for power/simple events."""
+        return not self.simple and not getattr(self.session, "power_only_snapshot", False)
+
     def _global_to_local(self, global_idx: int) -> tuple[list[dict], int]:
         if global_idx < len(self.registered_rows):
             return self.registered_rows, global_idx
@@ -289,10 +294,15 @@ class EventReviewView(discord.ui.View):
                     nameless.append(entry)
 
         rows = list(by_fid.values()) + nameless
+        zero_absent = self.zero_is_absent
         for row in rows:
-            if row["result_value"] is not None and row["registered_value"] is not None:
+            rv = row["result_value"]
+            if zero_absent and rv == 0:
+                # Joined but scored nothing — counts as absent.
+                row["attendance"] = "absent"
+            elif rv is not None and row["registered_value"] is not None:
                 row["attendance"] = "present"
-            elif row["result_value"] is not None:
+            elif rv is not None:
                 # Game rule: a FID can only join one Foundry/Canyon per cycle,
                 # so a result row with no registration match is by definition
                 # an anomaly — missed Substitute, duplicate name, OCR mismatch,
@@ -335,8 +345,10 @@ class EventReviewView(discord.ui.View):
                 f"{theme.warnIcon} **Registration only** — Submit saves this "
                 f"{scope}; the result mail you upload later will close it."
             )
+        tail = ("0-point players are marked absent." if self.zero_is_absent
+                else "no Absent flip.")
         return (f"{theme.warnIcon} **Result only** — no matching registration "
-                "found. Submit records results without an Absent flip.")
+                f"found. Submit records results; {tail}")
 
     def _event_scope_phrase(self) -> str:
         """Short human phrase identifying this session (legion + date)."""
@@ -373,6 +385,8 @@ class EventReviewView(discord.ui.View):
             "• Empty the Name field on edit to delete a row.",
             legend,
         ]
+        if self.zero_is_absent:
+            desc_lines.append("• Set a player's points to `0` to mark them **absent**.")
         if self.existing_session_id is not None:
             desc_lines.append(
                 f"\n{theme.refreshIcon} **Editing existing record** — Submit will "
@@ -471,16 +485,19 @@ class EventReviewView(discord.ui.View):
         page_rows = rows[start:start + self.ROWS_PER_PAGE]
         desc_lines.append(f"\n**{label} · {len(rows)}**")
         budget_remaining = 4096 - sum(len(l) + 1 for l in desc_lines) - 120
+        is_result = not self.has_registration
         for offset, r in enumerate(page_rows):
             i = start + offset + 1  # global row number, stable across pages
-            icon = _STATUS_ICON.get(r["status"], "")
+            absent = is_result and self.zero_is_absent and not r["value"]
+            icon = theme.deniedIcon if absent else _STATUS_ICON.get(r["status"], "")
             if r["status"] in ("auto", "manual") and r["fid"]:
                 player = f"`{_isolate_rtl(r['nickname'])}` · `{r['fid']}`"
             elif r["status"] in ("likely", "review") and r["fid"]:
                 player = f"`{_isolate_rtl(r['nickname'])}` ({r['status']}) · `{r['fid']}`"
             else:
                 player = f"`{_isolate_rtl(r['name'])}` — no match"
-            line = _ltr_line(f"**#{i}** {icon} {player} — `{_format_int(r['value'])}`")
+            tail = "`Absent`" if absent else f"`{_format_int(r['value'])}`"
+            line = _ltr_line(f"**#{i}** {icon} {player} — {tail}")
             if budget_remaining - len(line) - 1 < 0:
                 break  # rest is on the next page — pagination, not a truncation note
             desc_lines.append(line)
@@ -534,10 +551,10 @@ class EventReviewView(discord.ui.View):
                 bits.append(f"`{r['fid']}`")
             if r["registered_value"] is not None:
                 bits.append(f"`{self._fmt_reg(r['registered_value'])}` {self._reg_tag()}")
-            if r["result_value"] is not None:
-                bits.append(f"`{_format_compact(r['result_value'])}` Pts")
-            elif r["attendance"] == "absent":
+            if r["attendance"] == "absent":
                 bits.append("`Absent`")
+            elif r["result_value"] is not None:
+                bits.append(f"`{_format_compact(r['result_value'])}` Pts")
             line = _ltr_line(" · ".join(bits))
             if budget_remaining - len(line) - 1 < 0:
                 desc_lines.append(f"_…and {len(page_rows) - rendered} more on this "
@@ -1021,6 +1038,11 @@ class EventReviewView(discord.ui.View):
                 conn.execute(
                     "UPDATE attendance_sessions SET awaiting_result = 1 "
                     "WHERE session_id = ?", (session_id,))
+                # Re-upload rebuilds the event; clear prior result rows so they
+                # don't accumulate.
+                conn.execute(
+                    "DELETE FROM attendance_records WHERE session_id = ? "
+                    "AND status IN ('present', 'absent')", (session_id,))
                 conn.commit()
         else:
             session_id = _find_or_create_session(
@@ -1053,9 +1075,13 @@ class EventReviewView(discord.ui.View):
 
         next_unmatched = _unmatched_id_floor(session_id) - 1
         present_fids = set()
+        zero_absent = self.zero_is_absent
         for r in self.result_rows:
+            # 0 points = joined-but-did-nothing = absent (Foundry/Canyon).
+            row_status = "absent" if (zero_absent and not r["value"]) else "present"
             if r["fid"]:
-                present_fids.add(r["fid"])
+                if row_status == "present":
+                    present_fids.add(r["fid"])
                 learn_name_alias(self.session.alliance_id, r["name"], r["fid"])
                 row_fid: int = r["fid"]
             else:
@@ -1065,7 +1091,8 @@ class EventReviewView(discord.ui.View):
                     matched_neg = unmatched_reg_by_name[norm].pop(0)
                 if matched_neg is not None:
                     row_fid = matched_neg
-                    present_fids.add(row_fid)
+                    if row_status == "present":
+                        present_fids.add(row_fid)
                 else:
                     row_fid = next_unmatched
                     next_unmatched -= 1
@@ -1077,7 +1104,7 @@ class EventReviewView(discord.ui.View):
                 alliance_id=self.session.alliance_id,
                 fid=row_fid,
                 name=r["nickname"] or r["name"],
-                status="present",
+                status=row_status,
                 points=r["value"],
             )
         absent_rows = _mark_registered_as_absent(session_id, except_fids=present_fids)

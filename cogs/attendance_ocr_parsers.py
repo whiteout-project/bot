@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import difflib
+import functools
 import logging
 import re
 import sqlite3
@@ -630,16 +631,19 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
 
     def merge(rows, fb_rows, fb_text, _lang):
         # Cheap value-merge first (works when the fallback engine happens to read
-        # the number too).
-        fb_by_value = {fr["value"]: fr for fr in fb_rows}
+        # the number too). Group by value so rows sharing a value aren't dropped.
+        fb_by_value: dict = {}
+        for fr in fb_rows:
+            fb_by_value.setdefault(fr["value"], []).append(fr)
         for r in rows:
             if not is_unfilled(r):
                 continue
-            fr = fb_by_value.get(r["value"])
-            if fr and fr.get("name"):
-                fid, _ = fuzzy_match_name(fr["name"], roster, alliance_id=alliance_id)
-                if fid is not None:
-                    r["name"] = fr["name"]
+            for fr in fb_by_value.get(r["value"], ()):
+                if fr.get("name"):
+                    fid, _ = fuzzy_match_name(fr["name"], roster, alliance_id=alliance_id)
+                    if fid is not None:
+                        r["name"] = fr["name"]
+                        break
         # Non-Latin engines read names well but mangle numbers, so value-merge
         # usually misses them. Fall back to bear's anchor-based position fill
         # (Latin names from the primary pass anchor the script substrings). It
@@ -648,8 +652,9 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
             for r in rows:
                 r["damage"] = r["value"]
             try:
+                # id() keys so rows sharing a value aren't collapsed.
                 bear_track.fill_unfilled_by_position(
-                    {r["value"]: r for r in rows}, fb_text, _lang, "attendance", roster)
+                    {id(r): r for r in rows}, fb_text, _lang, "attendance", roster)
             finally:
                 for r in rows:
                     r.pop("damage", None)
@@ -795,6 +800,7 @@ def _skeleton(s: str) -> str:
     return _skeleton_fn(s)
 
 
+@functools.lru_cache(maxsize=8192)
 def _normalize_for_match(s: str) -> str:
     """Fold homoglyphs to Latin, lowercase, drop non-alphanumeric noise — so a
     decorated 'ROγAL' matches 'ROYAL'. Genuine non-Latin scripts (Arabic, CJK)
@@ -1011,8 +1017,30 @@ def learn_name_alias(alliance_id, ocr_name, fid) -> None:
             """, (int(alliance_id), key, int(fid), ocr_name,
                   datetime.now(timezone.utc).isoformat(timespec="seconds")))
             conn.commit()
+        _ALIAS_CACHE.pop(int(alliance_id), None)
     except Exception as e:
         logger.warning(f"AttendanceOCR: could not learn alias for {ocr_name!r}: {e}")
+
+
+_ALIAS_CACHE: dict[int, list] = {}
+
+
+def _load_alliance_aliases(alliance_id: int) -> list:
+    """Cached alias rows per alliance; invalidated by learn_name_alias on write."""
+    aid = int(alliance_id)
+    cached = _ALIAS_CACHE.get(aid)
+    if cached is not None:
+        return cached
+    try:
+        with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+            rows = conn.execute(
+                "SELECT ocr_key, fid FROM ocr_name_alias WHERE alliance_id = ?",
+                (aid,)).fetchall()
+    except Exception as e:
+        logger.warning(f"AttendanceOCR: alias load failed: {e}")
+        return []
+    _ALIAS_CACHE[aid] = rows
+    return rows
 
 
 def alias_lookup(alliance_id, detected, roster) -> Optional[int]:
@@ -1025,14 +1053,7 @@ def alias_lookup(alliance_id, detected, roster) -> Optional[int]:
     if len(key) < 2:
         return None
     roster_fids = {f for f, _ in roster}
-    try:
-        with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
-            rows = conn.execute(
-                "SELECT ocr_key, fid FROM ocr_name_alias WHERE alliance_id = ?",
-                (int(alliance_id),)).fetchall()
-    except Exception as e:
-        logger.warning(f"AttendanceOCR: alias lookup failed: {e}")
-        return None
+    rows = _load_alliance_aliases(alliance_id)
     for ocr_key, fid in rows:
         if ocr_key == key and fid in roster_fids:
             return fid
@@ -1575,8 +1596,8 @@ class _ProgressView(discord.ui.View):
 class PowerRankingsSession(OcrUploadSession):
     """Power Rankings: stitch scroll screenshots, read Power (multi-language),
     then route through the shared review as a power snapshot (writes users.power,
-    no attendance). Dedup keys on the power value (unique per player), which also
-    collapses the uploader's own row that the game pins at the list bottom."""
+    no attendance). Rows dedup by value + overlapping name across the stitched
+    scroll screenshots."""
 
     db_event_type = "power_rankings"
     registration_value_label = "Power"   # unused — no sign-up phase
@@ -1587,7 +1608,7 @@ class PowerRankingsSession(OcrUploadSession):
     def __init__(self, *, alliance_id: int, **kwargs):
         super().__init__(**kwargs)
         self.alliance_id = alliance_id
-        self.rows: dict[int, dict] = {}
+        self.rows: list[dict] = []
         self.result_rows: list[dict] = []
         self.registered_rows: list[dict] = []
         # A power snapshot reflects the roster's power right now — default to
@@ -1616,16 +1637,15 @@ class PowerRankingsSession(OcrUploadSession):
             except Exception:
                 self.processed_images += 1
                 continue
+            # Dedup by value + overlapping name (keep distinct same-power players).
             for row in rows:
-                existing = self.rows.get(row["power"])
-                if existing is None or _cleaner_name(row["name"], existing["name"]):
-                    self.rows[row["power"]] = row
+                _dedup_into(self.rows, row)
             self.processed_images += 1
             await self.render_progress()
         # Sorted by power desc — the canonical ranking — for the review.
         self.result_rows = [
             {"name": r["name"], "value": r["power"]}
-            for r in sorted(self.rows.values(), key=lambda r: -r["power"])
+            for r in sorted(self.rows, key=lambda r: -r["power"])
         ]
 
     def extra_progress_lines(self) -> str:
