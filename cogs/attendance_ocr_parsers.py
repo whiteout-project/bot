@@ -521,8 +521,9 @@ _FORMATTED_NUMBER_RE = re.compile(
                                                # letters ('lord235342323' is a name)
 )
 _RANK_PREFIX_RE = re.compile(r"^\s*(\d{1,4})\b")
-# A lone "0" (a 0-point scorer), not part of a larger number.
-_LONE_ZERO_RE = re.compile(r"(?<![A-Za-z0-9.,])0(?![A-Za-z0-9.,])")
+# A lone 0-point value (a 0-scorer), not part of a larger number. Tolerates the
+# common OCR 0->O misread since these rows show a bare "0".
+_LONE_ZERO_RE = re.compile(r"(?<![A-Za-z0-9.,])[0O](?![A-Za-z0-9.,])")
 
 _PARSE_STOPWORDS = frozenset({
     "mail", "delete", "ranking", "rankings", "personal", "arsenal",
