@@ -990,13 +990,9 @@ class ConfirmDeleteView(discord.ui.View):
     @discord.ui.button(label="🗑️ Delete", style=discord.ButtonStyle.danger)
     async def confirm_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            # Delete session and all associated records
-            with sqlite3.connect('db/attendance.sqlite') as db:
-                cursor = db.cursor()
-                # Delete all attendance records for this session
-                cursor.execute("DELETE FROM attendance_records WHERE session_id = ?", (self.session_id,))
-                db.commit()
-                
+            from .attendance_ocr_parsers import delete_session
+            delete_session(self.session_id)
+
             # Show success message
             success_embed = discord.Embed(
                 title=f"{theme.verifiedIcon} Session Deleted",

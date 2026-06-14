@@ -1342,6 +1342,17 @@ def _close_session(session_id: str) -> None:
         conn.commit()
 
 
+def delete_session(session_id: str) -> None:
+    """Remove a session and all its rows (records, scoreboard, stats, MVPs).
+    users.power/combat_power are independent and left untouched."""
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        for tbl in ("attendance_records", "attendance_session_scoreboard",
+                    "attendance_session_stats", "attendance_session_mvps",
+                    "attendance_sessions"):
+            conn.execute(f"DELETE FROM {tbl} WHERE session_id = ?", (session_id,))
+        conn.commit()
+
+
 def _unmatched_id_floor(session_id: str) -> int:
     """Most-negative existing player_id for this session, or 0 if none. Callers
     decrement from this to allocate a fresh per-session placeholder id."""

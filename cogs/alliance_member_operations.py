@@ -21,6 +21,32 @@ from .bot_level_mapping import LEVEL_MAPPING
 
 logger = logging.getLogger('alliance')
 
+_ID_HEADERS = {"id", "fid", "player id", "player_id"}
+
+
+def _extract_ids_from_csv(text: str) -> list[str]:
+    """Numeric player IDs from an uploaded CSV. With a recognised ID/FID header
+    only that column is read (so the export's other columns don't leak in as
+    bogus ids); otherwise every numeric cell is taken (plain ID lists). Order
+    preserved, deduplicated."""
+    rows = list(csv.reader(io.StringIO(text.strip())))
+    if not rows:
+        return []
+    header = [h.strip().lower() for h in rows[0]]
+    id_col = next((i for i, h in enumerate(header) if h in _ID_HEADERS), None)
+    if id_col is not None:
+        cells = (r[id_col] for r in rows[1:] if len(r) > id_col)
+    else:
+        cells = (cell for r in rows for cell in r)
+    seen: set[str] = set()
+    out: list[str] = []
+    for cell in cells:
+        v = cell.strip()
+        if v.isdigit() and v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
 
 class _MemberAddProgress:
     # Drops the target message after MAX_FAILS edits fail in a row so callers
@@ -320,9 +346,9 @@ class MemberListView(discord.ui.View):
                 if m.get('power') is not None or m.get('combat_power') is not None:
                     pwr = []
                     if m.get('power') is not None:
-                        pwr.append(f"{theme.chartIcon} {_compact_power(m['power'])}")
+                        pwr.append(f"{theme.chartIcon} PWR: {_compact_power(m['power'])}")
                     if m.get('combat_power') is not None:
-                        pwr.append(f"{theme.shieldIcon} {_compact_power(m['combat_power'])}")
+                        pwr.append(f"{theme.shieldIcon} CPWR: {int(m['combat_power']):,}")
                     row_lines.append("     " + " · ".join(pwr))
                 rows.append("\n".join(row_lines))
             body = "\n".join(rows)
@@ -650,8 +676,19 @@ class ManageMembersView(MemberListView):
         except discord.HTTPException:
             pass
 
-        # Hand off to the existing add flow; it edits this ephemeral with progress.
-        await self.cog.add_user(interaction, self.alliance_id, ids)
+        fids = _extract_ids_from_csv(ids)
+        if not fids:
+            await interaction.edit_original_response(embed=discord.Embed(
+                title=f"{theme.deniedIcon} No IDs Found",
+                description="That file had no usable player IDs. Use the export file "
+                            "as-is, or a list of numeric IDs.",
+                color=theme.emColor2,
+            ))
+            return
+
+        # Hand off only the ID column so the count and API lookups aren't polluted
+        # by the export's other columns (name, level, state, power).
+        await self.cog.add_user(interaction, self.alliance_id, "\n".join(fids))
 
     async def _on_select_ids(self, interaction: discord.Interaction):
         await interaction.response.send_modal(IDMultiSelectModal(self))

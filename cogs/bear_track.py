@@ -161,8 +161,19 @@ _FULLWIDTH_PUNCT = str.maketrans({
 _BARE_DAMAGE_RUN_RE = re.compile(r'(?<!\d)(\d{9,12})(?!\d)')
 
 
+def _rejoin_spaced_thousands(m) -> str:
+    s = m.group(0)
+    sep = ',' if ',' in s else '.'
+    return re.sub(r'[ \t]+', sep, s)
+
+
 def repair_ocr_digits(text: str) -> str:
     text = text.translate(_FULLWIDTH_PUNCT)
+    # OCR often reads a thousands separator as a space ('663,240 667'), which
+    # truncates the value ~1000x at parse. Rejoin trailing 3-digit groups onto a
+    # number that already has a real separator (so a leading rank isn't merged);
+    # same-line only so a value never absorbs the next row.
+    text = _SPACED_THOUSANDS_RE.sub(_rejoin_spaced_thousands, text)
     text = _BARE_DAMAGE_RUN_RE.sub(lambda m: f'{int(m.group(1)):,}', text)
     def _fix(match):
         run = match.group(0)
@@ -174,6 +185,8 @@ def repair_ocr_digits(text: str) -> str:
 
 
 _FORMATTED_NUMBER_RE = re.compile(r'\d{1,3}(?:[,\.]\d{3})+')
+# A grouped number whose later separators OCR'd as spaces: '663,240 667'.
+_SPACED_THOUSANDS_RE = re.compile(r'\d{1,3}(?:[,\.]\d{3})+(?:[ \t]+\d{3})+(?!\d)')
 # Two capture groups: digit-at-end (`[Hunting Trap 1]`) or digit-at-start
 # (Arabic visual-order: `[1 فخ الصيد]` → OCR `[1 ...]`).
 _BRACKETED_TRAP_RE = re.compile(r'\[(?:[^\]\d][^\]]*?(\d+)|(\d+)[^\]]*?)\]')
@@ -880,6 +893,15 @@ def _name_at_date(changes, date_str, current_nick):
     return changes[0][0] or current_nick  # all changes after date → earliest old name
 
 
+def _roster_parts(entry):
+    """A roster entry as (fid, match_name, penalty, display). Accepts the plain
+    (fid, nick) 2-tuple or the date-aware (fid, match_name, penalty, display)."""
+    fid, match_name = entry[0], entry[1]
+    penalty = entry[2] if len(entry) > 2 else 0
+    display = entry[3] if len(entry) > 3 else entry[1]
+    return fid, match_name, penalty, display
+
+
 def match_roster(detected_name: str, roster):
     """Top fuzzy matches as [(fid, display_nick, score_0_100), ...], best per fid.
 
@@ -893,17 +915,11 @@ def match_roster(detected_name: str, roster):
     if not detected_name or not roster or not RAPIDFUZZ_AVAILABLE:
         return []
 
-    def _parts(entry):
-        fid, match_name = entry[0], entry[1]
-        penalty = entry[2] if len(entry) > 2 else 0
-        display = entry[3] if len(entry) > 3 else entry[1]
-        return fid, match_name, penalty, display
-
     best: dict = {}
     if sum(c.isalpha() for c in detected_name) < 3:
         normalized = _fold(detected_name)
         for entry in roster:
-            fid, match_name, penalty, display = _parts(entry)
+            fid, match_name, penalty, display = _roster_parts(entry)
             if _fold(match_name or '') == normalized:
                 score = 100 - penalty
                 if fid not in best or score > best[fid][2]:
@@ -911,7 +927,7 @@ def match_roster(detected_name: str, roster):
         return sorted(best.values(), key=lambda c: -c[2])[:5]
 
     cleaned = _strip_minority_script(detected_name)
-    names = [(_parts(e)[1] or "") for e in roster]
+    names = [(_roster_parts(e)[1] or "") for e in roster]
     results = _rf_process.extract(
         cleaned, names,
         scorer=_rf_fuzz.WRatio,
@@ -919,7 +935,7 @@ def match_roster(detected_name: str, roster):
         limit=None, score_cutoff=MATCH_LIKELY_MIN,
     )
     for _match_str, score, idx in results:
-        fid, _match_name, penalty, display = _parts(roster[idx])
+        fid, _match_name, penalty, display = _roster_parts(roster[idx])
         adj = int(score) - penalty
         if adj < MATCH_LIKELY_MIN:
             continue
@@ -3371,10 +3387,10 @@ class BearHuntReviewView(discord.ui.View):
         )
 
     def _lookup_nickname(self, fid):
-        # roster entries may be (fid, nick) or (fid, match_name, penalty, display)
         for entry in self.roster:
-            if entry[0] == fid:
-                return entry[-1]
+            f, _match_name, _penalty, display = _roster_parts(entry)
+            if f == fid:
+                return display
         return None
 
     def _total_pages(self):
@@ -3399,6 +3415,11 @@ class BearHuntReviewView(discord.ui.View):
         parts.append(
             "*Select a player to edit in the drop-down; "
             "clear the name to delete the row.*"
+        )
+        parts.append(
+            f"{theme.infoIcon} *Bear mails only list the top ~10 by damage, so only "
+            f"those are auto-recognized for now. Add others with **Add Player** — "
+            f"capturing further participants via OCR is planned in a future release.*"
         )
         action_lines = [
             f"{theme.addIcon} **Add Player**\n"

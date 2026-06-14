@@ -27,6 +27,7 @@ from .attendance_ocr_parsers import (
     _upsert_attendance_row,
     _mark_registered_as_absent,
     _close_session,
+    delete_session,
     _find_or_create_session,
     _record_session,
     _unmatched_id_floor,
@@ -63,6 +64,12 @@ _MATCH_PRIORITY = {"no_match": 0, "no_name": 0, "review": 1,
 
 def _format_int(n: Optional[int]) -> str:
     return f"{int(n):,}" if n is not None else "—"
+
+
+def _parse_value_input(raw: Optional[str]) -> Optional[int]:
+    """Digits-only int from a user value field; None if it had no digits."""
+    digits = re.sub(r"[^\d]", "", raw or "")
+    return int(digits) if digits else None
 
 
 def _add_paginated_field(embed: discord.Embed, header: str, lines: list[str],
@@ -145,6 +152,10 @@ class EventReviewView(discord.ui.View):
         self.roster = load_alliance_roster(session.alliance_id)
         self.registered_rows = self._enrich_rows(session.registered_rows, kind="registration")
         self.result_rows = self._enrich_rows(session.result_rows, kind="result")
+        # Move results off a duplicate-name twin that didn't register, so an
+        # extra roster twin isn't pulled in as a phantom player.
+        reg_fids = {r["fid"] for r in self.registered_rows if r.get("fid")}
+        self._reconcile_result_twins(reg_fids)
         # Cache for the merged per-player view — building it is O(n²) and it's
         # consulted ~6× per render (embed, footer, dropdown count, components).
         # Invalidated in refresh(), which runs after every row-mutating edit.
@@ -155,8 +166,31 @@ class EventReviewView(discord.ui.View):
         self.show_unmatched_only = False
         self._build_components()
 
+    def _reconcile_result_twins(self, reg_fids: set) -> None:
+        """A result row matched to a duplicate-name twin who didn't register is
+        the same player as an unmatched registered twin — move it onto that fid
+        so a 2-player event can't surface a phantom 3rd."""
+        used = {r["fid"] for r in self.result_rows if r.get("fid")}
+        open_reg = reg_fids - used
+        for r in self.result_rows:
+            if not open_reg:
+                return
+            fid = r.get("fid")
+            if fid in reg_fids or not r.get("candidates"):
+                continue
+            for cand_fid, cand_nick, _score, status in r["candidates"]:
+                if cand_fid in open_reg:
+                    used.discard(fid)
+                    r["fid"] = cand_fid
+                    r["nickname"] = self._lookup_nickname(cand_fid) or cand_nick
+                    r["status"] = status
+                    used.add(cand_fid)
+                    open_reg.discard(cand_fid)
+                    break
+
     def _enrich_rows(self, raw_rows: list[dict], *, kind: str) -> list[dict]:
-        enriched = assign_unique_fids(raw_rows, self.roster, alliance_id=self.session.alliance_id)
+        enriched = assign_unique_fids(
+            raw_rows, self.roster, alliance_id=self.session.alliance_id)
         for r in enriched:
             r["_kind"] = kind
         return enriched
@@ -452,6 +486,15 @@ class EventReviewView(discord.ui.View):
             desc_lines.append(line)
             budget_remaining -= len(line) + 1
 
+    def _reg_tag(self) -> str:
+        return "CP" if self.registration_value_label == "Combat Power" else "Pwr"
+
+    def _fmt_reg(self, value) -> str:
+        # Combat Power is precise and small; don't abbreviate it.
+        if self.registration_value_label == "Combat Power":
+            return _format_int(value)
+        return _format_compact(value)
+
     def _append_merged_player_lines(self, desc_lines: list[str]) -> None:
         """One row per player into the description (present → needs-review →
         absent), truncating with a hint near the 4096-char budget."""
@@ -490,7 +533,7 @@ class EventReviewView(discord.ui.View):
             if r["fid"] and r["fid"] > 0:
                 bits.append(f"`{r['fid']}`")
             if r["registered_value"] is not None:
-                bits.append(f"`{_format_compact(r['registered_value'])}` Pwr")
+                bits.append(f"`{self._fmt_reg(r['registered_value'])}` {self._reg_tag()}")
             if r["result_value"] is not None:
                 bits.append(f"`{_format_compact(r['result_value'])}` Pts")
             elif r["attendance"] == "absent":
@@ -523,7 +566,7 @@ class EventReviewView(discord.ui.View):
             if kind == "merged":
                 vbits = []
                 if row.get("registered_value") is not None:
-                    vbits.append(f"{_format_compact(row['registered_value'])} Pwr")
+                    vbits.append(f"{self._fmt_reg(row['registered_value'])} {self._reg_tag()}")
                 if row.get("result_value") is not None:
                     vbits.append(f"{_format_compact(row['result_value'])} Pts")
                 tail = " · ".join(vbits) if vbits else "—"
@@ -656,7 +699,7 @@ class EventReviewView(discord.ui.View):
                     label = _ltr_line(f"#{key + 1} {name_part}{tag}")[:100]
                     desc_bits = []
                     if row["registered_value"] is not None:
-                        desc_bits.append(f"{_format_compact(row['registered_value'])} Pwr")
+                        desc_bits.append(f"{self._fmt_reg(row['registered_value'])} {self._reg_tag()}")
                     if row["result_value"] is not None:
                         desc_bits.append(f"{_format_compact(row['result_value'])} Pts")
                     elif row["attendance"] == "absent":
@@ -745,7 +788,10 @@ class EventReviewView(discord.ui.View):
 
         # Row 3: Back (edit mode autosaves) — or Submit / Cancel (upload review).
         if self.edit_mode:
-            row3 = [("Back", theme.backIcon, discord.ButtonStyle.secondary, self._on_back_edit)]
+            row3 = [
+                ("Back", theme.backIcon, discord.ButtonStyle.secondary, self._on_back_edit),
+                ("Delete Event", theme.trashIcon, discord.ButtonStyle.danger, self._on_delete_event),
+            ]
         else:
             row3 = [
                 ("Submit", theme.verifiedIcon, discord.ButtonStyle.success, self._on_submit),
@@ -884,6 +930,27 @@ class EventReviewView(discord.ui.View):
             await attendance_cog.show_session_selection_for_marking(
                 interaction, self.session.alliance_id)
 
+    async def _on_delete_event(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title=f"{theme.warnIcon} Delete this event?",
+            description=(
+                "This permanently removes the event and its recorded attendance. "
+                "Player Power / Combat Power is **not** affected.\n\n"
+                "_To restore it, re-upload the screenshots._"
+            ),
+            color=theme.emColor2,
+        )
+        await interaction.response.edit_message(
+            embed=embed, view=_ConfirmDeleteEventView(self))
+
+    async def _do_delete_event(self, interaction: discord.Interaction):
+        delete_session(self.existing_session_id)
+        self.stop()
+        attendance_cog = self.session.cog.bot.get_cog("Attendance")
+        if attendance_cog:
+            await attendance_cog.show_session_selection_for_marking(
+                interaction, self.session.alliance_id)
+
     async def _save_edit(self, interaction: discord.Interaction):
         """Refresh the embed, then persist immediately when editing a saved
         session (so edits stick without a Submit step). Used by the row/header
@@ -989,7 +1056,6 @@ class EventReviewView(discord.ui.View):
         for r in self.result_rows:
             if r["fid"]:
                 present_fids.add(r["fid"])
-                update_fn(r["fid"], r["value"], ts)
                 learn_name_alias(self.session.alliance_id, r["name"], r["fid"])
                 row_fid: int = r["fid"]
             else:
@@ -1351,6 +1417,34 @@ class EventReviewView(discord.ui.View):
         )
 
 
+class _ConfirmDeleteEventView(discord.ui.View):
+    """Ephemeral-style inline confirm for deleting a saved event."""
+
+    def __init__(self, parent: "EventReviewView"):
+        super().__init__(timeout=60)
+        self.parent = parent
+        confirm = discord.ui.Button(
+            label="Delete", emoji=theme.trashIcon, style=discord.ButtonStyle.danger)
+        confirm.callback = self._confirm
+        self.add_item(confirm)
+        cancel = discord.ui.Button(
+            label="Cancel", emoji=theme.backIcon, style=discord.ButtonStyle.secondary)
+        cancel.callback = self._cancel
+        self.add_item(cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self.parent.interaction_check(interaction)
+
+    async def _confirm(self, interaction: discord.Interaction):
+        self.stop()
+        await self.parent._do_delete_event(interaction)
+
+    async def _cancel(self, interaction: discord.Interaction):
+        self.stop()
+        await interaction.response.edit_message(
+            embed=self.parent.build_embed(), view=self.parent)
+
+
 # ── modals ────────────────────────────────────────────────────────────────
 
 async def _resolve_player_field(interaction: discord.Interaction,
@@ -1436,7 +1530,9 @@ class _EditMergedRowModal(discord.ui.Modal):
             default=display, required=False, max_length=80,
         )
         self.add_item(self.player_input)
-        if self.reg_idx is not None:
+        # Offer a field for every phase the event has, not just the buckets this
+        # row already fills — so a missing Combat Power / result can be added here.
+        if view.has_registration:
             self.reg_value_input: Optional[discord.ui.TextInput] = discord.ui.TextInput(
                 label=f"Reg power ({view.registration_value_label})"[:45],
                 default=str(merged_row.get("registered_value") or 0),
@@ -1445,7 +1541,7 @@ class _EditMergedRowModal(discord.ui.Modal):
             self.add_item(self.reg_value_input)
         else:
             self.reg_value_input = None
-        if self.res_idx is not None:
+        if view.has_result:
             self.res_value_input: Optional[discord.ui.TextInput] = discord.ui.TextInput(
                 label=f"Result pts ({view.result_value_label})"[:45],
                 default=str(merged_row.get("result_value") or 0),
@@ -1465,25 +1561,29 @@ class _EditMergedRowModal(discord.ui.Modal):
 
         fid, nickname, status, note = await _resolve_player_field(
             interaction, self.view, self.player_input.value)
-        # Update in place so each row keeps its original OCR name (the alias DB
-        # learns from it) and _kind; we only re-resolve the player + value.
-        if self.reg_idx is not None and self.reg_value_input is not None:
-            try:
-                reg_val = int(re.sub(r"[^\d]", "", self.reg_value_input.value or "0"))
-            except ValueError:
-                reg_val = 0
-            self.view.registered_rows[self.reg_idx].update(
-                {"value": reg_val, "fid": fid, "nickname": nickname, "status": status})
-        if self.res_idx is not None and self.res_value_input is not None:
-            try:
-                res_val = int(re.sub(r"[^\d]", "", self.res_value_input.value or "0"))
-            except ValueError:
-                res_val = 0
-            self.view.result_rows[self.res_idx].update(
-                {"value": res_val, "fid": fid, "nickname": nickname, "status": status})
+        name = self.player_input.value.strip()
+        # Update the row in place (keeps its OCR name for the alias DB); if a
+        # bucket has no row yet but a value was entered, create one.
+        if self.reg_value_input is not None:
+            self._apply(self.view.registered_rows, self.reg_idx,
+                        _parse_value_input(self.reg_value_input.value) or 0,
+                        "registration", fid, nickname, status, name)
+        if self.res_value_input is not None:
+            self._apply(self.view.result_rows, self.res_idx,
+                        _parse_value_input(self.res_value_input.value) or 0,
+                        "result", fid, nickname, status, name)
         await self.view._save_edit(interaction)
         if note:
             await interaction.followup.send(note, ephemeral=True)
+
+    @staticmethod
+    def _apply(bucket, idx, value, kind, fid, nickname, status, name) -> None:
+        if idx is not None and idx < len(bucket):
+            bucket[idx].update(
+                {"value": value, "fid": fid, "nickname": nickname, "status": status})
+        elif value:
+            bucket.append({"name": nickname or name, "value": value, "fid": fid,
+                           "nickname": nickname, "status": status, "_kind": kind})
 
     def _underlying_targets(self) -> list[tuple[list[dict], Optional[int]]]:
         return [
@@ -1525,9 +1625,8 @@ class _EditRowModal(discord.ui.Modal):
             del self.bucket[self.local_idx]
             await self.view._save_edit(interaction)
             return
-        try:
-            value = int(re.sub(r"[^\d]", "", self.value_input.value))
-        except ValueError:
+        value = _parse_value_input(self.value_input.value)
+        if value is None:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Value must be a whole number.", ephemeral=True,
             )
@@ -1571,9 +1670,8 @@ class _AddRowModal(discord.ui.Modal):
                 f"{theme.deniedIcon} Provide a player ID or name.", ephemeral=True,
             )
             return
-        try:
-            value = int(re.sub(r"[^\d]", "", self.value_input.value))
-        except ValueError:
+        value = _parse_value_input(self.value_input.value)
+        if value is None:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Value must be a whole number.", ephemeral=True,
             )
