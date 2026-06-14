@@ -560,6 +560,13 @@ class ManageMembersView(MemberListView):
         transfer_btn.callback = self._on_transfer_selected
         self.add_item(transfer_btn)
 
+        import_btn = discord.ui.Button(
+            label="Import", emoji=theme.importIcon,
+            style=discord.ButtonStyle.success, row=3,
+        )
+        import_btn.callback = self._on_import
+        self.add_item(import_btn)
+
         export_btn = discord.ui.Button(
             label="Export", emoji=theme.exportIcon,
             style=discord.ButtonStyle.success, row=3,
@@ -589,6 +596,62 @@ class ManageMembersView(MemberListView):
 
     async def _on_add_members(self, interaction: discord.Interaction):
         await interaction.response.send_modal(AddMemberModal(self.alliance_id))
+
+    async def _on_import(self, interaction: discord.Interaction):
+        """Bulk-add members from an uploaded .csv (no paste size limit)."""
+        instructions = discord.Embed(
+            title=f"{theme.importIcon} Import Members from CSV",
+            description=(
+                f"Upload a **.csv** file **in this channel** within 2 minutes.\n\n"
+                f"**Format**\n"
+                f"{theme.upperDivider}\n"
+                f"• Header row with an **`ID`** (or `FID`) column, or the bot's export file as-is.\n"
+                f"• Only the ID column is read; names, levels and state are refreshed from the game API.\n"
+                f"• A plain list of IDs (one per line or comma-separated) works too.\n"
+                f"{theme.lowerDivider}\n\n"
+                f"{theme.boltIcon} Direct file upload has no paste size limit, so large alliances can import."
+            ),
+            color=theme.emColor1,
+        )
+        await interaction.response.send_message(embed=instructions, ephemeral=True)
+
+        def _check(m: discord.Message) -> bool:
+            return (
+                m.author.id == self.author_id
+                and m.channel.id == interaction.channel_id
+                and bool(m.attachments)
+                and m.attachments[0].filename.lower().endswith(".csv")
+            )
+
+        try:
+            upload = await self.cog.bot.wait_for("message", check=_check, timeout=120)
+        except asyncio.TimeoutError:
+            await interaction.edit_original_response(embed=discord.Embed(
+                title=f"{theme.deniedIcon} Import Timeout",
+                description="No .csv was uploaded within 2 minutes. Tap Import to try again.",
+                color=theme.emColor2,
+            ))
+            return
+
+        try:
+            raw = await upload.attachments[0].read()
+            ids = raw.decode("utf-8-sig", errors="replace")
+        except Exception as e:
+            logger.error(f"Member import: could not read CSV: {e}")
+            await interaction.edit_original_response(embed=discord.Embed(
+                title=f"{theme.deniedIcon} Couldn't Read File",
+                description=f"That file couldn't be read: {e}",
+                color=theme.emColor2,
+            ))
+            return
+
+        try:
+            await upload.delete()  # the upload was just transport; keep the channel tidy
+        except discord.HTTPException:
+            pass
+
+        # Hand off to the existing add flow; it edits this ephemeral with progress.
+        await self.cog.add_user(interaction, self.alliance_id, ids)
 
     async def _on_select_ids(self, interaction: discord.Interaction):
         await interaction.response.send_modal(IDMultiSelectModal(self))
@@ -2168,7 +2231,12 @@ class AllianceMemberOperations(commands.Cog):
             value="-",
             inline=False
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Import reuses this with an already-answered interaction (it showed
+        # upload instructions first), so edit that ephemeral instead.
+        if interaction.response.is_done():
+            await interaction.edit_original_response(content=None, embed=embed)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # Enqueue the operation, attaching the live interaction for progress updates
         process_id = process_queue.enqueue(

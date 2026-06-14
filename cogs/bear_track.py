@@ -3326,6 +3326,7 @@ class BearHuntReviewView(discord.ui.View):
                 row['fid'] = None
                 row['nickname'] = None
                 row['status'] = 'none'
+                row['match_score'] = None
 
         candidates = []
         for row_idx, row in enumerate(self.rows):
@@ -3342,6 +3343,26 @@ class BearHuntReviewView(discord.ui.View):
             row['fid'] = fid
             row['nickname'] = nick
             row['status'] = 'auto' if score >= MATCH_AUTO_CONFIRM else 'likely'
+            row['match_score'] = score
+            assigned_fids.add(fid)
+
+        # Second chance: a row whose every candidate fid was already claimed
+        # re-matches against the unassigned roster, so duplicate-name rows each
+        # land on a distinct id instead of going unmatched.
+        for row in self.rows:
+            if row.get('status') == 'manual' or row.get('fid') is not None:
+                continue
+            if not row.get('candidates'):
+                continue  # never matched anything — leave as a genuine no-match
+            remaining = [e for e in self.roster if e[0] not in assigned_fids]
+            alt = match_roster(row.get('name') or '', remaining)
+            if not alt:
+                continue
+            fid, nick, score = alt[0]
+            row['fid'] = fid
+            row['nickname'] = nick
+            row['status'] = 'auto' if score >= MATCH_AUTO_CONFIRM else 'likely'
+            row['match_score'] = score
             assigned_fids.add(fid)
 
     def _sort_rows(self):
@@ -3432,8 +3453,11 @@ class BearHuntReviewView(discord.ui.View):
             if status == 'auto':
                 player = f"`{_isolate_rtl(r['nickname'])}` · `{r['fid']}`"
             elif status == 'likely':
-                top_fid, top_nick, score = r['candidates'][0]
-                player = f"`{_isolate_rtl(top_nick)}` ({score}%) · `{top_fid}`"
+                # Show the actually-assigned id/nick (greedy may pick a non-top
+                # candidate for duplicate names) so the embed matches the dropdown.
+                score = r.get('match_score')
+                score_str = f" ({score}%)" if score is not None else ""
+                player = f"`{_isolate_rtl(r['nickname'])}`{score_str} · `{r['fid']}`"
             elif status == 'ambiguous':
                 tops = " / ".join(
                     f"`{_isolate_rtl(c[1])}` (`{c[0]}`, {c[2]}%)"
@@ -6704,7 +6728,11 @@ class DataSubmit:
             if player_rows:
                 for r in player_rows:
                     fid = r.get('fid')
-                    score = r['candidates'][0][2] if r.get('candidates') else None
+                    # The assigned fid's own score, not the top candidate's —
+                    # they differ when greedy picks a non-top match for dupes.
+                    score = r.get('match_score')
+                    if score is None and r.get('candidates'):
+                        score = r['candidates'][0][2]
                     self.bear_cursor.execute(
                         "INSERT INTO bear_player_damage "
                         "(hunt_id, fid, raw_name, resolved_nickname, damage, rank, match_score) "

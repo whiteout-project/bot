@@ -365,6 +365,9 @@ class MainMenu(commands.Cog):
                 )
                 return
             view = AdminManagerView(self, interaction.user.id)
+            # refresh_data resolves each admin's name; defer first so the later edit can't 404 (10062).
+            if not interaction.response.is_done():
+                await interaction.response.defer()
             await view.refresh_data(self.bot)
             embed = view.build_embed()
             await safe_edit_message(interaction, embed=embed, view=view, content=None)

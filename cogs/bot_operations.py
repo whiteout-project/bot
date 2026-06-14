@@ -192,7 +192,10 @@ class BotOperations(commands.Cog):
                               activity_url: str | None) -> None:
         """Push the given presence to Discord via change_presence."""
         try:
-            if activity_type == 'streaming' and activity_url:
+            if activity_type == 'custom':
+                # Custom status shows the text alone, with no "Playing/Watching" verb.
+                activity = discord.CustomActivity(name=activity_text)
+            elif activity_type == 'streaming' and activity_url:
                 activity = discord.Streaming(name=activity_text, url=activity_url)
             else:
                 # Streaming-without-URL silently falls back to Playing
@@ -965,6 +968,7 @@ _PRESENCE_TYPES: list[tuple[str, str, str]] = [
     ('listening', 'Listening to', '🎧'),
     ('watching',  'Watching',     '👁️'),
     ('competing', 'Competing in', '🏆'),
+    ('custom',    'Custom',       '💬'),
 ]
 _PRESENCE_VERB = {code: label for code, label, _ in _PRESENCE_TYPES}
 
@@ -984,10 +988,13 @@ class BotPresenceView(discord.ui.View):
 
     def build_embed(self) -> discord.Embed:
         p = self.cog.get_bot_presence()
-        verb = _PRESENCE_VERB.get(p['activity_type'], 'Playing')
-        current = f"{verb} **{p['activity_text']}**"
-        if p['activity_type'] == 'streaming' and p['activity_url']:
-            current += f"\n└ {p['activity_url']}"
+        if p['activity_type'] == 'custom':
+            current = f"**{p['activity_text']}**"
+        else:
+            verb = _PRESENCE_VERB.get(p['activity_type'], 'Playing')
+            current = f"{verb} **{p['activity_text']}**"
+            if p['activity_type'] == 'streaming' and p['activity_url']:
+                current += f"\n└ {p['activity_url']}"
         return discord.Embed(
             title=f"{theme.robotIcon} Bot Presence",
             description=(
