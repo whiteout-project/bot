@@ -88,6 +88,23 @@ def break_system_packages() -> bool:
 def break_system_packages_arg() -> bool:
     return break_system_packages() and not should_skip_venv()
 
+def _pip_env():
+    """Env for pip subprocesses that puts pip's download/unpack temp on the
+    working volume. Containers (e.g. Pterodactyl) often give /tmp a tiny tmpfs
+    separate from the disk quota, so big wheels (opencv ~73MB) fail with
+    'No space left on device' even when the real disk has room. --no-cache-dir
+    only moves the cache, not this temp."""
+    env = os.environ.copy()
+    tmp = os.path.join(os.getcwd(), ".pip-tmp")
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        env["TMPDIR"] = tmp   # POSIX
+        env["TEMP"] = tmp     # Windows
+        env["TMP"] = tmp
+    except Exception:
+        pass  # fall back to the default temp dir
+    return env
+
 def should_skip_venv() -> bool:
     """Check if venv should be skipped"""
     
@@ -436,7 +453,16 @@ def check_and_install_requirements():
                 if break_system_packages_arg():
                     cmd.append("--break-system-packages")
 
-                subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Capture output so a failure shows pip's real reason (no wheel for
+                # this Python/arch, OOM kill, disk full) instead of a bare exit code.
+                result = subprocess.run(cmd, timeout=1200, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, text=True, env=_pip_env())
+                if result.returncode != 0:
+                    tail = (result.stdout or "").strip().splitlines()[-15:]
+                    startup.phase_fail("Dependencies failed",
+                                       details=[f"Failed to install {package} (pip exit {result.returncode}):", *tail],
+                                       fix="pip install -r requirements.txt")
+                    return False
 
             except Exception as e:
                 startup.phase_fail("Dependencies failed", details=[f"Failed to install {package}: {e}"], fix="pip install -r requirements.txt")
@@ -468,7 +494,7 @@ def ensure_opencv_headless():
         cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir", "opencv-python-headless"]
         if break_system_packages_arg():
             cmd.append("--break-system-packages")
-        subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(cmd, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_pip_env())
         startup.phase_ok("OpenCV set to headless")
     except Exception as e:
         startup.phase_fail(
@@ -623,9 +649,9 @@ if __name__ == "__main__":
         
         try:
             if debug:
-                subprocess.check_call(full_command, timeout=1200)
+                subprocess.check_call(full_command, timeout=1200, env=_pip_env())
             else:
-                subprocess.check_call(full_command, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.check_call(full_command, timeout=1200, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=_pip_env())
             return True
         except Exception as e:
             if debug:

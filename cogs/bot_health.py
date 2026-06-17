@@ -87,7 +87,7 @@ LEGACY_FILES = ['autoupdateinfo.txt']
 
 # Update-flow artifacts: removed if present at cleanup time. The update flow
 # itself cleans these on success, so finding them means an aborted run.
-UPDATE_ARTIFACTS_DIRS = ['update', 'cogs.bak']
+UPDATE_ARTIFACTS_DIRS = ['update', 'cogs.bak', '.pip-tmp']
 UPDATE_ARTIFACTS_FILES = ['package.zip', 'main.py.bak', 'requirements.old']
 
 
