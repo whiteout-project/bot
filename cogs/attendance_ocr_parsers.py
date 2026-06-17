@@ -140,23 +140,37 @@ def classify_event(ocr_text: str, enabled_events: list[str],
         return None
     text_lower = ocr_text.lower()
     kw_map = keywords_by_event or {}
-    for event_type in enabled_events:
-        cfg = EVENT_TYPES.get(event_type)
-        if cfg is None:
-            continue
-        keywords = kw_map.get(event_type, [])
-        if keywords and not any(kw.lower() in text_lower for kw in keywords):
-            continue
-        for kind, regex in cfg.fingerprint_re_by_kind.items():
-            if regex.search(ocr_text):
-                return (event_type, kind)
-    return None
+
+    def _scan(require_keyword: bool) -> Optional[tuple[str, str]]:
+        for event_type in enabled_events:
+            cfg = EVENT_TYPES.get(event_type)
+            if cfg is None:
+                continue
+            keywords = kw_map.get(event_type, [])
+            if require_keyword and keywords and not any(kw.lower() in text_lower for kw in keywords):
+                continue
+            for kind, regex in cfg.fingerprint_re_by_kind.items():
+                if regex.search(ocr_text):
+                    return (event_type, kind)
+        return None
+
+    # Keyword match takes priority (disambiguates), but fall back to the
+    # fingerprint alone — result/power mails often omit the event name, and the
+    # registration fingerprints already require it.
+    return _scan(require_keyword=True) or _scan(require_keyword=False)
 
 
-def resolve_event_date(mail_date_local: date, event_type: str) -> tuple[date, str]:
+def resolve_event_date(mail_date_local: date, event_type: str,
+                       *, registration: bool = False) -> tuple[date, str]:
     cfg = EVENT_TYPES.get(event_type)
     if cfg is None or cfg.event_weekday is None:
         return mail_date_local, "exact"
+    if registration:
+        # The registration mail arrives before the event (Foundry ~2 days,
+        # Canyon ~1) — snap forward to the event's weekday so it dates the event,
+        # not the sign-up day, and matches the result session.
+        days = (cfg.event_weekday - mail_date_local.weekday()) % 7
+        return mail_date_local + timedelta(days=days), ("exact" if days == 0 else "adjusted")
     delta = (mail_date_local.weekday() - cfg.event_weekday) % 7
     if delta == 0:
         return mail_date_local, "exact"
@@ -674,10 +688,10 @@ def find_formatted_numbers(text: str) -> list[tuple[int, int, int]]:
     return out
 
 
-def _parse_player_value_rows(text: str) -> list[dict]:
+def _parse_player_value_rows(text: str, *, capture_tail: bool = False) -> list[dict]:
     """Parse (name, value) rows position-based, not line-based: OCR flattens the
     screenshot to one line, so the name is the chunk before each number (data
-    section only)."""
+    section only). `capture_tail` (results only) recovers trailing 0-scorers."""
     rows = []
     text = _trim_to_data_section(text)
     prev_end = 0
@@ -710,7 +724,8 @@ def _parse_player_value_rows(text: str) -> list[dict]:
         rows.append({"name": name, "value": value})
     # Trailing 0-scorers the value-anchored loop misses (their value is a lone 0
     # or OCR-dropped, leaving only "Name Rank").
-    rows.extend(_parse_tail_rows(text[prev_end:]))
+    if capture_tail:
+        rows.extend(_parse_tail_rows(text[prev_end:]))
     return rows
 
 
@@ -755,13 +770,16 @@ def _cleaner_name(new: str, old: str) -> bool:
     return len(new or "") > len(old or "")
 
 
-_LETTERS_THEN_DIGITS_RE = re.compile(r"^[A-Za-z]+\d+$")
+# Name-like: a letter then word chars only ("BB_300", "lord235342323"). A
+# garbled power value carries comma/period separators or is digit-led, so it
+# still trips the digit-majority check below.
+_NAMELIKE_TOKEN_RE = re.compile(r"^[A-Za-z]\w*$")
 
 
 def _looks_like_garbled_number(token: str) -> bool:
-    """A garbled power value (long, digit-majority). A clean letters-then-digits
-    token (the 'lord235342323' default name) is always a name, never a number."""
-    if _LETTERS_THEN_DIGITS_RE.match(token):
+    """A garbled power value (long, digit-majority) that the number regex missed;
+    a name-like token (even with digits/underscore) is never one."""
+    if _NAMELIKE_TOKEN_RE.match(token):
         return False
     digits = sum(c.isdigit() for c in token)
     return len(token) >= 5 and digits * 2 >= len(token)
@@ -1252,7 +1270,8 @@ def _load_existing_session_data(session_id: str) -> dict:
              "name": r[1], "value": int(r[2]) if r[2] is not None else 0}
             for r in conn.execute(
                 "SELECT player_id, player_name, points FROM attendance_records "
-                "WHERE session_id = ? AND status = 'present' ORDER BY points DESC",
+                "WHERE session_id = ? AND status IN ('present', 'absent') "
+                "ORDER BY points DESC",
                 (session_id,),
             ).fetchall()
         ]
@@ -1790,7 +1809,8 @@ class _PointsSession(OcrUploadSession):
             if self.detected_date is None:
                 d = extract_header_date(text)
                 if d:
-                    self.detected_date, self.date_confidence = resolve_event_date(d, self.db_event_type)
+                    self.detected_date, self.date_confidence = resolve_event_date(
+                        d, self.db_event_type, registration=(kind == "registration"))
             if self.detected_legion is None:
                 self.detected_legion = extract_legion(text)
 
@@ -1804,12 +1824,16 @@ class _PointsSession(OcrUploadSession):
                 # Multi-language fallback so non-Latin names (e.g. Arabic) read
                 # correctly instead of OCRing as garbage that splits one player
                 # into duplicate unmatched rows across overlapping screenshots.
+                # Tail 0-capture only for results (0 = absent); registration CP is
+                # always present so a tail row there is just a misread, not a 0.
+                parse = (lambda t: _parse_player_value_rows(t, capture_tail=True)) \
+                    if kind == "result" else _parse_player_value_rows
                 try:
                     rows, _ = await ocr_value_rows(
                         data, roster=roster, alliance_id=self.alliance_id,
-                        primary_text=text)
+                        parse=parse, primary_text=text)
                 except Exception:
-                    rows = _parse_player_value_rows(text)
+                    rows = parse(text)
                 for row in rows:
                     _dedup_into(target, row)
             self.processed_images += 1
@@ -1864,16 +1888,17 @@ class _PointsSession(OcrUploadSession):
     async def render_review(self, *, timed_out: bool):
         from .attendance_ocr_review import EventReviewView
 
-        # Two enrichment paths: re-uploading a CLOSED session (rare, admin
-        # fix) vs. uploading the result that closes an OPEN registration
-        # (the common workflow — what triggers the "complete" mode).
+        # Enrichment paths: re-uploading a CLOSED session, OR uploading
+        # registration AFTER the result already closed the event (out-of-order)
+        # — both merge into that session. Uploading the result that closes an
+        # OPEN registration is the common in-order workflow.
         existing_closed_id = (
             _find_closed_session(
                 event_type=self.db_event_type,
                 event_date=self.detected_date,
                 event_subtype=self.detected_legion,
                 alliance_id=self.alliance_id,
-            ) if self.result_rows else None
+            ) if (self.result_rows or self.registered_rows) else None
         )
         existing_open_id = None
         if existing_closed_id is None and self.result_rows:

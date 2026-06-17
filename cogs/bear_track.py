@@ -50,6 +50,11 @@ OCR_IMPORT_ERROR = None  # real reason OCR is off (e.g. missing libGL.so.1), for
 # Above ~1800px ONNXRuntime hits 'bad allocation' on the 2nd-3rd image.
 MAX_OCR_DIM = 1600
 
+# onnxruntime threads per engine. -1 (its default) grabs one thread per core the
+# host reports; small VPS plans over-report cores, so it spawns too many threads
+# and OOMs / pegs CPU at 100%. 1 keeps low-RAM boxes alive; raise it for speed.
+OCR_NUM_THREADS = 1
+
 DEFAULT_OCR_LANG = "en"
 
 if PIL_AVAILABLE:
@@ -568,7 +573,11 @@ def get_ocr_model(lang: str):
     label = _OCR_LANG_DISPLAY.get(lang, lang)
 
     def _factory(lang_code=lang):
-        return RapidOCR(params={"Rec.lang_type": LangRec(lang_code)})
+        return RapidOCR(params={
+            "Rec.lang_type": LangRec(lang_code),
+            "EngineConfig.onnxruntime.intra_op_num_threads": OCR_NUM_THREADS,
+            "EngineConfig.onnxruntime.inter_op_num_threads": OCR_NUM_THREADS,
+        })
 
     model = onnx_lifecycle.get_or_create(
         name=f'bear_track:{lang}',
