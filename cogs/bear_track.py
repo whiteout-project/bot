@@ -54,6 +54,11 @@ def _detect_ram_mb() -> int:
         return psutil.virtual_memory().total // (1024 * 1024)
     except Exception:
         pass
+    logger.warning(
+        "Could not detect host RAM (cgroup+psutil unavailable). "
+        "Falling back to %d MB — install psutil or expose cgroup limits for optimal OCR tuning.",
+        _FALLBACK_RAM_MB,
+    )
     return _FALLBACK_RAM_MB
 
 
@@ -688,7 +693,7 @@ async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session
             )
     except asyncio.TimeoutError:
         logger.error(f"OCR timed out after {OCR_TIMEOUT}s (lang={lang}) — recycling engine")
-        gc.collect()
+        await asyncio.to_thread(gc.collect)
         if session is not None:
             await session._recycle_engine(lang)
         return ""
@@ -751,7 +756,7 @@ async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
             )
     except asyncio.TimeoutError:
         logger.error(f"OCR (boxed) timed out after {OCR_TIMEOUT}s (lang={lang}) — recycling engine")
-        gc.collect()
+        await asyncio.to_thread(gc.collect)
         if session is not None:
             await session._recycle_engine(lang)
         return []
