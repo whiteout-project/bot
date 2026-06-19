@@ -19,9 +19,72 @@ from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
 from .permission_handler import PermissionManager
 from .login_handler import LoginHandler
 from .bot_level_mapping import format_furnace_level
+import gc
 import numpy as np
 
 logger = logging.getLogger('bot')
+
+_PTERODACTYL_CGROUP_V2 = '/sys/fs/cgroup/memory.max'
+_PTERODACTYL_CGROUP_V1 = '/sys/fs/cgroup/memory/memory.limit_in_bytes'
+_MAX_SANITY = 1 << 40
+_FALLBACK_RAM_MB = 512
+
+
+def _detect_ram_mb() -> int:
+    try:
+        with open(_PTERODACTYL_CGROUP_V2) as f:
+            val = f.read().strip()
+            if val and val != 'max':
+                limit_v2 = int(val)
+                if limit_v2 < _MAX_SANITY:
+                    return limit_v2 // (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        with open(_PTERODACTYL_CGROUP_V1) as f:
+            val = f.read().strip()
+            if val.isdigit():
+                limit_v1 = int(val)
+                if limit_v1 < _MAX_SANITY:
+                    return limit_v1 // (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        import psutil
+        return psutil.virtual_memory().total // (1024 * 1024)
+    except Exception:
+        pass
+    return _FALLBACK_RAM_MB
+
+
+_HOST_RAM_MB = _detect_ram_mb()
+
+if _HOST_RAM_MB <= 768:
+    _OCR_MODE = 'low'
+    MAX_OCR_DIM = 800
+    MAX_CONCURRENT_OCR = 1
+    OCR_NUM_THREADS = 1
+    OCR_TIMEOUT = 90
+elif _HOST_RAM_MB <= 1536:
+    _OCR_MODE = 'moderate'
+    MAX_OCR_DIM = 1200
+    MAX_CONCURRENT_OCR = 1
+    OCR_NUM_THREADS = 1
+    OCR_TIMEOUT = 120
+else:
+    _OCR_MODE = 'normal'
+    MAX_OCR_DIM = 1600
+    MAX_CONCURRENT_OCR = 2
+    OCR_NUM_THREADS = 1
+    OCR_TIMEOUT = 120
+
+DEFAULT_OCR_LANG = "en"
+
+logger.info(
+    "Bear OCR tuned for %d MB RAM (%s mode): "
+    "MAX_OCR_DIM=%d, MAX_CONCURRENT_OCR=%d, OCR_TIMEOUT=%d",
+    _HOST_RAM_MB, _OCR_MODE, MAX_OCR_DIM, MAX_CONCURRENT_OCR, OCR_TIMEOUT,
+)
 
 try:
     from PIL import Image
@@ -45,17 +108,7 @@ from . import onnx_lifecycle
 # RapidOCR setup. Engines are lazy-loaded per language via onnx_lifecycle and
 # unloaded ~2 min after the last bear session finalises.
 OCR_AVAILABLE = False
-OCR_IMPORT_ERROR = None  # real reason OCR is off (e.g. missing libGL.so.1), for admin diagnostics
-
-# Above ~1800px ONNXRuntime hits 'bad allocation' on the 2nd-3rd image.
-MAX_OCR_DIM = 1600
-
-# onnxruntime threads per engine. -1 (its default) grabs one thread per core the
-# host reports; small VPS plans over-report cores, so it spawns too many threads
-# and OOMs / pegs CPU at 100%. 1 keeps low-RAM boxes alive; raise it for speed.
-OCR_NUM_THREADS = 1
-
-DEFAULT_OCR_LANG = "en"
+OCR_IMPORT_ERROR = None
 
 if PIL_AVAILABLE:
     try:
@@ -68,13 +121,10 @@ if PIL_AVAILABLE:
         OCR_AVAILABLE = True
         logger.info("Bear track OCR ready (engines load on demand per language).")
     except Exception as e:
-        # log the real cause (e.g. OpenCV's missing libGL.so.1), not "not installed"
+        # log the real cause (e.g. OpenCV's missing libGL.so.1), not just "not installed"
         OCR_IMPORT_ERROR = f"{type(e).__name__}: {e}"
         logger.warning(f"OCR disabled — could not import rapidocr: {OCR_IMPORT_ERROR}")
         print(f"[WARNING] OCR disabled — could not import rapidocr: {OCR_IMPORT_ERROR}")
-    except Exception as e:
-        logger.error(f"Failed to initialize RapidOCR: {e}")
-        print(f"[ERROR] Failed to initialize RapidOCR: {e}")
 
 os.makedirs("db", exist_ok=True)
 
@@ -406,8 +456,6 @@ OCR_LANG_LABEL = dict(OCR_LANGUAGES)
 
 # Useful fallback runs per image — skipped/rejected ones don't count.
 MAX_FALLBACK_ATTEMPTS = 4
-MAX_CONCURRENT_OCR = 2
-
 _ocr_semaphore: asyncio.Semaphore | None = None
 
 
@@ -601,6 +649,7 @@ def _ocr_image_with_engine(image_bytes: bytes, engine) -> str:
         result = engine(np.array(image))
     finally:
         image.close()
+        gc.collect()
     if not result:
         return ""
     if hasattr(result, 'txts') and result.txts:
@@ -623,13 +672,29 @@ async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session
     model = get_ocr_model(lang)
     if model is None:
         return ""
-    if session is not None:
-        engine = await session._ensure_engine(lang)
-        if engine is None:
-            return ""
-        return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
-    async with model.use() as engine:
-        return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
+    try:
+        if session is not None:
+            engine = await session._ensure_engine(lang)
+            if engine is None:
+                return ""
+            return await asyncio.wait_for(
+                asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine),
+                timeout=OCR_TIMEOUT,
+            )
+        async with model.use() as engine:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine),
+                timeout=OCR_TIMEOUT,
+            )
+    except asyncio.TimeoutError:
+        logger.error(f"OCR timed out after {OCR_TIMEOUT}s (lang={lang}) — recycling engine")
+        gc.collect()
+        if session is not None:
+            await session._recycle_engine(lang)
+        return ""
+    except Exception as e:
+        logger.error(f"OCR failed (lang={lang}): {e}")
+        return ""
 
 
 def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
@@ -646,6 +711,7 @@ def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
         result = engine(np.array(image))
     finally:
         image.close()
+        gc.collect()
     if not result:
         return []
     # Newer RapidOCR returns an object with .txts and .boxes parallel lists.
@@ -669,13 +735,29 @@ async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
     model = get_ocr_model(lang)
     if model is None:
         return []
-    if session is not None:
-        engine = await session._ensure_engine(lang)
-        if engine is None:
-            return []
-        return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
-    async with model.use() as engine:
-        return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+    try:
+        if session is not None:
+            engine = await session._ensure_engine(lang)
+            if engine is None:
+                return []
+            return await asyncio.wait_for(
+                asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine),
+                timeout=OCR_TIMEOUT,
+            )
+        async with model.use() as engine:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine),
+                timeout=OCR_TIMEOUT,
+            )
+    except asyncio.TimeoutError:
+        logger.error(f"OCR (boxed) timed out after {OCR_TIMEOUT}s (lang={lang}) — recycling engine")
+        gc.collect()
+        if session is not None:
+            await session._recycle_engine(lang)
+        return []
+    except Exception as e:
+        logger.error(f"OCR (boxed) failed (lang={lang}): {e}")
+        return []
 
 
 async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
@@ -1539,6 +1621,18 @@ class BearSession:
                 logger.warning(f"Bear OCR: engine release error: {e}")
         self._engine_handles.clear()
         self._engine_cache.clear()
+
+    async def _recycle_engine(self, lang: str):
+        """Release and drop the cached engine for *lang* so the next OCR call
+        acquires a fresh one. Used after a timeout to discard a potentially
+        corrupted ONNX session."""
+        handle = self._engine_handles.pop(lang, None)
+        self._engine_cache.pop(lang, None)
+        if handle is not None:
+            try:
+                await handle.release()
+            except Exception as e:
+                logger.warning(f"Bear OCR: engine recycle release error ({lang}): {e}")
 
     def cluster(self, result: ImageResult) -> EventGroup:
         for event in self.events:
