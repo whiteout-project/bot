@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable
@@ -20,8 +21,77 @@ logger = logging.getLogger('bot')
 DEFAULT_GRACE_SECONDS = 120
 SWEEP_INTERVAL_SECONDS = 30
 
+# Boxes at or below this RAM limit get low-memory behaviour: models load one at
+# a time and unload the instant they're released, instead of staying warm for a
+# grace period. Trades cold-start latency for survival on a 512 MB free plan.
+LOW_MEM_THRESHOLD_MB = 768
+
+
+def _detect_memory_limit_mb() -> "int | None":
+    """Best-effort container memory limit in MB, or None if undetectable.
+    Pterodactyl/Docker enforce a cgroup limit we can read; bare Windows hosts
+    expose none, so we return None and stay in normal mode there."""
+    for path in ("/sys/fs/cgroup/memory.max",                     # cgroup v2
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):  # cgroup v1
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+        except OSError:
+            continue
+        if not raw or raw == "max":
+            continue
+        try:
+            val = int(raw)
+        except ValueError:
+            continue
+        # cgroup v1 reports a near-INT64 sentinel when memory is unlimited.
+        if 0 < val < (1 << 62):
+            return val // (1024 * 1024)
+    return None
+
+
+def _resolve_low_mem() -> "tuple[bool, int | None]":
+    """Return (low_mem_mode, detected_limit_mb). The BOT_LOW_MEM env var forces
+    the mode on (1/true/yes/on) or off (0/false/no/off) for self-hosters who
+    know their box better than the cgroup reading does."""
+    limit = _detect_memory_limit_mb()
+    override = os.environ.get("BOT_LOW_MEM", "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True, limit
+    if override in ("0", "false", "no", "off"):
+        return False, limit
+    return (limit is not None and limit <= LOW_MEM_THRESHOLD_MB), limit
+
+
+LOW_MEM_MODE, MEM_LIMIT_MB = _resolve_low_mem()
+
+if LOW_MEM_MODE:
+    logger.info(
+        f"Low-memory mode ON (limit={MEM_LIMIT_MB or '?'} MB): OCR engines load "
+        "one at a time and unload immediately after use."
+    )
+    print(
+        f"[INFO] Low-memory mode ON (limit={MEM_LIMIT_MB or '?'} MB): "
+        "OCR engines load one at a time."
+    )
+else:
+    logger.info(
+        f"Low-memory mode OFF (detected limit={MEM_LIMIT_MB or 'none'} MB)."
+    )
+
 
 _REGISTRY: dict[str, "LazyOnnxModel"] = {}
+
+
+async def _drain_and_collect() -> None:
+    """Force idle to_thread workers to drop the last engine they touched, then
+    collect. Workers cache their previous task's result until they pick up
+    another task, so a no-op submission releases the stale reference."""
+    try:
+        await asyncio.to_thread(lambda: None)
+    except Exception:
+        pass
+    gc.collect()
 
 
 def get_status_lines() -> list[dict]:
@@ -125,14 +195,7 @@ class LazyOnnxModel:
             self._model = None
             self._unload_pending_since = None
             logger.info(f"OCR model unloaded (idle): {self.name}")
-        # asyncio.to_thread workers cache the previous task's result until they
-        # pick up another task; submitting a no-op forces them to drop the
-        # stale reference so the engine memory is actually released.
-        try:
-            await asyncio.to_thread(lambda: None)
-        except Exception:
-            pass
-        gc.collect()
+        await _drain_and_collect()
         return True
 
     def status(self) -> dict:

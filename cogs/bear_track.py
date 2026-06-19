@@ -6,6 +6,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 from contextlib import asynccontextmanager
+import gc
 import io
 import re
 import os
@@ -47,8 +48,10 @@ from . import onnx_lifecycle
 OCR_AVAILABLE = False
 OCR_IMPORT_ERROR = None  # real reason OCR is off (e.g. missing libGL.so.1), for admin diagnostics
 
-# Above ~1800px ONNXRuntime hits 'bad allocation' on the 2nd-3rd image.
-MAX_OCR_DIM = 1600
+# Above ~1800px ONNXRuntime hits 'bad allocation' on the 2nd-3rd image. The
+# inference arena scales with image area, so low-memory boxes shrink further to
+# fit alongside the captcha model in ~512 MB.
+MAX_OCR_DIM = 1280 if onnx_lifecycle.LOW_MEM_MODE else 1600
 
 # onnxruntime threads per engine. -1 (its default) grabs one thread per core the
 # host reports; small VPS plans over-report cores, so it spawns too many threads
@@ -1518,11 +1521,18 @@ class BearSession:
 
     async def _ensure_engine(self, lang: str):
         """Lazy per-session engine acquire. First call for `lang` loads the
-        model and pins it for the rest of the session; subsequent calls
-        return the cached engine."""
+        model and keeps it warm for the rest of the session; subsequent calls
+        return the cached engine.
+
+        On low-memory boxes only ONE engine stays resident: switching to a new
+        language evicts whatever we already hold first. That makes en→cyrillic→ch
+        fallbacks reload per language (slower) but keeps peak RAM to a single
+        engine plus the pinned captcha model, which a 512 MB container survives."""
         cached = self._engine_cache.get(lang)
         if cached is not None:
             return cached
+        if onnx_lifecycle.LOW_MEM_MODE and self._engine_cache:
+            await self._release_all_engines()
         model = get_ocr_model(lang)
         if model is None:
             return None
@@ -1701,6 +1711,10 @@ class BearSession:
                     self.any_ocr_success = True
                     self.cluster(result)
                 await self.render_progress()
+                if onnx_lifecycle.LOW_MEM_MODE:
+                    # Reclaim the decoded image + OCR buffers before the next
+                    # image so peak RSS doesn't ratchet up on a 512 MB box.
+                    gc.collect()
 
             self.current_image_idx = None
             self.current_image_total = None

@@ -1463,11 +1463,17 @@ class OcrUploadSession:
         self.processed_images = 0
         self.current_image_idx: Optional[int] = None
 
-    async def start(self, attachments: list[discord.Attachment]):
-        self.progress_message = await self.channel.send(
-            embed=self.build_progress_embed(),
-            view=_ProgressView(self),
-        )
+    async def start(self, attachments: list[discord.Attachment], *, status_message=None):
+        if status_message is not None:
+            # Reuse the "Reading your screenshots…" ack already shown to the
+            # uploader, updating it in place instead of posting a second embed.
+            self.progress_message = status_message
+            await self.render_progress()
+        else:
+            self.progress_message = await self.channel.send(
+                embed=self.build_progress_embed(),
+                view=_ProgressView(self),
+            )
         await self.add_attachments(attachments)
         self.restart_timer()
 

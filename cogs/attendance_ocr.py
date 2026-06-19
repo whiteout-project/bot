@@ -175,11 +175,17 @@ class AttendanceOCR(commands.Cog):
             await self._maybe_delete_source(message, settings)
             return
 
+        # Acknowledge immediately so the uploader sees activity during the slow
+        # classification OCR (mirrors bear's "collecting" message). It's reused
+        # in place once the event is known, or removed if we post nothing usable.
+        status_message = await self._send_reading_ack(message.channel)
+
         classification, ocr_text = await self._classify_images(
             message.channel.id, images
         )
         event_type = classification[0] if classification else None
         if event_type is None:
+            await self._discard_status(status_message)
             # Log the OCR text snippet — invaluable when an admin reports
             # "the bot can't identify my screenshot" and we need to see
             # what RapidOCR actually produced.
@@ -210,6 +216,7 @@ class AttendanceOCR(commands.Cog):
             uploader=message.author, alliance_id=settings["alliance_id"],
         )
         if new_session is None:
+            await self._discard_status(status_message)
             await message.channel.send(
                 f"{theme.warnIcon} Parser for `{event_type}` not implemented yet.",
                 delete_after=20,
@@ -217,7 +224,7 @@ class AttendanceOCR(commands.Cog):
             return
 
         self.active_sessions[key] = new_session
-        await new_session.start(images)
+        await new_session.start(images, status_message=status_message)
         await self._maybe_delete_source(message, settings)
 
     async def _maybe_delete_source(self, message: discord.Message, settings: dict) -> None:
@@ -229,6 +236,34 @@ class AttendanceOCR(commands.Cog):
             await message.delete()
         except (discord.Forbidden, discord.NotFound, discord.HTTPException):
             # Forbidden = bot lacks Manage Messages; nothing actionable.
+            pass
+
+    async def _send_reading_ack(self, channel: discord.TextChannel) -> Optional[discord.Message]:
+        """Post an immediate 'Reading your screenshots…' status so the uploader
+        sees activity during the slow classification OCR. Returns the message so
+        the session can reuse it in place, or None if it couldn't be posted."""
+        try:
+            return await channel.send(embed=discord.Embed(
+                title=f"{theme.searchIcon} Reading your screenshots…",
+                description=(
+                    f"{theme.upperDivider}\n"
+                    f"{theme.processingIcon} Reading the text from your upload — "
+                    f"this can take a moment.\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1,
+            ))
+        except discord.HTTPException:
+            return None
+
+    async def _discard_status(self, status_message: Optional[discord.Message]) -> None:
+        """Remove the reading-ack when it won't be reused (classification failed
+        or no parser), so it doesn't linger in the channel."""
+        if status_message is None:
+            return
+        try:
+            await status_message.delete()
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
 
     async def _classify_images(

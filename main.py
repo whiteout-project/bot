@@ -4,6 +4,22 @@ import os
 import shutil
 import stat
 import contextlib
+
+# Cap glibc malloc arenas before anything allocates: glibc keeps a per-thread
+# arena and never frees it, so OCR across many to_thread workers grows RSS until
+# a 512MB container OOM-kills the bot. Must be set before glibc inits, so re-exec
+# once if unset (same PID). Pre-set it to override.
+if sys.platform.startswith("linux") and "MALLOC_ARENA_MAX" not in os.environ:
+    os.environ["MALLOC_ARENA_MAX"] = "2"
+    os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "131072")
+    try:
+        from cogs import bot_startup_display as _startup
+        _startup.phase_ok("Memory tuned for low-memory host — restarting once")
+    except Exception:
+        print("  Memory tuned for low-memory host — restarting once...", flush=True)
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 def _bootstrap_from_main_branch(zip_url):
     """Self-heal: download source zip, extract atomically via staging dir, guard against path traversal."""
     import urllib.request, zipfile, io
