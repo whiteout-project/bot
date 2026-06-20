@@ -83,6 +83,23 @@ else:
 _REGISTRY: dict[str, "LazyOnnxModel"] = {}
 
 
+async def _evict_other_idle_models(keep_name: str) -> None:
+    """Evict every other non-pinned model that's loaded but unused (refcount 0),
+    so at most one OCR engine stays resident on a low-memory box."""
+    drained = False
+    for name, m in list(_REGISTRY.items()):
+        if name == keep_name or m.pinned:
+            continue
+        async with m._lock:
+            if m._model is not None and m._refcount == 0:
+                m._model = None
+                m._unload_pending_since = None
+                logger.info(f"OCR model evicted (low-mem, single-engine): {name}")
+                drained = True
+    if drained:
+        await _drain_and_collect()
+
+
 async def _drain_and_collect() -> None:
     """Force idle to_thread workers to drop the last engine they touched, then
     collect. Workers cache their previous task's result until they pick up
@@ -157,7 +174,14 @@ class LazyOnnxModel:
             self._refcount += 1
             self._last_used = datetime.now(timezone.utc)
             self._unload_pending_since = None
-            return self._model
+            model = self._model
+        if LOW_MEM_MODE and not self.pinned:
+            # Keep only one OCR engine resident on low-memory boxes: drop any
+            # other idle engine so a multi-language fallback run (en→arabic→…)
+            # runs sequentially in memory instead of stacking 5 engines and
+            # OOM-killing the container.
+            await _evict_other_idle_models(self.name)
+        return model
 
     async def release(self) -> None:
         """Decrement refcount. When it reaches zero, schedule unload."""

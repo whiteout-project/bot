@@ -599,7 +599,7 @@ def _alliance_ocr_langs(alliance_id, names) -> tuple[str, list]:
     return primary, fbs
 
 
-async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None, parse=None, primary_text: str | None = None):
+async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=None, parse=None, primary_text: str | None = None, progress_callback=None):
     """OCR (name, value) rows with multi-language fallback for non-Latin names;
     returns (rows, primary_text). `parse` overrides the row parser (Power
     Rankings passes `_parse_power_rows`). `primary_text` reuses a primary read
@@ -650,7 +650,7 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
     return await bear_track.ocr_rows_with_fallback(
         image_bytes, primary_lang=primary, fallback_langs=fallbacks,
         parse=parse, is_unfilled=is_unfilled, merge=merge,
-        session=session, primary_text=primary_text)
+        session=session, primary_text=primary_text, progress_callback=progress_callback)
 
 
 def find_formatted_numbers(text: str) -> list[tuple[int, int, int]]:
@@ -1436,6 +1436,8 @@ class OcrUploadSession:
         self.known_total_images = 0
         self.processed_images = 0
         self.current_image_idx: Optional[int] = None
+        self.current_phase: Optional[str] = None   # 'ocr' or 'fallback'
+        self.current_lang: Optional[str] = None
 
     async def start(self, attachments: list[discord.Attachment], *, status_message=None):
         if status_message is not None:
@@ -1460,12 +1462,15 @@ class OcrUploadSession:
             await self._process_attachments(attachments)
             self.restart_timer()
             self.current_image_idx = None
+            self.current_phase = None
+            self.current_lang = None
             await self.render_progress()
 
     async def finalize(self, *, timed_out: bool = False):
         if self.finalized or self.cancelled:
             return
         self.finalized = True
+        self.delete_snapshot()
         self.stop_timer()
         try:
             # Wait for any in-flight batch so we render the full parsed set, not a
@@ -1479,6 +1484,7 @@ class OcrUploadSession:
         if self.finalized or self.cancelled:
             return
         self.cancelled = True
+        self.delete_snapshot()
         self.stop_timer()
         if self.progress_message:
             try:
@@ -1524,9 +1530,13 @@ class OcrUploadSession:
     def build_progress_embed(self) -> discord.Embed:
         label = EVENT_TYPES[self.event_type].label if self.event_type in EVENT_TYPES else self.event_type
         if self.current_image_idx is not None and self.known_total_images:
+            bar = self._progress_bar(self.current_image_idx, self.known_total_images)
+            phase_label = "fallback OCR" if self.current_phase == 'fallback' else "running OCR"
+            lang_label = self._short_lang_label(self.current_lang)
+            lang_part = f" ({lang_label})" if lang_label else ""
             progress_line = (
-                f"**{theme.importIcon} Processing image:** "
-                f"`{self.current_image_idx} of {self.known_total_images}`\n"
+                f"{bar} **`{self.current_image_idx} of {self.known_total_images}`** "
+                f"{theme.processingIcon} {phase_label}{lang_part}…\n"
             )
         else:
             done = min(self.processed_images, self.known_total_images)
@@ -1534,7 +1544,7 @@ class OcrUploadSession:
                 f"**{theme.importIcon} Images processed:** "
                 f"`{done} of {self.known_total_images}`\n"
             )
-        return discord.Embed(
+        embed = discord.Embed(
             title=f"{theme.documentIcon} Screenshot Upload — {label}",
             description=(
                 f"{theme.upperDivider}\n"
@@ -1545,6 +1555,94 @@ class OcrUploadSession:
             ),
             color=theme.emColor1,
         )
+        from . import onnx_lifecycle  # low-mem OCR is slow; reassure the uploader
+        if onnx_lifecycle.LOW_MEM_MODE and self.current_image_idx is not None:
+            embed.set_footer(text="Please wait, this can take a while...")
+        return embed
+
+    async def _phase_callback(self, phase: str, lang: str):
+        """Update the live OCR phase/language so the progress embed shows which
+        language pass is running (mirrors bear_track's indicator)."""
+        self.current_phase = phase
+        self.current_lang = lang
+        await self.render_progress()
+
+    @staticmethod
+    def _progress_bar(current: int, total: int) -> str:
+        width = max(min(total, 12), 6)
+        filled = max(0, min(width, round(current / total * width))) if total else 0
+        return "▰" * filled + "▱" * (width - filled)
+
+    @staticmethod
+    def _short_lang_label(lang: Optional[str]) -> str:
+        if not lang:
+            return ""
+        return {"en": "English"}.get(lang, lang.title())
+
+    # --- Crash resume: snapshot parsed state after each image, restore on restart ---
+    _SNAPSHOT_SKIP = {'cog', 'channel', 'progress_message', '_timer_task', '_lock',
+                      'image_attachments', 'session_view'}
+
+    def _snapshot_key(self) -> str:
+        return f"att:{self.channel.id}:{self.uploader_id}"
+
+    def snapshot_payload(self) -> dict:
+        import datetime as _dt
+        import json as _json
+        p: dict = {'channel_id': self.channel.id}
+        for k, v in self.__dict__.items():
+            if k in self._SNAPSHOT_SKIP:
+                continue
+            if isinstance(v, (_dt.date, _dt.datetime)):
+                p[k] = {'__date__': v.isoformat()}
+            elif isinstance(v, (str, int, float, bool, type(None), list, dict)):
+                try:
+                    _json.dumps(v)
+                    p[k] = v
+                except Exception:
+                    pass
+        return p
+
+    def restore_payload(self, p: dict) -> None:
+        import datetime as _dt
+        for k, v in p.items():
+            if k == 'channel_id':
+                continue
+            if isinstance(v, dict) and '__date__' in v:
+                try:
+                    v = _dt.date.fromisoformat(v['__date__'])
+                except Exception:
+                    try:
+                        v = _dt.datetime.fromisoformat(v['__date__'])
+                    except Exception:
+                        continue
+            setattr(self, k, v)
+
+    def save_snapshot(self) -> None:
+        from . import ocr_resume
+        ocr_resume.save(self._snapshot_key(), 'attendance', self.snapshot_payload())
+
+    def delete_snapshot(self) -> None:
+        from . import ocr_resume
+        ocr_resume.delete(self._snapshot_key())
+
+    async def resume(self) -> None:
+        """Re-post the progress message for a session recovered after a restart."""
+        kept = len(getattr(self, 'rows', None) or []) + len(getattr(self, 'result_rows', None) or []) \
+            + len(getattr(self, 'registered_rows', None) or [])
+        embed = discord.Embed(
+            title=f"{theme.documentIcon} Recovered your upload",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"The bot restarted mid-upload. **{kept}** parsed entr{'y' if kept == 1 else 'ies'} kept.\n"
+                f"Click **Done Uploading** to review and submit, or re-upload any screenshots that "
+                f"weren't processed yet.\n"
+                f"{theme.lowerDivider}\n"
+            ),
+            color=theme.emColor1,
+        )
+        self.progress_message = await self.channel.send(embed=embed, view=_ProgressView(self))
+        self.restart_timer()
 
     def extra_progress_lines(self) -> str:
         return ""
@@ -1662,7 +1760,7 @@ class PowerRankingsSession(OcrUploadSession):
                 data = await att.read()
                 rows, _text = await ocr_value_rows(
                     data, roster=roster, alliance_id=self.alliance_id,
-                    parse=_parse_power_rows)
+                    parse=_parse_power_rows, progress_callback=self._phase_callback)
             except Exception:
                 self.processed_images += 1
                 continue
@@ -1671,6 +1769,7 @@ class PowerRankingsSession(OcrUploadSession):
                 _dedup_into(self.rows, row)
             self.processed_images += 1
             await self.render_progress()
+            self.save_snapshot()
         # Sorted by power desc — the canonical ranking — for the review.
         self.result_rows = [
             {"name": r["name"], "value": r["power"]}
@@ -1772,6 +1871,7 @@ class _PointsSession(OcrUploadSession):
             await self.render_progress()
             try:
                 data = await att.read()
+                await self._phase_callback('ocr', bear_track.DEFAULT_OCR_LANG)
                 blocks = await bear_track.ocr_bytes_with_boxes(
                     data, lang=bear_track.DEFAULT_OCR_LANG)
                 text = " ".join(t for t, _ in blocks)
@@ -1811,13 +1911,14 @@ class _PointsSession(OcrUploadSession):
                 try:
                     rows, _ = await ocr_value_rows(
                         data, roster=roster, alliance_id=self.alliance_id,
-                        parse=parse, primary_text=text)
+                        parse=parse, primary_text=text, progress_callback=self._phase_callback)
                 except Exception:
                     rows = parse(text)
                 for row in rows:
                     _dedup_into(target, row)
             self.processed_images += 1
             await self.render_progress()
+            self.save_snapshot()
 
     def _merge_result_metadata(self, text: str, blocks: Optional[list] = None):
         """Capture alliance rank / scoreboard / stats / MVPs from a result-mail header."""
@@ -2028,7 +2129,8 @@ class AllianceShowdownSession(OcrUploadSession):
             try:
                 data = await att.read()
                 rows, text = await ocr_value_rows(
-                    data, roster=roster, alliance_id=self.alliance_id)
+                    data, roster=roster, alliance_id=self.alliance_id,
+                    progress_callback=self._phase_callback)
             except Exception:
                 self.processed_images += 1
                 continue
@@ -2042,6 +2144,7 @@ class AllianceShowdownSession(OcrUploadSession):
                 _dedup_into(self.result_rows, row)
             self.processed_images += 1
             await self.render_progress()
+            self.save_snapshot()
 
     def extra_progress_lines(self) -> str:
         bits = [f"**{theme.listIcon} Players parsed:** `{len(self.result_rows)}`"]
@@ -2081,3 +2184,14 @@ def build_session(event_type: str, *, cog, channel, uploader, alliance_id: int) 
         cog=cog, channel=channel, uploader_id=uploader.id,
         event_type=event_type, alliance_id=alliance_id,
     )
+
+
+def build_session_from_snapshot(cog, channel, payload: dict) -> Optional[OcrUploadSession]:
+    """Recreate a session from a crash snapshot, pre-loaded with its parsed rows."""
+    cls = SESSION_CLASSES.get(payload.get('event_type'))
+    if cls is None:
+        return None
+    sess = cls(cog=cog, channel=channel, uploader_id=payload['uploader_id'],
+               event_type=payload['event_type'], alliance_id=payload.get('alliance_id'))
+    sess.restore_payload(payload)
+    return sess

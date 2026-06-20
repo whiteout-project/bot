@@ -58,6 +58,11 @@ MAX_OCR_DIM = 1280 if onnx_lifecycle.LOW_MEM_MODE else 1600
 # and OOMs / pegs CPU at 100%. 1 keeps low-RAM boxes alive; raise it for speed.
 OCR_NUM_THREADS = 1
 
+# Low-memory boxes are usually CPU-throttled too. Pause this long after each OCR
+# pass so the event loop can send Discord heartbeats and breathe between the
+# CPU-heavy passes (e.g. a multi-language fallback run), instead of starving them.
+_LOW_MEM_OCR_PAUSE = 1.0
+
 DEFAULT_OCR_LANG = "en"
 
 if PIL_AVAILABLE:
@@ -615,6 +620,13 @@ def _ocr_image_with_engine(image_bytes: bytes, engine) -> str:
     return str(result)
 
 
+async def _maybe_breathe():
+    """On low-memory (usually CPU-throttled) boxes, yield briefly so the event
+    loop can send Discord heartbeats between CPU-heavy OCR passes."""
+    if onnx_lifecycle.LOW_MEM_MODE:
+        await asyncio.sleep(_LOW_MEM_OCR_PAUSE)
+
+
 async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session=None) -> str:
     """OCR `image_bytes` → space-joined text, or "" on failure.
 
@@ -630,9 +642,12 @@ async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session
         engine = await session._ensure_engine(lang)
         if engine is None:
             return ""
-        return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
-    async with model.use() as engine:
-        return await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
+        result = await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
+    else:
+        async with model.use() as engine:
+            result = await asyncio.to_thread(_ocr_image_with_engine, image_bytes, engine)
+    await _maybe_breathe()
+    return result
 
 
 def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
@@ -676,14 +691,18 @@ async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
         engine = await session._ensure_engine(lang)
         if engine is None:
             return []
-        return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
-    async with model.use() as engine:
-        return await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+        result = await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+    else:
+        async with model.use() as engine:
+            result = await asyncio.to_thread(_ocr_image_with_engine_boxed, image_bytes, engine)
+    await _maybe_breathe()
+    return result
 
 
 async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
                                  fallback_langs, parse, is_unfilled, merge,
-                                 session=None, primary_text: str | None = None):
+                                 session=None, primary_text: str | None = None,
+                                 progress_callback=None):
     """Generic primary+fallback OCR loop, shared across OCR features.
 
     Runs the primary engine, then — only if some parsed rows are still unread —
@@ -697,6 +716,8 @@ async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
     """
     # Reuse a primary read the caller already has (Foundry/Canyon does a boxed
     # pass for the scoreboard) so the primary engine isn't run twice per image.
+    if progress_callback and primary_text is None:
+        await progress_callback('ocr', primary_lang)
     text = primary_text if primary_text is not None else await ocr_bytes(image_bytes, lang=primary_lang, session=session)
     if not text.strip():
         return [], ""
@@ -712,6 +733,8 @@ async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
     for fb in fallback_langs:
         if attempts >= MAX_FALLBACK_ATTEMPTS or not any(is_unfilled(r) for r in rows):
             break
+        if progress_callback:
+            await progress_callback('fallback', fb)
         try:
             fb_text = await ocr_bytes(image_bytes, lang=fb, session=session)
         except Exception as e:
@@ -1550,6 +1573,79 @@ class BearSession:
         self._engine_handles.clear()
         self._engine_cache.clear()
 
+    # --- Crash resume: snapshot parsed events after each image, restore on restart ---
+    def _snapshot_key(self) -> str:
+        return f"bear:{self.channel_id}:{self.user_id}"
+
+    def snapshot_payload(self) -> dict:
+        return {
+            'channel_id': self.channel_id, 'user_id': self.user_id,
+            'alliance_id': self.alliance_id, 'alliance_name': self.alliance_name,
+            'primary_lang': self.primary_lang, 'fallback_langs': self.fallback_langs,
+            'timeout_min': self.timeout_min, 'auto_delete': self.auto_delete,
+            'processed_images': self.processed_images,
+            'known_total_images': self.known_total_images,
+            'any_ocr_success': self.any_ocr_success,
+            'events': [{
+                'trap_value': e.trap_value, 'rallies_value': e.rallies_value,
+                'damage_int': e.damage_int, 'date_value': e.date_value,
+                'image_count': e.image_count,
+                'merged_rows': {str(k): v for k, v in e.merged_rows.items()},
+            } for e in self.events],
+        }
+
+    def restore_events(self, payload: dict) -> None:
+        self.processed_images = payload.get('processed_images', 0)
+        self.known_total_images = payload.get('known_total_images', 0)
+        self.any_ocr_success = payload.get('any_ocr_success', False)
+        self.events = []
+        for ed in payload.get('events', []):
+            e = EventGroup()
+            e.trap_value = ed.get('trap_value', '')
+            e.rallies_value = ed.get('rallies_value', '')
+            e.damage_int = ed.get('damage_int', 0)
+            e.date_value = ed.get('date_value', '')
+            e.image_count = ed.get('image_count', 0)
+            mr = {}
+            for k, v in (ed.get('merged_rows') or {}).items():
+                try:
+                    k = int(k)
+                except (TypeError, ValueError):
+                    pass
+                mr[k] = v
+            e.merged_rows = mr
+            self.events.append(e)
+
+    def save_snapshot(self) -> None:
+        from . import ocr_resume
+        ocr_resume.save(self._snapshot_key(), 'bear', self.snapshot_payload())
+
+    def delete_snapshot(self) -> None:
+        from . import ocr_resume
+        ocr_resume.delete(self._snapshot_key())
+
+    async def resume(self) -> None:
+        """Re-post the progress message for a bear session recovered after a restart."""
+        channel = self.cog.bot.get_channel(self.channel_id)
+        if channel is None:
+            return
+        kept = sum(len(e.merged_rows) for e in self.events)
+        embed = discord.Embed(
+            title=f"{theme.searchIcon} Recovered your bear upload",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"The bot restarted mid-upload. **{kept}** parsed row(s) kept across "
+                f"**{len(self.events)}** event(s).\n"
+                f"Click **Done Uploading** to review and submit, or re-upload any screenshots "
+                f"that weren't processed yet.\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+        self.session_view = BearSessionView(self)
+        self.progress_msg = await channel.send(embed=embed, view=self.session_view)
+        self.restart_timer()
+
     def cluster(self, result: ImageResult) -> EventGroup:
         for event in self.events:
             if event.is_compatible(result, self.roster):
@@ -1641,7 +1737,10 @@ class BearSession:
             f"{footer_line}\n"
             f"{theme.lowerDivider}"
         )
-        return discord.Embed(title=title, description=description, color=theme.emColor1)
+        embed = discord.Embed(title=title, description=description, color=theme.emColor1)
+        if onnx_lifecycle.LOW_MEM_MODE and self.current_image_idx is not None:
+            embed.set_footer(text="Please wait, this can take a while...")
+        return embed
 
     @staticmethod
     def _progress_bar(current: int, total: int) -> str:
@@ -1711,6 +1810,7 @@ class BearSession:
                     self.any_ocr_success = True
                     self.cluster(result)
                 await self.render_progress()
+                self.save_snapshot()
                 if onnx_lifecycle.LOW_MEM_MODE:
                     # Reclaim the decoded image + OCR buffers before the next
                     # image so peak RSS doesn't ratchet up on a 512 MB box.
@@ -1730,6 +1830,7 @@ class BearSession:
             self.finalized = True
             self.stop_timer()
             _active_sessions.pop((self.channel_id, self.user_id), None)
+            self.delete_snapshot()
         try:
             await self.cog._finalize_session(self, timed_out=timed_out)
         finally:
@@ -1742,6 +1843,7 @@ class BearSession:
             self.finalized = True
             self.stop_timer()
             _active_sessions.pop((self.channel_id, self.user_id), None)
+            self.delete_snapshot()
         await self._release_all_engines()
         if self.progress_msg:
             embed = discord.Embed(
@@ -2100,6 +2202,7 @@ def render_bear_info_message() -> str:
 class BearTrack(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._resume_done = False
 
         # Pre-register the default English engine so it's visible in the
         # Health dashboard from boot, even before any bear screenshot runs.
@@ -2599,6 +2702,36 @@ class BearTrack(commands.Cog):
     # -------------------------------------------------------------------
     # on_message — OCR processing
     # -------------------------------------------------------------------
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Restore bear sessions interrupted by a crash/restart, pre-loaded with parsed events."""
+        if self._resume_done:
+            return
+        self._resume_done = True
+        from . import ocr_resume
+        for key, payload in ocr_resume.load_all('bear'):
+            try:
+                aid = payload.get('alliance_id')
+                if self.bot.get_channel(payload.get('channel_id')) is None or aid is None:
+                    ocr_resume.delete(key)
+                    continue
+                _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                _hist = bool(self.get_bear_settings(aid).get("match_all_history"))
+                roster = self.get_match_roster(aid, as_of_date=_today, include_history=_hist)
+                session = BearSession(
+                    cog=self, channel_id=payload['channel_id'], user_id=payload['user_id'],
+                    alliance_id=aid, alliance_name=payload.get('alliance_name', ''),
+                    roster=roster, primary_lang=payload.get('primary_lang', 'en'),
+                    fallback_langs=payload.get('fallback_langs', []),
+                    timeout_min=payload.get('timeout_min', 15),
+                    auto_delete=payload.get('auto_delete', True))
+                session.restore_events(payload)
+                _active_sessions[(payload['channel_id'], payload['user_id'])] = session
+                await session.resume()
+            except Exception as e:
+                logger.error(f"BearTrack: failed to resume session: {e}")
+                ocr_resume.delete(key)
 
     @commands.Cog.listener()
     async def on_message(self, message):

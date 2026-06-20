@@ -34,6 +34,32 @@ class AttendanceOCR(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_sessions: dict[tuple[int, int], OcrUploadSession] = {}
+        self._resume_done = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Restore OCR sessions interrupted by a crash/restart, pre-loaded with parsed rows."""
+        if self._resume_done:
+            return
+        self._resume_done = True
+        from . import ocr_resume
+        from .attendance_ocr_parsers import build_session_from_snapshot
+        for key, payload in ocr_resume.load_all('attendance'):
+            try:
+                channel = self.bot.get_channel(payload.get('channel_id'))
+                uploader_id = payload.get('uploader_id')
+                if channel is None or uploader_id is None:
+                    ocr_resume.delete(key)
+                    continue
+                session = build_session_from_snapshot(self, channel, payload)
+                if session is None:
+                    ocr_resume.delete(key)
+                    continue
+                self.active_sessions[(channel.id, uploader_id)] = session
+                await session.resume()
+            except Exception:
+                logger.exception("AttendanceOCR: failed to resume interrupted session")
+                ocr_resume.delete(key)
 
     # Content fingerprints for the info message the current code produces.
     # Only these exact strings count as "ours" — historical wordings aren't

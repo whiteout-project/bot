@@ -14,9 +14,9 @@ if sys.platform.startswith("linux") and "MALLOC_ARENA_MAX" not in os.environ:
     os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "131072")
     try:
         from cogs import bot_startup_display as _startup
-        _startup.phase_ok("Memory tuned for low-memory host — restarting once")
+        _startup.phase_ok("Low-memory mode enabled")
     except Exception:
-        print("  Memory tuned for low-memory host — restarting once...", flush=True)
+        print("  Low-memory mode enabled", flush=True)
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
