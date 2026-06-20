@@ -130,6 +130,24 @@ class AllianceSync(commands.Cog):
         # Initialize login handler for centralized queue management
         self.login_handler = LoginHandler()
 
+    async def cog_unload(self):
+        # Stop the monitor loop and any per-alliance scheduler tasks, then close connections.
+        try:
+            if self.monitor_alliance_changes.is_running():
+                self.monitor_alliance_changes.cancel()
+        except Exception:
+            pass
+        for task in self.alliance_tasks.values():
+            if not task.done():
+                task.cancel()
+        self.alliance_tasks.clear()
+        self.is_running.clear()
+        for conn in (self.conn_alliance, self.conn_users, self.conn_changes, self.conn_settings):
+            try:
+                conn.close()
+            except Exception:
+                pass
+
     def load_proxies(self):
         proxies = []
         if os.path.exists('proxy.txt'):
@@ -292,7 +310,12 @@ class AllianceSync(commands.Cog):
         checked_users = 0
 
         self.cursor_alliance.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-        alliance_name_from_db = self.cursor_alliance.fetchone()[0]
+        _name_row = self.cursor_alliance.fetchone()
+        if _name_row is None:
+            # Alliance was deleted between enqueue and run — nothing to sync.
+            self.logger.warning(f"AllianceSync: alliance {alliance_id} no longer exists, skipping sync.")
+            return
+        alliance_name_from_db = _name_row[0]
         # Use provided name if available, otherwise use from database
         if not alliance_name:
             alliance_name = alliance_name_from_db

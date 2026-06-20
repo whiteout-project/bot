@@ -31,6 +31,10 @@ class AllianceIDChannel(commands.Cog):
 
         self.level_mapping = LEVEL_MAPPING
 
+    def cog_unload(self):
+        if self.check_channels_loop.is_running():
+            self.check_channels_loop.cancel()
+
     def setup_database(self):
         if not os.path.exists('db'):
             os.makedirs('db')
@@ -96,6 +100,19 @@ class AllianceIDChannel(commands.Cog):
             cursor.execute("INSERT OR IGNORE INTO id_channel_settings (guild_id) VALUES (?)", (guild_id,))
             db.commit()
 
+    async def _safe_react_reply(self, message, emoji=None, content=None, *, delete_after=None, embed=None):
+        """Best-effort reaction/reply that won't raise if the bot lacks channel perms."""
+        if emoji is not None:
+            try:
+                await message.add_reaction(emoji)
+            except discord.HTTPException:
+                pass
+        if content is not None or embed is not None:
+            try:
+                await message.reply(content, embed=embed, delete_after=delete_after)
+            except discord.HTTPException:
+                pass
+
     async def warn_invalid_format(self, message):
         # Default off: silently ignore non-numeric posts in ID channels unless
         # the admin has opted in. Avoids embarrassing X-emoji spam if a busy
@@ -112,8 +129,10 @@ class AllianceIDChannel(commands.Cog):
             return
 
         self.invalid_format_warnings[channel_id] = now
-        await message.add_reaction(theme.deniedIcon)
-        await message.reply("Please enter a valid numeric ID.", delete_after=settings['delete_after'])
+        await self._safe_react_reply(
+            message, theme.deniedIcon, "Please enter a valid numeric ID.",
+            delete_after=settings['delete_after'],
+        )
 
     async def log_action(self, action_type: str, user_id: int, guild_id: int, details: dict):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -369,8 +388,10 @@ class AllianceIDChannel(commands.Cog):
         except Exception as e:
             logger.error(f"Error in process_fid: {e}")
             print(f"Error in process_fid: {e}")
-            await message.add_reaction(theme.deniedIcon)
-            await message.reply("An error occurred during the process!", delete_after=delete_after)
+            await self._safe_react_reply(
+                message, theme.deniedIcon, "An error occurred during the process!",
+                delete_after=delete_after,
+            )
 
     @tasks.loop(seconds=300)
     async def check_channels_loop(self):
@@ -413,6 +434,10 @@ class AllianceIDChannel(commands.Cog):
             else:
                 logger.error(f"Error in check_channels_loop: {e}")
                 print(f"Error in check_channels_loop: {e}")
+
+    @check_channels_loop.before_loop
+    async def before_check_channels_loop(self):
+        await self.bot.wait_until_ready()
 
     async def show_id_channel_for(self, interaction: discord.Interaction, alliance_id: int):
         """Hub-context entry: show + manage the ID channel for one alliance."""

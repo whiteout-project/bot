@@ -2,6 +2,7 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import asyncio
 import logging
 from datetime import datetime, timezone
 from .pimp_my_bot import theme
@@ -49,10 +50,10 @@ class WCommand(commands.Cog):
     @w.autocomplete('fid')
     async def autocomplete_fid(self, interaction: discord.Interaction, current: str):
         try:
-            with sqlite3.connect('db/users.sqlite') as users_db:
-                cursor = users_db.cursor()
-                cursor.execute("SELECT fid, nickname FROM users")
-                users = cursor.fetchall()
+            def _read():
+                with sqlite3.connect('db/users.sqlite', timeout=30.0) as users_db:
+                    return users_db.execute("SELECT fid, nickname FROM users").fetchall()
+            users = await asyncio.to_thread(_read)
 
             choices = [
                 discord.app_commands.Choice(name=f"{nickname} ({fid})", value=str(fid)) 

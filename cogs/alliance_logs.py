@@ -15,44 +15,34 @@ logger = logging.getLogger('alliance')
 class AllianceLogs(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.settings_db = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
-        self.settings_cursor = self.settings_db.cursor()
-
-        self.alliance_db = sqlite3.connect('db/alliance.sqlite', timeout=30.0, check_same_thread=False)
-        self.alliance_cursor = self.alliance_db.cursor()
-        
         self.setup_database()
 
     def setup_database(self):
         try:
-            self.settings_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS alliance_logs (
-                    alliance_id INTEGER PRIMARY KEY,
-                    channel_id INTEGER,
-                    FOREIGN KEY (alliance_id) REFERENCES alliance_list (alliance_id)
-                )
-            """)
-            
-            self.settings_db.commit()
-                
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS alliance_logs (
+                        alliance_id INTEGER PRIMARY KEY,
+                        channel_id INTEGER,
+                        FOREIGN KEY (alliance_id) REFERENCES alliance_list (alliance_id)
+                    )
+                """)
+                conn.commit()
+
         except Exception as e:
             logger.error(f"Error setting up log system database: {e}")
             print(f"Error setting up log system database: {e}")
 
-    async def cog_unload(self):
-        try:
-            self.settings_db.close()
-            self.alliance_db.close()
-        except Exception:
-            pass
-
     async def show_activity_log_for(self, interaction: discord.Interaction, alliance_id: int):
         """Hub-context entry: show + manage the activity log channel for one alliance."""
         try:
-            self.alliance_cursor.execute(
-                "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
-            )
-            row = self.alliance_cursor.fetchone()
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+                )
+                row = cursor.fetchone()
             if not row:
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Alliance not found.", ephemeral=True
@@ -60,11 +50,13 @@ class AllianceLogs(commands.Cog):
                 return
             alliance_name = row[0]
 
-            self.settings_cursor.execute(
-                "SELECT channel_id FROM alliance_logs WHERE alliance_id = ?",
-                (alliance_id,),
-            )
-            ch_row = self.settings_cursor.fetchone()
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT channel_id FROM alliance_logs WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                ch_row = cursor.fetchone()
             current_channel_id = ch_row[0] if ch_row else None
             current_channel = (
                 interaction.guild.get_channel(int(current_channel_id))
@@ -185,6 +177,10 @@ class AllianceLogs(commands.Cog):
                 await main_menu_cog.show_alliance_management(interaction)
             return
 
+        if custom_id == "log_system":
+            await self.show_log_menu(interaction)
+            return
+
         if custom_id == "set_log_channel":
             try:
                 from .permission_handler import PermissionManager
@@ -253,14 +249,18 @@ class AllianceLogs(commands.Cog):
                             try:
                                 channel_id = int(channel_interaction.data["values"][0])
                                 
-                                self.settings_cursor.execute("""
-                                    INSERT OR REPLACE INTO alliance_logs (alliance_id, channel_id)
-                                    VALUES (?, ?)
-                                """, (alliance_id, channel_id))
-                                self.settings_db.commit()
+                                with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute("""
+                                        INSERT OR REPLACE INTO alliance_logs (alliance_id, channel_id)
+                                        VALUES (?, ?)
+                                    """, (alliance_id, channel_id))
+                                    conn.commit()
 
-                                self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                                alliance_name = self.alliance_cursor.fetchone()[0]
+                                with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                                    alliance_name = cursor.fetchone()[0]
 
                                 success_embed = discord.Embed(
                                     title=f"{theme.verifiedIcon} Log Channel Set",
@@ -356,12 +356,14 @@ class AllianceLogs(commands.Cog):
 
                 # Get log entries only for alliances admin can access
                 placeholders = ','.join('?' * len(admin_alliance_ids))
-                self.settings_cursor.execute(f"""
-                    SELECT al.alliance_id, al.channel_id
-                    FROM alliance_logs al
-                    WHERE al.alliance_id IN ({placeholders})
-                """, admin_alliance_ids)
-                log_entries = self.settings_cursor.fetchall()
+                with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(f"""
+                        SELECT al.alliance_id, al.channel_id
+                        FROM alliance_logs al
+                        WHERE al.alliance_id IN ({placeholders})
+                    """, admin_alliance_ids)
+                    log_entries = cursor.fetchall()
 
                 if not log_entries:
                     await interaction.response.send_message(
@@ -372,8 +374,10 @@ class AllianceLogs(commands.Cog):
 
                 alliances_with_counts = []
                 for alliance_id, channel_id in log_entries:
-                    self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                    alliance_result = self.alliance_cursor.fetchone()
+                    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                        alliance_result = cursor.fetchone()
                     alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
 
                     with sqlite3.connect('db/users.sqlite') as users_db:
@@ -405,13 +409,17 @@ class AllianceLogs(commands.Cog):
                 async def alliance_callback(select_interaction: discord.Interaction):
                     try:
                         alliance_id = int(view.current_select.values[0])
-                        
-                        self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                        alliance_name = self.alliance_cursor.fetchone()[0]
-                        
-                        self.settings_cursor.execute("SELECT channel_id FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
-                        channel_id = self.settings_cursor.fetchone()[0]
-                        
+
+                        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                            alliance_name = cursor.fetchone()[0]
+
+                        with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT channel_id FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
+                            channel_id = cursor.fetchone()[0]
+
                         confirm_embed = discord.Embed(
                             title=f"{theme.warnIcon} Confirm Removal",
                             description=(
@@ -427,11 +435,13 @@ class AllianceLogs(commands.Cog):
                         
                         async def confirm_callback(button_interaction: discord.Interaction):
                             try:
-                                self.settings_cursor.execute("""
-                                    DELETE FROM alliance_logs 
-                                    WHERE alliance_id = ?
-                                """, (alliance_id,))
-                                self.settings_db.commit()
+                                with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute("""
+                                        DELETE FROM alliance_logs
+                                        WHERE alliance_id = ?
+                                    """, (alliance_id,))
+                                    conn.commit()
 
                                 success_embed = discord.Embed(
                                     title=f"{theme.verifiedIcon} Log Channel Removed",
@@ -556,13 +566,15 @@ class AllianceLogs(commands.Cog):
 
                 # Get log entries only for alliances admin can access
                 placeholders = ','.join('?' * len(admin_alliance_ids))
-                self.settings_cursor.execute(f"""
-                    SELECT alliance_id, channel_id
-                    FROM alliance_logs
-                    WHERE alliance_id IN ({placeholders})
-                    ORDER BY alliance_id
-                """, admin_alliance_ids)
-                log_entries = self.settings_cursor.fetchall()
+                with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(f"""
+                        SELECT alliance_id, channel_id
+                        FROM alliance_logs
+                        WHERE alliance_id IN ({placeholders})
+                        ORDER BY alliance_id
+                    """, admin_alliance_ids)
+                    log_entries = cursor.fetchall()
 
                 if not log_entries:
                     await interaction.response.send_message(
@@ -578,8 +590,10 @@ class AllianceLogs(commands.Cog):
                 )
 
                 for alliance_id, channel_id in log_entries:
-                    self.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                    alliance_result = self.alliance_cursor.fetchone()
+                    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                        alliance_result = cursor.fetchone()
                     alliance_name = alliance_result[0] if alliance_result else "Unknown Alliance"
 
                     channel = interaction.guild.get_channel(channel_id)
@@ -673,12 +687,14 @@ class AllianceActivityLogView(discord.ui.View):
             async def callback(self, channel_interaction: discord.Interaction):
                 selected = self.values[0]
                 try:
-                    cog.settings_cursor.execute(
-                        "INSERT OR REPLACE INTO alliance_logs (alliance_id, channel_id) "
-                        "VALUES (?, ?)",
-                        (alliance_id, selected.id),
-                    )
-                    cog.settings_db.commit()
+                    with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "INSERT OR REPLACE INTO alliance_logs (alliance_id, channel_id) "
+                            "VALUES (?, ?)",
+                            (alliance_id, selected.id),
+                        )
+                        conn.commit()
                 except Exception as e:
                     logger.error(f"Activity log set error: {e}")
                     print(f"Activity log set error: {e}")
@@ -700,11 +716,13 @@ class AllianceActivityLogView(discord.ui.View):
 
     async def _on_remove(self, interaction: discord.Interaction):
         try:
-            self.cog.settings_cursor.execute(
-                "DELETE FROM alliance_logs WHERE alliance_id = ?",
-                (self.alliance_id,),
-            )
-            self.cog.settings_db.commit()
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM alliance_logs WHERE alliance_id = ?",
+                    (self.alliance_id,),
+                )
+                conn.commit()
         except Exception as e:
             logger.error(f"Activity log remove error: {e}")
             print(f"Activity log remove error: {e}")

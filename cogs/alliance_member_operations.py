@@ -15,7 +15,7 @@ import csv
 import io
 from .login_handler import LoginHandler
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, disable_expired_view
 from .process_queue import MEMBER_ADD, PreemptedException
 from .bot_level_mapping import LEVEL_MAPPING
 
@@ -421,14 +421,7 @@ class MemberListView(discord.ui.View):
         )
 
     async def on_timeout(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
+        await disable_expired_view(self)
 
 
 class ManageMembersView(MemberListView):
@@ -2245,7 +2238,8 @@ class AllianceMemberOperations(commands.Cog):
             )
             return
 
-        member_count = len(ids.split(',') if ',' in ids else ids.split('\n'))
+        # Mirror the processing parse (newlines win over commas) so the preview count matches.
+        member_count = len([x for x in (ids.split('\n') if '\n' in ids else ids.split(',')) if x.strip()])
 
         # Always send the progress embed up front (whether queued or starting now)
         embed = discord.Embed(
@@ -4142,13 +4136,7 @@ class AlliancePowerRankingsView(discord.ui.View):
         self._build_components()
 
     async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.HTTPException:
-                pass
+        await disable_expired_view(self)
 
     def _total_pages(self) -> int:
         if not self.members:

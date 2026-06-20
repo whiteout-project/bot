@@ -31,36 +31,30 @@ class Alliance(commands.Cog):
     def __init__(self, bot, conn):
         self.bot = bot
         self.conn = conn
-        self.c = self.conn.cursor()
-        
-        self.conn_users = sqlite3.connect('db/users.sqlite', timeout=30.0, check_same_thread=False)
-        self.c_users = self.conn_users.cursor()
-
-        self.conn_settings = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
-        self.c_settings = self.conn_settings.cursor()
-
-        self.conn_giftcode = sqlite3.connect('db/giftcode.sqlite', timeout=30.0, check_same_thread=False)
-        self.c_giftcode = self.conn_giftcode.cursor()
 
         self._create_table()
         self._check_and_add_column()
 
     def _create_table(self):
-        self.c.execute("""
-            CREATE TABLE IF NOT EXISTS alliance_list (
-                alliance_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                discord_server_id INTEGER
-            )
-        """)
-        self.conn.commit()
+        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS alliance_list (
+                    alliance_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    discord_server_id INTEGER
+                )
+            """)
+            conn.commit()
 
     def _check_and_add_column(self):
-        self.c.execute("PRAGMA table_info(alliance_list)")
-        columns = [info[1] for info in self.c.fetchall()]
-        if "discord_server_id" not in columns:
-            self.c.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
-            self.conn.commit()
+        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(alliance_list)")
+            columns = [info[1] for info in cursor.fetchall()]
+            if "discord_server_id" not in columns:
+                cursor.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
+                conn.commit()
 
     async def cog_unload(self):
         """Close database connections when cog is unloaded."""
@@ -87,46 +81,50 @@ class Alliance(commands.Cog):
             return
 
         try:
-            if is_global:
-                # Global admin - show all alliances
-                query = """
-                    SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
-                    FROM alliance_list a
-                    LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-                    ORDER BY a.alliance_id ASC
-                """
-                self.c.execute(query)
-            else:
-                # Get alliance IDs using centralized permission manager
-                alliance_ids, _ = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                if is_global:
+                    # Global admin - show all alliances
+                    query = """
+                        SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
+                        FROM alliance_list a
+                        LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
+                        ORDER BY a.alliance_id ASC
+                    """
+                    cursor.execute(query)
+                else:
+                    # Get alliance IDs using centralized permission manager
+                    alliance_ids, _ = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
 
-                if not alliance_ids:
-                    embed = discord.Embed(
-                        title="Existing Alliances",
-                        description="No alliances found for your permissions.",
-                        color=theme.emColor1
-                    )
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                    return
+                    if not alliance_ids:
+                        embed = discord.Embed(
+                            title="Existing Alliances",
+                            description="No alliances found for your permissions.",
+                            color=theme.emColor1
+                        )
+                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        return
 
-                placeholders = ','.join('?' * len(alliance_ids))
-                query = f"""
-                    SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
-                    FROM alliance_list a
-                    LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-                    WHERE a.alliance_id IN ({placeholders})
-                    ORDER BY a.alliance_id ASC
-                """
-                self.c.execute(query, alliance_ids)
+                    placeholders = ','.join('?' * len(alliance_ids))
+                    query = f"""
+                        SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
+                        FROM alliance_list a
+                        LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
+                        WHERE a.alliance_id IN ({placeholders})
+                        ORDER BY a.alliance_id ASC
+                    """
+                    cursor.execute(query, alliance_ids)
 
-            alliances = self.c.fetchall()
+                alliances = cursor.fetchall()
 
             alliance_list = ""
             for alliance_id, name, interval in alliances:
-                
-                self.c_users.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                member_count = self.c_users.fetchone()[0]
-                
+
+                with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                    member_count = cursor.fetchone()[0]
+
                 interval_text = f"{interval} minutes" if interval > 0 else "No automatic sync"
                 alliance_list += f"{theme.allianceIcon} **{alliance_id}: {name}**\n{theme.userIcon} Members: {member_count}\n{theme.timeIcon} Sync Interval: {interval_text}\n\n"
 
@@ -159,17 +157,21 @@ class Alliance(commands.Cog):
                     )
                     return
                 
-            self.c_settings.execute("SELECT COUNT(*) FROM admin")
-            admin_count = self.c_settings.fetchone()[0]
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM admin")
+                admin_count = cursor.fetchone()[0]
 
             user_id = interaction.user.id
 
             if admin_count == 0:
-                self.c_settings.execute("""
-                    INSERT INTO admin (id, is_initial) 
-                    VALUES (?, 1)
-                """, (user_id,))
-                self.conn_settings.commit()
+                with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO admin (id, is_initial)
+                        VALUES (?, 1)
+                    """, (user_id,))
+                    conn.commit()
 
                 first_use_embed = discord.Embed(
                     title=f"{theme.newIcon} First Time Setup",
@@ -184,8 +186,10 @@ class Alliance(commands.Cog):
                 
                 await asyncio.sleep(3)
                 
-            self.c_settings.execute("SELECT id, is_initial FROM admin WHERE id = ?", (user_id,))
-            admin = self.c_settings.fetchone()
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, is_initial FROM admin WHERE id = ?", (user_id,))
+                admin = cursor.fetchone()
 
             if admin is None:
                 await interaction.response.send_message(
@@ -304,25 +308,27 @@ class Alliance(commands.Cog):
                 interaction.user.id, interaction.guild_id
             )
 
-            if is_global:
-                self.c.execute(
-                    "SELECT alliance_id, name FROM alliance_list ORDER BY name"
-                )
-            elif allowed_alliance_ids:
-                placeholders = ",".join("?" * len(allowed_alliance_ids))
-                self.c.execute(
-                    f"SELECT alliance_id, name FROM alliance_list "
-                    f"WHERE alliance_id IN ({placeholders}) ORDER BY name",
-                    allowed_alliance_ids,
-                )
-            else:
+            if not is_global and not allowed_alliance_ids:
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} You don't have permission to sync any alliances.",
                     ephemeral=True,
                 )
                 return
 
-            alliances = self.c.fetchall()
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                if is_global:
+                    cursor.execute(
+                        "SELECT alliance_id, name FROM alliance_list ORDER BY name"
+                    )
+                else:
+                    placeholders = ",".join("?" * len(allowed_alliance_ids))
+                    cursor.execute(
+                        f"SELECT alliance_id, name FROM alliance_list "
+                        f"WHERE alliance_id IN ({placeholders}) ORDER BY name",
+                        allowed_alliance_ids,
+                    )
+                alliances = cursor.fetchall()
 
             if not alliances:
                 await interaction.response.send_message(
@@ -391,11 +397,13 @@ class Alliance(commands.Cog):
             queued_alliances = []
             for index, (alliance_id, name) in enumerate(eligible):
                 try:
-                    self.c.execute(
-                        "SELECT channel_id FROM alliancesettings WHERE alliance_id = ?",
-                        (alliance_id,),
-                    )
-                    channel_data = self.c.fetchone()
+                    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT channel_id FROM alliancesettings WHERE alliance_id = ?",
+                            (alliance_id,),
+                        )
+                        channel_data = cursor.fetchone()
                     channel = self.bot.get_channel(channel_data[0]) if channel_data else interaction.channel
                     if not channel:
                         continue
@@ -435,10 +443,12 @@ class Alliance(commands.Cog):
 
     async def show_edit_name_for(self, interaction: discord.Interaction, alliance_id: int):
         """Direct entry: rename a single alliance (no other settings)."""
-        self.c.execute(
-            "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
-        )
-        row = self.c.fetchone()
+        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+            )
+            row = cursor.fetchone()
         if not row:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Alliance not found.", ephemeral=True
@@ -451,23 +461,27 @@ class Alliance(commands.Cog):
     async def show_edit_alliance_for(self, interaction: discord.Interaction, alliance_id: int):
         """Hub-context entry: edit a known alliance (skip the picker)."""
         try:
-            self.c.execute(
-                "SELECT alliance_id, name FROM alliance_list WHERE alliance_id = ?",
-                (alliance_id,),
-            )
-            alliance_data = self.c.fetchone()
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT alliance_id, name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                alliance_data = cursor.fetchone()
             if not alliance_data:
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Alliance not found.", ephemeral=True
                 )
                 return
 
-            self.c.execute(
-                "SELECT interval, channel_id, start_time FROM alliancesettings "
-                "WHERE alliance_id = ?",
-                (alliance_id,),
-            )
-            settings_data = self.c.fetchone()
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT interval, channel_id, start_time FROM alliancesettings "
+                    "WHERE alliance_id = ?",
+                    (alliance_id,),
+                )
+                settings_data = cursor.fetchone()
 
             modal = AllianceModal(
                 title="Edit Alliance",
@@ -512,24 +526,26 @@ class Alliance(commands.Cog):
                 async def channel_select_callback(channel_interaction: discord.Interaction):
                     try:
                         channel_id = int(channel_interaction.data["values"][0])
-                        self.c.execute(
-                            "UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
-                            (alliance_name, alliance_id),
-                        )
-                        if settings_data:
-                            self.c.execute(
-                                "UPDATE alliancesettings SET channel_id = ?, interval = ?, "
-                                "start_time = ? WHERE alliance_id = ?",
-                                (channel_id, interval, start_time, alliance_id),
+                        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
+                                (alliance_name, alliance_id),
                             )
-                        else:
-                            self.c.execute(
-                                "INSERT INTO alliancesettings "
-                                "(alliance_id, channel_id, interval, start_time) "
-                                "VALUES (?, ?, ?, ?)",
-                                (alliance_id, channel_id, interval, start_time),
-                            )
-                        self.conn.commit()
+                            if settings_data:
+                                cursor.execute(
+                                    "UPDATE alliancesettings SET channel_id = ?, interval = ?, "
+                                    "start_time = ? WHERE alliance_id = ?",
+                                    (channel_id, interval, start_time, alliance_id),
+                                )
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO alliancesettings "
+                                    "(alliance_id, channel_id, interval, start_time) "
+                                    "VALUES (?, ?, ?, ?)",
+                                    (alliance_id, channel_id, interval, start_time),
+                                )
+                            conn.commit()
 
                         start_time_display = (
                             f"{start_time} UTC" if start_time
@@ -606,8 +622,10 @@ class Alliance(commands.Cog):
                 return
 
             user_id = interaction.user.id
-            self.c_settings.execute("SELECT id, is_initial FROM admin WHERE id = ?", (user_id,))
-            admin = self.c_settings.fetchone()
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, is_initial FROM admin WHERE id = ?", (user_id,))
+                admin = cursor.fetchone()
 
             if admin is None:
                 await interaction.response.send_message("You do not have permission to perform this action.", ephemeral=True)
@@ -626,13 +644,15 @@ class Alliance(commands.Cog):
                     await self.edit_alliance(interaction)
 
                 elif custom_id == "check_alliance":
-                    self.c.execute("""
-                        SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
-                        FROM alliance_list a
-                        LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-                        ORDER BY a.name
-                    """)
-                    alliances = self.c.fetchall()
+                    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval
+                            FROM alliance_list a
+                            LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
+                            ORDER BY a.name
+                        """)
+                        alliances = cursor.fetchall()
 
                     if not alliances:
                         await interaction.response.send_message("No alliances found to check.", ephemeral=True)
@@ -716,10 +736,12 @@ class Alliance(commands.Cog):
                                 queued_alliances = []
                                 for index, (alliance_id, name, _) in enumerate(eligible):
                                     try:
-                                        self.c.execute("""
-                                            SELECT channel_id FROM alliancesettings WHERE alliance_id = ?
-                                        """, (alliance_id,))
-                                        channel_data = self.c.fetchone()
+                                        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                                            cursor = conn.cursor()
+                                            cursor.execute("""
+                                                SELECT channel_id FROM alliancesettings WHERE alliance_id = ?
+                                            """, (alliance_id,))
+                                            channel_data = cursor.fetchone()
                                         channel = self.bot.get_channel(channel_data[0]) if channel_data else select_interaction.channel
                                         if not channel:
                                             continue
@@ -759,13 +781,15 @@ class Alliance(commands.Cog):
 
                             else:
                                 alliance_id = int(selected_value)
-                                self.c.execute("""
-                                    SELECT a.name, s.channel_id
-                                    FROM alliance_list a
-                                    LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-                                    WHERE a.alliance_id = ?
-                                """, (alliance_id,))
-                                alliance_data = self.c.fetchone()
+                                with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                                    cursor = conn.cursor()
+                                    cursor.execute("""
+                                        SELECT a.name, s.channel_id
+                                        FROM alliance_list a
+                                        LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
+                                        WHERE a.alliance_id = ?
+                                    """, (alliance_id,))
+                                    alliance_data = cursor.fetchone()
 
                                 if not alliance_data:
                                     await select_interaction.response.send_message("Alliance not found.", ephemeral=True)
@@ -902,14 +926,16 @@ class Alliance(commands.Cog):
         # Fetch full alliance details for the ones admin can access
         alliance_ids = [a[0] for a in admin_alliances]
         placeholders = ','.join('?' * len(alliance_ids))
-        self.c.execute(f"""
-            SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval, COALESCE(s.channel_id, 0) as channel_id
-            FROM alliance_list a
-            LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-            WHERE a.alliance_id IN ({placeholders})
-            ORDER BY a.alliance_id ASC
-        """, alliance_ids)
-        alliances = self.c.fetchall()
+        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval, COALESCE(s.channel_id, 0) as channel_id
+                FROM alliance_list a
+                LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
+                WHERE a.alliance_id IN ({placeholders})
+                ORDER BY a.alliance_id ASC
+            """, alliance_ids)
+            alliances = cursor.fetchall()
 
         if not alliances:
             no_alliance_embed = discord.Embed(
@@ -1011,12 +1037,14 @@ class Alliance(commands.Cog):
                 alliance_id = int(select_interaction.data["values"][0])
                 alliance_data = next(a for a in alliances if a[0] == alliance_id)
 
-                self.c.execute("""
-                    SELECT interval, channel_id, start_time
-                    FROM alliancesettings
-                    WHERE alliance_id = ?
-                """, (alliance_id,))
-                settings_data = self.c.fetchone()
+                with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT interval, channel_id, start_time
+                        FROM alliancesettings
+                        WHERE alliance_id = ?
+                    """, (alliance_id,))
+                    settings_data = cursor.fetchone()
 
                 modal = AllianceModal(
                     title="Edit Alliance",
@@ -1066,22 +1094,24 @@ class Alliance(commands.Cog):
                         try:
                             channel_id = int(channel_interaction.data["values"][0])
 
-                            self.c.execute("UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
-                                          (alliance_name, alliance_id))
+                            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                                cursor = conn.cursor()
+                                cursor.execute("UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
+                                              (alliance_name, alliance_id))
 
-                            if settings_data:
-                                self.c.execute("""
-                                    UPDATE alliancesettings
-                                    SET channel_id = ?, interval = ?, start_time = ?
-                                    WHERE alliance_id = ?
-                                """, (channel_id, interval, start_time, alliance_id))
-                            else:
-                                self.c.execute("""
-                                    INSERT INTO alliancesettings (alliance_id, channel_id, interval, start_time)
-                                    VALUES (?, ?, ?, ?)
-                                """, (alliance_id, channel_id, interval, start_time))
+                                if settings_data:
+                                    cursor.execute("""
+                                        UPDATE alliancesettings
+                                        SET channel_id = ?, interval = ?, start_time = ?
+                                        WHERE alliance_id = ?
+                                    """, (channel_id, interval, start_time, alliance_id))
+                                else:
+                                    cursor.execute("""
+                                        INSERT INTO alliancesettings (alliance_id, channel_id, interval, start_time)
+                                        VALUES (?, ?, ?, ?)
+                                    """, (alliance_id, channel_id, interval, start_time))
 
-                            self.conn.commit()
+                                conn.commit()
 
                             result_embed = discord.Embed(
                                 title=f"{theme.verifiedIcon} Alliance Successfully Updated",
@@ -1196,8 +1226,10 @@ class Alliance(commands.Cog):
 
             alliance_members = {}
             for alliance_id, _ in alliances:
-                self.c_users.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                member_count = self.c_users.fetchone()[0]
+                with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                    member_count = cursor.fetchone()[0]
                 alliance_members[alliance_id] = member_count
 
             items_per_page = 25
@@ -1247,35 +1279,51 @@ class Alliance(commands.Cog):
             if alliance_id is None:
                 alliance_id = int(interaction.data["values"][0])
 
-            self.c.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-            alliance_data = self.c.fetchone()
-            
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                alliance_data = cursor.fetchone()
+
             if not alliance_data:
                 await interaction.response.send_message("Alliance not found.", ephemeral=True)
                 return
-            
+
             alliance_name = alliance_data[0]
 
-            self.c.execute("SELECT COUNT(*) FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
-            settings_count = self.c.fetchone()[0]
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
+                settings_count = cursor.fetchone()[0]
 
-            self.c_users.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-            users_count = self.c_users.fetchone()[0]
+            with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                users_count = cursor.fetchone()[0]
 
-            self.c_settings.execute("SELECT COUNT(*) FROM adminserver WHERE alliances_id = ?", (alliance_id,))
-            admin_server_count = self.c_settings.fetchone()[0]
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM adminserver WHERE alliances_id = ?", (alliance_id,))
+                admin_server_count = cursor.fetchone()[0]
 
-            self.c_giftcode.execute("SELECT COUNT(*) FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
-            gift_channels_count = self.c_giftcode.fetchone()[0]
+            with sqlite3.connect('db/giftcode.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+                gift_channels_count = cursor.fetchone()[0]
 
-            self.c_giftcode.execute("SELECT COUNT(*) FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
-            gift_code_control_count = self.c_giftcode.fetchone()[0]
+            with sqlite3.connect('db/giftcode.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
+                gift_code_control_count = cursor.fetchone()[0]
 
-            self.c_settings.execute("SELECT COUNT(*) FROM invalid_id_tracker WHERE alliance_id = ?", (str(alliance_id),))
-            invalid_tracker_count = self.c_settings.fetchone()[0]
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM invalid_id_tracker WHERE alliance_id = ?", (str(alliance_id),))
+                invalid_tracker_count = cursor.fetchone()[0]
 
-            self.c_settings.execute("SELECT COUNT(*) FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
-            alliance_logs_count = self.c_settings.fetchone()[0]
+            with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
+                alliance_logs_count = cursor.fetchone()[0]
 
             confirm_embed = discord.Embed(
                 title=f"{theme.warnIcon} Confirm Alliance Deletion",
@@ -1305,36 +1353,44 @@ class Alliance(commands.Cog):
                     # Delete dependents first and the alliance row LAST. The DBs
                     # aren't a single transaction, so if a step fails the alliance
                     # still exists and its members stay valid instead of orphaned.
-                    self.c_users.execute("DELETE FROM users WHERE alliance = ?", (alliance_id,))
-                    users_count_deleted = self.c_users.rowcount
-                    self.conn_users.commit()
+                    with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM users WHERE alliance = ?", (alliance_id,))
+                        users_count_deleted = cursor.rowcount
+                        conn.commit()
 
-                    self.c_settings.execute("DELETE FROM adminserver WHERE alliances_id = ?", (alliance_id,))
-                    admin_server_count = self.c_settings.rowcount
+                    with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM adminserver WHERE alliances_id = ?", (alliance_id,))
+                        admin_server_count = cursor.rowcount
 
-                    self.c_settings.execute("DELETE FROM invalid_id_tracker WHERE alliance_id = ?", (str(alliance_id),))
-                    invalid_tracker_deleted = self.c_settings.rowcount
+                        cursor.execute("DELETE FROM invalid_id_tracker WHERE alliance_id = ?", (str(alliance_id),))
+                        invalid_tracker_deleted = cursor.rowcount
 
-                    self.c_settings.execute("DELETE FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
-                    alliance_logs_deleted = self.c_settings.rowcount
+                        cursor.execute("DELETE FROM alliance_logs WHERE alliance_id = ?", (alliance_id,))
+                        alliance_logs_deleted = cursor.rowcount
 
-                    self.conn_settings.commit()
+                        conn.commit()
 
-                    self.c_giftcode.execute("DELETE FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
-                    gift_channels_count = self.c_giftcode.rowcount
+                    with sqlite3.connect('db/giftcode.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+                        gift_channels_count = cursor.rowcount
 
-                    self.c_giftcode.execute("DELETE FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
-                    gift_code_control_count = self.c_giftcode.rowcount
+                        cursor.execute("DELETE FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
+                        gift_code_control_count = cursor.rowcount
 
-                    self.conn_giftcode.commit()
+                        conn.commit()
 
-                    self.c.execute("DELETE FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
-                    admin_settings_count = self.c.rowcount
+                    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("DELETE FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
+                        admin_settings_count = cursor.rowcount
 
-                    self.c.execute("DELETE FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                    alliance_count = self.c.rowcount
+                        cursor.execute("DELETE FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                        alliance_count = cursor.rowcount
 
-                    self.conn.commit()
+                        conn.commit()
 
                     cleanup_embed = discord.Embed(
                         title=f"{theme.verifiedIcon} Alliance Successfully Deleted",
@@ -1489,33 +1545,37 @@ class AddAllianceModal(discord.ui.Modal):
             return
 
         try:
-            self.cog.c.execute(
-                "SELECT alliance_id FROM alliance_list WHERE name = ?", (alliance_name,)
-            )
-            if self.cog.c.fetchone():
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An alliance named **{alliance_name}** already exists.",
-                    ephemeral=True,
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT alliance_id FROM alliance_list WHERE name = ?", (alliance_name,)
                 )
-                return
+                if cursor.fetchone():
+                    await interaction.response.send_message(
+                        f"{theme.deniedIcon} An alliance named **{alliance_name}** already exists.",
+                        ephemeral=True,
+                    )
+                    return
 
-            self.cog.c.execute(
-                "INSERT INTO alliance_list (name, discord_server_id) VALUES (?, ?)",
-                (alliance_name, interaction.guild.id if interaction.guild else None),
-            )
-            alliance_id = self.cog.c.lastrowid
-            self.cog.c.execute(
-                "INSERT INTO alliancesettings (alliance_id, channel_id, interval, start_time) "
-                "VALUES (?, NULL, ?, NULL)",
-                (alliance_id, self.DEFAULT_INTERVAL_MINUTES),
-            )
-            self.cog.conn.commit()
+                cursor.execute(
+                    "INSERT INTO alliance_list (name, discord_server_id) VALUES (?, ?)",
+                    (alliance_name, interaction.guild.id if interaction.guild else None),
+                )
+                alliance_id = cursor.lastrowid
+                cursor.execute(
+                    "INSERT INTO alliancesettings (alliance_id, channel_id, interval, start_time) "
+                    "VALUES (?, NULL, ?, NULL)",
+                    (alliance_id, self.DEFAULT_INTERVAL_MINUTES),
+                )
+                conn.commit()
 
-            self.cog.c_giftcode.execute(
-                "INSERT INTO giftcodecontrol (alliance_id, status) VALUES (?, 1)",
-                (alliance_id,),
-            )
-            self.cog.conn_giftcode.commit()
+            with sqlite3.connect('db/giftcode.sqlite', timeout=30.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO giftcodecontrol (alliance_id, status) VALUES (?, 1)",
+                    (alliance_id,),
+                )
+                conn.commit()
 
             # Drop the user straight onto the new alliance's hub — no
             # intermediate "created" ephemeral. The hub itself confirms the

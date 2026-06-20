@@ -2,6 +2,7 @@
 import discord
 from discord.ext import commands
 import sqlite3
+import asyncio
 import logging
 from datetime import datetime, timezone
 from .pimp_my_bot import theme
@@ -98,8 +99,10 @@ class AllianceRegistration(commands.Cog):
             return False
 
     async def alliance_autocomplete(self, interaction: discord.Interaction, current: str):
-        self.c_alliance.execute("SELECT alliance_id, name FROM alliance_list")
-        alliances = self.c_alliance.fetchall()
+        def _read():
+            with sqlite3.connect("db/alliance.sqlite", timeout=30.0) as conn:
+                return conn.execute("SELECT alliance_id, name FROM alliance_list").fetchall()
+        alliances = await asyncio.to_thread(_read)
 
         return [
             discord.app_commands.Choice(name=name, value=alliance_id)
@@ -215,6 +218,8 @@ class AllianceRegistration(commands.Cog):
             await self._send_register_success(interaction, fid, caller_id, action="linked")
             return
 
+        # API lookup can exceed the 3s ack window — defer before the slow call.
+        await interaction.response.defer(ephemeral=True)
         try:
             api_response = await self.fetch_user(fid)
             if api_response.get("msg") != "success":
@@ -223,10 +228,10 @@ class AllianceRegistration(commands.Cog):
                     display_msg = f"{theme.deniedIcon} Invalid ID. Please try again."
                 else:
                     display_msg = f"{theme.deniedIcon} Invalid ID: {error_msg}"
-                await interaction.response.send_message(display_msg, ephemeral=True)
+                await interaction.followup.send(display_msg, ephemeral=True)
                 return
             if "data" not in api_response:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"{theme.deniedIcon} Invalid response from server. Please try again later.",
                     ephemeral=True,
                 )
@@ -234,14 +239,14 @@ class AllianceRegistration(commands.Cog):
             user_data = api_response["data"]
         except Exception as e:
             if str(e) == "RATE_LIMITED":
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "⏳ Rate limit reached. Please wait a minute before trying again.",
                     ephemeral=True,
                 )
             else:
                 logger.error(f"Error fetching user data for ID {fid}: {e}")
                 print(f"Error fetching user data for ID {fid}: {e}")
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"{theme.deniedIcon} Failed to fetch user data. Please try again later.",
                     ephemeral=True,
                 )
@@ -262,10 +267,12 @@ class AllianceRegistration(commands.Cog):
         else:
             extra = ""
         verb = "Linked" if action == "linked" else "Registered"
-        await interaction.response.send_message(
-            f"{theme.verifiedIcon} {verb} ID `{fid}` to your Discord account.{extra}",
-            ephemeral=True,
-        )
+        msg = f"{theme.verifiedIcon} {verb} ID `{fid}` to your Discord account.{extra}"
+        # Called from both the deferred (new-user) and non-deferred (attach) paths.
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
 
     def _server_name_or_id(self, server_id, interaction):
         if server_id is None:

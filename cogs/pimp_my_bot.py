@@ -182,6 +182,51 @@ async def safe_edit_message(interaction: discord.Interaction, embed: discord.Emb
         await interaction.edit_original_response(embed=embed, view=view, content=content, **extra)
 
 
+def expired_embed(what: str = "menu") -> discord.Embed:
+    """Standard 'this menu timed out' notice. Keep wording consistent bot-wide."""
+    return discord.Embed(
+        title=f"{theme.hourglassIcon} Menu Expired",
+        description=(
+            f"{theme.upperDivider}\n"
+            f"This {what} timed out after a period of inactivity.\n"
+            f"Run the command again to pick up where you left off.\n"
+            f"{theme.lowerDivider}"
+        ),
+        color=theme.emColor2,
+    )
+
+
+async def notify_view_expired(view: discord.ui.View, what: str = "menu"):
+    """Call from a View.on_timeout to replace a finite-timeout menu with the
+    standard expiry notice. No-op if the view never stored `self.message`.
+    Set `self.message = await interaction.original_response()` when first sending
+    the menu, and `self.stop()` on normal finalize so a stale timeout can't
+    overwrite a completed action."""
+    msg = getattr(view, "message", None)
+    if msg is None:
+        return
+    try:
+        await msg.edit(content=None, embed=expired_embed(what), view=None)
+    except discord.HTTPException:
+        pass
+
+
+async def disable_expired_view(view: discord.ui.View):
+    """For DATA displays (lists, rankings, charts, reports): on timeout, grey out
+    the controls but KEEP the content visible — never wipe a display to an expiry
+    notice. Use this instead of notify_view_expired for anything the user is
+    reading. No-op if the view never stored `self.message`."""
+    msg = getattr(view, "message", None)
+    if msg is None:
+        return
+    for child in view.children:
+        child.disabled = True
+    try:
+        await msg.edit(view=view)
+    except discord.HTTPException:
+        pass
+
+
 def build_divider(start, pattern, end, length, max_length=99):
     """Build a divider string with exact character length.
 
