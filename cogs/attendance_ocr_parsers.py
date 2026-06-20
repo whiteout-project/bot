@@ -100,15 +100,6 @@ EVENT_TYPES: dict[str, EventTypeConfig] = {
 }
 
 
-def classify_by_keywords(ocr_text: str, allowed: dict[str, list[str]]) -> Optional[str]:
-    text_lower = ocr_text.lower()
-    for event_type, keywords in allowed.items():
-        for kw in keywords:
-            if kw.lower() in text_lower:
-                return event_type
-    return None
-
-
 def fingerprint_match(event_type: str, ocr_text: str, kind: Optional[str] = None) -> bool:
     """True if the event's fingerprint regex matches; `kind` narrows to one kind."""
     cfg = EVENT_TYPES.get(event_type)
@@ -131,33 +122,16 @@ def detect_kind(event_type: str, ocr_text: str) -> Optional[str]:
     return None
 
 
-def classify_event(ocr_text: str, enabled_events: list[str],
-                   keywords_by_event: dict[str, list[str]] | None = None
+def classify_event(ocr_text: str, enabled_events: list[str]
                    ) -> Optional[tuple[str, str]]:
-    """Classify text to `(event_type, kind)` or None: configured keywords are an
-    optional prefilter, the per-kind fingerprint regex decides."""
+    """Classify text to `(event_type, kind)` or None via fingerprint regex."""
     if not ocr_text or not enabled_events:
         return None
-    text_lower = ocr_text.lower()
-    kw_map = keywords_by_event or {}
-
-    def _scan(require_keyword: bool) -> Optional[tuple[str, str]]:
-        for event_type in enabled_events:
-            cfg = EVENT_TYPES.get(event_type)
-            if cfg is None:
-                continue
-            keywords = kw_map.get(event_type, [])
-            if require_keyword and keywords and not any(kw.lower() in text_lower for kw in keywords):
-                continue
-            for kind, regex in cfg.fingerprint_re_by_kind.items():
-                if regex.search(ocr_text):
-                    return (event_type, kind)
-        return None
-
-    # Keyword match takes priority (disambiguates), but fall back to the
-    # fingerprint alone — result/power mails often omit the event name, and the
-    # registration fingerprints already require it.
-    return _scan(require_keyword=True) or _scan(require_keyword=False)
+    for event_type in enabled_events:
+        kind = detect_kind(event_type, ocr_text)
+        if kind is not None:
+            return (event_type, kind)
+    return None
 
 
 def resolve_event_date(mail_date_local: date, event_type: str,

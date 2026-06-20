@@ -14,24 +14,8 @@ from harness_attendance import parsers, load_roster
 
 
 # ---------------------------------------------------------------------------
-# Event-type classifier — keyword whitelist + fingerprint regex
+# Event-type classifier — fingerprint regex
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("text,allowed,expected", [
-    # Single event type allowed; keyword present
-    ("Foundry Battle results page", {"foundry_battle": ["Foundry Battle"]}, "foundry_battle"),
-    # Keyword case-insensitive
-    ("foundry battle blah blah", {"foundry_battle": ["Foundry Battle"]}, "foundry_battle"),
-    # Multiple event types — first keyword match wins
-    ("Canyon Clash page", {"foundry_battle": ["Foundry"], "canyon_clash": ["Canyon"]}, "canyon_clash"),
-    # No keyword match — returns None
-    ("random text with no keywords", {"foundry_battle": ["Foundry"]}, None),
-    # Empty whitelist
-    ("Foundry Battle", {}, None),
-])
-def test_classify_by_keywords(text, allowed, expected):
-    assert parsers.classify_by_keywords(text, allowed) == expected
-
 
 @pytest.mark.parametrize("event_type,text,expected", [
     ("foundry_battle", "Personal Arsenal Points scrolling", True),
@@ -88,8 +72,7 @@ def test_detect_kind_returns_none_for_scroll_page():
 
 
 # ---------------------------------------------------------------------------
-# classify_event — the fingerprint-first classifier used in production.
-# Keywords are an optional prefilter; fingerprint regex is the deciding factor.
+# classify_event — the fingerprint classifier used in production.
 # ---------------------------------------------------------------------------
 
 # Real-ish OCR text snippets — these match the fingerprint regexes in
@@ -118,52 +101,39 @@ _ALL_EVENTS = ["foundry_battle", "canyon_clash", "power_rankings", "alliance_sho
 
 
 def test_classify_event_no_keywords_fingerprint_alone_works():
-    assert parsers.classify_event(_TEXT_FOUNDRY_REG, _ALL_EVENTS, {}) == ("foundry_battle", "registration")
-    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, _ALL_EVENTS, {}) == ("foundry_battle", "result")
-    assert parsers.classify_event(_TEXT_CANYON_REG, _ALL_EVENTS, {}) == ("canyon_clash", "registration")
-    assert parsers.classify_event(_TEXT_CANYON_RESULT, _ALL_EVENTS, {}) == ("canyon_clash", "result")
-    assert parsers.classify_event(_TEXT_POWER_RANKING, _ALL_EVENTS, {}) == ("power_rankings", "result")
-    assert parsers.classify_event(_TEXT_SHOWDOWN, _ALL_EVENTS, {}) == ("alliance_showdown", "result")
+    assert parsers.classify_event(_TEXT_FOUNDRY_REG, _ALL_EVENTS) == ("foundry_battle", "registration")
+    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, _ALL_EVENTS) == ("foundry_battle", "result")
+    assert parsers.classify_event(_TEXT_CANYON_REG, _ALL_EVENTS) == ("canyon_clash", "registration")
+    assert parsers.classify_event(_TEXT_CANYON_RESULT, _ALL_EVENTS) == ("canyon_clash", "result")
+    assert parsers.classify_event(_TEXT_POWER_RANKING, _ALL_EVENTS) == ("power_rankings", "result")
+    assert parsers.classify_event(_TEXT_SHOWDOWN, _ALL_EVENTS) == ("alliance_showdown", "result")
 
 
 def test_classify_event_distinguishes_foundry_registration_vs_result():
     """Same event family, different kind — the per-kind fingerprint regexes
     return the right kind tag for each."""
-    assert parsers.classify_event(_TEXT_FOUNDRY_REG, _ALL_EVENTS, {}) == ("foundry_battle", "registration")
-    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, _ALL_EVENTS, {}) == ("foundry_battle", "result")
+    assert parsers.classify_event(_TEXT_FOUNDRY_REG, _ALL_EVENTS) == ("foundry_battle", "registration")
+    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, _ALL_EVENTS) == ("foundry_battle", "result")
 
 
 def test_classify_event_distinguishes_canyon_registration_vs_clash():
-    assert parsers.classify_event(_TEXT_CANYON_REG, _ALL_EVENTS, {}) == ("canyon_clash", "registration")
-    assert parsers.classify_event(_TEXT_CANYON_RESULT, _ALL_EVENTS, {}) == ("canyon_clash", "result")
-
-
-def test_classify_event_keyword_prefilter_narrows_correctly():
-    # When a keyword is configured for an event, the text must contain it
-    # OR the event is skipped — even if the fingerprint would otherwise match.
-    keywords = {"foundry_battle": ["customword"]}
-    # Foundry result text without "customword" — should NOT classify.
-    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, _ALL_EVENTS, keywords) is None
-    # Same text with "customword" injected — should classify.
-    assert parsers.classify_event(
-        _TEXT_FOUNDRY_RESULT + " customword", _ALL_EVENTS, keywords
-    ) == ("foundry_battle", "result")
+    assert parsers.classify_event(_TEXT_CANYON_REG, _ALL_EVENTS) == ("canyon_clash", "registration")
+    assert parsers.classify_event(_TEXT_CANYON_RESULT, _ALL_EVENTS) == ("canyon_clash", "result")
 
 
 def test_classify_event_disabled_event_never_classified():
     enabled = ["canyon_clash"]  # foundry_battle deliberately omitted
-    keywords = {"foundry_battle": ["Foundry"]}
-    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, enabled, keywords) is None
+    assert parsers.classify_event(_TEXT_FOUNDRY_RESULT, enabled) is None
 
 
 def test_classify_event_empty_inputs_return_none():
-    assert parsers.classify_event("", _ALL_EVENTS, {}) is None
-    assert parsers.classify_event("any text", [], {}) is None
-    assert parsers.classify_event(None or "", _ALL_EVENTS, {}) is None
+    assert parsers.classify_event("", _ALL_EVENTS) is None
+    assert parsers.classify_event("any text", []) is None
+    assert parsers.classify_event(None or "", _ALL_EVENTS) is None
 
 
 def test_classify_event_no_match_returns_none():
-    assert parsers.classify_event("random unrelated chatter", _ALL_EVENTS, {}) is None
+    assert parsers.classify_event("random unrelated chatter", _ALL_EVENTS) is None
 
 
 # Regression: "Please get ready to enter the [Canyon Clash]..." invitation mail.
@@ -181,13 +151,13 @@ _TEXT_FOUNDRY_REG_INVITATION = (
 
 def test_classify_event_canyon_registration_invitation_wording():
     assert parsers.classify_event(
-        _TEXT_CANYON_REG_INVITATION, _ALL_EVENTS, {}
+        _TEXT_CANYON_REG_INVITATION, _ALL_EVENTS
     ) == ("canyon_clash", "registration")
 
 
 def test_classify_event_foundry_registration_invitation_wording():
     assert parsers.classify_event(
-        _TEXT_FOUNDRY_REG_INVITATION, _ALL_EVENTS, {}
+        _TEXT_FOUNDRY_REG_INVITATION, _ALL_EVENTS
     ) == ("foundry_battle", "registration")
 
 
@@ -195,7 +165,7 @@ def test_classify_event_canyon_registration_not_misclassified_as_result():
     """The bug: 'Canyon Clash' appears in the registration mail header — the
     result-kind regex must NOT match it, so classify_event returns the
     registration kind."""
-    result = parsers.classify_event(_TEXT_CANYON_REG_INVITATION, _ALL_EVENTS, {})
+    result = parsers.classify_event(_TEXT_CANYON_REG_INVITATION, _ALL_EVENTS)
     assert result == ("canyon_clash", "registration")
 
 
@@ -209,12 +179,12 @@ def test_canyon_clash_result_fingerprint_doesnt_match_registration_mail():
 
 def test_canyon_clash_fingerprint_still_matches_real_result_mails():
     """Tightening canyon_clash mustn't break real result classification."""
-    assert parsers.classify_event(_TEXT_CANYON_RESULT, _ALL_EVENTS, {}) == ("canyon_clash", "result")
+    assert parsers.classify_event(_TEXT_CANYON_RESULT, _ALL_EVENTS) == ("canyon_clash", "result")
     text = (
         "Congratulations, [Legion 2] of your alliance ranked No. 2 in [Canyon Clash]! "
         "Here are the battle details: #293 Legion 2 [BRF]Bla 612,477"
     )
-    assert parsers.classify_event(text, _ALL_EVENTS, {}) == ("canyon_clash", "result")
+    assert parsers.classify_event(text, _ALL_EVENTS) == ("canyon_clash", "result")
 
 
 # ---------------------------------------------------------------------------

@@ -186,7 +186,7 @@ def test_classify_event_against_real_ocr_fixtures():
             continue
         ocr_text = ocr_image(case.screenshot_path)
         all_events = list(parsers.EVENT_TYPES.keys())
-        classified = parsers.classify_event(ocr_text, all_events, {})
+        classified = parsers.classify_event(ocr_text, all_events)
         actual_et = classified[0] if classified else None
         actual_kind = classified[1] if classified else None
         expected_et = case.event_type

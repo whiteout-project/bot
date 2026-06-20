@@ -661,8 +661,8 @@ class OCRChannelEditView(discord.ui.View):
                      "finishes, keeping the channel clean")
         lines.append("")
         lines.append(f"{theme.editListIcon} **Edit Keywords**")
-        lines.append("└ Optional keyword filter per event type — usually not needed; "
-                     "fingerprint detection alone is reliable")
+        lines.append("└ Optional — only OCR on uploads whose message text contains "
+                     "a keyword; blank = read every image (the default)")
         lines.append("")
         lines.append(f"{theme.trashIcon} **Remove Channel**")
         lines.append("└ Stop processing screenshots here and remove the info message")
@@ -868,9 +868,11 @@ class _KeywordsView(discord.ui.View):
             f"{theme.upperDivider}",
             f"**Channel:** <#{self.channel_id}>",
             "",
-            "Keywords decide which event a screenshot belongs to. The bot",
-            "OCR's the first uploaded image and matches these against the",
-            "result, case-insensitively.",
+            "Keywords gate which uploads get processed. If you set any, the bot",
+            "only reads messages whose TEXT contains a keyword — type one when",
+            "posting your screenshots so other images in the channel are ignored.",
+            "Blank = process every upload. All keywords below act as one combined",
+            "trigger list.",
             "",
             "**Current keywords:**",
         ]
