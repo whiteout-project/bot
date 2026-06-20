@@ -352,6 +352,8 @@ class GiftCodeAPI:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
                                                     validation_status = f"{theme.warnIcon} Pending"
                                                     auto_alliances = []
+                                                    # Re-test soon instead of waiting for the 2h periodic loop.
+                                                    gift_operations.schedule_revalidation(code, "api")
                                             else:
                                                 self.logger.error("GiftOperations cog not found for validation!")
                                                 validation_status = f"{theme.deniedIcon} Error"
@@ -372,10 +374,8 @@ class GiftCodeAPI:
                                                 )
 
                                                 if is_valid is None:
-                                                    embed_description += (
-                                                        f"\n{theme.warnIcon} **Auto-redemption delayed** - Validation inconclusive after several retries.\n"
-                                                        f"Please wait for periodic validation to complete, after which auto-redemption will begin.\n"
-                                                    )
+                                                    from . import gift_redemption
+                                                    embed_description += f"\n{gift_redemption.PENDING_REVALIDATION_NOTICE}\n"
 
                                                 embed_description += f"{theme.lowerDivider}\n"
 
@@ -404,14 +404,13 @@ class GiftCodeAPI:
                                                     channel_embed = discord.Embed(
                                                         title="🎁 New Gift Code Retrieved",
                                                         description=(
-                                                            f"A new gift code has been automatically retrieved from the Gift Code Distribution API.\n\n"
                                                             f"**Code:** `{code}`\n"
                                                             f"**Status:** {validation_status}\n"
                                                             f"**Auto-redemption:** {'Started' if auto_alliances else 'Disabled'}"
                                                         ),
                                                         color=embed_color
                                                     )
-                                                    channel_embed.set_footer(text="Retrieved via API")
+                                                    channel_embed.set_footer(text="Retrieved via Gift Code Distribution API")
 
                                                     for (channel_id,) in gift_channels:
                                                         try:

@@ -69,6 +69,17 @@ async def enqueue_redemption(cog, giftcode, alliance_id, source='manual', batch_
     cog.logger.info(f"Enqueued redemption for code '{giftcode}' alliance {alliance_id}")
 
 
+# Shown when a new code can't be confirmed yet; schedule_revalidation re-tests it within minutes.
+PENDING_REVALIDATION_NOTICE = (
+    "⏳ Auto-redemption pending - couldn't confirm the code yet. It'll be "
+    "automatically re-tested over the next few minutes; redemption starts as "
+    "soon as it validates. You can also trigger the redemption manually if needed."
+)
+
+# Backoff (seconds) for re-testing an inconclusive new code: 1m, 2m, 5m, 15m, then the 2h loop.
+_REVALIDATION_BACKOFFS = [60, 120, 300, 900]
+
+
 async def handle_gift_validate_process(cog, process):
     """ProcessQueue handler for gift_validate actions."""
     details = process.get('details', {})
@@ -122,9 +133,11 @@ async def handle_gift_validate_process(cog, process):
     if message and channel:
         await _send_validation_response(cog, message, giftcode, is_valid, validation_msg, processing_message)
 
-    # Process auto-use if valid
+    # Valid -> redeem; inconclusive -> re-test on a short backoff (else the 2h loop).
     if is_valid:
         await _process_auto_use(cog, giftcode)
+    elif is_valid is None:
+        schedule_revalidation(cog, giftcode, source)
 
 
 async def _record_batch_start(cog, batch_id, alliance_id):
@@ -259,7 +272,7 @@ async def _send_validation_response(cog, message, giftcode, is_valid, validation
             f"{theme.userIcon} **Sender:** {message.author.mention}\n"
             f"{theme.giftIcon} **Gift Code:** `{giftcode}`\n"
             f"{theme.warnIcon} **Status:** {validation_msg}\n"
-            f"{theme.editListIcon} **Action:** Added for later validation\n"
+            f"\n{PENDING_REVALIDATION_NOTICE}\n"
             f"{theme.lowerDivider}\n"
         )
         reaction = theme.warnIcon
@@ -284,6 +297,106 @@ async def _process_auto_use(cog, giftcode):
         cog.logger.info(f"Queueing auto-use for {len(auto_alliances)} alliances for code '{giftcode}'")
         for alliance in auto_alliances:
             await enqueue_redemption(cog, giftcode=giftcode, alliance_id=alliance[0], source='auto')
+
+
+async def _dm_global_admins(cog, embed):
+    """DM `embed` to every global admin; per-admin failures are logged, not raised."""
+    try:
+        cog.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
+        admin_ids = [row[0] for row in cog.settings_cursor.fetchall()]
+    except Exception:
+        admin_ids = []
+    for admin_id in admin_ids:
+        try:
+            admin_user = await cog.bot.fetch_user(admin_id)
+            if admin_user:
+                await admin_user.send(embed=embed)
+        except Exception as e:
+            cog.logger.exception(f"Error DMing admin {admin_id}: {e}")
+
+
+async def start_auto_redemption(cog, giftcode, auto_alliances, *, source):
+    """Redeem a freshly-validated pending code and DM admins. Shared by the 2h loop
+    and the backoff retry; deduped so a code only auto-redeems once."""
+    if not auto_alliances:
+        return
+    if not hasattr(cog, '_auto_redeem_started'):
+        cog._auto_redeem_started = set()
+    if giftcode in cog._auto_redeem_started:
+        cog.logger.info(f"GiftOps: auto-redemption already started for '{giftcode}'; skipping duplicate ({source})")
+        return
+    cog._auto_redeem_started.add(giftcode)
+
+    cog.logger.info(f"GiftOps: Triggering auto-redemption for code '{giftcode}' to {len(auto_alliances)} alliances ({source})")
+    for alliance in auto_alliances:
+        try:
+            await enqueue_redemption(cog, giftcode=giftcode, alliance_id=alliance[0], source=source)
+        except Exception as e:
+            cog.logger.exception(f"Error queueing auto-redemption for code {giftcode} to alliance {alliance[0]}: {e}")
+
+    await _dm_global_admins(cog, discord.Embed(
+        title=f"{theme.verifiedIcon} Auto-Redemption Started",
+        description=f"Code `{giftcode}` has been validated and auto-redemption is now starting for {len(auto_alliances)} alliance(s).",
+        color=theme.emColor3,
+        timestamp=datetime.now(),
+    ))
+
+
+async def _revalidation_loop(cog, giftcode, source):
+    """Re-test an inconclusive new code on a bounded backoff so it redeems within minutes
+    instead of waiting up to 2h. Best-effort: a restart drops the chain; the 2h loop covers it."""
+    try:
+        for delay in _REVALIDATION_BACKOFFS:
+            await asyncio.sleep(delay)
+
+            # Stop if another path already resolved it.
+            try:
+                cog.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
+                row = cog.cursor.fetchone()
+            except Exception:
+                row = None
+            if row and row[0] in ('validated', 'invalid'):
+                cog.logger.info(f"GiftOps: '{giftcode}' already {row[0]}; stopping re-validation.")
+                return
+
+            cog.logger.info(f"GiftOps: re-validating pending code '{giftcode}' ({source})")
+            try:
+                is_valid, msg = await validate_gift_code_immediately(cog, giftcode, source=f"{source}-retry")
+            except Exception as e:
+                cog.logger.exception(f"GiftOps: error re-validating '{giftcode}': {e}")
+                continue
+
+            if is_valid and "already validated" not in (msg or ""):
+                # Fresh validation: distribute then redeem.
+                if hasattr(cog, 'api') and cog.api:
+                    asyncio.create_task(cog.api.add_giftcode(giftcode))
+                try:
+                    cog.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
+                    auto_alliances = cog.cursor.fetchall() or []
+                except Exception:
+                    auto_alliances = []
+                await start_auto_redemption(cog, giftcode, auto_alliances, source=f"{source}-retry")
+                return
+            if is_valid is False:
+                return  # already marked invalid
+            # else: still inconclusive, wait for the next step
+
+        cog.logger.info(f"GiftOps: '{giftcode}' still inconclusive after near-term retries; leaving for the periodic loop.")
+    finally:
+        tasks = getattr(cog, '_revalidation_tasks', None)
+        if isinstance(tasks, dict):
+            tasks.pop(giftcode, None)
+
+
+def schedule_revalidation(cog, giftcode, source="unknown"):
+    """Start a deduped backoff re-validation chain for a code left pending."""
+    if not hasattr(cog, '_revalidation_tasks'):
+        cog._revalidation_tasks = {}
+    existing = cog._revalidation_tasks.get(giftcode)
+    if existing and not existing.done():
+        return
+    cog._revalidation_tasks[giftcode] = asyncio.create_task(_revalidation_loop(cog, giftcode, source))
+    cog.logger.info(f"GiftOps: scheduled near-term re-validation for '{giftcode}' ({source})")
 
 
 async def get_queue_status(cog):
@@ -1355,22 +1468,12 @@ async def periodic_validation_loop_body(cog):
                             asyncio.create_task(cog.api.remove_giftcode(giftcode, from_validation=True))
 
                         # Notify admins about invalidated code
-                        cog.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
-                        admin_ids = [row[0] for row in cog.settings_cursor.fetchall()]
-
-                        for admin_id in admin_ids:
-                            try:
-                                admin_user = await cog.bot.fetch_user(admin_id)
-                                if admin_user:
-                                    embed = discord.Embed(
-                                        title=f"{theme.deniedIcon} Gift Code Invalidated",
-                                        description=f"Code `{giftcode}` has been invalidated during periodic validation.\nStatus: {status}",
-                                        color=theme.emColor2,
-                                        timestamp=datetime.now()
-                                    )
-                                    await admin_user.send(embed=embed)
-                            except Exception as e:
-                                cog.logger.exception(f"Error notifying admin {admin_id}: {e}")
+                        await _dm_global_admins(cog, discord.Embed(
+                            title=f"{theme.deniedIcon} Gift Code Invalidated",
+                            description=f"Code `{giftcode}` has been invalidated during periodic validation.\nStatus: {status}",
+                            color=theme.emColor2,
+                            timestamp=datetime.now()
+                        ))
 
                     elif status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"]:
                         codes_still_valid += 1
@@ -1399,36 +1502,7 @@ async def periodic_validation_loop_body(cog):
                                 print(f"ERROR: {error_msg}")
                                 auto_alliances = []
 
-                            if auto_alliances:
-                                cog.logger.info(f"GiftOps: Triggering delayed auto-redemption for code '{giftcode}' to {len(auto_alliances)} alliances")
-
-                                for alliance in auto_alliances:
-                                    try:
-                                        await enqueue_redemption(
-                                            cog,
-                                            giftcode=giftcode,
-                                            alliance_id=alliance[0],
-                                            source='periodic-auto',
-                                        )
-                                    except Exception as e:
-                                        cog.logger.exception(f"Error queueing delayed auto-redemption for code {giftcode} to alliance {alliance[0]}: {e}")
-
-                                cog.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
-                                admin_ids = [row[0] for row in cog.settings_cursor.fetchall()]
-
-                                for admin_id in admin_ids:
-                                    try:
-                                        admin_user = await cog.bot.fetch_user(admin_id)
-                                        if admin_user:
-                                            embed = discord.Embed(
-                                                title=f"{theme.verifiedIcon} Auto-Redemption Started",
-                                                description=f"Code `{giftcode}` has been validated and auto-redemption is now starting for {len(auto_alliances)} alliance(s).",
-                                                color=theme.emColor3,
-                                                timestamp=datetime.now()
-                                            )
-                                            await admin_user.send(embed=embed)
-                                    except Exception as e:
-                                        cog.logger.exception(f"Error notifying admin {admin_id} about delayed auto-redemption: {e}")
+                            await start_auto_redemption(cog, giftcode, auto_alliances, source='periodic-auto')
 
                     else:
                         cog.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
@@ -1512,9 +1586,6 @@ async def validate_gift_codes(cog):
         cog.cursor.execute("SELECT giftcode, validation_status FROM gift_codes WHERE validation_status != 'invalid'")
         all_codes = cog.cursor.fetchall()
 
-        cog.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
-        admin_ids = [row[0] for row in cog.settings_cursor.fetchall()]
-
         if not all_codes:
             cog.logger.info("[validate_gift_codes] No codes found needing validation.")
             return
@@ -1560,13 +1631,7 @@ async def validate_gift_codes(cog):
                     color=discord.Color.orange()
                 )
 
-                for admin_id in admin_ids:
-                    try:
-                        admin_user = await cog.bot.fetch_user(admin_id)
-                        if admin_user:
-                            await admin_user.send(embed=admin_embed)
-                    except Exception as e:
-                        cog.logger.exception(f"Error sending message to admin {admin_id}: {str(e)}")
+                await _dm_global_admins(cog, admin_embed)
 
             elif status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"] and current_db_status == 'pending':
                 cog.logger.info(f"[validate_gift_codes] Code {giftcode} confirmed valid. Updating status to 'validated'.")

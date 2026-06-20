@@ -128,6 +128,11 @@ class GiftOperations(commands.Cog):
         # Batch redemption tracking (in-memory only, for live progress messages)
         self.redemption_batches = {}
 
+        # Near-term gift-code re-validation: in-flight backoff tasks per code,
+        # and codes whose auto-redemption has already been started (dedup).
+        self._revalidation_tasks = {}
+        self._auto_redeem_started = set()
+
         self.processing_stats = {
             "ocr_solver_calls": 0,
             "ocr_valid_format": 0,
@@ -215,6 +220,9 @@ class GiftOperations(commands.Cog):
     async def cog_unload(self):
         if hasattr(self, 'periodic_validation_loop') and self.periodic_validation_loop.is_running():
             self.periodic_validation_loop.cancel()
+        for task in list(getattr(self, '_revalidation_tasks', {}).values()):
+            if not task.done():
+                task.cancel()
         for conn_name in ['conn', 'settings_conn', 'alliance_conn']:
             if hasattr(self, conn_name):
                 try:
@@ -471,6 +479,9 @@ class GiftOperations(commands.Cog):
 
     async def _process_auto_use(self, giftcode):
         return await gift_redemption._process_auto_use(self, giftcode)
+
+    def schedule_revalidation(self, giftcode, source="unknown"):
+        return gift_redemption.schedule_revalidation(self, giftcode, source)
 
     async def add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction):
         return await gift_redemption.add_manual_redemption_to_queue(self, giftcodes, alliance_ids, interaction)
