@@ -414,7 +414,8 @@ OCR_LANG_LABEL = dict(OCR_LANGUAGES)
 
 # Useful fallback runs per image — skipped/rejected ones don't count.
 MAX_FALLBACK_ATTEMPTS = 4
-MAX_CONCURRENT_OCR = 2
+# Serialize OCR on low-mem boxes so two inference spikes can't overlap.
+MAX_CONCURRENT_OCR = 1 if onnx_lifecycle.LOW_MEM_MODE else 2
 
 _ocr_semaphore: asyncio.Semaphore | None = None
 

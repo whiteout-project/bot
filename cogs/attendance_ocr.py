@@ -283,8 +283,8 @@ class AttendanceOCR(commands.Cog):
                 title=f"{theme.searchIcon} Reading your screenshots…",
                 description=(
                     f"{theme.upperDivider}\n"
-                    f"{theme.processingIcon} Reading the text from your upload — "
-                    f"this can take a moment.\n"
+                    f"{theme.processingIcon} Reading the text from your upload, "
+                    f"please wait...\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1,
