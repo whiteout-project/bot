@@ -6,13 +6,27 @@ Runs as a standalone HTTP service that receives image bytes, runs RapidOCR,
 and returns the recognised text. The bot offloads all model RAM to this
 process by starting with --ext-ocr <url>.
 
+Multiple bots from multiple users on the same network can share one handler.
+Concurrent requests are serialised per language via a semaphore sized to
+(cpu_count / OCR_NUM_THREADS) so CPU thrashing is avoided under load.
+
 Usage:
     python ocr_handler.py                       # listens on 0.0.0.0:18090
     python ocr_handler.py --port 18090
     python ocr_handler.py --host 127.0.0.1 --port 18090
 
 Install dependencies (once):
-    pip install rapidocr pillow numpy aiohttp aiohttp-web
+    pip install rapidocr pillow numpy aiohttp
+
+Environment variables:
+    EXT_OCR_TOKEN     Shared secret. When set, every POST /ocr must carry a
+                      matching X-OCR-Token header or receive 401. Leave unset
+                      on a trusted LAN. Never pass as a CLI flag (leaks in ps).
+    OCR_NUM_THREADS   onnxruntime intra/inter thread count per engine (default 2).
+    MAX_OCR_DIM       Longest image edge after resize (default 1600).
+    OCR_MAX_QUEUE     Max requests waiting for inference per language before the
+                      handler returns 429. Prevents memory growth under spikes
+                      (default 16).
 
 API:
     POST /ocr
@@ -23,14 +37,17 @@ API:
         "boxes": false          # optional — set true for box coordinates
     }
 
-    200 OK (text mode):
-    { "text": "recognised text here" }
+    200 OK (text mode):    { "text": "recognised text here" }
+    200 OK (boxes mode):   { "results": [ {"text": "foo", "box": [[x,y],...] }, ... ] }
+    400  malformed request or undecodable image
+    401  missing or wrong X-OCR-Token
+    429  inference queue full (shed load)
+    500  OCR runtime error
+    503  RapidOCR failed to import on this host
 
-    200 OK (boxes mode):
-    { "results": [ {"text": "foo", "box": [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]}, ... ] }
-
-    503 if OCR is not available (import failed).
-    400 if the request is malformed or the image cannot be decoded.
+    GET /health
+    { "ok": true, "engines_loaded": ["en"], "num_threads": 2, "max_dim": 1600,
+      "max_queue": 16, "queue_depth": { "en": 0 } }
 """
 from __future__ import annotations
 
@@ -47,6 +64,31 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("ocr_handler")
+
+# ── Config from environment ──────────────────────────────────────────────────
+
+# Optional shared-secret auth. When set, every POST /ocr must carry a matching
+# X-OCR-Token header or receive 401. Leave unset on a trusted LAN.
+AUTH_TOKEN = os.environ.get("EXT_OCR_TOKEN") or None
+
+# onnxruntime thread count per engine. 2 is a good balance on a dedicated host;
+# lower to 1 on a constrained box, raise if you have cores to spare.
+OCR_NUM_THREADS = int(os.environ.get("OCR_NUM_THREADS", "2"))
+
+# Longest edge in pixels after thumbnail. Above ~1800 px onnxruntime hits
+# bad-allocation errors on the second/third image in a session.
+MAX_OCR_DIM = int(os.environ.get("MAX_OCR_DIM", "1600"))
+
+# Maximum number of requests queued waiting for an inference slot per language.
+# Requests that arrive when the queue is full receive 429 immediately rather
+# than piling up in the thread pool silently. 16 is generous for a handful of
+# bots; lower it if RAM is tight.
+OCR_MAX_QUEUE = int(os.environ.get("OCR_MAX_QUEUE", "16"))
+
+# Derived: how many inference jobs can run concurrently.
+# cpu_count() / OCR_NUM_THREADS — at least 1, at most OCR_MAX_QUEUE.
+_cpu = os.cpu_count() or 1
+OCR_CONCURRENCY = max(1, _cpu // OCR_NUM_THREADS)
 
 # ── RapidOCR setup ──────────────────────────────────────────────────────────
 
@@ -69,20 +111,27 @@ except Exception as exc:
     OCR_AVAILABLE = False
     logger.error(f"RapidOCR unavailable: {exc}")
 
-# Optional shared-secret auth. If EXT_OCR_TOKEN is set in this process's env,
-# requests must carry a matching `X-OCR-Token` header (or be rejected 401).
-# Leave it unset for a trusted LAN; set it when the handler is reachable by
-# other tenants on shared infrastructure.
-AUTH_TOKEN = os.environ.get("EXT_OCR_TOKEN") or None
+# ── Engine cache + per-language semaphores ───────────────────────────────────
 
-# Thread count: 2 is a good balance for a dedicated OCR host.
-# Raise it if you have cores to spare; lower to 1 for very constrained boxes.
-OCR_NUM_THREADS = int(os.environ.get("OCR_NUM_THREADS", "2"))
-MAX_OCR_DIM = int(os.environ.get("MAX_OCR_DIM", "1600"))
-
-# Per-language engine cache (one engine per lang, loaded on demand)
+# One RapidOCR engine per language, loaded on first use and kept for the
+# lifetime of the process (dedicated host; no eviction needed).
 _ENGINES: dict[str, "RapidOCR"] = {}
 _ENGINE_LOCK = asyncio.Lock()
+
+# Per-language semaphore: caps concurrent inference jobs to OCR_CONCURRENCY.
+# A separate semaphore per language means English requests don't block Arabic
+# ones when each language has a different engine loaded.
+_LANG_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+# Tracks how many requests are currently waiting or running per language,
+# so handle_ocr can reject early (429) when the queue is full.
+_LANG_QUEUE_DEPTH: dict[str, int] = {}
+
+
+def _get_lang_semaphore(lang: str) -> asyncio.Semaphore:
+    if lang not in _LANG_SEMAPHORES:
+        _LANG_SEMAPHORES[lang] = asyncio.Semaphore(OCR_CONCURRENCY)
+        _LANG_QUEUE_DEPTH[lang] = 0
+    return _LANG_SEMAPHORES[lang]
 
 
 def _make_engine(lang: str) -> "RapidOCR":
@@ -103,9 +152,10 @@ async def _get_engine(lang: str) -> "RapidOCR":
             logger.info(f"Engine for lang={lang!r} ready.")
         return _ENGINES[lang]
 
+# ── Image processing ─────────────────────────────────────────────────────────
 
 def _run_ocr(image_bytes: bytes, engine: "RapidOCR") -> "object":
-    """Synchronous OCR call — runs in a thread pool."""
+    """Synchronous OCR call — runs in the thread pool via to_thread."""
     with Image.open(io.BytesIO(image_bytes)) as src:
         image = src.convert("RGB")
     if max(image.size) > MAX_OCR_DIM:
@@ -126,16 +176,15 @@ def _extract_text(result) -> str:
 
 
 def _to_list(box):
-    """RapidOCR boxes are numpy arrays (float32) — not JSON serializable.
-    Coerce to nested Python lists. Already-list input passes through."""
+    """RapidOCR boxes are numpy float32 ndarrays — not JSON serializable.
+    Coerce to plain nested Python lists. Already-list input passes through."""
     if hasattr(box, "tolist"):
         return box.tolist()
     return [[float(p[0]), float(p[1])] for p in box]
 
 
 def _extract_boxes(result) -> list:
-    """Extract [{"text":..., "box":...}, ...] from a RapidOCR result, with
-    boxes coerced to plain nested lists so json.dumps can serialize them."""
+    """Extract [{"text":..., "box":[[x,y],...]},...] from a RapidOCR result."""
     if not result:
         return []
     if hasattr(result, "txts") and hasattr(result, "boxes") and result.txts:
@@ -149,8 +198,7 @@ def _extract_boxes(result) -> list:
         return out
     return []
 
-
-# ── aiohttp web handler ──────────────────────────────────────────────────────
+# ── aiohttp web handlers ─────────────────────────────────────────────────────
 
 try:
     from aiohttp import web
@@ -165,15 +213,15 @@ VALID_LANGS = {
 
 
 async def handle_ocr(request: "web.Request") -> "web.Response":
+    # ── Auth ──────────────────────────────────────────────────────────────────
     if AUTH_TOKEN is not None and request.headers.get("X-OCR-Token") != AUTH_TOKEN:
         return web.json_response({"error": "unauthorized"}, status=401)
 
     if not OCR_AVAILABLE:
         return web.json_response(
-            {"error": "RapidOCR not available on this host"},
-            status=503,
-        )
+            {"error": "RapidOCR not available on this host"}, status=503)
 
+    # ── Parse request ─────────────────────────────────────────────────────────
     try:
         body = await request.json()
     except Exception:
@@ -195,19 +243,35 @@ async def handle_ocr(request: "web.Request") -> "web.Response":
         return web.json_response({"error": "image is not valid base64"}, status=400)
 
     if not image_bytes:
-        if want_boxes:
-            return web.json_response({"results": []})
-        return web.json_response({"text": ""})
+        return web.json_response({"results": []} if want_boxes else {"text": ""})
 
+    # ── Queue management ──────────────────────────────────────────────────────
+    sem = _get_lang_semaphore(lang)
+
+    # Reject immediately if the queue for this language is already full.
+    # waiting = total slots - available slots = what's currently in flight or waiting.
+    waiting = OCR_CONCURRENCY - sem._value + _LANG_QUEUE_DEPTH.get(lang, 0)
+    if waiting >= OCR_MAX_QUEUE:
+        logger.warning(f"Queue full for lang={lang!r} ({waiting} waiting) — shedding request")
+        return web.json_response(
+            {"error": f"OCR queue full for lang '{lang}', try again shortly"}, status=429)
+
+    _LANG_QUEUE_DEPTH[lang] = _LANG_QUEUE_DEPTH.get(lang, 0) + 1
+
+    # ── Inference ─────────────────────────────────────────────────────────────
     try:
         engine = await _get_engine(lang)
-        result = await asyncio.to_thread(_run_ocr, image_bytes, engine)
+        async with sem:
+            result = await asyncio.to_thread(_run_ocr, image_bytes, engine)
     except Image.DecompressionBombError:
         return web.json_response({"error": "image too large"}, status=400)
     except Exception as exc:
         logger.exception("OCR failed")
         return web.json_response({"error": f"OCR error: {exc}"}, status=500)
+    finally:
+        _LANG_QUEUE_DEPTH[lang] = max(0, _LANG_QUEUE_DEPTH.get(lang, 1) - 1)
 
+    # ── Respond ───────────────────────────────────────────────────────────────
     if want_boxes:
         return web.json_response({"results": _extract_boxes(result)})
     return web.json_response({"text": _extract_text(result)})
@@ -218,7 +282,10 @@ async def handle_health(request: "web.Request") -> "web.Response":
         "ok": OCR_AVAILABLE,
         "engines_loaded": list(_ENGINES.keys()),
         "num_threads": OCR_NUM_THREADS,
+        "concurrency": OCR_CONCURRENCY,
         "max_dim": MAX_OCR_DIM,
+        "max_queue": OCR_MAX_QUEUE,
+        "queue_depth": dict(_LANG_QUEUE_DEPTH),
     })
 
 
@@ -227,7 +294,6 @@ def build_app() -> "web.Application":
     app.router.add_post("/ocr", handle_ocr)
     app.router.add_get("/health", handle_health)
     return app
-
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
@@ -241,7 +307,10 @@ def main():
     logger.info(f"Starting OCR handler on {args.host}:{args.port}")
     logger.info(f"  OCR available : {OCR_AVAILABLE}")
     logger.info(f"  Threads/engine: {OCR_NUM_THREADS}")
+    logger.info(f"  Concurrency   : {OCR_CONCURRENCY} (cpu={_cpu})")
     logger.info(f"  Max image dim : {MAX_OCR_DIM}px")
+    logger.info(f"  Max queue/lang: {OCR_MAX_QUEUE}")
+    logger.info(f"  Auth token    : {'set' if AUTH_TOKEN else 'not set (open)'}")
     web.run_app(app, host=args.host, port=args.port, print=None)
 
 
