@@ -318,6 +318,27 @@ UPDATE_SOURCES = [
     # Can add more sources here as needed
 ]
 
+def _parse_version(tag):
+    """(major, minor, patch) for a vX.Y.Z tag, else None."""
+    if not tag:
+        return None
+    try:
+        parts = [int(n) for n in tag.strip().lstrip("vV").split(".")[:3]]
+    except ValueError:
+        return None
+    if not parts:
+        return None
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+def _is_newer_version(candidate, current):
+    """True if candidate is a strictly newer vX.Y.Z than current; unparseable -> True so odd tags aren't blocked."""
+    c, cur = _parse_version(candidate), _parse_version(current)
+    if c is None or cur is None:
+        return True
+    return c > cur
+
 def get_latest_release_info(beta_mode=False):
     """Try to get latest release info from multiple sources."""
     for source in UPDATE_SOURCES:
@@ -699,7 +720,11 @@ if __name__ == "__main__":
             else:
                 current_version = "v0.0.0"
 
-            if current_version != latest_tag or repair_mode:
+            # Only move to a strictly newer release; beta/repair always proceed.
+            # A stale mirror (e.g. GitLab behind GitHub) must never downgrade us.
+            is_upgrade = repair_mode or beta_mode or _is_newer_version(latest_tag, current_version)
+
+            if (current_version != latest_tag and is_upgrade) or repair_mode:
                 if repair_mode:
                     print(f"  Repairing installation using: {latest_tag} (from {source_name})")
                     print("  This will overwrite existing files and restore any missing components.")
@@ -873,7 +898,10 @@ if __name__ == "__main__":
                         startup.phase_fail("Update failed", details=[f"HTTP {download_resp.status_code} from {source_name}"])
                         return
             else:
-                startup.up_to_date(current_version, source_name)
+                if current_version != latest_tag and not is_upgrade:
+                    startup.phase_ok(f"Ignored older {source_name} release {latest_tag}; staying on {current_version}")
+                else:
+                    startup.up_to_date(current_version, source_name)
         else:
             startup.phase_fail("Update check failed", details=["Could not fetch release info from any source"])
         
