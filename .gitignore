@@ -9,4 +9,5 @@ version
 backups
 captcha_images
 .vscode
+ocr_handler.py
 CLAUDE.md
