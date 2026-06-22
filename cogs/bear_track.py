@@ -43,6 +43,33 @@ except ImportError:
 
 from . import onnx_lifecycle
 
+# External OCR engine support.  When --ext-ocr <url> is passed to main.py it
+# sets EXT_OCR_URL in the environment.  Both ocr_bytes() and
+# ocr_bytes_with_boxes() will POST to that service instead of loading models
+# locally.  The local RapidOCR stack is still imported as a fallback when the
+# env var is absent, so nothing breaks for self-hosters who don't use it.
+EXT_OCR_URL: str | None = os.environ.get("EXT_OCR_URL") or None
+# Optional shared secret, forwarded as X-OCR-Token when set. Must match the
+# handler's EXT_OCR_TOKEN. Unset = no auth header (trusted LAN).
+EXT_OCR_TOKEN: str | None = os.environ.get("EXT_OCR_TOKEN") or None
+# Lazily-created, reused aiohttp session for ext-OCR calls. A single bear/
+# attendance session issues many sequential OCR requests; reusing one session
+# keeps the TCP connection warm instead of reconnecting per image. Bound to the
+# bot's event loop, created on first use.
+_ext_ocr_session = None
+_EXT_OCR_HEADERS = {"X-OCR-Token": EXT_OCR_TOKEN} if EXT_OCR_TOKEN else None
+
+
+async def _get_ext_ocr_session():
+    import aiohttp
+    global _ext_ocr_session
+    if _ext_ocr_session is None or _ext_ocr_session.closed:
+        _ext_ocr_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30),
+            headers=_EXT_OCR_HEADERS or {},
+        )
+    return _ext_ocr_session
+
 # RapidOCR setup. Engines are lazy-loaded per language via onnx_lifecycle and
 # unloaded ~2 min after the last bear session finalises.
 OCR_AVAILABLE = False
@@ -628,13 +655,58 @@ async def _maybe_breathe():
         await asyncio.sleep(_LOW_MEM_OCR_PAUSE)
 
 
+async def _ext_ocr_bytes(image_bytes: bytes, lang: str) -> str:
+    """Send image bytes to the external OCR service and return the text.
+    Returns "" on any network or protocol error so callers degrade gracefully."""
+    import base64
+    payload = {"image": base64.b64encode(image_bytes).decode(), "lang": lang}
+    try:
+        sess = await _get_ext_ocr_session()
+        async with sess.post(EXT_OCR_URL, json=payload) as resp:
+            if resp.status != 200:
+                logger.warning(f"Ext OCR service returned HTTP {resp.status}")
+                return ""
+            data = await resp.json()
+            return data.get("text", "")
+    except Exception as e:
+        logger.warning(f"Ext OCR request failed: {e}")
+        return ""
+
+
+async def _ext_ocr_bytes_with_boxes(image_bytes: bytes, lang: str) -> list:
+    """Send image bytes to the external OCR service and return [(text, box), ...].
+    Returns [] on any network or protocol error."""
+    import base64
+    payload = {"image": base64.b64encode(image_bytes).decode(), "lang": lang, "boxes": True}
+    try:
+        sess = await _get_ext_ocr_session()
+        async with sess.post(EXT_OCR_URL, json=payload) as resp:
+            if resp.status != 200:
+                logger.warning(f"Ext OCR service (boxes) returned HTTP {resp.status}")
+                return []
+            data = await resp.json()
+            return [(item["text"], item["box"]) for item in data.get("results", [])]
+    except Exception as e:
+        logger.warning(f"Ext OCR (boxes) request failed: {e}")
+        return []
+
+
 async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session=None) -> str:
     """OCR `image_bytes` → space-joined text, or "" on failure.
 
-    If `session` is given, the engine is acquired via the session (warm reuse
-    across multiple OCR calls in one bear session). Otherwise this falls back
-    to a one-shot acquire/release covered by the lifecycle grace period."""
-    if not OCR_AVAILABLE or not image_bytes:
+    When EXT_OCR_URL is set (via --ext-ocr flag), the image is forwarded to
+    the external OCR handler instead of loading models locally.  The `session`
+    parameter is ignored in that path (no warm-engine reuse needed; the remote
+    service manages its own lifecycle).
+
+    If `session` is given (local mode), the engine is acquired via the session
+    (warm reuse across multiple OCR calls in one bear session). Otherwise this
+    falls back to a one-shot acquire/release covered by the lifecycle grace period."""
+    if not image_bytes:
+        return ""
+    if EXT_OCR_URL:
+        return await _ext_ocr_bytes(image_bytes, lang)
+    if not OCR_AVAILABLE:
         return ""
     model = get_ocr_model(lang)
     if model is None:
@@ -682,8 +754,13 @@ def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
 
 async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
                                *, session=None) -> list:
-    """OCR returning [(text, box), ...]. Box is 4 corner coords. Empty list on failure."""
-    if not OCR_AVAILABLE or not image_bytes:
+    """OCR returning [(text, box), ...]. Box is 4 corner coords. Empty list on failure.
+    When EXT_OCR_URL is set, forwards to the external handler with boxes=True."""
+    if not image_bytes:
+        return []
+    if EXT_OCR_URL:
+        return await _ext_ocr_bytes_with_boxes(image_bytes, lang)
+    if not OCR_AVAILABLE:
         return []
     model = get_ocr_model(lang)
     if model is None:
