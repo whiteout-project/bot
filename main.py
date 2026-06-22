@@ -647,6 +647,23 @@ if __name__ == "__main__":
         os.environ.setdefault("http_proxy",  _proxy_url)
         os.environ.setdefault("https_proxy", _proxy_url)
 
+    # ── External OCR engine support (--ext-ocr flag) ───────────────────────────
+    # Pass --ext-ocr <url> to offload all OCR work to an external handler.
+    # Example: python main.py --ext-ocr http://192.168.1.20:18090
+    # If --ext-ocr is passed without a URL, defaults to http://localhost:18090.
+    # The handler (ocr_handler.py) must be running separately; it receives the
+    # image via HTTP POST and returns the recognised text.  When this flag is
+    # active the bot loads no ONNX models and has no RapidOCR RAM overhead.
+    _ext_ocr_url = None
+    if "--ext-ocr" in sys.argv:
+        _ext_ocr_idx = sys.argv.index("--ext-ocr")
+        _ext_ocr_url = (
+            sys.argv[_ext_ocr_idx + 1]
+            if _ext_ocr_idx + 1 < len(sys.argv) and not sys.argv[_ext_ocr_idx + 1].startswith("--")
+            else "http://localhost:18090"
+        )
+        os.environ["EXT_OCR_URL"] = _ext_ocr_url
+
     # Display startup header
     _version = "unknown"
     if os.path.exists("version"):
@@ -659,9 +676,12 @@ if __name__ == "__main__":
     if '--repair' in sys.argv: _flags.append('--repair')
     if '--break-system-packages' in sys.argv: _flags.append('--break-system-packages')
     if _proxy_url: _flags.append('--proxy')
+    if _ext_ocr_url: _flags.append('--ext-ocr')
     startup.header(_version, f"{sys.version_info.major}.{sys.version_info.minor}", _flags or None)
     if _proxy_url:
         startup.info(f"Routing player traffic through proxy: {_proxy_url}")
+    if _ext_ocr_url:
+        startup.info(f"External OCR engine: {_ext_ocr_url}")
 
     # Check for mutually exclusive flags
     mutually_exclusive_flags = ["--autoupdate", "--no-update", "--repair"]
