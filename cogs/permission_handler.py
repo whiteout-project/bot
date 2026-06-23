@@ -12,6 +12,7 @@ Bot Owner anchor:
 """
 
 import sqlite3
+import time
 import logging
 from datetime import datetime, timezone
 from typing import Tuple, List, Optional
@@ -32,6 +33,24 @@ class PermissionManager:
     ALLIANCE_DB = 'db/alliance.sqlite'
     USERS_DB = 'db/users.sqlite'
 
+    # Short-TTL cache of the admin table ({id: is_initial}). is_admin is the
+    # hottest permission primitive (per-keystroke autocompletes, per-click gates);
+    # caching avoids opening a connection on every call. Staleness is bounded to
+    # the TTL, so an added/removed admin takes effect within a few seconds.
+    _ADMIN_CACHE_TTL = 5.0
+    _admin_cache = None
+    _admin_cache_at = 0.0
+
+    @classmethod
+    def _admin_map(cls) -> dict:
+        now = time.monotonic()
+        if cls._admin_cache is None or (now - cls._admin_cache_at) > cls._ADMIN_CACHE_TTL:
+            with sqlite3.connect(cls.SETTINGS_DB) as db:
+                rows = db.execute("SELECT id, is_initial FROM admin").fetchall()
+            cls._admin_cache = {int(r[0]): r[1] for r in rows}
+            cls._admin_cache_at = now
+        return cls._admin_cache
+
     @staticmethod
     def is_admin(user_id: int) -> Tuple[bool, bool]:
         """
@@ -40,15 +59,10 @@ class PermissionManager:
         Returns:
             (is_admin, is_global) - is_global True means access to all alliances
         """
-        with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
-            cursor = db.cursor()
-            cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (user_id,))
-            result = cursor.fetchone()
-
-            if not result:
-                return False, False
-
-            return True, result[0] == 1
+        admin_map = PermissionManager._admin_map()
+        if user_id not in admin_map:
+            return False, False
+        return True, admin_map[user_id] == 1
 
     @staticmethod
     def get_admin_alliance_ids(user_id: int, guild_id: int) -> Tuple[List[int], bool]:

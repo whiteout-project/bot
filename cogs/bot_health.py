@@ -20,6 +20,7 @@ import re
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .bot_restart import is_container, restart_process
+from .browser_headers import get_headers
 
 
 # Health status constants
@@ -297,12 +298,9 @@ class BotHealth(commands.Cog):
         """Actual live probe — only called by the cached wrapper or the
         background refresh loop."""
         try:
-            login_handler_cog = self.bot.get_cog("LoginHandler")
-            if login_handler_cog:
-                handler = login_handler_cog.handler
-            else:
-                from .login_handler import LoginHandler
-                handler = LoginHandler()
+            # LoginHandler is a singleton helper, not a cog — construct it directly.
+            from .login_handler import LoginHandler
+            handler = LoginHandler()
 
             status = await handler.check_apis_availability()
 
@@ -336,7 +334,8 @@ class BotHealth(commands.Cog):
             timeout = aiohttp.ClientTimeout(total=5)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 start = datetime.now()
-                headers = {'X-API-Key': self.gift_api_key}
+                headers = get_headers()
+                headers['X-API-Key'] = self.gift_api_key
                 async with session.get(self.gift_api_url, headers=headers) as response:
                     elapsed = (datetime.now() - start).total_seconds()
 
@@ -344,6 +343,9 @@ class BotHealth(commands.Cog):
                         if elapsed > 3:
                             return {'status': STATUS_WARNING, 'message': f'Online (slow: {elapsed:.1f}s)'}
                         return {'status': STATUS_HEALTHY, 'message': 'Online'}
+                    # 429/1015/5xx = reachable but throttled, not a hard error.
+                    elif response.status in (429, 1015, 502, 503, 504):
+                        return {'status': STATUS_WARNING, 'message': f'Reachable, rate-limited (HTTP {response.status})'}
                     else:
                         return {'status': STATUS_ERROR, 'message': f'Error (HTTP {response.status})'}
         except asyncio.TimeoutError:
@@ -848,7 +850,7 @@ class BotHealth(commands.Cog):
         removed = []
 
         for dirname in LEGACY_DIRS + UPDATE_ARTIFACTS_DIRS:
-            if os.path.isdir(dirname):
+            if os.path.isdir(dirname) and not os.path.islink(dirname):
                 try:
                     shutil.rmtree(dirname, onerror=self._on_rmtree_error)
                     removed.append(dirname)
@@ -1122,13 +1124,11 @@ class BotHealth(commands.Cog):
             config = self.get_config()
             now = datetime.now(timezone.utc)
 
-            # Check if it's cleanup time
-            if now.hour == config['cleanup_hour'] and now.minute == config['cleanup_minute']:
-                # Check if already ran today
-                last_cleanup = config.get('last_cleanup_date')
-                if last_cleanup == now.date().isoformat():
-                    return
-
+            # Fire at/after the scheduled time (not an exact-minute match) so a
+            # missed tick still runs later the same day.
+            last_cleanup = config.get('last_cleanup_date')
+            scheduled_passed = (now.hour, now.minute) >= (config['cleanup_hour'], config['cleanup_minute'])
+            if scheduled_passed and last_cleanup != now.date().isoformat():
                 self.logger.info("Starting scheduled cleanup")
                 results = await self.run_cleanup()
 
@@ -1201,13 +1201,15 @@ class BotHealth(commands.Cog):
 
     @staticmethod
     def _compute_bot_footprint_mb() -> float:
-        """Walk the bot directory and sum file sizes. Runs in a thread.
-        Skips dev/VCS artifacts (hidden dirs, __pycache__) since they aren't
-        part of the bot's runtime footprint and slow the walk significantly."""
+        """Sum file sizes under the bot dir (in a thread). Skips hidden dirs,
+        __pycache__, and virtualenvs — not runtime footprint and slow to walk."""
         bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         total = 0
         for root, dirs, files in os.walk(bot_dir):
-            dirs[:] = [d for d in dirs if not d.startswith('.') and d != '__pycache__']
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith('.') and d != '__pycache__' and 'venv' not in d
+            ]
             for f in files:
                 try:
                     total += os.path.getsize(os.path.join(root, f))

@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
+import aiohttp
 from contextlib import asynccontextmanager
 import gc
 import io
@@ -64,6 +65,21 @@ OCR_NUM_THREADS = 1
 _LOW_MEM_OCR_PAUSE = 1.0
 
 DEFAULT_OCR_LANG = "en"
+
+# Optional external OCR service. When OCR_REMOTE_URL is set, OCR calls POST the
+# image to that service instead of running a local engine; any remote failure
+# falls back to the local engine for that image. Lets a disk-/RAM-constrained
+# host offload OCR to one shared box. Unset = local OCR, unchanged.
+OCR_REMOTE_URL = os.environ.get("OCR_REMOTE_URL", "").strip().rstrip("/")
+OCR_REMOTE_TOKEN = os.environ.get("OCR_REMOTE_TOKEN", "").strip()
+try:
+    OCR_REMOTE_TIMEOUT = float(os.environ.get("OCR_REMOTE_TIMEOUT", "60"))
+except ValueError:
+    OCR_REMOTE_TIMEOUT = 60.0
+
+if OCR_REMOTE_URL:
+    logger.info(f"External OCR mode ON: posting to {OCR_REMOTE_URL} (local fallback on failure).")
+    print(f"[INFO] External OCR mode ON: {OCR_REMOTE_URL}")
 
 if PIL_AVAILABLE:
     try:
@@ -628,13 +644,83 @@ async def _maybe_breathe():
         await asyncio.sleep(_LOW_MEM_OCR_PAUSE)
 
 
+_remote_ocr_session: "aiohttp.ClientSession | None" = None
+
+
+def _get_remote_session() -> "aiohttp.ClientSession":
+    """Lazily create the shared aiohttp session used for external OCR posts."""
+    global _remote_ocr_session
+    if _remote_ocr_session is None or _remote_ocr_session.closed:
+        _remote_ocr_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=OCR_REMOTE_TIMEOUT)
+        )
+    return _remote_ocr_session
+
+
+async def close_remote_ocr_session() -> None:
+    """Close the shared external-OCR session. Called from the cog's unload."""
+    global _remote_ocr_session
+    if _remote_ocr_session is not None and not _remote_ocr_session.closed:
+        await _remote_ocr_session.close()
+    _remote_ocr_session = None
+
+
+async def _remote_ocr_post(path: str, image_bytes: bytes, lang: str):
+    """POST an image to the external OCR service. Returns parsed JSON, or None on
+    any failure so the caller falls back to the local engine."""
+    url = f"{OCR_REMOTE_URL}{path}"
+    headers = {"Authorization": f"Bearer {OCR_REMOTE_TOKEN}"} if OCR_REMOTE_TOKEN else {}
+    try:
+        form = aiohttp.FormData()
+        form.add_field("lang", lang)
+        form.add_field("image", image_bytes, filename="image",
+                       content_type="application/octet-stream")
+        async with _get_remote_session().post(url, data=form, headers=headers) as resp:
+            if resp.status != 200:
+                logger.warning(f"External OCR {path} HTTP {resp.status}; using local OCR.")
+                print(f"[WARNING] External OCR {path} HTTP {resp.status}; using local OCR.")
+                return None
+            return await resp.json()
+    except Exception as e:
+        logger.warning(f"External OCR {path} failed ({e}); using local OCR.")
+        print(f"[WARNING] External OCR {path} failed ({e}); using local OCR.")
+        return None
+
+
+async def _remote_ocr_text(image_bytes: bytes, lang: str):
+    """Remote /ocr -> space-joined text, or None to fall back to local."""
+    data = await _remote_ocr_post("/ocr", image_bytes, lang)
+    if data is None:
+        return None
+    text = data.get("text")
+    return text if isinstance(text, str) else ""
+
+
+async def _remote_ocr_boxed(image_bytes: bytes, lang: str):
+    """Remote /ocr/boxes -> [(text, box), ...], or None to fall back to local."""
+    data = await _remote_ocr_post("/ocr/boxes", image_bytes, lang)
+    if data is None:
+        return None
+    results = data.get("results")
+    if not isinstance(results, list):
+        return []
+    return [(item["text"], item.get("box")) for item in results
+            if isinstance(item, dict) and isinstance(item.get("text"), str)]
+
+
 async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session=None) -> str:
     """OCR `image_bytes` → space-joined text, or "" on failure.
 
     If `session` is given, the engine is acquired via the session (warm reuse
     across multiple OCR calls in one bear session). Otherwise this falls back
     to a one-shot acquire/release covered by the lifecycle grace period."""
-    if not OCR_AVAILABLE or not image_bytes:
+    if not image_bytes:
+        return ""
+    if OCR_REMOTE_URL:
+        remote = await _remote_ocr_text(image_bytes, lang)
+        if remote is not None:
+            return remote
+    if not OCR_AVAILABLE:
         return ""
     model = get_ocr_model(lang)
     if model is None:
@@ -683,7 +769,13 @@ def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
 async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
                                *, session=None) -> list:
     """OCR returning [(text, box), ...]. Box is 4 corner coords. Empty list on failure."""
-    if not OCR_AVAILABLE or not image_bytes:
+    if not image_bytes:
+        return []
+    if OCR_REMOTE_URL:
+        remote = await _remote_ocr_boxed(image_bytes, lang)
+        if remote is not None:
+            return remote
+    if not OCR_AVAILABLE:
         return []
     model = get_ocr_model(lang)
     if model is None:
@@ -2291,6 +2383,7 @@ class BearTrack(commands.Cog):
             conn = getattr(self, attr, None)
             if conn is not None:
                 conn.close()
+        await close_remote_ocr_session()
 
     def get_alliance_roster(self, alliance_id):
         """Return [(fid, nickname), ...] for members of the given alliance."""
@@ -3004,6 +3097,8 @@ class BearTrack(commands.Cog):
             merged_rows.values(),
             key=lambda r: (r['rank'] if r['rank'] is not None else 999, -r['damage']),
         )
+        existing_hunt_id, existing_rows = self.data_submit._load_existing_hunt(
+            session.alliance_id, hunt_meta['date'], hunt_meta['hunting_trap'])
         review = BearHuntReviewView(
             cog=self,
             data_submit=self.data_submit,
@@ -3015,6 +3110,8 @@ class BearTrack(commands.Cog):
             original_user_id=session.user_id,
             auto_delete_tracker=tracker,
             source_messages=session.source_messages,
+            existing_hunt_id=existing_hunt_id,
+            existing_rows=existing_rows,
         )
         tracker.register()
 
@@ -3436,7 +3533,8 @@ class BearHuntReviewView(discord.ui.View):
 
     def __init__(self, cog, data_submit, *, hunt_meta, rows, roster,
                  alliance_id, alliance_name, original_user_id,
-                 auto_delete_tracker=None, source_messages=None):
+                 auto_delete_tracker=None, source_messages=None,
+                 existing_hunt_id=None, existing_rows=None):
         super().__init__(timeout=7200)
         self.cog = cog
         self.data_submit = data_submit
@@ -3448,11 +3546,14 @@ class BearHuntReviewView(discord.ui.View):
         self.auto_delete_tracker = auto_delete_tracker
         # Used by Retry OCR to re-download attachments.
         self.source_messages = source_messages or []
+        # Set when re-uploading a trap+date already on record (edit in place).
+        self.existing_hunt_id = existing_hunt_id
         self.message = None
         self.page = 0
         self._tracker_resolved = False
 
-        self.rows = [self._enrich_row(r) for r in rows]
+        self.rows = [self._enrich_row(r)
+                     for r in self._merge_existing_rows(rows, existing_rows or [])]
         self._resolve_unique_assignments()
         self._sort_rows()
         self._build_components()
@@ -3490,6 +3591,44 @@ class BearHuntReviewView(discord.ui.View):
             'candidates': candidates,
             'status': status,
         }
+
+    def _merge_existing_rows(self, new_rows, old_rows):
+        """Keep the better-matching name per row when re-uploading an existing trap+date."""
+        if not old_rows:
+            return list(new_rows)
+        used = set()
+        by_dmg, by_rank = {}, {}
+        for o in old_rows:
+            by_dmg.setdefault(int(o['damage']), []).append(o)
+            if o.get('rank') is not None:
+                by_rank.setdefault(o['rank'], []).append(o)
+
+        def take(pool):
+            for o in pool:
+                if id(o) not in used:
+                    used.add(id(o))
+                    return o
+            return None
+
+        def score(name):
+            cands = resolve_against_roster(name or '', self.roster, self.alliance_id)
+            return cands[0][2] if cands else 0
+
+        merged = []
+        for n in new_rows:
+            # Pair by exact damage first, then by rank so one misread digit doesn't add a row.
+            old = take(by_dmg.get(int(n.get('damage') or 0), []))
+            if old is None and n.get('rank') is not None:
+                old = take(by_rank.get(n['rank'], []))
+            row = dict(n)
+            if old is not None and score(old['name']) > score(n.get('name')):
+                row['name'] = old['name']
+            merged.append(row)
+        # Players only the previous submission had (the new upload missed them).
+        for o in old_rows:
+            if id(o) not in used:
+                merged.append({'name': o['name'], 'damage': o['damage'], 'rank': o.get('rank')})
+        return merged
 
     def _resolve_unique_assignments(self):
         """Greedy unique-fid assignment across rows. Manual entries
@@ -3561,6 +3700,13 @@ class BearHuntReviewView(discord.ui.View):
         # hunt editor's layout. `none`-with-name = roster gap and `likely` =
         # OCR captured well enough; neither counts as "unreadable".
         parts = []
+        if self.existing_hunt_id is not None:
+            parts.append(
+                f"{theme.editListIcon} **Editing this alliance's existing Trap "
+                f"{self.hunt_meta.get('hunting_trap')} hunt for {self.hunt_meta.get('date')}.** "
+                f"Submitting overwrites that record; matches from the previous "
+                f"submission are kept where the new screenshots came up blank."
+            )
         unreadable_rows = sum(
             1 for r in self.rows
             if sum(c.isalpha() for c in (r.get('name') or '')) < 3
@@ -3598,7 +3744,9 @@ class BearHuntReviewView(discord.ui.View):
         )
         parts.append("\n".join(action_lines))
         embed = discord.Embed(
-            title=f"{theme.chartIcon} Review Bear Hunt",
+            title=(f"{theme.editListIcon} Edit Bear Hunt"
+                   if self.existing_hunt_id is not None
+                   else f"{theme.chartIcon} Review Bear Hunt"),
             description="\n\n".join(parts),
             color=theme.emColor1,
         )
@@ -3827,6 +3975,7 @@ class BearHuntReviewView(discord.ui.View):
                 player_rows=self.rows,
                 alliance_id=self.alliance_id,
                 alliance_name=self.alliance_name,
+                existing_hunt_id=self.existing_hunt_id,
             )
             if submitted:
                 await self._notify_tracker_submit()
@@ -6845,8 +6994,31 @@ class DataSubmit:
         self.bear_conn = bear_conn
         self.bear_cursor = bear_conn.cursor()
 
+    def _load_existing_hunt(self, alliance_id, date, hunting_trap):
+        """Return (hunt_id, rows) for a prior submission of this trap+date, else (None, [])."""
+        if hunting_trap is None:
+            return None, []
+        if isinstance(date, datetime):
+            date = date.strftime("%Y-%m-%d")
+        self.bear_cursor.execute(
+            "SELECT id FROM bear_hunts WHERE alliance_id=? AND date=? AND hunting_trap=?",
+            (alliance_id, date, int(hunting_trap)),
+        )
+        row = self.bear_cursor.fetchone()
+        if not row:
+            return None, []
+        self.bear_cursor.execute(
+            "SELECT raw_name, resolved_nickname, damage, rank "
+            "FROM bear_player_damage WHERE hunt_id=?",
+            (row[0],),
+        )
+        rows = [{'name': r[0] or r[1] or '', 'damage': r[2], 'rank': r[3]}
+                for r in self.bear_cursor.fetchall()]
+        return row[0], rows
+
     async def process_full_submission(self, interaction, *, hunt_meta, player_rows,
-                                      alliance_id=None, alliance_name=None):
+                                      alliance_id=None, alliance_name=None,
+                                      existing_hunt_id=None):
         """Persist a reviewed bear hunt: hunt summary + every player row.
         Rows with `fid is None` are saved with NULL fid so the raw OCR'd
         name and damage are preserved for later resolution from the
@@ -6859,11 +7031,13 @@ class DataSubmit:
             total_damage=hunt_meta.get('total_damage') or 0,
             player_rows=player_rows,
             alliance_id=alliance_id, alliance_name=alliance_name,
+            existing_hunt_id=existing_hunt_id,
         )
 
     async def _persist_hunt_and_render(self, interaction, *, date, hunting_trap, rallies,
                                        total_damage, player_rows=None,
-                                       alliance_id=None, alliance_name=None):
+                                       alliance_id=None, alliance_name=None,
+                                       existing_hunt_id=None):
         """Insert one hunt row (and any provided player rows), then build
         and send the standard per-trap chart embed."""
         if not interaction.response.is_done():
@@ -6898,21 +7072,41 @@ class DataSubmit:
 
         # Single transaction so a mid-loop failure rolls the hunt back instead of leaving it orphaned.
         matched = unmatched = 0
+        edited = False
         try:
-            try:
+            if existing_hunt_id is not None:
+                # Re-resolve by the current header (date/trap may have changed in review).
                 self.bear_cursor.execute(
-                    "INSERT INTO bear_hunts (alliance_id, date, hunting_trap, rallies, total_damage) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (alliance_id, date, hunting_trap, rallies, total_damage),
+                    "SELECT id FROM bear_hunts WHERE alliance_id=? AND date=? AND hunting_trap=?",
+                    (alliance_id, date, hunting_trap),
                 )
-                hunt_id = self.bear_cursor.lastrowid
-            except sqlite3.IntegrityError:
-                self.bear_conn.rollback()
-                await interaction.followup.send(
-                    f"{theme.warnIcon} This alliance already submitted this trap for that date.",
-                    ephemeral=True,
-                )
-                return False
+                existing = self.bear_cursor.fetchone()
+                if existing:
+                    # Edit in place: keep the hunt record, refresh summary + rows.
+                    hunt_id = existing[0]
+                    self.bear_cursor.execute(
+                        "UPDATE bear_hunts SET rallies=?, total_damage=? WHERE id=?",
+                        (rallies, total_damage, hunt_id),
+                    )
+                    self.bear_cursor.execute(
+                        "DELETE FROM bear_player_damage WHERE hunt_id=?", (hunt_id,)
+                    )
+                    edited = True
+            if not edited:
+                try:
+                    self.bear_cursor.execute(
+                        "INSERT INTO bear_hunts (alliance_id, date, hunting_trap, rallies, total_damage) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (alliance_id, date, hunting_trap, rallies, total_damage),
+                    )
+                    hunt_id = self.bear_cursor.lastrowid
+                except sqlite3.IntegrityError:
+                    self.bear_conn.rollback()
+                    await interaction.followup.send(
+                        f"{theme.warnIcon} This alliance already submitted this trap for that date.",
+                        ephemeral=True,
+                    )
+                    return False
 
             learned: list[tuple] = []  # (name, fid) — learned AFTER commit
             if player_rows:
@@ -6948,7 +7142,7 @@ class DataSubmit:
             except Exception as e:
                 logger.warning(f"Bear OCR: post-commit learn_alias failed for {name!r}: {e}")
 
-        title_suffix = "Latest Submission"
+        title_suffix = "Updated Submission" if edited else "Latest Submission"
         if player_rows:
             title_suffix += f" · {matched} player(s)"
             if unmatched:

@@ -7,6 +7,7 @@ from discord.ext import commands
 from datetime import datetime
 import logging
 import sqlite3
+import asyncio
 from .permission_handler import (
     PermissionManager, TIER_OWNER, TIER_GLOBAL, TIER_SERVER, TIER_ALLIANCE, TIER_NONE,
 )
@@ -139,6 +140,16 @@ class MainMenu(commands.Cog):
             logger.error(f"Error in show_main_menu: {e}")
             print(f"Error in show_main_menu: {e}")
 
+    @staticmethod
+    def _member_counts() -> dict:
+        """{str(alliance_id): member_count} for all alliances, in one query."""
+        with sqlite3.connect('db/users.sqlite') as db:
+            return {
+                str(a): c for a, c in db.execute(
+                    "SELECT alliance, COUNT(*) FROM users GROUP BY alliance"
+                ).fetchall()
+            }
+
     async def show_alliance_management(self, interaction: discord.Interaction):
         """Entry to Alliances — pick an alliance to manage, or run a bulk
         action across alliances (gated by tier)."""
@@ -155,16 +166,11 @@ class MainMenu(commands.Cog):
                 interaction.user.id, interaction.guild_id
             )
 
-            alliances_with_counts = []
-            for alliance_id, name in alliances:
-                with sqlite3.connect('db/users.sqlite') as users_db:
-                    cursor = users_db.cursor()
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM users WHERE alliance = ?",
-                        (alliance_id,),
-                    )
-                    count = cursor.fetchone()[0] or 0
-                alliances_with_counts.append((alliance_id, name, count))
+            counts = self._member_counts()
+            alliances_with_counts = [
+                (alliance_id, name, counts.get(str(alliance_id), 0))
+                for alliance_id, name in alliances
+            ]
 
             tier_label = {
                 TIER_OWNER: "Bot Owner",
@@ -286,15 +292,10 @@ class MainMenu(commands.Cog):
             accessible, _ = PermissionManager.get_admin_alliances(
                 interaction.user.id, interaction.guild_id
             )
-            alliances_with_counts = []
-            for aid, name in accessible:
-                with sqlite3.connect('db/users.sqlite') as udb:
-                    ucur = udb.cursor()
-                    ucur.execute(
-                        "SELECT COUNT(*) FROM users WHERE alliance = ?", (aid,)
-                    )
-                    a_count = ucur.fetchone()[0] or 0
-                alliances_with_counts.append((aid, name, a_count))
+            counts = self._member_counts()
+            alliances_with_counts = [
+                (aid, name, counts.get(str(aid), 0)) for aid, name in accessible
+            ]
 
             embed = discord.Embed(
                 title=f"{theme.allianceIcon} {alliance_name}",
@@ -1165,9 +1166,10 @@ class AdminManagerView(discord.ui.View):
         """Reload admin list + display names. Call before build_embed/_build."""
         self.admins = PermissionManager.list_admins()
         self.owner_id = PermissionManager.get_owner_id()
-        self._names = {}
-        for a in self.admins:
-            self._names[a['id']] = await _resolve_user_name(bot, a['id'])
+        names = await asyncio.gather(
+            *(_resolve_user_name(bot, a['id']) for a in self.admins)
+        )
+        self._names = {a['id']: n for a, n in zip(self.admins, names)}
         self._build()
 
     def _total_pages(self) -> int:
@@ -2070,11 +2072,11 @@ class MaintenanceView(discord.ui.View):
         self.cog = cog
         self.is_global = is_global
 
-        # Disable Global Admin only buttons for non-global admins
+        # Gate Global-Admin-only buttons by stable custom_id, not label text.
+        global_only = {"check_updates", "backup_system", "bot_health", "bot_presence"}
         for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                if child.label in ["Check for Updates", "Backup System", "Bot Health", "Bot Presence"]:
-                    child.disabled = not is_global
+            if isinstance(child, discord.ui.Button) and child.custom_id in global_only:
+                child.disabled = not is_global
 
     @discord.ui.button(
         label="Check for Updates",

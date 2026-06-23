@@ -156,6 +156,8 @@ class BotOperations(commands.Cog):
         try:
             self.settings_db.close()
             self.alliance_db.close()
+            if hasattr(self, 'conn'):
+                self.conn.close()
         except Exception:
             pass
 
@@ -413,23 +415,49 @@ class BotOperations(commands.Cog):
         except Exception as e:
             return False
 
+    @staticmethod
+    def _is_stable_upgrade(current_version: str, latest_tag: str) -> bool:
+        """True if latest_tag is a strictly newer vX.Y.Z. Unparseable current
+        (e.g. v0.0.0 fresh install) => any differing tag upgrades (pull-forward)."""
+        def parse(tag):
+            try:
+                parts = [int(n) for n in tag.strip().lstrip("vV").split(".")[:3]]
+            except (ValueError, AttributeError):
+                return None
+            if not parts:
+                return None
+            while len(parts) < 3:
+                parts.append(0)
+            return tuple(parts)
+
+        cur, latest = parse(current_version), parse(latest_tag)
+        if cur is None or latest is None:
+            return current_version != latest_tag
+        return latest > cur
+
     async def check_for_updates(self):
         """Check for updates using GitHub releases API"""
         try:
+            current_version = self.get_current_version()
+
+            # Beta builds (version "beta-<sha>") track main and are ahead of the
+            # latest stable tag, so don't offer the stable release as an update.
+            if current_version.startswith("beta-"):
+                return current_version, current_version, [], False
+
             latest_release_url = "https://api.github.com/repos/whiteout-project/bot/releases/latest"
-            
+
             response = await asyncio.to_thread(requests.get, latest_release_url, timeout=10)
             if response.status_code != 200:
                 return None, None, [], False
 
             latest_release_data = response.json()
             latest_tag = latest_release_data.get("tag_name", "")
-            current_version = self.get_current_version()
-            
+
             if not latest_tag:
                 return current_version, None, [], False
 
-            updates_needed = current_version != latest_tag
+            updates_needed = self._is_stable_upgrade(current_version, latest_tag)
             
             # Parse release notes
             update_notes = []
@@ -518,6 +546,7 @@ class SyncSettingsView(discord.ui.View):
     def __init__(self, alliance_cursor, alliance_db, alliances, initial_interaction,
                  *, locked_alliance_id: int | None = None, return_to_hub: bool = False):
         super().__init__(timeout=7200)
+        self.original_user_id = initial_interaction.user.id
         self.alliance_cursor = alliance_cursor
         self.alliance_db = alliance_db
         self.alliances = alliances
@@ -532,6 +561,22 @@ class SyncSettingsView(discord.ui.View):
         self.show_sync_message = True
         self.silent_notifications = False
         self.setup_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.original_user_id:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only the user who opened this menu can use it.",
+                ephemeral=True,
+            )
+            return False
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} You don't have admin permissions.",
+                ephemeral=True,
+            )
+            return False
+        return True
 
     def setup_components(self):
         self.clear_items()
@@ -985,6 +1030,16 @@ class BotPresenceView(discord.ui.View):
         super().__init__(timeout=7200)
         self.cog = cog
         self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        _, is_global = PermissionManager.is_admin(interaction.user.id)
+        if not is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Only global admins can change bot presence.",
+                ephemeral=True,
+            )
+            return False
+        return True
 
     def build_embed(self) -> discord.Embed:
         p = self.cog.get_bot_presence()

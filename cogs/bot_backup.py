@@ -12,6 +12,7 @@ import pyzipper
 import shutil
 import traceback
 import logging
+import asyncio
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
 
@@ -189,17 +190,17 @@ class BackupOperations(commands.Cog):
                 return
 
             keep = max(1, int(settings.get('keep_automatic') or 2))
-            for admin_id in global_admins:
-                admin_id = admin_id[0]
-                try:
-                    filename = await self.create_backup(str(admin_id), "Automatic", save_locally=True)
-                    if filename:
-                        self.log_backup(str(admin_id), True, "Automatic Backup", "Local", filename)
-                        await self.cleanup_old_backups("automatic", keep=keep)
-                    else:
-                        self.log_backup(str(admin_id), False, "Automatic Backup", "Local", None, "Backup creation failed")
-                except Exception as e:
-                    self.log_backup(str(admin_id), False, "Automatic Backup", "Local", None, str(e))
+            # One backup per cycle, attributed to the first global admin (for their password).
+            owner_id = str(global_admins[0][0]) if global_admins else "system"
+            try:
+                filename = await self.create_backup(owner_id, "Automatic", save_locally=True)
+                if filename:
+                    self.log_backup(owner_id, True, "Automatic Backup", "Local", filename)
+                    await self.cleanup_old_backups("automatic", keep=keep)
+                else:
+                    self.log_backup(owner_id, False, "Automatic Backup", "Local", None, "Backup creation failed")
+            except Exception as e:
+                self.log_backup(owner_id, False, "Automatic Backup", "Local", None, str(e))
 
             self.update_settings(last_auto_backup_at=datetime.datetime.utcnow().isoformat())
 
@@ -281,6 +282,32 @@ class BackupOperations(commands.Cog):
             pass
         return sorted(backup_files, key=os.path.getmtime, reverse=True)
 
+    def _checkpoint_wal_dbs(self):
+        """Flush each DB's WAL into its .sqlite so the zip captures committed data."""
+        for f in os.listdir("db"):
+            if f.endswith(".sqlite"):
+                try:
+                    with sqlite3.connect(os.path.join("db", f), timeout=30.0) as conn:
+                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except Exception as e:
+                    logger.warning(f"WAL checkpoint failed for {f}: {e}")
+
+    def _write_db_zip(self, filepath, password, readme_content):
+        """Zip all db/*.sqlite + README (AES-LZMA if password, else DEFLATED). Sync — use to_thread."""
+        if password:
+            with pyzipper.AESZipFile(filepath, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
+                zf.setpassword(password.encode())
+                for f in os.listdir("db"):
+                    if f.endswith(".sqlite"):
+                        zf.write(os.path.join("db", f), f)
+                zf.writestr("README.txt", readme_content)
+        else:
+            with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for f in os.listdir("db"):
+                    if f.endswith(".sqlite"):
+                        zf.write(os.path.join("db", f), f)
+                zf.writestr("README.txt", readme_content)
+
     async def create_backup(self, user_id: str, backup_type: str = "Manual", save_locally: bool = True):
         try:
             # Get password
@@ -294,129 +321,57 @@ class BackupOperations(commands.Cog):
 
             timestamp = datetime.datetime.now()
             backup_name = f"{backup_type.lower()}_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-            
+
+            self._checkpoint_wal_dbs()
+
             if save_locally:
                 # Save to local backups folder
-                if backup_password:
-                    filename = f"{backup_name}_encrypted.zip"
-                    filepath = os.path.join(self.backup_dir, filename)
-                    
-                    with pyzipper.AESZipFile(filepath, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
-                        zf.setpassword(backup_password.encode())
-                        
-                        for file in os.listdir("db"):
-                            if file.endswith(".sqlite"):
-                                file_path = os.path.join("db", file)
-                                zf.write(file_path, file)
-                        
-                        readme_content = f"""Encrypted Local Backup
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
-User ID: {user_id}
-Type: {backup_type}
-Contains: All SQLite database files
-Encryption: AES (Password Protected)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-To restore:
-1. Extract this ZIP file using your backup password
-2. Replace your db/ folder contents with these files
-3. Restart the bot
-
-🤖 WOS Discord Bot Backup System
-"""
-                        zf.writestr("README.txt", readme_content)
-                else:
-                    filename = f"{backup_name}.zip"
-                    filepath = os.path.join(self.backup_dir, filename)
-                    
-                    with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for file in os.listdir("db"):
-                            if file.endswith(".sqlite"):
-                                file_path = os.path.join("db", file)
-                                zf.write(file_path, file)
-                        
-                        readme_content = f"""Local Backup
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
-User ID: {user_id}
-Type: {backup_type}
-Contains: All SQLite database files
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-To restore:
-1. Extract this ZIP file
-2. Replace your db/ folder contents with these files
-3. Restart the bot
-
-🤖 WOS Discord Bot Backup System
-"""
-                        zf.writestr("README.txt", readme_content)
-                
+                filename = f"{backup_name}_encrypted.zip" if backup_password else f"{backup_name}.zip"
+                filepath = os.path.join(self.backup_dir, filename)
+                enc_line = "Encryption: AES (Password Protected)\n" if backup_password else ""
+                extract_pw = " using your backup password" if backup_password else ""
+                readme_content = (
+                    "Local Backup\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"User ID: {user_id}\n"
+                    f"Type: {backup_type}\n"
+                    "Contains: All SQLite database files\n"
+                    f"{enc_line}"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "To restore:\n"
+                    f"1. Extract this ZIP file{extract_pw}\n"
+                    "2. Replace your db/ folder contents with these files\n"
+                    "3. Restart the bot\n\n"
+                    "🤖 WOS Discord Bot Backup System\n"
+                )
+                await asyncio.to_thread(self._write_db_zip, filepath, backup_password, readme_content)
                 return filename
             
             else:
                 # Send via DM - create temporary file
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    if backup_password:
-                        filename = f"{backup_name}_encrypted.zip"
-                        temp_filepath = os.path.join(temp_dir, filename)
-                        
-                        with pyzipper.AESZipFile(temp_filepath, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
-                            zf.setpassword(backup_password.encode())
-                            
-                            for file in os.listdir("db"):
-                                if file.endswith(".sqlite"):
-                                    file_path = os.path.join("db", file)
-                                    zf.write(file_path, file)
-                            
-                            readme_content = f"""Discord Backup
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
-User ID: {user_id}
-Type: {backup_type}
-Contains: All SQLite database files
-Encryption: AES (Password Protected)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-To restore:
-1. Extract this ZIP file using your backup password
-2. Replace your db/ folder contents with these files
-3. Restart the bot
-
-⚠️ This backup expires in 30 days from Discord
-
-🤖 WOS Discord Bot Backup System
-"""
-                            zf.writestr("README.txt", readme_content)
-                    else:
-                        filename = f"{backup_name}.zip"
-                        temp_filepath = os.path.join(temp_dir, filename)
-                        
-                        with zipfile.ZipFile(temp_filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
-                            for file in os.listdir("db"):
-                                if file.endswith(".sqlite"):
-                                    file_path = os.path.join("db", file)
-                                    zf.write(file_path, file)
-                            
-                            readme_content = f"""Discord Backup
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}
-User ID: {user_id}
-Type: {backup_type}
-Contains: All SQLite database files
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-To restore:
-1. Extract this ZIP file
-2. Replace your db/ folder contents with these files
-3. Restart the bot
-
-⚠️ This backup expires in 30 days from Discord
-
-🤖 WOS Discord Bot Backup System
-"""
-                            zf.writestr("README.txt", readme_content)
+                    filename = f"{backup_name}_encrypted.zip" if backup_password else f"{backup_name}.zip"
+                    temp_filepath = os.path.join(temp_dir, filename)
+                    enc_line = "Encryption: AES (Password Protected)\n" if backup_password else ""
+                    extract_pw = " using your backup password" if backup_password else ""
+                    readme_content = (
+                        "Discord Backup\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"Created: {timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"User ID: {user_id}\n"
+                        f"Type: {backup_type}\n"
+                        "Contains: All SQLite database files\n"
+                        f"{enc_line}"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        "To restore:\n"
+                        f"1. Extract this ZIP file{extract_pw}\n"
+                        "2. Replace your db/ folder contents with these files\n"
+                        "3. Restart the bot\n\n"
+                        "⚠️ This backup expires in 30 days from Discord\n\n"
+                        "🤖 WOS Discord Bot Backup System\n"
+                    )
+                    await asyncio.to_thread(self._write_db_zip, temp_filepath, backup_password, readme_content)
                     
                     # Check file size before sending
                     file_size = os.path.getsize(temp_filepath)
@@ -490,10 +445,24 @@ To restore:
             print(f"Cleanup error: {e}")
             return 0
 
+async def _global_admin_check(interaction: discord.Interaction) -> bool:
+    """Re-verify Global Admin on every click (persisted menus can be re-clicked)."""
+    _, is_global = PermissionManager.is_admin(interaction.user.id)
+    if not is_global:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} Only global admins can use this menu.", ephemeral=True
+        )
+        return False
+    return True
+
+
 class BackupView(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=7200)
         self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _global_admin_check(interaction)
 
     @discord.ui.button(label="Set Password", emoji=f"{theme.lockIcon}", style=discord.ButtonStyle.primary, row=0)
     async def set_password(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -637,6 +606,9 @@ class BackupManageView(discord.ui.View):
         self.cog = cog
         self.status_note = status_note
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _global_admin_check(interaction)
+
     def build_embed(self) -> discord.Embed:
         backup_files = self.cog.get_backup_files()
         settings = self.cog.get_settings()
@@ -723,6 +695,9 @@ class BackupSettingsView(discord.ui.View):
         super().__init__(timeout=7200)
         self.cog = cog
         self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _global_admin_check(interaction)
 
     def build_embed(self) -> discord.Embed:
         s = self.cog.get_settings()

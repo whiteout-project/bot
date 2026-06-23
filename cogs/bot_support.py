@@ -9,6 +9,7 @@ import sys
 import platform
 import zipfile
 import io
+import asyncio
 from datetime import datetime, timezone, timedelta
 from .pimp_my_bot import theme, safe_edit_message
 from .permission_handler import PermissionManager
@@ -104,33 +105,30 @@ class SupportOperations(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Create in-memory zip file
-            zip_buffer = io.BytesIO()
+            # Build the zip off the event loop — compression + log reads block.
             cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
 
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
-                # Add bot_info.txt
-                bot_info = self._generate_bot_info()
-                zf.writestr('bot_info.txt', bot_info)
+            def _build_support_zip():
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr('bot_info.txt', self._generate_bot_info())
+                    logs_added = 0
+                    if os.path.exists(self.log_path):
+                        for filename in os.listdir(self.log_path):
+                            filepath = os.path.join(self.log_path, filename)
+                            if os.path.isfile(filepath) and filename != 'archive':
+                                try:
+                                    mtime = datetime.fromtimestamp(os.path.getmtime(filepath), timezone.utc)
+                                    if mtime >= cutoff_time:
+                                        zf.write(filepath, f"logs/{filename}")
+                                        logs_added += 1
+                                except Exception as e:
+                                    logger.warning(f"Could not add log file {filename}: {e}")
+                    if logs_added == 0:
+                        zf.writestr('logs/no_recent_logs.txt', 'No log files modified in the last 24 hours.')
+                return buffer, logs_added
 
-                # Add recent logs (last 24 hours)
-                logs_added = 0
-                if os.path.exists(self.log_path):
-                    for filename in os.listdir(self.log_path):
-                        filepath = os.path.join(self.log_path, filename)
-                        if os.path.isfile(filepath) and filename != 'archive':
-                            try:
-                                mtime = datetime.fromtimestamp(os.path.getmtime(filepath), timezone.utc)
-                                # Include files modified in last 24h
-                                if mtime >= cutoff_time:
-                                    zf.write(filepath, f"logs/{filename}")
-                                    logs_added += 1
-                            except Exception as e:
-                                logger.warning(f"Could not add log file {filename}: {e}")
-
-                # If no recent logs, add a note
-                if logs_added == 0:
-                    zf.writestr('logs/no_recent_logs.txt', 'No log files modified in the last 24 hours.')
+            zip_buffer, logs_added = await asyncio.to_thread(_build_support_zip)
 
             # Check size
             zip_buffer.seek(0)

@@ -12,6 +12,7 @@ import discord
 import ssl
 import logging
 from .pimp_my_bot import theme
+from .browser_headers import get_headers
 
 logger = logging.getLogger('gift')
 
@@ -169,10 +170,9 @@ class GiftCodeAPI:
             
             connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
-                headers = {
-                    'X-API-Key': self.api_key,
-                    'Content-Type': 'application/json'
-                }
+                headers = get_headers()
+                headers['Content-Type'] = 'application/json'
+                headers['X-API-Key'] = self.api_key
                 
                 await self._wait_for_rate_limit()
                 
@@ -533,10 +533,9 @@ class GiftCodeAPI:
             
             connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
-                headers = {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': self.api_key
-                }
+                headers = get_headers()
+                headers['Content-Type'] = 'application/json'
+                headers['X-API-Key'] = self.api_key
                 
                 date_str = datetime.now().strftime("%d.%m.%Y")
                 data = {
@@ -605,10 +604,9 @@ class GiftCodeAPI:
             self.logger.info(f"Removing invalid code {giftcode} from API")
             connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
-                headers = {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': self.api_key
-                }
+                headers = get_headers()
+                headers['Content-Type'] = 'application/json'
+                headers['X-API-Key'] = self.api_key
                 data = {'code': giftcode}
                 
                 await self._wait_for_rate_limit()
@@ -648,9 +646,8 @@ class GiftCodeAPI:
         try:
             connector = aiohttp.TCPConnector(ssl=self.ssl_context)
             async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
-                headers = {
-                    'X-API-Key': self.api_key
-                }
+                headers = get_headers()
+                headers['X-API-Key'] = self.api_key
                 
                 await self._wait_for_rate_limit()
                 

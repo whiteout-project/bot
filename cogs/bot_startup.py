@@ -292,8 +292,6 @@ class ReassignSelectView(OrphanViewBase):
 class BotStartup(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
-        self.c = self.conn.cursor()
         self.orphan_resolution = {
             "resolved": False,
             "resolved_by": None,
@@ -301,10 +299,6 @@ class BotStartup(commands.Cog):
             "action_taken": None,
             "timestamp": None
         }
-
-    async def cog_unload(self):
-        if hasattr(self, 'conn'):
-            self.conn.close()
 
     def get_orphaned_users(self) -> dict:
         """Returns {alliance_id: [(fid, nickname), ...]} for orphaned users"""
@@ -362,6 +356,11 @@ class BotStartup(commands.Cog):
     async def on_ready(self):
         if getattr(self.bot, 'no_dm', False):
             return
+        # on_ready re-fires on every reconnect; run the startup DMs/orphan scan
+        # once per process (flag set before any await to avoid races).
+        if getattr(self.bot, 'startup_dm_sent', False):
+            return
+        self.bot.startup_dm_sent = True
 
         try:
             with sqlite3.connect('db/settings.sqlite') as settings_db:
@@ -429,20 +428,24 @@ class BotStartup(commands.Cog):
                     if alliances:
                         ALLIANCES_PER_PAGE = 5
                         alliance_info = []
-                        
-                        for alliance_id, name in alliances:
-                            info_parts = []
-                            
-                            with sqlite3.connect('db/users.sqlite') as users_db:
-                                cursor = users_db.cursor()
-                                cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                                user_count = cursor.fetchone()[0]
+
+                        # One connection per DB for the whole loop, not per alliance.
+                        with sqlite3.connect('db/users.sqlite') as users_db, \
+                             sqlite3.connect('db/alliance.sqlite') as alliance_db, \
+                             sqlite3.connect('db/giftcode.sqlite') as gift_db:
+                            users_cur = users_db.cursor()
+                            alliance_cur = alliance_db.cursor()
+                            gift_cur = gift_db.cursor()
+
+                            for alliance_id, name in alliances:
+                                info_parts = []
+
+                                users_cur.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
+                                user_count = users_cur.fetchone()[0]
                                 info_parts.append(f"{theme.userIcon} Members: {user_count}")
-                            
-                            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                                cursor = alliance_db.cursor()
-                                cursor.execute("SELECT discord_server_id FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                                discord_server = cursor.fetchone()
+
+                                alliance_cur.execute("SELECT discord_server_id FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
+                                discord_server = alliance_cur.fetchone()
                                 if discord_server:
                                     server_id = discord_server[0]
                                     if server_id:
@@ -451,32 +454,30 @@ class BotStartup(commands.Cog):
                                             info_parts.append(f"{theme.globeIcon} Server Name: {guild.name}")
                                         else:
                                             info_parts.append(f"{theme.globeIcon} Server ID: {server_id}")
-                            
-                                cursor.execute("SELECT channel_id, interval FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
-                                settings = cursor.fetchone()
+
+                                alliance_cur.execute("SELECT channel_id, interval FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
+                                settings = alliance_cur.fetchone()
                                 if settings:
                                     if settings[0]:
                                         info_parts.append(f"{theme.announceIcon} Channel: <#{settings[0]}>")
-                                    interval_text = f"{theme.timeIcon} Auto Check: {settings[1]} minutes" if settings[1] > 0 else f"{theme.timeIcon} No Auto Check"
+                                    interval_text = f"{theme.timeIcon} Auto Check: {settings[1]} minutes" if settings[1] and settings[1] > 0 else f"{theme.timeIcon} No Auto Check"
                                     info_parts.append(interval_text)
-                            
-                            with sqlite3.connect('db/giftcode.sqlite') as gift_db:
-                                cursor = gift_db.cursor()
-                                cursor.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
-                                gift_status = cursor.fetchone()
+
+                                gift_cur.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
+                                gift_status = gift_cur.fetchone()
                                 gift_text = f"{theme.giftIcon} Gift System: Active" if gift_status and gift_status[0] == 1 else f"{theme.giftIcon} Gift System: Inactive"
                                 info_parts.append(gift_text)
 
-                                cursor.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
-                                gift_channel = cursor.fetchone()
+                                gift_cur.execute("SELECT channel_id FROM giftcode_channel WHERE alliance_id = ?", (alliance_id,))
+                                gift_channel = gift_cur.fetchone()
                                 if gift_channel and gift_channel[0]:
                                     info_parts.append(f"{theme.giftIcon} Gift Channel: <#{gift_channel[0]}>")
-                            
-                            alliance_info.append(
-                                f"**{name}**\n" +
-                                "\n".join(f"> {part}" for part in info_parts) +
-                                f"\n{theme.lowerDivider}"
-                            )
+
+                                alliance_info.append(
+                                    f"**{name}**\n" +
+                                    "\n".join(f"> {part}" for part in info_parts) +
+                                    f"\n{theme.lowerDivider}"
+                                )
 
                         pages = [alliance_info[i:i + ALLIANCES_PER_PAGE] 
                                 for i in range(0, len(alliance_info), ALLIANCES_PER_PAGE)]
@@ -498,7 +499,6 @@ class BotStartup(commands.Cog):
                         await admin_user.send(embed=alliance_embed)
 
                     logger.info("Activation messages sent to admin user.")
-                    self.bot.startup_dm_sent = True
                 else:
                     logger.warning(f"User with Admin ID {admin_id} not found.")
             else:
