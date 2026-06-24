@@ -761,7 +761,6 @@ class MinisterMenu(commands.Cog):
         self.alliance_cursor = self.alliance_conn.cursor()
         self.svs_conn = sqlite3.connect("db/svs.sqlite", timeout=30.0, check_same_thread=False)
         self.svs_cursor = self.svs_conn.cursor()
-        self.original_interaction = None
 
     async def cog_unload(self):
         """Close database connections when cog is unloaded."""
@@ -798,7 +797,6 @@ class MinisterMenu(commands.Cog):
 
     async def show_minister_channel_menu(self, interaction: discord.Interaction):
         # Store the original interaction for later updates
-        self.original_interaction = interaction
 
         # Get channel status and permissions
         channel_status, embed_color = await self.get_channel_status_display()

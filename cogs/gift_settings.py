@@ -2,11 +2,8 @@
 
 import discord
 import sqlite3
-import asyncio
 import time
 import base64
-import re
-import os
 import logging
 import requests
 import json

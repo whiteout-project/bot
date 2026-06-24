@@ -97,10 +97,6 @@ def _ltr_line(text: str) -> str:
     return "\u200e" + text if _has_rtl(text) else text
 
 
-def fix_rtl(text):
-    return _isolate_rtl(text)
-
-
 def _compact_power(n) -> str:
     """Short power display (120.5M / 45.1B) for dense member lists."""
     try:
@@ -760,6 +756,22 @@ class ManageMembersView(MemberListView):
 
                 # Refresh parent view's data — drop transferred members from local cache
                 transferred = set(fids)
+                transferred_rows = [m for m in parent_view.all_members if m['fid'] in transferred]
+                title = f"{theme.allianceIcon} Member Transfer"
+                await _post_alliance_log(
+                    parent_view.cog.bot, parent_view.alliance_id,
+                    _member_action_log_embed(
+                        title, parent_view.alliance_name, target_interaction.user,
+                        transferred_rows, extra_line=f"**Transferred To:** {target_name}\n",
+                    ),
+                )
+                await _post_alliance_log(
+                    parent_view.cog.bot, target_alliance_id,
+                    _member_action_log_embed(
+                        title, target_name, target_interaction.user,
+                        transferred_rows, extra_line=f"**Transferred From:** {parent_view.alliance_name}\n",
+                    ),
+                )
                 parent_view.all_members = [
                     m for m in parent_view.all_members if m['fid'] not in transferred
                 ]
@@ -822,6 +834,42 @@ class ManageMembersView(MemberListView):
             )
 
 
+async def _post_alliance_log(bot, alliance_id, embed) -> None:
+    """Send an embed to the alliance's configured Activity Log channel, if set."""
+    try:
+        with sqlite3.connect('db/settings.sqlite', timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT channel_id FROM alliance_logs WHERE alliance_id = ?",
+                (alliance_id,),
+            ).fetchone()
+        if not (row and row[0]):
+            return
+        ch = bot.get_channel(int(row[0]))
+        if ch:
+            await ch.send(embed=embed)
+    except Exception as e:
+        logger.error(f"Alliance log post failed: {e}")
+
+
+def _member_action_log_embed(title, alliance_name, admin, rows, extra_line=""):
+    """Audit embed for a bulk member action (remove/transfer), listing up to 20 members."""
+    listed = "\n".join(f"ID{i+1}: {m['fid']} - {m['nickname']}" for i, m in enumerate(rows[:20]))
+    if len(rows) > 20:
+        listed += f"\n... and {len(rows) - 20} more"
+    return discord.Embed(
+        title=title,
+        description=(
+            f"**Alliance:** {alliance_name}\n"
+            f"**Administrator:** {admin.name} (`{admin.id}`)\n"
+            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"{extra_line}"
+            f"**Total Members:** {len(rows)}\n\n"
+            "**Members:**\n```\n" + listed + "\n```"
+        ),
+        color=theme.emColor2,
+    )
+
+
 class _RemoveSelectedConfirmView(discord.ui.View):
     """Yes/no confirmation for ManageMembersView's Remove Selected action."""
 
@@ -844,6 +892,8 @@ class _RemoveSelectedConfirmView(discord.ui.View):
             )
             return
         try:
+            removed = set(fids)
+            removed_rows = [m for m in self.parent_view.all_members if m['fid'] in removed]
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cur = users_db.cursor()
                 placeholders = ",".join("?" * len(fids))
@@ -855,7 +905,13 @@ class _RemoveSelectedConfirmView(discord.ui.View):
                 f"Bulk remove: {len(fids)} members from "
                 f"{self.parent_view.alliance_name}"
             )
-            removed = set(fids)
+            await _post_alliance_log(
+                self.parent_view.cog.bot, self.parent_view.alliance_id,
+                _member_action_log_embed(
+                    f"{theme.trashIcon} Bulk Member Removal",
+                    self.parent_view.alliance_name, interaction.user, removed_rows,
+                ),
+            )
             self.parent_view.all_members = [
                 m for m in self.parent_view.all_members if m['fid'] not in removed
             ]
@@ -916,18 +972,6 @@ class AllianceMemberOperations(commands.Cog):
         
         self.level_mapping = LEVEL_MAPPING
 
-        self.fl_emojis = {
-            range(35, 40): "<:fc1:1326751863764156528>",
-            range(40, 45): "<:fc2:1326751886954594315>",
-            range(45, 50): "<:fc3:1326751903912034375>",
-            range(50, 55): "<:fc4:1326751938674692106>",
-            range(55, 60): "<:fc5:1326751952750776331>",
-            range(60, 65): "<:fc6:1326751966184869981>",
-            range(65, 70): "<:fc7:1326751983939489812>",
-            range(70, 75): "<:fc8:1326751996707082240>",
-            range(75, 80): "<:fc9:1326752008505528331>",
-            range(80, 85): "<:fc10:1326752023001174066>"
-        }
 
         # Log directory for audit logs (member additions)
         self.log_directory = 'log'
@@ -937,16 +981,6 @@ class AllianceMemberOperations(commands.Cog):
 
         # Initialize login handler for centralized API management
         self.login_handler = LoginHandler()
-
-    def get_fl_emoji(self, fl_level: int) -> str:
-        for level_range, emoji in self.fl_emojis.items():
-            if fl_level in level_range:
-                return emoji
-        return f"{theme.levelIcon}"
-
-    async def show_add_members_for(self, interaction: discord.Interaction, alliance_id: int):
-        """Open the Add Members modal for a known alliance (no picker step)."""
-        await interaction.response.send_modal(AddMemberModal(alliance_id))
 
     async def show_power_rankings_for(self, interaction: discord.Interaction, alliance_id: int):
         """Show the alliance roster sorted by Power (highest first) with last-updated timestamps."""
@@ -979,54 +1013,6 @@ class AllianceMemberOperations(commands.Cog):
             view.message = await interaction.original_response()
         except discord.HTTPException:
             pass
-
-    async def show_view_members_for(self, interaction: discord.Interaction, alliance_id: int):
-        """Build the Member List directly for a known alliance (no picker step).
-        Posts the list publicly in the channel and replaces the source ephemeral
-        with a 'list posted below' acknowledgement, matching the entry-point flow."""
-        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-            cursor = alliance_db.cursor()
-            cursor.execute(
-                "SELECT name FROM alliance_list WHERE alliance_id = ?",
-                (alliance_id,),
-            )
-            row = cursor.fetchone()
-        if not row:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Alliance not found.", ephemeral=True
-            )
-            return
-        alliance_name = row[0]
-
-        with sqlite3.connect('db/users.sqlite') as users_db:
-            cursor = users_db.cursor()
-            cursor.execute(
-                "SELECT fid, nickname, furnace_lv, kid FROM users WHERE alliance = ?",
-                (alliance_id,),
-            )
-            members = cursor.fetchall()
-
-        if not members:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} No members found in this alliance.",
-                ephemeral=True,
-            )
-            return
-
-        member_view = MemberListView(
-            members, alliance_id, alliance_name, self, interaction.user.id,
-        )
-
-        await interaction.response.edit_message(
-            content=f"{theme.verifiedIcon} Member list has been generated and posted below.",
-            embed=None,
-            view=None,
-        )
-        message = await interaction.channel.send(
-            embed=member_view.build_embed(),
-            view=member_view,
-        )
-        member_view.message = message
 
     async def show_manage_members_for(self, interaction: discord.Interaction, alliance_id: int):
         """Open the unified Manage Members view (filter, sort, multi-select, act)."""
@@ -1074,277 +1060,6 @@ class AllianceMemberOperations(commands.Cog):
             view.message = await interaction.original_response()
         except Exception:
             pass
-
-    async def show_remove_members_for(self, interaction: discord.Interaction, alliance_id: int):
-        """Show member-selection for removal in a known alliance (no picker step)."""
-        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-            cursor = alliance_db.cursor()
-            cursor.execute(
-                "SELECT name FROM alliance_list WHERE alliance_id = ?",
-                (alliance_id,),
-            )
-            row = cursor.fetchone()
-        if not row:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Alliance not found.", ephemeral=True
-            )
-            return
-        alliance_name = row[0]
-
-        with sqlite3.connect('db/users.sqlite') as users_db:
-            cursor = users_db.cursor()
-            cursor.execute(
-                "SELECT fid, nickname, furnace_lv FROM users "
-                "WHERE alliance = ? ORDER BY furnace_lv DESC, nickname",
-                (alliance_id,),
-            )
-            members = cursor.fetchall()
-
-        if not members:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} No members found in this alliance.",
-                ephemeral=True,
-            )
-            return
-
-        max_fl = max(m[2] for m in members)
-        avg_fl = sum(m[2] for m in members) / len(members)
-
-        member_embed = discord.Embed(
-            title=f"{theme.userIcon} {alliance_name} - Member Selection",
-            description=(
-                "```ml\n"
-                "Alliance Statistics\n"
-                "══════════════════════════\n"
-                f"{theme.chartIcon} Total Member     : {len(members)}\n"
-                f"{theme.levelIcon} Highest Level    : "
-                f"{self.level_mapping.get(max_fl, str(max_fl))}\n"
-                f"{theme.chartIcon} Average Level    : "
-                f"{self.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                "══════════════════════════\n"
-                "```\n"
-                "Select the member you want to delete:"
-            ),
-            color=theme.emColor2,
-        )
-
-        alliances_with_counts = [(alliance_id, alliance_name, len(members))]
-        member_view = MemberSelectView(
-            members,
-            alliance_name,
-            self,
-            is_remove_operation=True,
-            alliance_id=alliance_id,
-            alliances=alliances_with_counts,
-        )
-
-        async def member_callback(member_interaction: discord.Interaction,
-                                  selected_fids=None, delete_all=False):
-            if delete_all or (selected_fids and len(selected_fids) == len(members)):
-                confirm_embed = discord.Embed(
-                    title=f"{theme.warnIcon} Confirmation Required",
-                    description=(
-                        f"A total of **{len(members)}** members will be deleted.\n"
-                        f"Do you confirm?"
-                    ),
-                    color=theme.emColor2,
-                )
-                confirm_view = discord.ui.View()
-                confirm_button = discord.ui.Button(
-                    label=f"{theme.verifiedIcon} Confirm",
-                    style=discord.ButtonStyle.danger,
-                    custom_id="confirm_all",
-                )
-                cancel_button = discord.ui.Button(
-                    label=f"{theme.deniedIcon} Cancel",
-                    style=discord.ButtonStyle.secondary,
-                    custom_id="cancel_all",
-                )
-                confirm_view.add_item(confirm_button)
-                confirm_view.add_item(cancel_button)
-
-                async def confirm_callback(confirm_interaction: discord.Interaction):
-                    if confirm_interaction.data["custom_id"] == "confirm_all":
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute(
-                                "SELECT fid, nickname FROM users WHERE alliance = ?",
-                                (alliance_id,),
-                            )
-                            removed_members = cursor.fetchall()
-                            cursor.execute(
-                                "DELETE FROM users WHERE alliance = ?",
-                                (alliance_id,),
-                            )
-                            users_db.commit()
-
-                        try:
-                            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                                cursor = settings_db.cursor()
-                                cursor.execute(
-                                    "SELECT channel_id FROM alliance_logs "
-                                    "WHERE alliance_id = ?",
-                                    (alliance_id,),
-                                )
-                                alliance_log_result = cursor.fetchone()
-
-                                if alliance_log_result and alliance_log_result[0]:
-                                    log_embed = discord.Embed(
-                                        title=f"{theme.trashIcon} Mass Member Removal",
-                                        description=(
-                                            f"**Alliance:** {alliance_name}\n"
-                                            f"**Administrator:** "
-                                            f"{confirm_interaction.user.name} "
-                                            f"(`{confirm_interaction.user.id}`)\n"
-                                            f"**Date:** "
-                                            f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                            f"**Total Members Removed:** "
-                                            f"{len(removed_members)}\n\n"
-                                            "**Removed Members:**\n```\n"
-                                            + "\n".join(
-                                                f"ID{idx+1}: {fid}"
-                                                for idx, (fid, _) in enumerate(removed_members[:20])
-                                            )
-                                            + (
-                                                f"\n... and {len(removed_members) - 20} more"
-                                                if len(removed_members) > 20 else ""
-                                            )
-                                            + "\n```"
-                                        ),
-                                        color=theme.emColor2,
-                                    )
-                                    try:
-                                        ch_id = int(alliance_log_result[0])
-                                        ch = self.bot.get_channel(ch_id)
-                                        if ch:
-                                            await ch.send(embed=log_embed)
-                                    except Exception as e:
-                                        logger.error(f"Alliance Log Sending Error: {e}")
-                        except Exception as e:
-                            logger.error(f"Log record error: {e}")
-
-                        success_embed = discord.Embed(
-                            title=f"{theme.verifiedIcon} Members Deleted",
-                            description=(
-                                f"A total of **{len(removed_members)}** members "
-                                f"have been successfully deleted."
-                            ),
-                            color=theme.emColor3,
-                        )
-                        await confirm_interaction.response.edit_message(
-                            embed=success_embed, view=None
-                        )
-                    else:
-                        cancel_embed = discord.Embed(
-                            title=f"{theme.deniedIcon} Operation Cancelled",
-                            description="Member deletion operation has been cancelled.",
-                            color=theme.emColor4,
-                        )
-                        await confirm_interaction.response.edit_message(
-                            embed=cancel_embed, view=None
-                        )
-
-                confirm_button.callback = confirm_callback
-                cancel_button.callback = confirm_callback
-                await member_interaction.response.edit_message(
-                    embed=confirm_embed, view=confirm_view
-                )
-
-            elif selected_fids:
-                try:
-                    with sqlite3.connect('db/users.sqlite') as users_db:
-                        cursor = users_db.cursor()
-                        placeholders = ','.join('?' * len(selected_fids))
-                        cursor.execute(
-                            f"SELECT fid, nickname FROM users WHERE fid IN ({placeholders})",
-                            selected_fids,
-                        )
-                        removed_members = cursor.fetchall()
-                        cursor.execute(
-                            f"DELETE FROM users WHERE fid IN ({placeholders})",
-                            selected_fids,
-                        )
-                        users_db.commit()
-
-                    try:
-                        with sqlite3.connect('db/settings.sqlite') as settings_db:
-                            cursor = settings_db.cursor()
-                            cursor.execute(
-                                "SELECT channel_id FROM alliance_logs "
-                                "WHERE alliance_id = ?",
-                                (alliance_id,),
-                            )
-                            alliance_log_result = cursor.fetchone()
-                            if alliance_log_result and alliance_log_result[0]:
-                                log_embed = discord.Embed(
-                                    title=f"{theme.trashIcon} Bulk Member Removal",
-                                    description=(
-                                        f"**Alliance:** {alliance_name}\n"
-                                        f"**Administrator:** "
-                                        f"{member_interaction.user.name} "
-                                        f"(`{member_interaction.user.id}`)\n"
-                                        f"**Date:** "
-                                        f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                        f"**Total Members Removed:** "
-                                        f"{len(removed_members)}\n\n"
-                                        "**Removed Members:**\n```\n"
-                                        + "\n".join(
-                                            f"ID{idx+1}: {fid} - {nickname}"
-                                            for idx, (fid, nickname) in enumerate(removed_members[:20])
-                                        )
-                                        + (
-                                            f"\n... and {len(removed_members) - 20} more"
-                                            if len(removed_members) > 20 else ""
-                                        )
-                                        + "\n```"
-                                    ),
-                                    color=theme.emColor2,
-                                )
-                                try:
-                                    ch_id = int(alliance_log_result[0])
-                                    ch = self.bot.get_channel(ch_id)
-                                    if ch:
-                                        await ch.send(embed=log_embed)
-                                except Exception as e:
-                                    logger.error(f"Alliance Log Sending Error: {e}")
-                    except Exception as e:
-                        logger.error(f"Log record error: {e}")
-
-                    success_embed = discord.Embed(
-                        title=f"{theme.verifiedIcon} Members Deleted",
-                        description=(
-                            f"Successfully deleted **{len(removed_members)}** member(s)."
-                        ),
-                        color=theme.emColor3,
-                    )
-                    try:
-                        await member_interaction.response.edit_message(
-                            embed=success_embed, view=None
-                        )
-                    except Exception:
-                        await member_interaction.edit_original_response(
-                            embed=success_embed, view=None
-                        )
-
-                except Exception as e:
-                    logger.error(f"Error in bulk member removal: {e}")
-                    print(f"Error in bulk member removal: {e}")
-                    error_embed = discord.Embed(
-                        title=f"{theme.deniedIcon} Error",
-                        description="An error occurred during member removal.",
-                        color=theme.emColor2,
-                    )
-                    try:
-                        await member_interaction.response.send_message(
-                            embed=error_embed, ephemeral=True
-                        )
-                    except Exception:
-                        await member_interaction.followup.send(
-                            embed=error_embed, ephemeral=True
-                        )
-
-        member_view.callback = member_callback
-        await interaction.response.edit_message(embed=member_embed, view=member_view)
 
     async def show_export_members(self, interaction: discord.Interaction):
         """Direct entry to Export Members flow (skip the operations sub-menu)."""
@@ -1674,510 +1389,6 @@ class AllianceMemberOperations(commands.Cog):
                 f"{theme.deniedIcon} An error occurred during the transfer operation.",
                 ephemeral=True
             )
-
-    async def handle_member_operations(self, interaction: discord.Interaction):
-        embed = discord.Embed(
-            title=f"{theme.userIcon} Alliance Member Operations",
-            description=(
-                "Add, remove, move, view and export your alliance members here.\n\n"
-                "**Available Operations**\n"
-                f"{theme.upperDivider}\n"
-                f"{theme.addIcon} **Add Members**\n"
-                f"└ Add new members by ID or CSV/TSV import\n\n"
-                f"{theme.minusIcon} **Remove Members**\n"
-                f"└ Remove members from an alliance\n\n"
-                f"{theme.retryIcon} **Transfer Members**\n"
-                f"└ Move members to another alliance\n\n"
-                f"{theme.membersIcon} **View Members**\n"
-                f"└ Browse the alliance member list\n\n"
-                f"{theme.chartIcon} **Export Members**\n"
-                f"└ Save member data to a CSV or TSV file\n"
-                f"{theme.lowerDivider}"
-            ),
-            color=theme.emColor1
-        )
-        
-        embed.set_footer(text="Select an option to continue")
-
-        class MemberOperationsView(discord.ui.View):
-            def __init__(self, cog):
-                super().__init__(timeout=7200)
-                self.cog = cog
-                self.bot = cog.bot
-
-            @discord.ui.button(
-                label="Add Members",
-                emoji=theme.addIcon,
-                style=discord.ButtonStyle.success,
-                custom_id="add_member",
-                row=0
-            )
-            async def add_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                try:
-                    alliances, is_global = PermissionManager.get_admin_alliances(
-                        button_interaction.user.id,
-                        button_interaction.guild_id
-                    )
-
-                    if not alliances:
-                        await button_interaction.response.send_message(
-                            f"{theme.deniedIcon} No alliances found for your permissions.",
-                            ephemeral=True
-                        )
-                        return
-
-                    select_embed = discord.Embed(
-                        title=f"{theme.listIcon} Alliance Selection",
-                        description=(
-                            f"Please select an alliance to add members:\n\n"
-                            f"**Permission Details**\n"
-                            f"{theme.upperDivider}\n"
-                            f"{theme.userIcon} **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
-                            f"{theme.searchIcon} **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
-                            f"{theme.chartIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{theme.lowerDivider}"
-                        ),
-                        color=theme.emColor3
-                    )
-
-                    alliances_with_counts = []
-                    for alliance_id, name in alliances:
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                            member_count = cursor.fetchone()[0]
-                            alliances_with_counts.append((alliance_id, name, member_count))
-
-                    view = AllianceSelectView(alliances_with_counts, self.cog)
-                    
-                    async def select_callback(interaction: discord.Interaction):
-                        alliance_id = int(view.current_select.values[0])
-                        await interaction.response.send_modal(AddMemberModal(alliance_id))
-
-                    view.callback = select_callback
-                    await button_interaction.response.send_message(
-                        embed=select_embed,
-                        view=view,
-                        ephemeral=True
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error in add_member_button: {e}")
-                    await button_interaction.response.send_message(
-                        "An error occurred while processing your request.", 
-                        ephemeral=True
-                    )
-
-            @discord.ui.button(
-                label="Remove Members",
-                emoji=theme.minusIcon,
-                style=discord.ButtonStyle.danger,
-                custom_id="remove_member",
-                row=0
-            )
-            async def remove_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                try:
-                    alliances, is_global = PermissionManager.get_admin_alliances(
-                        button_interaction.user.id,
-                        button_interaction.guild_id
-                    )
-
-                    if not alliances:
-                        await button_interaction.response.send_message(
-                            f"{theme.deniedIcon} Your authorized alliance was not found.",
-                            ephemeral=True
-                        )
-                        return
-
-                    select_embed = discord.Embed(
-                        title=f"{theme.trashIcon} Alliance Selection - Member Deletion",
-                        description=(
-                            f"Please select an alliance to remove members:\n\n"
-                            f"**Permission Details**\n"
-                            f"{theme.upperDivider}\n"
-                            f"{theme.userIcon} **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
-                            f"{theme.searchIcon} **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
-                            f"{theme.chartIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{theme.lowerDivider}"
-                        ),
-                        color=theme.emColor2
-                    )
-
-                    alliances_with_counts = []
-                    for alliance_id, name in alliances:
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                            member_count = cursor.fetchone()[0]
-                            alliances_with_counts.append((alliance_id, name, member_count))
-
-                    view = AllianceSelectView(alliances_with_counts, self.cog)
-                    
-                    async def select_callback(interaction: discord.Interaction):
-                        alliance_id = int(view.current_select.values[0])
-                        
-                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                            cursor = alliance_db.cursor()
-                            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                            alliance_name = cursor.fetchone()[0]
-                        
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("""
-                                SELECT fid, nickname, furnace_lv 
-                                FROM users 
-                                WHERE alliance = ? 
-                                ORDER BY furnace_lv DESC, nickname
-                            """, (alliance_id,))
-                            members = cursor.fetchall()
-                            
-                        if not members:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon} No members found in this alliance.", 
-                                ephemeral=True
-                            )
-                            return
-
-                        max_fl = max(member[2] for member in members)
-                        avg_fl = sum(member[2] for member in members) / len(members)
-
-                        member_embed = discord.Embed(
-                            title=f"{theme.userIcon} {alliance_name} -  Member Selection",
-                            description=(
-                                "```ml\n"
-                                "Alliance Statistics\n"
-                                "══════════════════════════\n"
-                                f"{theme.chartIcon} Total Member     : {len(members)}\n"
-                                f"{theme.levelIcon} Highest Level    : {self.cog.level_mapping.get(max_fl, str(max_fl))}\n"
-                                f"{theme.chartIcon} Average Level    : {self.cog.level_mapping.get(int(avg_fl), str(int(avg_fl)))}\n"
-                                "══════════════════════════\n"
-                                "```\n"
-                                "Select the member you want to delete:"
-                            ),
-                            color=theme.emColor2
-                        )
-
-                        member_view = MemberSelectView(
-                            members,
-                            alliance_name,
-                            self.cog,
-                            is_remove_operation=True,
-                            alliance_id=alliance_id,
-                            alliances=alliances_with_counts
-                        )
-
-                        async def member_callback(member_interaction: discord.Interaction, selected_fids=None, delete_all=False):
-                            # Handle multi-select or delete all
-                            if delete_all or (selected_fids and len(selected_fids) == len(members)):
-                                # Delete all members
-                                selected_value = "all"
-                                confirm_embed = discord.Embed(
-                                    title=f"{theme.warnIcon} Confirmation Required",
-                                    description=f"A total of **{len(members)}** members will be deleted.\nDo you confirm?",
-                                    color=theme.emColor2
-                                )
-                                
-                                confirm_view = discord.ui.View()
-                                confirm_button = discord.ui.Button(
-                                    label=f"{theme.verifiedIcon} Confirm", 
-                                    style=discord.ButtonStyle.danger, 
-                                    custom_id="confirm_all"
-                                )
-                                cancel_button = discord.ui.Button(
-                                    label=f"{theme.deniedIcon} Cancel", 
-                                    style=discord.ButtonStyle.secondary, 
-                                    custom_id="cancel_all"
-                                )
-                                
-                                confirm_view.add_item(confirm_button)
-                                confirm_view.add_item(cancel_button)
-
-                                async def confirm_callback(confirm_interaction: discord.Interaction):
-                                    if confirm_interaction.data["custom_id"] == "confirm_all":
-                                        with sqlite3.connect('db/users.sqlite') as users_db:
-                                            cursor = users_db.cursor()
-                                            cursor.execute("SELECT fid, nickname FROM users WHERE alliance = ?", (alliance_id,))
-                                            removed_members = cursor.fetchall()
-                                            cursor.execute("DELETE FROM users WHERE alliance = ?", (alliance_id,))
-                                            users_db.commit()
-                                        
-                                        try:
-                                            with sqlite3.connect('db/settings.sqlite') as settings_db:
-                                                cursor = settings_db.cursor()
-                                                cursor.execute("""
-                                                    SELECT channel_id 
-                                                    FROM alliance_logs 
-                                                    WHERE alliance_id = ?
-                                                """, (alliance_id,))
-                                                alliance_log_result = cursor.fetchone()
-                                                
-                                                if alliance_log_result and alliance_log_result[0]:
-                                                    log_embed = discord.Embed(
-                                                        title=f"{theme.trashIcon} Mass Member Removal",
-                                                        description=(
-                                                            f"**Alliance:** {alliance_name}\n"
-                                                            f"**Administrator:** {confirm_interaction.user.name} (`{confirm_interaction.user.id}`)\n"
-                                                            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                                            f"**Total Members Removed:** {len(removed_members)}\n\n"
-                                                            "**Removed Members:**\n"
-                                                            "```\n" + 
-                                                            "\n".join([f"ID{idx+1}: {fid}" for idx, (fid, _) in enumerate(removed_members[:20])]) +
-                                                            (f"\n... and {len(removed_members) - 20} more" if len(removed_members) > 20 else "") +
-                                                            "\n```"
-                                                        ),
-                                                        color=theme.emColor2
-                                                    )
-                                                    
-                                                    try:
-                                                        alliance_channel_id = int(alliance_log_result[0])
-                                                        alliance_log_channel = self.bot.get_channel(alliance_channel_id)
-                                                        if alliance_log_channel:
-                                                            await alliance_log_channel.send(embed=log_embed)
-                                                    except Exception as e:
-                                                        logger.error(f"Alliance Log Sending Error: {e}")
-                                        except Exception as e:
-                                            logger.error(f"Log record error: {e}")
-                                        
-                                        success_embed = discord.Embed(
-                                            title=f"{theme.verifiedIcon} Members Deleted",
-                                            description=f"A total of **{len(removed_members)}** members have been successfully deleted.",
-                                            color=theme.emColor3
-                                        )
-                                        await confirm_interaction.response.edit_message(embed=success_embed, view=None)
-                                    else:
-                                        cancel_embed = discord.Embed(
-                                            title=f"{theme.deniedIcon} Operation Cancelled",
-                                            description="Member deletion operation has been cancelled.",
-                                            color=theme.emColor4
-                                        )
-                                        await confirm_interaction.response.edit_message(embed=cancel_embed, view=None)
-
-                                confirm_button.callback = confirm_callback
-                                cancel_button.callback = confirm_callback
-                                
-                                await member_interaction.response.edit_message(
-                                    embed=confirm_embed,
-                                    view=confirm_view
-                                )
-                            
-                            elif selected_fids:
-                                # Bulk delete selected members
-                                try:
-                                    with sqlite3.connect('db/users.sqlite') as users_db:
-                                        cursor = users_db.cursor()
-                                        placeholders = ','.join('?' * len(selected_fids))
-                                        cursor.execute(f"SELECT fid, nickname FROM users WHERE fid IN ({placeholders})", selected_fids)
-                                        removed_members = cursor.fetchall()
-
-                                        cursor.execute(f"DELETE FROM users WHERE fid IN ({placeholders})", selected_fids)
-                                        users_db.commit()
-
-                                    try:
-                                        with sqlite3.connect('db/settings.sqlite') as settings_db:
-                                            cursor = settings_db.cursor()
-                                            cursor.execute("""
-                                                SELECT channel_id
-                                                FROM alliance_logs
-                                                WHERE alliance_id = ?
-                                            """, (alliance_id,))
-                                            alliance_log_result = cursor.fetchone()
-
-                                            if alliance_log_result and alliance_log_result[0]:
-                                                log_embed = discord.Embed(
-                                                    title=f"{theme.trashIcon} Bulk Member Removal",
-                                                    description=(
-                                                        f"**Alliance:** {alliance_name}\n"
-                                                        f"**Administrator:** {member_interaction.user.name} (`{member_interaction.user.id}`)\n"
-                                                        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                                                        f"**Total Members Removed:** {len(removed_members)}\n\n"
-                                                        "**Removed Members:**\n"
-                                                        "```\n" +
-                                                        "\n".join([f"ID{idx+1}: {fid} - {nickname}" for idx, (fid, nickname) in enumerate(removed_members[:20])]) +
-                                                        (f"\n... and {len(removed_members) - 20} more" if len(removed_members) > 20 else "") +
-                                                        "\n```"
-                                                    ),
-                                                    color=theme.emColor2
-                                                )
-
-                                                try:
-                                                    alliance_channel_id = int(alliance_log_result[0])
-                                                    alliance_log_channel = self.bot.get_channel(alliance_channel_id)
-                                                    if alliance_log_channel:
-                                                        await alliance_log_channel.send(embed=log_embed)
-                                                except Exception as e:
-                                                    logger.error(f"Alliance Log Sending Error: {e}")
-                                    except Exception as e:
-                                        logger.error(f"Log record error: {e}")
-
-                                    success_embed = discord.Embed(
-                                        title=f"{theme.verifiedIcon} Members Deleted",
-                                        description=f"Successfully deleted **{len(removed_members)}** member(s).",
-                                        color=theme.emColor3
-                                    )
-                                    try:
-                                        await member_interaction.response.edit_message(embed=success_embed, view=None)
-                                    except Exception:
-                                        await member_interaction.edit_original_response(embed=success_embed, view=None)
-
-                                except Exception as e:
-                                    logger.error(f"Error in bulk member removal: {e}")
-                                    print(f"Error in bulk member removal: {e}")
-                                    error_embed = discord.Embed(
-                                        title=f"{theme.deniedIcon} Error",
-                                        description="An error occurred during member removal.",
-                                        color=theme.emColor2
-                                    )
-                                    try:
-                                        await member_interaction.response.send_message(embed=error_embed, ephemeral=True)
-                                    except Exception:
-                                        await member_interaction.followup.send(embed=error_embed, ephemeral=True)
-
-                        member_view.callback = member_callback
-                        await interaction.response.edit_message(
-                            embed=member_embed,
-                            view=member_view
-                        )
-
-                    view.callback = select_callback
-                    await button_interaction.response.send_message(
-                        embed=select_embed,
-                        view=view,
-                        ephemeral=True
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error in remove_member_button: {e}")
-                    await button_interaction.response.send_message(
-                        f"{theme.deniedIcon} An error occurred during the member deletion process.",
-                        ephemeral=True
-                    )
-
-            @discord.ui.button(
-                label="View Members",
-                emoji=theme.membersIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="view_members",
-                row=1
-            )
-            async def view_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                try:
-                    alliances, is_global = PermissionManager.get_admin_alliances(
-                        button_interaction.user.id,
-                        button_interaction.guild_id
-                    )
-
-                    if not alliances:
-                        await button_interaction.response.send_message(
-                            f"{theme.deniedIcon} No alliance found that you have permission for.",
-                            ephemeral=True
-                        )
-                        return
-
-                    select_embed = discord.Embed(
-                        title=f"{theme.userIcon} Alliance Selection",
-                        description=(
-                            f"Please select an alliance to view members:\n\n"
-                            f"**Permission Details**\n"
-                            f"{theme.upperDivider}\n"
-                            f"{theme.userIcon} **Access Level:** `{'Global Admin' if is_global else 'Alliance Admin'}`\n"
-                            f"{theme.searchIcon} **Access Type:** `{'All Alliances' if is_global else 'Assigned Alliances'}`\n"
-                            f"{theme.chartIcon} **Available Alliances:** `{len(alliances)}`\n"
-                            f"{theme.lowerDivider}"
-                        ),
-                        color=theme.emColor1
-                    )
-
-                    alliances_with_counts = []
-                    for alliance_id, name in alliances:
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("SELECT COUNT(*) FROM users WHERE alliance = ?", (alliance_id,))
-                            member_count = cursor.fetchone()[0]
-                            alliances_with_counts.append((alliance_id, name, member_count))
-
-                    view = AllianceSelectView(alliances_with_counts, self.cog)
-                    
-                    async def select_callback(interaction: discord.Interaction):
-                        alliance_id = int(view.current_select.values[0])
-                        
-                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                            cursor = alliance_db.cursor()
-                            cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
-                            alliance_name = cursor.fetchone()[0]
-                        
-                        with sqlite3.connect('db/users.sqlite') as users_db:
-                            cursor = users_db.cursor()
-                            cursor.execute("""
-                                SELECT fid, nickname, furnace_lv, kid
-                                FROM users
-                                WHERE alliance = ?
-                            """, (alliance_id,))
-                            members = cursor.fetchall()
-
-                        if not members:
-                            await interaction.response.send_message(
-                                f"{theme.deniedIcon} No members found in this alliance.",
-                                ephemeral=True
-                            )
-                            return
-
-                        member_view = MemberListView(
-                            members, alliance_id, alliance_name,
-                            self.cog, interaction.user.id,
-                        )
-
-                        await interaction.response.edit_message(
-                            content=f"{theme.verifiedIcon} Member list has been generated and posted below.",
-                            embed=None,
-                            view=None,
-                        )
-
-                        message = await interaction.channel.send(
-                            embed=member_view.build_embed(),
-                            view=member_view,
-                        )
-                        member_view.message = message
-
-                    view.callback = select_callback
-                    await button_interaction.response.send_message(
-                        embed=select_embed,
-                        view=view,
-                        ephemeral=True
-                    )
-
-                except Exception as e:
-                    logger.error(f"Error in view_members_button: {e}")
-                    if not button_interaction.response.is_done():
-                        await button_interaction.response.send_message(
-                            f"{theme.deniedIcon} An error occurred while displaying the member list.",
-                            ephemeral=True
-                        )
-
-            @discord.ui.button(
-                label="Export Members",
-                emoji=theme.chartIcon,
-                style=discord.ButtonStyle.primary,
-                custom_id="export_members",
-                row=1
-            )
-            async def export_members_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                await self.cog.show_export_members(button_interaction)
-            
-            @discord.ui.button(
-                label="Back",
-                emoji=theme.backIcon,
-                style=discord.ButtonStyle.secondary,
-                row=2
-            )
-            async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                await self.cog.back_to_alliance_management(interaction)
-
-            @discord.ui.button(label="Transfer Members", emoji=theme.retryIcon, style=discord.ButtonStyle.primary, row=0)
-            async def transfer_member_button(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                await self.cog.show_transfer_members(button_interaction)
-
-        view = MemberOperationsView(self)
-        await interaction.response.edit_message(embed=embed, view=view)
 
     def _get_queue_size(self) -> int:
         """Get the current ProcessQueue size, or 0 if unavailable."""
@@ -2808,16 +2019,6 @@ class AllianceMemberOperations(commands.Cog):
         self.conn_users.close()
         self.conn_alliance.close()
 
-    async def get_admin_alliances(self, user_id: int, guild_id: int):
-        """Get alliances for admin from centralized PermissionManager"""
-        return PermissionManager.get_admin_alliances(user_id, guild_id)
-
-    async def handle_button_interaction(self, interaction: discord.Interaction):
-        custom_id = interaction.data["custom_id"]
-        
-        if custom_id == "main_menu":
-            await self.back_to_alliance_management(interaction)
-    
     async def process_member_export(self, interaction: discord.Interaction, alliance_id, alliance_name: str, selected_columns: list, export_format: str, prefiltered_members: list | None = None):
         """Process the member export with selected columns and format.
         When prefiltered_members is provided, uses it instead of querying DB."""

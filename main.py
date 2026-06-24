@@ -1281,7 +1281,12 @@ if __name__ == "__main__":
     async def on_ready():
         try:
             startup.phase_ok(f"Connected to Discord as {bot.user}")
-            await bot.tree.sync()
+            # Sync once per process — on_ready re-fires on reconnect; commands are static.
+            if not getattr(bot, '_commands_synced', False):
+                startup.phase_start("Syncing slash commands with Discord")
+                await bot.tree.sync()
+                bot._commands_synced = True
+                startup.phase_ok("Slash commands synced with Discord")
 
             # API health checks
             try:

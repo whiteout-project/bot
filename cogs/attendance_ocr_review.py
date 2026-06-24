@@ -72,41 +72,6 @@ def _parse_value_input(raw: Optional[str]) -> Optional[int]:
     return int(digits) if digits else None
 
 
-def _add_paginated_field(embed: discord.Embed, header: str, lines: list[str],
-                         *, max_fields: int = 4, budget: int = 1000) -> None:
-    """Split a long list of lines across multiple embed fields. Discord caps
-    each field at 1024 chars; we leave headroom and cap total fields so we
-    don't blow the 6000-char embed budget either."""
-    if not lines:
-        return
-    chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
-    for line in lines:
-        if current and current_len + len(line) + 1 > budget:
-            chunks.append("\n".join(current))
-            current = []
-            current_len = 0
-            if len(chunks) >= max_fields - 1:
-                # Last field — pack everything remaining (still respecting 1024)
-                rest = "\n".join([line] + lines[lines.index(line) + 1:])
-                if len(rest) > 1024:
-                    rest = rest[:1010] + "\n…(truncated)"
-                chunks.append(rest)
-                break
-        current.append(line)
-        current_len += len(line) + 1
-    else:
-        if current:
-            chunks.append("\n".join(current))
-
-    for i, chunk in enumerate(chunks):
-        # Continuation fields use a zero-width space as their name so Discord
-        # doesn't render the same header twice.
-        name = header if i == 0 else "​"
-        embed.add_field(name=name[:256], value=chunk, inline=False)
-
-
 def _format_compact(n: Optional[int]) -> str:
     if n is None:
         return "—"

@@ -72,7 +72,8 @@ def get_headers(origin: str = None) -> dict:
     
     headers = {
         'accept': 'application/json, text/plain, */*',
-        'accept-encoding': 'gzip, deflate, br, zstd',
+        # No br/zstd: aiohttp can't decode them here and would 400 on servers that send them.
+        'accept-encoding': 'gzip, deflate',
         'accept-language': 'en-US,en;q=0.9',
         'content-type': 'application/x-www-form-urlencoded',
         'priority': 'u=1, i',

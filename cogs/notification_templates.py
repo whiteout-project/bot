@@ -12,7 +12,7 @@ from typing import Optional, Dict, List
 # Import event type configuration
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
-from notification_event_types import EVENT_CONFIG, get_event_types, get_event_icon, get_event_config
+from notification_event_types import EVENT_CONFIG, get_event_icon, get_event_config
 from .pimp_my_bot import theme
 from .permission_handler import PermissionManager
 

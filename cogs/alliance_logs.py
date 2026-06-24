@@ -5,7 +5,6 @@ import discord
 from discord.ext import commands
 import sqlite3
 import logging
-from datetime import datetime
 from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
 from .pimp_my_bot import theme, safe_edit_message

@@ -57,13 +57,12 @@ class Alliance(commands.Cog):
                 conn.commit()
 
     async def cog_unload(self):
-        """Close database connections when cog is unloaded."""
-        for conn_name in ['conn_users', 'conn_settings', 'conn_giftcode']:
-            if hasattr(self, conn_name):
-                try:
-                    getattr(self, conn_name).close()
-                except Exception:
-                    pass
+        """Close the database connection when the cog is unloaded."""
+        if getattr(self, 'conn', None) is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
 
     async def view_alliances(self, interaction: discord.Interaction):
         

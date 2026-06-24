@@ -48,6 +48,10 @@ DISK_FREE_ERROR_MB = 100
 DISK_USED_PCT_WARNING = 90
 DISK_USED_PCT_ERROR = 95
 
+# Container RAM usage thresholds (percent of the cgroup limit).
+MEM_USED_PCT_WARNING = 85
+MEM_USED_PCT_ERROR = 95
+
 # Active log file names (files that should not be archived)
 ACTIVE_LOG_NAMES = [
     # Category logs written by the RotatingFileHandlers in main.setup_logging —
@@ -394,40 +398,62 @@ class BotHealth(commands.Cog):
             'message': f'{total_mb:.1f} MB'
         }
 
-    def get_disk_health(self) -> dict:
-        """Disk space at the bot's working directory. Status warns when free
-        space is low so admins notice before backups/logs start failing.
-        Tuned for small VPS hosts — error fires under 100 MB, warning under
-        500 MB (the bot's stated minimum)."""
+    @staticmethod
+    def _fmt_storage(mb: float) -> str:
+        return f"{mb / 1024:.0f} GB" if mb >= 1024 else f"{mb:.0f} MB"
+
+    @staticmethod
+    def _server_disk_quota_mb() -> float | None:
+        """Container disk quota in MiB from the host-injected SERVER_DISK var
+        (pterodactyl/wings sets it automatically). 0 means unlimited."""
+        raw = os.environ.get('SERVER_DISK')
         try:
-            total, used, free = shutil.disk_usage(".")
-        except Exception:
-            return {
-                'status': STATUS_WARNING,
-                'free_mb': 0, 'total_mb': 0, 'used_pct': 0,
-                'message': 'Disk usage unavailable',
-            }
+            mb = float(raw)
+            return mb if mb > 0 else None
+        except (TypeError, ValueError):
+            return None
 
-        total_mb = total / (1024 * 1024)
-        free_mb = free / (1024 * 1024)
-        used_pct = (used / total) * 100 if total else 0
+    def get_disk_health(self) -> dict:
+        """Disk usage with a warn/error as space runs low. On a container the
+        host filesystem isn't ours to measure, so report the bot directory (the
+        server's disk) against its quota; on bare hosts, the real filesystem."""
+        container = is_container()
+        if container:
+            used_mb = self._bot_footprint_mb
+            if used_mb is None:
+                return {'status': STATUS_HEALTHY, 'free_mb': 0, 'total_mb': 0,
+                        'used_pct': 0, 'message': 'Calculating...'}
+            quota_mb = self._server_disk_quota_mb()
+            if not quota_mb:
+                return {'status': STATUS_HEALTHY, 'free_mb': 0, 'total_mb': used_mb,
+                        'used_pct': 0, 'message': f"{self._fmt_storage(used_mb)} used"}
+            free_mb = max(0, quota_mb - used_mb)
+            used_pct = (used_mb / quota_mb) * 100
+        else:
+            try:
+                total, used, free = shutil.disk_usage(".")
+            except Exception:
+                return {'status': STATUS_WARNING, 'free_mb': 0, 'total_mb': 0,
+                        'used_pct': 0, 'message': 'Disk usage unavailable'}
+            quota_mb = total / (1024 * 1024)
+            free_mb = free / (1024 * 1024)
+            used_pct = (used / total) * 100 if total else 0
 
-        if free_mb < DISK_FREE_ERROR_MB or used_pct >= DISK_USED_PCT_ERROR:
+        # Container quotas use percent thresholds; the absolute-MB floors are
+        # tuned for bare VPS disks and too twitchy for a small container quota.
+        if used_pct >= DISK_USED_PCT_ERROR or (not container and free_mb < DISK_FREE_ERROR_MB):
             status = STATUS_ERROR
-        elif free_mb < DISK_FREE_WARNING_MB or used_pct >= DISK_USED_PCT_WARNING:
+        elif used_pct >= DISK_USED_PCT_WARNING or (not container and free_mb < DISK_FREE_WARNING_MB):
             status = STATUS_WARNING
         else:
             status = STATUS_HEALTHY
 
-        def _fmt(mb):
-            return f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb:.0f} MB"
-
         return {
             'status': status,
             'free_mb': free_mb,
-            'total_mb': total_mb,
+            'total_mb': quota_mb,
             'used_pct': used_pct,
-            'message': f"{_fmt(free_mb)} free of {_fmt(total_mb)} ({used_pct:.0f}% used)",
+            'message': f"{self._fmt_storage(quota_mb - free_mb)} / {self._fmt_storage(quota_mb)} · {used_pct:.0f}% used",
         }
 
     def get_log_health(self) -> dict:
@@ -619,6 +645,43 @@ class BotHealth(commands.Cog):
 
         return results
 
+    @staticmethod
+    def _read_container_memory() -> tuple | None:
+        """Container RAM (used_mb, limit_mb) from cgroup, or None off-container.
+        'Used' is the working set (usage minus inactive file cache) to match what
+        Docker/pterodactyl report; limit_mb is None when the cgroup is unlimited."""
+        def _read_int(path):
+            with open(path) as f:
+                return int(f.read().strip())
+
+        def _stat_value(path, key):
+            with open(path) as f:
+                for line in f:
+                    if line.startswith(key + ' '):
+                        return int(line.split()[1])
+            return 0
+
+        try:
+            if os.path.exists('/sys/fs/cgroup/memory.current'):  # cgroup v2
+                usage = _read_int('/sys/fs/cgroup/memory.current')
+                inactive = _stat_value('/sys/fs/cgroup/memory.stat', 'inactive_file')
+                raw = open('/sys/fs/cgroup/memory.max').read().strip()
+                limit = None if raw == 'max' else int(raw)
+            elif os.path.exists('/sys/fs/cgroup/memory/memory.usage_in_bytes'):  # cgroup v1
+                usage = _read_int('/sys/fs/cgroup/memory/memory.usage_in_bytes')
+                inactive = _stat_value('/sys/fs/cgroup/memory/memory.stat', 'total_inactive_file')
+                limit = _read_int('/sys/fs/cgroup/memory/memory.limit_in_bytes')
+                if limit > (1 << 62):  # v1 unlimited sentinel
+                    limit = None
+            else:
+                return None
+        except (OSError, ValueError):
+            return None
+
+        used_mb = max(0, usage - inactive) / (1024 * 1024)
+        limit_mb = (limit / (1024 * 1024)) if limit else None
+        return used_mb, limit_mb
+
     def get_system_health(self) -> dict:
         """Get system health info"""
         # Uptime
@@ -648,13 +711,31 @@ class BotHealth(commands.Cog):
         if is_container():
             platform_name = "Container"
 
+        # Memory (containers only — cgroup gives both usage and the limit)
+        mem = self._read_container_memory()
+        memory_msg = None
+        memory_status = STATUS_HEALTHY
+        if mem:
+            used_mb, limit_mb = mem
+            if limit_mb:
+                mem_pct = (used_mb / limit_mb) * 100
+                if mem_pct >= MEM_USED_PCT_ERROR:
+                    memory_status = STATUS_ERROR
+                elif mem_pct >= MEM_USED_PCT_WARNING:
+                    memory_status = STATUS_WARNING
+                memory_msg = f"{used_mb:.0f} / {limit_mb:.0f} MiB · {mem_pct:.0f}%"
+            else:
+                memory_msg = f"{used_mb:.0f} MiB"
+
         return {
             'uptime': uptime_str,
             'latency_ms': latency_ms,
             'latency_status': latency_status,
             'loaded_cogs': loaded_cogs,
             'python_version': python_version,
-            'platform': platform_name
+            'platform': platform_name,
+            'memory_msg': memory_msg,
+            'memory_status': memory_status,
         }
 
     def get_requirements_health(self) -> dict:
@@ -760,6 +841,7 @@ class BotHealth(commands.Cog):
         """Determine overall health status"""
         statuses = [
             db_health['status'], log_health['status'], system_health['latency_status'],
+            system_health.get('memory_status', STATUS_HEALTHY),
             self.get_disk_health()['status'],
         ]
 
@@ -1186,9 +1268,11 @@ class BotHealth(commands.Cog):
 
     @tasks.loop(minutes=15)
     async def update_bot_footprint_loop(self):
-        """Recompute the bot's directory size in a background thread. Cached
-        result is read by the Health dashboard so renders stay instant even
-        on installs with a fat venv."""
+        """Recompute the bot's directory size in a background thread so the Health
+        dashboard's container Disk reads stay instant. Only containers consume it;
+        bare hosts read the real filesystem, so skip the (venv-inclusive) walk."""
+        if not is_container():
+            return
         try:
             mb = await asyncio.to_thread(self._compute_bot_footprint_mb)
             self._bot_footprint_mb = mb
@@ -1201,15 +1285,11 @@ class BotHealth(commands.Cog):
 
     @staticmethod
     def _compute_bot_footprint_mb() -> float:
-        """Sum file sizes under the bot dir (in a thread). Skips hidden dirs,
-        __pycache__, and virtualenvs — not runtime footprint and slow to walk."""
+        """Total on-disk size of the bot dir (in a thread). Includes the venv and
+        caches so it matches the container's real disk usage / quota."""
         bot_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         total = 0
         for root, dirs, files in os.walk(bot_dir):
-            dirs[:] = [
-                d for d in dirs
-                if not d.startswith('.') and d != '__pycache__' and 'venv' not in d
-            ]
             for f in files:
                 try:
                     total += os.path.getsize(os.path.join(root, f))
@@ -1512,14 +1592,7 @@ class BotHealth(commands.Cog):
             onnx_lifecycle.get_status_lines()
         )
         disk_health = self.get_disk_health()
-
-        def fmt_short(mb):
-            return f"{mb / 1024:.0f} GB" if mb >= 1024 else f"{mb:.0f} MB"
-
-        disk_msg = (
-            f"{fmt_short(disk_health['free_mb'])} / {fmt_short(disk_health['total_mb'])} "
-            f"· {disk_health['used_pct']:.0f}% used"
-        )
+        disk_msg = disk_health['message']
 
         uptime = system_health['uptime']
         if uptime.startswith('0h '):
@@ -1542,25 +1615,20 @@ class BotHealth(commands.Cog):
             inline=True,
         )
 
-        embed.add_field(
-            name="System",
-            value=(
-                f"{theme.timeIcon} **Uptime:** {uptime}\n"
-                f"{theme.boltIcon} {status_prefix(system_health['latency_status'])}**Latency:** {system_health['latency_ms']}ms\n"
-                f"{theme.settingsIcon} **Cogs:** {system_health['loaded_cogs']}\n"
-                f"{theme.infoIcon} **Python:** {system_health['python_version']} on {system_health['platform']}"
-            ),
-            inline=True,
-        )
-
-        if self._bot_footprint_mb is None:
-            footprint_str = "—"
-        else:
-            footprint_str = fmt_short(self._bot_footprint_mb)
+        system_lines = [
+            f"{theme.timeIcon} **Uptime:** {uptime}",
+            f"{theme.boltIcon} {status_prefix(system_health['latency_status'])}**Latency:** {system_health['latency_ms']}ms",
+            f"{theme.settingsIcon} **Cogs:** {system_health['loaded_cogs']}",
+            f"{theme.infoIcon} **Python:** {system_health['python_version']} on {system_health['platform']}",
+        ]
+        if system_health.get('memory_msg'):
+            system_lines.append(
+                f"{theme.chartIcon} {status_prefix(system_health['memory_status'])}**Memory:** {system_health['memory_msg']}"
+            )
+        embed.add_field(name="System", value="\n".join(system_lines), inline=True)
 
         storage_lines = [
             f"{theme.saveIcon} {status_prefix(disk_health['status'])}**Disk:** {disk_msg}",
-            f"{theme.robotIcon} **Bot Footprint:** {footprint_str}",
             f"{theme.archiveIcon} {status_prefix(db_health['status'])}**Databases:** {db_health['message']}",
             f"{theme.documentIcon} {status_prefix(log_health['status'])}**Logs:** {log_health['message']}",
         ]
@@ -1606,21 +1674,6 @@ class BotHealth(commands.Cog):
         else:
             msg = f"{total} configured"
         return STATUS_HEALTHY, msg
-
-    @staticmethod
-    def _format_age(delta: timedelta) -> str:
-        seconds = int(delta.total_seconds())
-        if seconds < 60:
-            return "just now"
-        if seconds < 3600:
-            mins = seconds // 60
-            return f"{mins} min ago"
-        if seconds < 86400:
-            hours = seconds // 3600
-            return f"{hours}h ago"
-        days = seconds // 86400
-        return f"{days}d ago"
-
 
 class HealthMenuView(discord.ui.View):
     """Main Bot Health menu — flat layout with inline restart confirmation."""

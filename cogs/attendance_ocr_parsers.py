@@ -1846,7 +1846,6 @@ class _PointsSession(OcrUploadSession):
     db_event_type: str = ""
     registration_value_label: str = "Power"
     result_value_label: str = "Points"
-    update_fn_registration = staticmethod(lambda fid, val, ts: None)
 
     def __init__(self, *, alliance_id: int, **kwargs):
         super().__init__(**kwargs)
@@ -2066,14 +2065,12 @@ class FoundryBattleSession(_PointsSession):
     db_event_type = "foundry_battle"
     registration_value_label = "Combat Power"
     result_value_label = "Personal Arsenal Points"
-    update_fn_registration = staticmethod(update_users_combat_power)
 
 
 class CanyonClashSession(_PointsSession):
     db_event_type = "canyon_clash"
     registration_value_label = "Power"
     result_value_label = "Personal Points"
-    update_fn_registration = staticmethod(update_users_power)
 
 
 # ── Alliance Showdown session ─────────────────────────────────────────────

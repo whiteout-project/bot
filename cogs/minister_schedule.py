@@ -9,7 +9,6 @@ import sqlite3
 import logging
 import re
 from datetime import datetime
-import json
 from .pimp_my_bot import theme
 from .login_handler import LoginHandler
 
@@ -325,17 +324,6 @@ class MinisterSchedule(commands.Cog):
                     time_slots.append(f"{hour:02}:{minute:02}")
 
         return time_slots
-
-    async def show_minister_channel_menu(self, interaction: discord.Interaction):
-        # Redirect to the MinisterMenu cog
-        minister_cog = self.bot.get_cog("MinisterMenu")
-        if minister_cog:
-            await minister_cog.show_minister_channel_menu(interaction)
-        else:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Minister Menu module not found.",
-                ephemeral=True
-            )
 
     # Autocomplete handler for appointment type
     async def appointment_autocomplete(self, interaction: discord.Interaction, current: str):

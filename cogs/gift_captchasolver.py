@@ -6,7 +6,6 @@ import io
 import time
 import asyncio
 import logging
-import logging.handlers
 import json
 
 try:
@@ -64,24 +63,6 @@ class GiftCaptchaSolver:
             "failures": 0,
             "start_time": time.time()
         }
-
-    def get_run_stats_report(self):
-        """Get a formatted report of run statistics."""
-        duration = time.time() - self.run_stats["start_time"]
-        success_rate = 0
-        if self.run_stats["total_attempts"] > 0:
-            success_rate = (self.run_stats["successful_decodes"] / self.run_stats["total_attempts"]) * 100
-
-        report = [
-            "\n=== Captcha Solver Statistics ===",
-            f"Total captcha attempts: {self.run_stats['total_attempts']}",
-            f"Successful decodes: {self.run_stats['successful_decodes']}",
-            f"Failures: {self.run_stats['failures']}",
-            f"Success rate: {success_rate:.2f}%",
-            f"Processing time: {duration:.2f} seconds",
-            "=========================================="
-        ]
-        return "\n".join(report)
 
     def _initialize_onnx_model(self):
         """Verify model files exist and load metadata. Defers actual session
@@ -245,6 +226,3 @@ class GiftCaptchaSolver:
             self.logger.exception(f"[Solver] ID {fid}, Attempt {attempt+1}: Exception during ONNX inference: {e}")
             return None, False, "ONNX", 0.0, None
 
-    def get_stats(self):
-        """Get current OCR statistics."""
-        return self.stats

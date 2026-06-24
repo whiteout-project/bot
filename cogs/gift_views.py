@@ -6,7 +6,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
+from .pimp_my_bot import theme, check_interaction_user
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 
@@ -54,26 +54,6 @@ async def get_admin_info(cog, user_id):
     if not is_admin:
         return None
     return (user_id, 1 if is_global else 0)
-
-
-async def get_alliance_names(cog, user_id, is_global=False):
-    if is_global:
-        cog.alliance_cursor.execute("SELECT name FROM alliance_list")
-        return [row[0] for row in cog.alliance_cursor.fetchall()]
-    else:
-        cog.settings_cursor.execute("""
-            SELECT alliances_id FROM adminserver WHERE admin = ?
-        """, (user_id,))
-        alliance_ids = [row[0] for row in cog.settings_cursor.fetchall()]
-
-        if alliance_ids:
-            placeholders = ','.join('?' * len(alliance_ids))
-            cog.alliance_cursor.execute(f"""
-                SELECT name FROM alliance_list
-                WHERE alliance_id IN ({placeholders})
-            """, alliance_ids)
-            return [row[0] for row in cog.alliance_cursor.fetchall()]
-        return []
 
 
 async def get_available_alliances(cog, interaction: discord.Interaction):
@@ -525,41 +505,6 @@ class CreateGiftCodeModal(discord.ui.Modal):
             logger.info(f"[CreateGiftCodeModal] Final result embed sent for code {code}.")
         except Exception as final_edit_err:
             logger.exception(f"[CreateGiftCodeModal] Failed to edit interaction with final result for {code}: {final_edit_err}")
-
-
-class DeleteGiftCodeModal(discord.ui.Modal, title="Delete Gift Code"):
-    def __init__(self, cog):
-        super().__init__()
-        self.cog = cog
-
-    giftcode = discord.ui.TextInput(
-        label="Gift Code",
-        placeholder="Enter the gift code to delete",
-        required=True
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        code = self.giftcode.value
-
-        self.cog.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (code,))
-        if not self.cog.cursor.fetchone():
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Gift code not found!",
-                ephemeral=True
-            )
-            return
-
-        self.cog.cursor.execute("DELETE FROM gift_codes WHERE giftcode = ?", (code,))
-        self.cog.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ?", (code,))
-        self.cog.conn.commit()
-
-        embed = discord.Embed(
-            title=f"{theme.verifiedIcon} Gift Code Deleted",
-            description=f"Gift code `{code}` has been deleted successfully.",
-            color=theme.emColor3
-        )
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 # ---------------------------------------------------------------------------

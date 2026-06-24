@@ -585,11 +585,9 @@ class MainMenuView(discord.ui.View):
 # ============================================================================
 
 async def _route_to_cog(interaction: discord.Interaction, bot, cog_name: str,
-                        method_name: str, *args, fallback_method: str | None = None,
-                        missing_label: str | None = None):
-    """Try cog.method(*args); fall back to cog.fallback_method(interaction) if
-    the primary method doesn't exist yet (used during the staged hub rollout
-    so unconverted sub-cogs still work)."""
+                        method_name: str, *args, missing_label: str | None = None):
+    """Call cog.method(interaction, *args), with friendly errors if the cog or
+    method is unavailable."""
     cog = bot.get_cog(cog_name)
     if cog is None:
         await interaction.response.send_message(
@@ -601,11 +599,6 @@ async def _route_to_cog(interaction: discord.Interaction, bot, cog_name: str,
     if callable(method):
         await method(interaction, *args)
         return
-    if fallback_method:
-        fb = getattr(cog, fallback_method, None)
-        if callable(fb):
-            await fb(interaction)
-            return
     await interaction.response.send_message(
         f"{theme.deniedIcon} {missing_label or cog_name} entry point not found.",
         ephemeral=True,
@@ -717,7 +710,6 @@ class AllianceManagementEntryView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
             "show_add_alliance_for",
-            fallback_method="show_alliance_operations",
             missing_label="Alliance",
         )
 
@@ -742,7 +734,6 @@ class AllianceManagementEntryView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceMemberOperations",
             "show_transfer_members",
-            fallback_method="handle_member_operations",
             missing_label="Member Management",
         )
 
@@ -757,7 +748,6 @@ class AllianceManagementEntryView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceMemberOperations",
             "show_export_members",
-            fallback_method="handle_member_operations",
             missing_label="Member Management",
         )
 
@@ -772,7 +762,6 @@ class AllianceManagementEntryView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
             "sync_all_alliances",
-            fallback_method="show_alliance_operations",
             missing_label="Alliance",
         )
 
@@ -847,7 +836,6 @@ class AllianceHubView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceMemberOperations",
             "show_manage_members_for", self.alliance_id,
-            fallback_method="handle_member_operations",
             missing_label="Member Management",
         )
 
@@ -868,7 +856,6 @@ class AllianceHubView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "BotOperations",
             "show_control_settings_for", self.alliance_id,
-            fallback_method="show_control_settings_menu",
             missing_label="Bot Operations",
         )
 
@@ -878,7 +865,6 @@ class AllianceHubView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
             "show_edit_name_for", self.alliance_id,
-            fallback_method="show_alliance_operations",
             missing_label="Alliance",
         )
 
@@ -888,7 +874,6 @@ class AllianceHubView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "AllianceHistory",
             "show_history_for", self.alliance_id,
-            fallback_method="show_alliance_history_menu",
             missing_label="Alliance History",
         )
 
@@ -914,7 +899,6 @@ class AllianceHubView(discord.ui.View):
         await _route_to_cog(
             interaction, self.cog.bot, "Alliance",
             "show_delete_alliance_for", self.alliance_id,
-            fallback_method="show_alliance_operations",
             missing_label="Alliance",
         )
 

@@ -404,17 +404,6 @@ class BotOperations(commands.Cog):
                         ephemeral=True
                     )
 
-    async def confirm_permission_removal(self, admin_id: int, alliance_id: int, confirm_interaction: discord.Interaction):
-        try:
-            self.settings_cursor.execute("""
-                DELETE FROM adminserver 
-                WHERE admin = ? AND alliances_id = ?
-            """, (admin_id, alliance_id))
-            self.settings_db.commit()
-            return True
-        except Exception as e:
-            return False
-
     @staticmethod
     def _is_stable_upgrade(current_version: str, latest_tag: str) -> bool:
         """True if latest_tag is a strictly newer vX.Y.Z. Unparseable current
@@ -475,34 +464,6 @@ class BotOperations(commands.Cog):
             print(f"Error checking for updates: {e}")
             return None, None, [], False
     
-    async def show_control_settings_menu(self, interaction: discord.Interaction):
-        """Show the per-alliance Settings menu (with alliance picker)."""
-        try:
-            if interaction.guild is None:
-                await interaction.response.send_message(f"{theme.deniedIcon} This command must be used in a server.", ephemeral=True)
-                return
-
-            alliances, _ = PermissionManager.get_admin_alliances(interaction.user.id, interaction.guild.id)
-
-            if not alliances:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} No alliances found.",
-                    ephemeral=True
-                )
-                return
-
-            view = SyncSettingsView(self.c_alliance, self.alliance_db, alliances, interaction)
-            await view.update_view(interaction)
-
-        except Exception as e:
-            logger.error(f"Error in show_sync_settings_menu: {e}")
-            print(f"Error in show_sync_settings_menu: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while showing sync settings.",
-                    ephemeral=True
-                )
-
     async def show_control_settings_for(self, interaction: discord.Interaction, alliance_id: int):
         """Hub-context entry: open Settings for a known alliance (no picker)."""
         try:

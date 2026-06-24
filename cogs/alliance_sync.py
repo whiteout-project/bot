@@ -226,14 +226,6 @@ class AllianceSync(commands.Cog):
         self.cursor_settings.execute("DELETE FROM invalid_id_tracker WHERE fid = ?", (fid,))
         self.conn_settings.commit()
 
-    def get_invalid_count(self, fid: str) -> int:
-        """Get current fail count for a player."""
-        self.cursor_settings.execute(
-            "SELECT fail_count FROM invalid_id_tracker WHERE fid = ?", (fid,)
-        )
-        result = self.cursor_settings.fetchone()
-        return result[0] if result else 0
-
     def is_connection_error(self, error_msg: str) -> bool:
         """Check if error message indicates a network/connection issue vs actual player error"""
         network_indicators = [

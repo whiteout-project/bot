@@ -489,9 +489,6 @@ class GiftOperations(commands.Cog):
     async def get_queue_status(self):
         return await gift_redemption.get_queue_status(self)
 
-    async def validate_gift_codes(self, interaction):
-        return await gift_redemption.validate_gift_codes(self, interaction)
-
     async def handle_success(self, message, giftcode):
         from .gift_views import handle_success as _handle
         return await _handle(self, message, giftcode)
@@ -564,10 +561,6 @@ class GiftOperations(commands.Cog):
     async def get_admin_info(self, user_id):
         from .gift_views import get_admin_info as _info
         return await _info(self, user_id)
-
-    async def get_alliance_names(self, user_id, is_global=False):
-        from .gift_views import get_alliance_names as _names
-        return await _names(self, user_id, is_global)
 
     async def get_available_alliances(self, interaction):
         from .gift_views import get_available_alliances as _alliances

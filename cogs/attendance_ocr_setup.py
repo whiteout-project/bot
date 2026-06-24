@@ -140,11 +140,6 @@ def disable_event_for_channel(channel_id: int, event_type: str) -> None:
         conn.commit()
 
 
-def remove_event_from_channel(channel_id: int, event_type: str) -> None:
-    """Back-compat shim — equivalent to disable_event_for_channel."""
-    disable_event_for_channel(channel_id, event_type)
-
-
 def get_ocr_upload_admin_only(alliance_id: int) -> bool:
     """Read the per-alliance "admins only can upload" gate."""
     with sqlite3.connect("db/alliance.sqlite", timeout=30.0) as conn:

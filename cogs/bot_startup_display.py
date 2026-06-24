@@ -110,20 +110,30 @@ def header(version, python_version, flags=None):
     print()
 
 
+_last_phase_len = 0
+
+
 def phase_ok(message):
     """Display a successful phase completion."""
+    global _last_phase_len
     if _IS_TTY:
-        # Overwrite any in-progress line
-        sys.stdout.write(f"\r  {_OK} {message}          \n")
+        # Overwrite the in-progress line, padding enough to clear a longer one.
+        line = f"  {_OK} {message}"
+        pad = max(10, _last_phase_len - len(line))
+        sys.stdout.write("\r" + line + " " * pad + "\n")
         sys.stdout.flush()
+        _last_phase_len = 0
     else:
         print(f"  {_OK} {message}")
 
 
 def phase_start(message):
     """Display an in-progress phase (TTY only, overwritten by phase_ok)."""
+    global _last_phase_len
     if _IS_TTY:
-        sys.stdout.write(f"\r  {_PROGRESS} {message}...")
+        line = f"  {_PROGRESS} {message}..."
+        _last_phase_len = len(line)
+        sys.stdout.write("\r" + line)
         sys.stdout.flush()
 
 

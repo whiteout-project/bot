@@ -322,60 +322,6 @@ class LoginHandler:
             'error_message': last_error,
         }
 
-    async def fetch_player_batch(self, fids: List[str], progress_callback: Optional[Callable] = None, 
-                               alliance_id: Optional[str] = None) -> List[Dict]:
-        """
-        Fetch multiple players efficiently with progress updates
-        
-        Args:
-            fids: List of player IDs
-            progress_callback: async function(current, total, status_msg)
-            alliance_id: Alliance ID for locking (optional)
-            
-        Returns:
-            List of results in same format as fetch_player_data
-        """
-        results = []
-        total = len(fids)
-        
-        # Use alliance lock if provided
-        if alliance_id:
-            async with self.get_alliance_lock(alliance_id):
-                return await self._fetch_batch_internal(fids, progress_callback, total)
-        else:
-            return await self._fetch_batch_internal(fids, progress_callback, total)
-    
-    async def _fetch_batch_internal(self, fids: List[str], progress_callback: Optional[Callable], 
-                                  total: int) -> List[Dict]:
-        """Internal method to fetch batch of players"""
-        results = []
-        
-        for i, fid in enumerate(fids):
-            # Update progress
-            if progress_callback:
-                await progress_callback(i + 1, total, f"Fetching player {i + 1}/{total}")
-            
-            # Fetch player data
-            result = await self.fetch_player_data(fid)
-            results.append(result)
-            
-            # Handle rate limiting
-            if result['status'] == 'rate_limited':
-                wait_time = result.get('wait_time', 60)
-                if progress_callback:
-                    await progress_callback(i + 1, total, f"Rate limited. Waiting {wait_time:.1f}s...")
-                await asyncio.sleep(wait_time)
-                
-                # Retry after wait
-                result = await self.fetch_player_data(fid)
-                results[-1] = result
-            
-            # Add delay between requests
-            if i < total - 1:  # Don't delay after last request
-                await asyncio.sleep(self.request_delay)
-        
-        return results
-    
     def get_mode_text(self, for_console: bool = False) -> str:
         """Get human-readable description of current API mode.
 
@@ -401,20 +347,4 @@ class LoginHandler:
             return f"{theme.boltIcon} Rate: 1 member/2 seconds"
         else:
             return f"{theme.deniedIcon} Service unavailable"
-    
-    def get_rate_limit_info(self) -> Dict[str, int]:
-        """Get current rate limit information"""
-        now = time.time()
-        self.api1_requests = [t for t in self.api1_requests if now - t < self.rate_limit_window]
-        self.api2_requests = [t for t in self.api2_requests if now - t < self.rate_limit_window]
-        
-        return {
-            'api1_used': len(self.api1_requests),
-            'api1_remaining': self.rate_limit_per_api - len(self.api1_requests),
-            'api2_used': len(self.api2_requests),
-            'api2_remaining': self.rate_limit_per_api - len(self.api2_requests),
-            'total_available': (self.rate_limit_per_api - len(self.api1_requests)) + 
-                             (self.rate_limit_per_api - len(self.api2_requests)) if self.dual_api_mode else
-                             (self.rate_limit_per_api - len(self.api1_requests if 1 in self.available_apis else self.api2_requests))
-        }
     

@@ -70,10 +70,6 @@ if LOW_MEM_MODE:
         f"Low-memory mode ON (limit={MEM_LIMIT_MB or '?'} MB): OCR engines load "
         "one at a time and unload immediately after use."
     )
-    print(
-        f"[INFO] Low-memory mode ON (limit={MEM_LIMIT_MB or '?'} MB): "
-        "OCR engines load one at a time."
-    )
 else:
     logger.info(
         f"Low-memory mode OFF (detected limit={MEM_LIMIT_MB or 'none'} MB)."

@@ -348,10 +348,6 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
 
         return next_occurrence
 
-    # Biweekly with two days (Crazy Joe - Tuesday and Thursday)
-    if schedule_type == "global_biweekly":
-        # This is handled above, but for Crazy Joe specifically we need both days
-        pass
 
     return None
 

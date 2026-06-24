@@ -358,22 +358,6 @@ class PermissionManager:
             db.commit()
 
     @staticmethod
-    def set_alliance_assignments(user_id: int, alliance_ids: List[int]) -> None:
-        """Replace an admin's alliance assignments wholesale. Empty list
-        leaves them with zero rows in adminserver (i.e. effective Server
-        Admin tier). For Globals / Owner this is a no-op data-wise
-        because their tier ignores adminserver rows."""
-        with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
-            cur = db.cursor()
-            cur.execute("DELETE FROM adminserver WHERE admin = ?", (user_id,))
-            for aid in alliance_ids or []:
-                cur.execute(
-                    "INSERT OR IGNORE INTO adminserver (admin, alliances_id) VALUES (?, ?)",
-                    (user_id, aid),
-                )
-            db.commit()
-
-    @staticmethod
     def remove_admin(user_id: int) -> None:
         """Delete an admin and all their alliance assignments. Owner is
         guarded — caller must ensure the target isn't the owner."""
