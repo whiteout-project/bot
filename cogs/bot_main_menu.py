@@ -123,7 +123,11 @@ class MainMenu(commands.Cog):
                 f"{theme.lockIcon} **Permissions**\n"
                 f"└ Manage bot administrators (Global Admin only)\n\n"
                 f"{theme.robotIcon} **Maintenance**\n"
-                f"└ Updates, backups, and support\n"
+                f"└ Updates, backups, and support\n\n"
+                f"{theme.shieldIcon} **Discipline Log**\n"
+                f"└ Log and track member infractions\n\n"
+                f"{theme.listIcon} **State Transfer**\n"
+                f"└ Manage outbound state transfer lists\n"
                 f"{theme.lowerDivider}"
             ),
             color=theme.emColor1,
@@ -411,6 +415,36 @@ class MainMenu(commands.Cog):
             logger.error(f"Error in show_maintenance: {e}")
             print(f"Error in show_maintenance: {e}")
 
+    async def show_discipline_log(self, interaction: discord.Interaction):
+        """Display the Discipline Log menu."""
+        try:
+            discipline_cog = self.bot.get_cog("DisciplineCog")
+            if discipline_cog:
+                await discipline_cog.show_disc_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Discipline Log module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Error loading Discipline Log menu: {e}")
+            print(f"Error loading Discipline Log menu: {e}")
+
+    async def show_state_transfer(self, interaction: discord.Interaction):
+        """Display the State Transfer menu."""
+        try:
+            transfer_cog = self.bot.get_cog("TransferCog")
+            if transfer_cog:
+                await transfer_cog.show_transfer_menu(interaction)
+            else:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} State Transfer module not found.",
+                    ephemeral=True
+                )
+        except Exception as e:
+            logger.error(f"Error loading State Transfer menu: {e}")
+            print(f"Error loading State Transfer menu: {e}")
+
 
 # ============================================================================
 # Main Menu View
@@ -578,6 +612,26 @@ class MainMenuView(discord.ui.View):
     )
     async def maintenance_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_maintenance(interaction)
+
+    @discord.ui.button(
+        label="Discipline Log",
+        emoji=theme.shieldIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="discipline_log",
+        row=3
+    )
+    async def discipline_log_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_discipline_log(interaction)
+
+    @discord.ui.button(
+        label="State Transfer",
+        emoji=theme.listIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="state_transfer",
+        row=3
+    )
+    async def state_transfer_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_state_transfer(interaction)
 
 
 # ============================================================================
