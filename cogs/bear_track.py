@@ -71,7 +71,10 @@ DEFAULT_OCR_LANG = "en"
 # falls back to the local engine for that image. Lets a disk-/RAM-constrained
 # host offload OCR to one shared box. Unset = local OCR, unchanged.
 OCR_REMOTE_URL = os.environ.get("OCR_REMOTE_URL", "").strip().rstrip("/")
-OCR_REMOTE_TOKEN = os.environ.get("OCR_REMOTE_TOKEN", "").strip()
+# Shared OCR-engine key, baked in like the gift-code API key so any bot can reach
+# a public instance; sent as X-API-Key. Override via OCR_REMOTE_TOKEN for a
+# private instance (must match that service's OCR_REMOTE_TOKEN).
+OCR_REMOTE_TOKEN = os.environ.get("OCR_REMOTE_TOKEN", "").strip() or "wos_ks_ocr_shared_key"
 try:
     OCR_REMOTE_TIMEOUT = float(os.environ.get("OCR_REMOTE_TIMEOUT", "60"))
 except ValueError:
@@ -669,7 +672,7 @@ async def _remote_ocr_post(path: str, image_bytes: bytes, lang: str):
     """POST an image to the external OCR service. Returns parsed JSON, or None on
     any failure so the caller falls back to the local engine."""
     url = f"{OCR_REMOTE_URL}{path}"
-    headers = {"Authorization": f"Bearer {OCR_REMOTE_TOKEN}"} if OCR_REMOTE_TOKEN else {}
+    headers = {"X-API-Key": OCR_REMOTE_TOKEN}
     try:
         form = aiohttp.FormData()
         form.add_field("lang", lang)

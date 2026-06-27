@@ -14,6 +14,7 @@ from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .login_handler import LoginHandler
 from .bot_level_mapping import LEVEL_MAPPING
+from .alliance import check_alliance_state
 
 logger = logging.getLogger('alliance')
 
@@ -325,6 +326,15 @@ class AllianceIDChannel(commands.Cog):
                 stove_lv_content = result['data'].get('stove_lv_content', None)
                 kid = result['data'].get('kid', None)
                 avatar_image = result['data'].get('avatar_image', None)
+
+                state_error = check_alliance_state(alliance_id, kid)
+                if state_error:
+                    await message.add_reaction(theme.deniedIcon)
+                    await message.reply(
+                        f"{theme.deniedIcon} {state_error}",
+                        delete_after=delete_after,
+                    )
+                    return
 
                 try:
                     with sqlite3.connect('db/users.sqlite') as users_db:

@@ -18,6 +18,7 @@ from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message, disable_expired_view
 from .process_queue import MEMBER_ADD, PreemptedException
 from .bot_level_mapping import LEVEL_MAPPING
+from .alliance import resolve_alliance_kid, state_lock_reason, STATE_CHECK_UNAVAILABLE
 
 logger = logging.getLogger('alliance')
 
@@ -1700,6 +1701,9 @@ class AllianceMemberOperations(commands.Cog):
             # Cooperative preemption: yield to higher-priority work between members
             process_queue_cog = self.bot.get_cog('ProcessQueue')
 
+            # Resolve the alliance's state lock once for the whole batch.
+            kid_ok, locked_kid = resolve_alliance_kid(alliance_id)
+
             index = 0
             while index < len(fids_to_process):
                 # Check for higher-priority work
@@ -1763,6 +1767,26 @@ class AllianceMemberOperations(commands.Cog):
                         furnace_lv = data.get('stove_lv', 0)
                         stove_lv_content = data.get('stove_lv_content', None)
                         kid = data.get('kid', None)
+
+                        state_error = (
+                            STATE_CHECK_UNAVAILABLE if not kid_ok
+                            else state_lock_reason(locked_kid, kid)
+                        )
+                        if state_error:
+                            with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                                log_file.write(f"REJECTED: ID {fid} - {state_error}\n")
+                            error_count += 1
+                            error_users.append(fid)
+                            embed.set_field_at(
+                                1,
+                                name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
+                                value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70
+                                else ", ".join(error_users) or "-",
+                                inline=False
+                            )
+                            await progress.edit(embed)
+                            index += 1
+                            continue
 
                         if nickname:
                             try: # Since we pre-filtered, this ID should not exist in database

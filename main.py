@@ -1239,12 +1239,16 @@ if __name__ == "__main__":
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
                 alliance_id INTEGER PRIMARY KEY,
                 name TEXT,
-                discord_server_id INTEGER
+                discord_server_id INTEGER,
+                kid INTEGER
             )""")
             # Upgrade path: ensure discord_server_id exists before any cog queries it.
             existing_cols = [row[1] for row in conn_alliance.execute("PRAGMA table_info(alliance_list)").fetchall()]
             if "discord_server_id" not in existing_cols:
                 conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN discord_server_id INTEGER")
+            # Upgrade path: per-alliance state lock. NULL = no restriction (legacy behaviour).
+            if "kid" not in existing_cols:
+                conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN kid INTEGER")
 
     create_tables()
     startup.phase_ok("Database ready")
