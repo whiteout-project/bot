@@ -1,7 +1,7 @@
 import sqlite3
 import pytest
 from cogs import attendance_ocr_parsers as parsers
-from cogs import power_changes as pc
+from cogs import alliance_power_changes as pc
 
 
 @pytest.fixture

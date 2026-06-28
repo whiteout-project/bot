@@ -14,7 +14,7 @@ from typing import Optional
 import discord
 
 from .pimp_my_bot import theme
-from . import power_changes
+from . import alliance_power_changes
 
 logger = logging.getLogger("alliance")
 
@@ -978,7 +978,7 @@ def update_users_power(fid: int, power: int, ts_iso: str) -> None:
             (power, ts_iso, fid),
         )
         conn.commit()
-    power_changes.record_change(fid, "power", old, power, ts_iso)
+    alliance_power_changes.record_change(fid, "power", old, power, ts_iso)
 
 
 def update_users_combat_power(fid: int, combat_power: int, ts_iso: str) -> None:
@@ -992,7 +992,7 @@ def update_users_combat_power(fid: int, combat_power: int, ts_iso: str) -> None:
             (combat_power, ts_iso, fid),
         )
         conn.commit()
-    power_changes.record_change(fid, "combat_power", old, combat_power, ts_iso)
+    alliance_power_changes.record_change(fid, "combat_power", old, combat_power, ts_iso)
 
 
 # ── attendance session DB helpers ─────────────────────────────────────────

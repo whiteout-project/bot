@@ -15,7 +15,7 @@ import discord
 from .pimp_my_bot import theme
 from .bear_track import _isolate_rtl, _ltr_line
 from .login_handler import LoginHandler
-from . import power_changes
+from . import alliance_power_changes
 from .attendance_ocr_parsers import (
     EVENT_TYPES,
     _STAT_LABELS,
@@ -1260,12 +1260,12 @@ class EventReviewView(discord.ui.View):
         if matched:
             last_ts = getattr(self, "_last_ts", None)
             fids = [r["fid"] for r in matched]
-            deltas = power_changes.deltas_at(fids, "power", last_ts) if last_ts else {}
+            deltas = alliance_power_changes.deltas_at(fids, "power", last_ts) if last_ts else {}
             sorted_matched = sorted(matched, key=lambda r: -(r["value"] or 0))
             desc.append(f"**{theme.listIcon} Updated Players**")
             for r in sorted_matched:
                 player = r.get("nickname") or r["name"]
-                badge = power_changes.format_delta(deltas[r["fid"]]["pct"]) if r["fid"] in deltas else ""
+                badge = alliance_power_changes.format_delta(deltas[r["fid"]]["pct"]) if r["fid"] in deltas else ""
                 line = f"• **{player}** — `{_format_compact(r['value'])}`"
                 if badge:
                     line += f"  {badge}"

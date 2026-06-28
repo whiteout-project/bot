@@ -1,5 +1,5 @@
 import pytest
-from cogs import power_changes as pc
+from cogs import alliance_power_changes as pc
 
 
 @pytest.fixture

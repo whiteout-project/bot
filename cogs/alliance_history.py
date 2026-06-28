@@ -10,7 +10,7 @@ from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
 from .bot_level_mapping import LEVEL_MAPPING
-from . import power_changes
+from . import alliance_power_changes
 
 logger = logging.getLogger('alliance')
 
@@ -421,10 +421,14 @@ class AllianceHistory(commands.Cog):
                 description=(
                     f"Pick which history to view:\n"
                     f"{theme.upperDivider}\n"
-                    f"{theme.stoveIcon} **Furnace Changes** — track FC level changes over time\n"
-                    f"{theme.editListIcon} **Nickname Changes** — see when members renamed\n"
-                    f"{theme.upIcon} **Power Changes** - track power increase/decrease over time\n"
-                    f"{theme.chartIcon} **Combat Power Changes** - track combat power over time\n"
+                    f"{theme.stoveIcon} **Furnace Changes**\n"
+                    f"└ Track FC level changes over time\n\n"
+                    f"{theme.editListIcon} **Nickname Changes**\n"
+                    f"└ See when members renamed\n\n"
+                    f"{theme.upIcon} **Power Changes**\n"
+                    f"└ Track power increase/decrease over time\n\n"
+                    f"{theme.chartIcon} **Combat Power Changes**\n"
+                    f"└ Track combat power over time\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1,
@@ -497,7 +501,7 @@ class AllianceHistory(commands.Cog):
         label = "Combat Power" if metric == "combat_power" else "Power"
         col = "combat_power" if metric == "combat_power" else "power"
         try:
-            changes = power_changes.history(fid, metric)
+            changes = alliance_power_changes.history(fid, metric)
             if not changes:
                 await interaction.followup.send(
                     f"No {label.lower()} changes found for this player.",
@@ -525,7 +529,7 @@ class AllianceHistory(commands.Cog):
                 color=theme.emColor1,
             )
             for ch in changes:
-                badge = power_changes.format_delta(ch["pct"])
+                badge = alliance_power_changes.format_delta(ch["pct"])
                 embed.add_field(
                     name=f"Change at {ch['change_date'][:10]}",
                     value=f"`{_fmt_power(ch['old'])}` {theme.forwardIcon} "
