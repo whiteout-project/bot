@@ -9,7 +9,9 @@ pytz>=2025.2
 aiohttp-socks>=0.10.1
 python-dotenv>=1.1.0
 onnxruntime>=1.24.1
-rapidocr>=3.6.0
+# Cap below 3.9: newer rapidocr defaults to PP-OCRv6, which drops languages like
+# korean/japan/arabic. Lifting this needs a deliberate move to the new model set.
+rapidocr>=3.8.1,<3.9
 rapidfuzz>=3.14.0
 matplotlib>=3.10.5
 arabic-reshaper>=3.0.0

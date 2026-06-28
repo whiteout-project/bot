@@ -14,6 +14,7 @@ from typing import Optional
 import discord
 
 from .pimp_my_bot import theme
+from . import power_changes
 
 logger = logging.getLogger("alliance")
 
@@ -969,26 +970,35 @@ def fuzzy_match_name(detected: str, roster: list[tuple[int, str]],
 
 
 def update_users_power(fid: int, power: int, ts_iso: str) -> None:
-    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+    with sqlite3.connect(_USERS_DB, timeout=30.0) as conn:
+        row = conn.execute("SELECT power FROM users WHERE fid = ?", (fid,)).fetchone()
+        old = row[0] if row else None
         conn.execute(
             "UPDATE users SET power = ?, power_updated_at = ? WHERE fid = ?",
             (power, ts_iso, fid),
         )
         conn.commit()
+    power_changes.record_change(fid, "power", old, power, ts_iso)
 
 
 def update_users_combat_power(fid: int, combat_power: int, ts_iso: str) -> None:
-    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+    with sqlite3.connect(_USERS_DB, timeout=30.0) as conn:
+        row = conn.execute(
+            "SELECT combat_power FROM users WHERE fid = ?", (fid,)
+        ).fetchone()
+        old = row[0] if row else None
         conn.execute(
             "UPDATE users SET combat_power = ?, combat_power_updated_at = ? WHERE fid = ?",
             (combat_power, ts_iso, fid),
         )
         conn.commit()
+    power_changes.record_change(fid, "combat_power", old, combat_power, ts_iso)
 
 
 # ── attendance session DB helpers ─────────────────────────────────────────
 
 _ATT_DB = "db/attendance.sqlite"
+_USERS_DB = "db/users.sqlite"
 
 # Min similarity to reuse a stored alias key when OCR drifts between screenshots.
 _OCR_ALIAS_FUZZY_MIN = 0.92
