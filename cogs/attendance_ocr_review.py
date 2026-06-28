@@ -15,6 +15,7 @@ import discord
 from .pimp_my_bot import theme
 from .bear_track import _isolate_rtl, _ltr_line
 from .login_handler import LoginHandler
+from . import power_changes
 from .attendance_ocr_parsers import (
     EVENT_TYPES,
     _STAT_LABELS,
@@ -988,6 +989,7 @@ class EventReviewView(discord.ui.View):
             else update_users_power
         )
         ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        self._last_ts = ts
 
         # Power Rankings is a power snapshot, not an event — write users.power for
         # matched rows and record no attendance.
@@ -1243,6 +1245,7 @@ class EventReviewView(discord.ui.View):
         cfg = EVENT_TYPES.get(self.session.event_type)
         label = cfg.label if cfg else self.session.event_type
         updated = getattr(self, "_power_updated_count", 0)
+        matched = [r for r in self.result_rows if r["fid"]]
         unmatched = [r for r in self.result_rows if not r["fid"]]
         desc = [
             f"{theme.upperDivider}",
@@ -1254,6 +1257,19 @@ class EventReviewView(discord.ui.View):
                 f"{theme.warnIcon} `{len(unmatched)}` unmatched row"
                 f"{'s' if len(unmatched) != 1 else ''} skipped — re-upload to assign them."
             )
+        if matched:
+            last_ts = getattr(self, "_last_ts", None)
+            fids = [r["fid"] for r in matched]
+            deltas = power_changes.deltas_at(fids, "power", last_ts) if last_ts else {}
+            sorted_matched = sorted(matched, key=lambda r: -(r["value"] or 0))
+            desc.append(f"**{theme.listIcon} Updated Players**")
+            for r in sorted_matched:
+                player = r.get("nickname") or r["name"]
+                badge = power_changes.format_delta(deltas[r["fid"]]["pct"]) if r["fid"] in deltas else ""
+                line = f"• **{player}** — `{_format_compact(r['value'])}`"
+                if badge:
+                    line += f"  {badge}"
+                desc.append(line)
         desc.append(f"{theme.lowerDivider}")
         return discord.Embed(
             title=f"{theme.verifiedIcon} {label} — Power Recorded",

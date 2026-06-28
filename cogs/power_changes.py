@@ -74,6 +74,7 @@ def _row_to_delta(old, new, change_date):
 def latest_delta(fid, metric):
     if metric not in METRICS:
         return None
+    ensure_tables()
     m = METRICS[metric]
     with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
         row = conn.execute(
@@ -85,17 +86,27 @@ def latest_delta(fid, metric):
 
 
 def latest_deltas(fids, metric):
+    if metric not in METRICS or not fids:
+        return {}
+    ensure_tables()
+    m = METRICS[metric]
+    placeholders = ",".join("?" for _ in fids)
+    with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
+        rows = conn.execute(
+            f"SELECT fid, {m['old_col']}, {m['new_col']}, change_date FROM {m['table']} "
+            f"WHERE fid IN ({placeholders}) ORDER BY change_date ASC, id ASC",
+            tuple(fids),
+        ).fetchall()
     out = {}
-    for fid in fids:
-        d = latest_delta(fid, metric)
-        if d is not None:
-            out[fid] = d
+    for r in rows:
+        out[r[0]] = _row_to_delta(r[1], r[2], r[3])  # ascending so last seen = most recent
     return out
 
 
 def deltas_at(fids, metric, change_date):
     if metric not in METRICS or not fids:
         return {}
+    ensure_tables()
     m = METRICS[metric]
     placeholders = ",".join("?" for _ in fids)
     with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
@@ -110,6 +121,7 @@ def deltas_at(fids, metric, change_date):
 def history(fid, metric):
     if metric not in METRICS:
         return []
+    ensure_tables()
     m = METRICS[metric]
     with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
         rows = conn.execute(

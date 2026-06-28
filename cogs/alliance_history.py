@@ -10,8 +10,20 @@ from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
 from .bot_level_mapping import LEVEL_MAPPING
+from . import power_changes
 
 logger = logging.getLogger('alliance')
+
+
+def _fmt_power(n) -> str:
+    if n is None:
+        return "N/A"
+    n = int(n)
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    return f"{n:,}"
 
 
 async def _open_post_to_channel_picker(interaction: discord.Interaction, embed: discord.Embed):
@@ -54,7 +66,7 @@ class _SingleHistoryResultView(discord.ui.View):
         super().__init__(timeout=7200)
         self.cog = cog
         self.alliance_id = alliance_id
-        self.history_type = history_type  # "furnace" or "nickname"
+        self.history_type = history_type  # "furnace", "nickname", "power", or "combat_power"
         self.embed = embed
 
     @discord.ui.button(label="Back", emoji=f"{theme.backIcon}",
@@ -67,8 +79,16 @@ class _SingleHistoryResultView(discord.ui.View):
             return
         if self.history_type == "furnace":
             await self.cog.show_member_list_furnace(interaction, self.alliance_id)
-        else:
+        elif self.history_type == "nickname":
             await self.cog.show_member_list_nickname(interaction, self.alliance_id)
+        elif self.history_type == "power":
+            await self.cog.show_member_list_power(interaction, self.alliance_id)
+        elif self.history_type == "combat_power":
+            await self.cog.show_member_list_combat_power(interaction, self.alliance_id)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Unknown history type.", ephemeral=True
+            )
 
     @discord.ui.button(label="Post to Channel", emoji=f"{theme.announceIcon}",
                        style=discord.ButtonStyle.primary, row=0)
@@ -403,6 +423,8 @@ class AllianceHistory(commands.Cog):
                     f"{theme.upperDivider}\n"
                     f"{theme.stoveIcon} **Furnace Changes** — track FC level changes over time\n"
                     f"{theme.editListIcon} **Nickname Changes** — see when members renamed\n"
+                    f"{theme.upIcon} **Power Changes** - track power increase/decrease over time\n"
+                    f"{theme.chartIcon} **Combat Power Changes** - track combat power over time\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1,
@@ -469,6 +491,115 @@ class AllianceHistory(commands.Cog):
                 f"{theme.deniedIcon} An error occurred while displaying the member list.",
                 ephemeral=True
             )
+
+    async def show_power_history(self, interaction: discord.Interaction, fid: int,
+                                metric: str = "power"):
+        label = "Combat Power" if metric == "combat_power" else "Power"
+        col = "combat_power" if metric == "combat_power" else "power"
+        try:
+            changes = power_changes.history(fid, metric)
+            if not changes:
+                await interaction.followup.send(
+                    f"No {label.lower()} changes found for this player.",
+                    ephemeral=True,
+                )
+                return
+
+            with sqlite3.connect('db/users.sqlite') as users_db:
+                info = users_db.execute(
+                    f"SELECT nickname, {col}, alliance FROM users WHERE fid = ?",
+                    (fid,),
+                ).fetchone()
+            nickname = info[0] if info else "Unknown"
+            current = info[1] if info else None
+            alliance_id = info[2] if info else None
+
+            embed = discord.Embed(
+                title=f"{theme.chartIcon} {label} History",
+                description=(
+                    f"**Player:** `{nickname}`\n"
+                    f"**ID:** `{fid}`\n"
+                    f"**Current {label}:** `{_fmt_power(current)}`\n"
+                    f"{theme.upperDivider}\n"
+                ),
+                color=theme.emColor1,
+            )
+            for ch in changes:
+                badge = power_changes.format_delta(ch["pct"])
+                embed.add_field(
+                    name=f"Change at {ch['change_date'][:10]}",
+                    value=f"`{_fmt_power(ch['old'])}` {theme.forwardIcon} "
+                          f"`{_fmt_power(ch['new'])}`  {badge}",
+                    inline=False,
+                )
+            await interaction.followup.send(
+                embed=embed,
+                view=_SingleHistoryResultView(self, alliance_id, metric, embed),
+                ephemeral=True,
+            )
+        except Exception as e:
+            logger.error(f"Error in show_power_history ({metric}): {e}")
+            print(f"Error in show_power_history ({metric}): {e}")
+            await interaction.followup.send(
+                f"{theme.deniedIcon} An error occurred while displaying the {label.lower()} history.",
+                ephemeral=True,
+            )
+
+    async def show_member_list_power(self, interaction: discord.Interaction, alliance_id: int):
+        await self._show_member_list_power(interaction, alliance_id, "power")
+
+    async def show_member_list_combat_power(self, interaction: discord.Interaction, alliance_id: int):
+        await self._show_member_list_power(interaction, alliance_id, "combat_power")
+
+    async def _show_member_list_power(self, interaction: discord.Interaction,
+                                      alliance_id: int, metric: str):
+        label = "Combat Power" if metric == "combat_power" else "Power"
+        col = "combat_power" if metric == "combat_power" else "power"
+        icon = theme.chartIcon
+        try:
+            with sqlite3.connect('db/users.sqlite') as users_db:
+                members = users_db.execute(
+                    f"SELECT fid, nickname, {col} FROM users "
+                    f"WHERE alliance = ? ORDER BY {col} DESC, nickname",
+                    (alliance_id,),
+                ).fetchall()
+
+            if not members:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} No members found in this alliance.",
+                    ephemeral=True,
+                )
+                return
+
+            with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                row = alliance_db.execute(
+                    "SELECT name FROM alliance_list WHERE alliance_id = ?",
+                    (alliance_id,),
+                ).fetchone()
+            alliance_name = row[0] if row else f"Alliance {alliance_id}"
+
+            view = MemberListViewPower(self, members, alliance_name, alliance_id, metric)
+            embed = discord.Embed(
+                title=f"{icon} {alliance_name} - Member List",
+                description=(
+                    f"Select a member to view {label.lower()} history:\n"
+                    f"{theme.upperDivider}\n"
+                    f"Total Members: {len(members)}\n"
+                    f"Current Page: 1/{view.total_pages}\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor1,
+            )
+            await interaction.response.edit_message(embed=embed, view=view)
+
+        except Exception as e:
+            logger.error(f"Error in _show_member_list_power ({metric}): {e}")
+            print(f"Error in _show_member_list_power ({metric}): {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} An error occurred while showing the member list.",
+                    ephemeral=True,
+                )
 
     async def show_recent_changes(self, interaction: discord.Interaction, alliance_name: str, match: re.Match):
         time_multipliers = {"h": 1, "d": 24, "mo": 24 * 30}
@@ -602,8 +733,18 @@ class HistoryTypeView(discord.ui.View):
     async def nickname(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_member_list_nickname(interaction, self.alliance_id)
 
+    @discord.ui.button(label="Power Changes", emoji=f"{theme.upIcon}",
+                       style=discord.ButtonStyle.primary, row=1)
+    async def power(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_member_list_power(interaction, self.alliance_id)
+
+    @discord.ui.button(label="Combat Power Changes", emoji=f"{theme.chartIcon}",
+                       style=discord.ButtonStyle.primary, row=1)
+    async def combat_power(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_member_list_combat_power(interaction, self.alliance_id)
+
     @discord.ui.button(label="Back to Hub", emoji=f"{theme.backIcon}",
-                       style=discord.ButtonStyle.secondary, row=1)
+                       style=discord.ButtonStyle.secondary, row=2)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         main_menu = self.cog.bot.get_cog("MainMenu")
         if main_menu and hasattr(main_menu, "show_alliance_hub"):
@@ -1095,6 +1236,123 @@ class NicknameHistoryIDSearchModal(discord.ui.Modal, title="Search by ID"):
                     f"{theme.deniedIcon} An error occurred while searching for the player.",
                     ephemeral=True
                 )
+
+class MemberListViewPower(discord.ui.View):
+    def __init__(self, cog, members, alliance_name, alliance_id, metric):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.members = members
+        self.alliance_name = alliance_name
+        self.alliance_id = alliance_id
+        self.metric = metric
+        self.current_page = 0
+        self.total_pages = (len(members) + 24) // 25
+        self.update_view()
+
+    def update_view(self):
+        self.clear_items()
+
+        label = "Combat Power" if self.metric == "combat_power" else "Power"
+        start_idx = self.current_page * 25
+        end_idx = min(start_idx + 25, len(self.members))
+        current_members = self.members[start_idx:end_idx]
+
+        select = discord.ui.Select(
+            placeholder=f"Select a member (Page {self.current_page + 1}/{self.total_pages})",
+            options=[
+                discord.SelectOption(
+                    label=f"{name}",
+                    value=str(fid),
+                    description=f"ID: {fid} | {label}: {_fmt_power(val)}"
+                ) for fid, name, val in current_members
+            ],
+            row=0,
+        )
+
+        metric = self.metric
+
+        async def member_callback(interaction):
+            try:
+                fid = int(select.values[0])
+                await interaction.response.defer()
+                await self.cog.show_power_history(interaction, fid, metric)
+            except Exception as e:
+                logger.error(f"Error in MemberListViewPower member_callback: {e}")
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        f"{theme.deniedIcon} An error occurred while showing {label.lower()} history.",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"{theme.deniedIcon} An error occurred while showing {label.lower()} history.",
+                        ephemeral=True,
+                    )
+
+        select.callback = member_callback
+        self.add_item(select)
+
+        if self.total_pages > 1:
+            previous_button = discord.ui.Button(
+                label="Previous",
+                emoji=f"{theme.backIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="previous_power",
+                disabled=self.current_page == 0,
+                row=1,
+            )
+            previous_button.callback = self.previous_callback
+            self.add_item(previous_button)
+
+            next_button = discord.ui.Button(
+                label="Next",
+                emoji=f"{theme.forwardIcon}",
+                style=discord.ButtonStyle.secondary,
+                custom_id="next_power",
+                disabled=self.current_page == self.total_pages - 1,
+                row=1,
+            )
+            next_button.callback = self.next_callback
+            self.add_item(next_button)
+
+        if self.alliance_id is not None:
+            back_button = discord.ui.Button(
+                label="Back",
+                emoji=f"{theme.backIcon}",
+                style=discord.ButtonStyle.secondary,
+                row=2,
+            )
+            back_button.callback = self._back_callback
+            self.add_item(back_button)
+
+    async def _back_callback(self, interaction: discord.Interaction):
+        await self.cog.show_history_for(interaction, self.alliance_id)
+
+    async def previous_callback(self, interaction: discord.Interaction):
+        self.current_page = max(0, self.current_page - 1)
+        await self.update_page(interaction)
+
+    async def next_callback(self, interaction: discord.Interaction):
+        self.current_page = min(self.total_pages - 1, self.current_page + 1)
+        await self.update_page(interaction)
+
+    async def update_page(self, interaction: discord.Interaction):
+        self.update_view()
+        label = "Combat Power" if self.metric == "combat_power" else "Power"
+        icon = theme.chartIcon
+        embed = discord.Embed(
+            title=f"{icon} {self.alliance_name} - Member List",
+            description=(
+                f"Select a member to view {label.lower()} history:\n"
+                f"{theme.upperDivider}\n"
+                f"Total Members: {len(self.members)}\n"
+                f"Current Page: {self.current_page + 1}/{self.total_pages}\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+        await interaction.response.edit_message(embed=embed, view=self)
+
 
 class CustomTimeModal(discord.ui.Modal, title="Custom Time Range"):
     def __init__(self, cog, alliance_name):

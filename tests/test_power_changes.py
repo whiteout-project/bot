@@ -1,4 +1,3 @@
-import sqlite3
 import pytest
 from cogs import power_changes as pc
 
@@ -66,3 +65,12 @@ def test_format_delta():
     assert pc.format_delta(12.0) == f"{pc.theme.upIcon} +12%"
     assert pc.format_delta(-7.0) == f"{pc.theme.downIcon} -7%"
     assert pc.format_delta(0.0) == f"{pc.theme.forwardIcon} 0%"
+
+
+def test_reads_safe_on_cold_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(pc, "_CHANGES_DB", str(tmp_path / "cold.sqlite"))
+    # No ensure_tables() call here - reads must not raise on a missing table.
+    assert pc.latest_delta(1, "power") is None
+    assert pc.latest_deltas([1, 2], "power") == {}
+    assert pc.deltas_at([1], "power", "t") == {}
+    assert pc.history(1, "power") == []
