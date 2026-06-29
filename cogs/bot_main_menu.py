@@ -408,6 +408,8 @@ class MainMenu(commands.Cog):
                     f"└ API status, DB health, system info, restart, cleanup tools (Global Admin only)\n\n"
                     f"{theme.robotIcon} **Bot Presence**\n"
                     f"└ Set the bot's Discord activity status (Global Admin only)\n\n"
+                    f"{theme.globeIcon} **External OCR Service**\n"
+                    f"└ Set the OCR service URL, or blank for local OCR (Global Admin only)\n\n"
                     f"{theme.supportIcon} **Request Support**\n"
                     f"└ Open a support DM with logs attached\n\n"
                     f"{theme.infoIcon} **About Project**\n"
@@ -2070,6 +2072,46 @@ class TransferOwnerView(discord.ui.View):
 # Maintenance View
 # ============================================================================
 
+class ExternalOcrModal(discord.ui.Modal):
+    """Set the external OCR service URL. Blank = local OCR on this bot."""
+
+    def __init__(self, cog, is_global: bool):
+        super().__init__(title="External OCR Service")
+        self.cog = cog
+        self.is_global = is_global
+        from .bear_track import remote_ocr_setting, OCR_REMOTE_URL_DEFAULT, OCR_REMOTE_URL_ENV
+        stored = remote_ocr_setting()
+        prefill = stored if stored is not None else (OCR_REMOTE_URL_ENV or OCR_REMOTE_URL_DEFAULT)
+        self.url_input = discord.ui.TextInput(
+            label="OCR Service URL",
+            placeholder="Blank = local OCR. Default is the free shared service.",
+            default=prefill,
+            required=False,
+            max_length=300,
+        )
+        self.add_item(self.url_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = self.url_input.value.strip().rstrip("/")
+        try:
+            from .bear_track import invalidate_remote_ocr_cache
+            with sqlite3.connect("db/settings.sqlite", timeout=30.0) as conn:
+                conn.execute(
+                    "INSERT INTO bot_global_settings (setting_key, setting_value) VALUES (?, ?) "
+                    "ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value",
+                    ("remote_ocr_url", url),
+                )
+                conn.commit()
+            invalidate_remote_ocr_cache()
+        except Exception as e:
+            logger.error(f"Failed to save External OCR URL: {e}")
+            print(f"Failed to save External OCR URL: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Could not save the setting.", ephemeral=True)
+            return
+        await self.cog.show_maintenance(interaction)
+
+
 class MaintenanceView(discord.ui.View):
     """Maintenance sub-menu."""
 
@@ -2079,10 +2121,22 @@ class MaintenanceView(discord.ui.View):
         self.is_global = is_global
 
         # Gate Global-Admin-only buttons by stable custom_id, not label text.
-        global_only = {"check_updates", "backup_system", "bot_health", "bot_presence"}
+        global_only = {"check_updates", "backup_system", "bot_health", "bot_presence",
+                       "toggle_remote_ocr"}
         for child in self.children:
             if isinstance(child, discord.ui.Button) and child.custom_id in global_only:
                 child.disabled = not is_global
+
+        # Reflect current External OCR state on its toggle (dynamic label/style).
+        try:
+            from .bear_track import remote_ocr_url
+            ocr_on = remote_ocr_url() is not None
+        except Exception:
+            ocr_on = False
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.custom_id == "toggle_remote_ocr":
+                child.label = f"External OCR Service: {'On' if ocr_on else 'Off'}"
+                child.style = discord.ButtonStyle.success if ocr_on else discord.ButtonStyle.secondary
 
     @discord.ui.button(
         label="Check for Updates",
@@ -2203,11 +2257,25 @@ class MaintenanceView(discord.ui.View):
             print(f"Error loading About menu: {e}")
 
     @discord.ui.button(
+        label="External OCR Service",
+        emoji=theme.globeIcon,
+        style=discord.ButtonStyle.secondary,
+        custom_id="toggle_remote_ocr",
+        row=2
+    )
+    async def toggle_remote_ocr_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Global Admin only.", ephemeral=True)
+            return
+        await interaction.response.send_modal(ExternalOcrModal(self.cog, self.is_global))
+
+    @discord.ui.button(
         label="Main Menu",
         emoji=theme.homeIcon,
         style=discord.ButtonStyle.secondary,
         custom_id="main_menu_from_maintenance",
-        row=2
+        row=3
     )
     async def main_menu_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.cog.show_main_menu(interaction)

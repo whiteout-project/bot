@@ -242,6 +242,10 @@ class NotificationSystem(commands.Cog):
             self.cursor.execute("SELECT instance_identifier FROM bear_notifications LIMIT 1")
         except sqlite3.OperationalError:
             self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN instance_identifier TEXT")
+        try:
+            self.cursor.execute("SELECT auto_disabled_at FROM bear_notifications LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN auto_disabled_at TEXT")
 
         # Message deletion settings
         self.cursor.execute("""
@@ -1922,6 +1926,8 @@ class EmbedEditorView(discord.ui.View):
 
             def replace_variables(text):
                 """Replace all notification variables with sample values for preview."""
+                if not text:
+                    return text
                 return (text
                     .replace("%t", example_time)
                     .replace("{time}", example_time)
@@ -1932,13 +1938,15 @@ class EmbedEditorView(discord.ui.View):
 
             embed = discord.Embed(color=self.embed_data.get("color", discord.Color.blue().value))
 
-            if "title" in self.embed_data:
+            # Guard on value, not key presence: author/mention default to None and
+            # a loaded template can store NULL fields, which would break .replace().
+            if self.embed_data.get("title"):
                 embed.title = replace_variables(self.embed_data["title"])
-            if "description" in self.embed_data:
+            if self.embed_data.get("description"):
                 embed.description = replace_variables(self.embed_data["description"])
-            if "footer" in self.embed_data:
+            if self.embed_data.get("footer"):
                 embed.set_footer(text=replace_variables(self.embed_data["footer"]))
-            if "author" in self.embed_data:
+            if self.embed_data.get("author"):
                 embed.set_author(name=replace_variables(self.embed_data["author"]))
             if "image_url" in self.embed_data and self.embed_data["image_url"]:
                 embed.set_image(url=self.embed_data["image_url"])
@@ -4158,14 +4166,25 @@ class ChannelSelectMenu(discord.ui.ChannelSelect):
     async def callback(self, interaction: discord.Interaction):
         try:
             channel = self.values[0]
+            # Diagnostic context: what the picker handed us vs what the cache resolved.
+            sel_info = (
+                f"id={channel.id} name={getattr(channel, 'name', '?')} "
+                f"type={getattr(channel, 'type', '?')} guild={interaction.guild.id}"
+            )
             actual_channel = interaction.guild.get_channel(channel.id)
             if not actual_channel:
+                # get_channel is cache-only and never resolves threads; log what was
+                # selected so we can tell a thread/forum from a genuine cache miss.
+                logger.warning(f"Notification channel select: get_channel() returned None for {sel_info}")
+                print(f"Notification channel select: get_channel() returned None for {sel_info}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Channel not found or inaccessible!",
                     ephemeral=True
                 )
                 return
             if not actual_channel.permissions_for(interaction.guild.me).send_messages:
+                logger.warning(f"Notification channel select: missing send_messages permission for {sel_info}")
+                print(f"Notification channel select: missing send_messages permission for {sel_info}")
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} I don't have permission to send messages in this channel!",
                     ephemeral=True

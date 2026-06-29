@@ -1102,6 +1102,11 @@ if __name__ == "__main__":
                 giftcodestatus TEXT
             )""")
 
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS bot_global_settings (
+                setting_key TEXT PRIMARY KEY,
+                setting_value TEXT
+            )""")
+
             conn_settings.execute("""CREATE TABLE IF NOT EXISTS admin (
                 id INTEGER PRIMARY KEY,
                 is_initial INTEGER
@@ -1343,6 +1348,28 @@ if __name__ == "__main__":
                         startup.api_status("Gift Code Redemption API", "error", "Check failed")
                 except Exception:
                     startup.api_status("Gift Code Redemption API", "error", "Check failed")
+
+                # OCR status last, after both API checks, for a clean order.
+                try:
+                    from cogs.bear_track import remote_ocr_url, OCR_REMOTE_TOKEN
+                    ocr_url = remote_ocr_url()
+                    if not ocr_url:
+                        startup.phase_ok("Using local OCR")
+                    else:
+                        startup.phase_start("Checking External OCR Service")
+                        try:
+                            async with _aio.ClientSession(timeout=timeout, trust_env=True) as ocr_session:
+                                async with ocr_session.get(
+                                    f"{ocr_url}/health",
+                                    headers={"X-API-Key": OCR_REMOTE_TOKEN},
+                                ) as resp:
+                                    ok = resp.status == 200
+                                    ocr_detail = None if ok else f"HTTP {resp.status}"
+                            startup.api_status("External OCR Service", "ok" if ok else "error", ocr_detail)
+                        except Exception:
+                            startup.api_status("External OCR Service", "error", "Unreachable (using local OCR)")
+                except Exception:
+                    pass
             except Exception:
                 pass
 

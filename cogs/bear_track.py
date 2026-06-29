@@ -12,6 +12,7 @@ import io
 import re
 import os
 import sqlite3
+import time
 import unicodedata
 import logging
 from dataclasses import dataclass, field
@@ -66,23 +67,61 @@ _LOW_MEM_OCR_PAUSE = 1.0
 
 DEFAULT_OCR_LANG = "en"
 
-# Optional external OCR service. When OCR_REMOTE_URL is set, OCR calls POST the
-# image to that service instead of running a local engine; any remote failure
-# falls back to the local engine for that image. Lets a disk-/RAM-constrained
-# host offload OCR to one shared box. Unset = local OCR, unchanged.
-OCR_REMOTE_URL = os.environ.get("OCR_REMOTE_URL", "").strip().rstrip("/")
-# Shared OCR-engine key, baked in like the gift-code API key so any bot can reach
-# a public instance; sent as X-API-Key. Override via OCR_REMOTE_TOKEN for a
-# private instance (must match that service's OCR_REMOTE_TOKEN).
+# External OCR service. The bot can POST screenshots to a shared OCR box instead
+# of running engines locally (any remote failure falls back to local for that
+# image). The URL resolves as: bot config (UI modal) > OCR_REMOTE_URL env > local.
+# OCR_REMOTE_URL_DEFAULT is the free shared service, offered as the modal's
+# pre-filled suggestion.
+OCR_REMOTE_URL_DEFAULT = "https://ocr.whiteout-bot.com"
+OCR_REMOTE_URL_ENV = os.environ.get("OCR_REMOTE_URL", "").strip().rstrip("/")
+# Shared key (X-API-Key), baked in like the gift-code API key; OCR_REMOTE_TOKEN
+# env overrides it for a private instance.
 OCR_REMOTE_TOKEN = os.environ.get("OCR_REMOTE_TOKEN", "").strip() or "wos_ks_ocr_shared_key"
 try:
     OCR_REMOTE_TIMEOUT = float(os.environ.get("OCR_REMOTE_TIMEOUT", "60"))
 except ValueError:
     OCR_REMOTE_TIMEOUT = 60.0
 
-if OCR_REMOTE_URL:
-    logger.info(f"External OCR mode ON: posting to {OCR_REMOTE_URL} (local fallback on failure).")
-    print(f"[INFO] External OCR mode ON: {OCR_REMOTE_URL}")
+_SETTINGS_DB = "db/settings.sqlite"
+_remote_ocr_cache = (0.0, None)  # (monotonic expiry, URL string | "" | None)
+
+
+def remote_ocr_setting():
+    """Cached UI value for the external OCR URL: a URL string, '' (explicitly
+    disabled), or None (not configured -> defer to env)."""
+    global _remote_ocr_cache
+    now = time.monotonic()
+    exp, val = _remote_ocr_cache
+    if now < exp:
+        return val
+    val = None
+    try:
+        with sqlite3.connect(_SETTINGS_DB, timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT setting_value FROM bot_global_settings WHERE setting_key=?",
+                ("remote_ocr_url",),
+            ).fetchone()
+            if row:
+                val = row[0]
+    except Exception:
+        val = None
+    _remote_ocr_cache = (now + 10.0, val)
+    return val
+
+
+def remote_ocr_url():
+    """External OCR base URL to use, or None for local OCR.
+    Precedence: bot config (UI modal) > OCR_REMOTE_URL env > local."""
+    val = remote_ocr_setting()
+    if val is not None:
+        return val or None  # '' = disabled (local); otherwise the configured URL
+    return OCR_REMOTE_URL_ENV or None
+
+
+def invalidate_remote_ocr_cache():
+    """Drop the cached value so a UI change takes effect immediately."""
+    global _remote_ocr_cache
+    _remote_ocr_cache = (0.0, None)
 
 if PIL_AVAILABLE:
     try:
@@ -671,22 +710,22 @@ async def close_remote_ocr_session() -> None:
 async def _remote_ocr_post(path: str, image_bytes: bytes, lang: str):
     """POST an image to the external OCR service. Returns parsed JSON, or None on
     any failure so the caller falls back to the local engine."""
-    url = f"{OCR_REMOTE_URL}{path}"
+    base = remote_ocr_url()
+    if not base:
+        return None
     headers = {"X-API-Key": OCR_REMOTE_TOKEN}
     try:
         form = aiohttp.FormData()
         form.add_field("lang", lang)
         form.add_field("image", image_bytes, filename="image",
                        content_type="application/octet-stream")
-        async with _get_remote_session().post(url, data=form, headers=headers) as resp:
+        async with _get_remote_session().post(f"{base}{path}", data=form, headers=headers) as resp:
             if resp.status != 200:
                 logger.warning(f"External OCR {path} HTTP {resp.status}; using local OCR.")
-                print(f"[WARNING] External OCR {path} HTTP {resp.status}; using local OCR.")
                 return None
             return await resp.json()
     except Exception as e:
         logger.warning(f"External OCR {path} failed ({e}); using local OCR.")
-        print(f"[WARNING] External OCR {path} failed ({e}); using local OCR.")
         return None
 
 
@@ -719,7 +758,7 @@ async def ocr_bytes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG, *, session
     to a one-shot acquire/release covered by the lifecycle grace period."""
     if not image_bytes:
         return ""
-    if OCR_REMOTE_URL:
+    if remote_ocr_url():
         remote = await _remote_ocr_text(image_bytes, lang)
         if remote is not None:
             return remote
@@ -774,7 +813,7 @@ async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
     """OCR returning [(text, box), ...]. Box is 4 corner coords. Empty list on failure."""
     if not image_bytes:
         return []
-    if OCR_REMOTE_URL:
+    if remote_ocr_url():
         remote = await _remote_ocr_boxed(image_bytes, lang)
         if remote is not None:
             return remote
