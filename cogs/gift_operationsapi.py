@@ -240,16 +240,21 @@ class GiftCodeAPI:
                             new_codes = []
                             for code, date_obj in valid_codes:
                                 formatted_date = date_obj.strftime("%Y-%m-%d")
-                                if code not in db_codes:
+                                prior = db_codes.get(code)
+                                if prior is None:
                                     try:
                                         # First add as pending
                                         self.cursor.execute(
                                             "INSERT OR IGNORE INTO gift_codes (giftcode, date, validation_status) VALUES (?, ?, ?)",
                                             (code, formatted_date, "pending")
                                         )
-                                        new_codes.append((code, formatted_date))
+                                        new_codes.append((code, formatted_date, False))
                                     except Exception as e:
                                         self.logger.exception(f"Error inserting new code {code}: {e}")
+                                elif prior[1] == 'invalid':
+                                    # API still distributing a code we hold invalid. Don't trust it -
+                                    # re-validate ourselves; only our own check can confirm a reactivation.
+                                    new_codes.append((code, formatted_date, True))
 
                             try:
                                 await self._safe_commit(self.conn, "new codes insertion")
@@ -261,72 +266,38 @@ class GiftCodeAPI:
                                     valid_codes_count = 0
                                     invalid_codes_count = 0
                                     
-                                    for code, formatted_date in new_codes:
+                                    for code, formatted_date, was_invalid in new_codes:
                                         try:
                                             # Get GiftOperations cog to validate
                                             gift_operations = self.bot.get_cog('GiftOperations')
                                             if gift_operations:
-                                                is_valid, validation_msg = await gift_operations.validate_gift_code_immediately(code, "api")
+                                                is_valid, validation_msg = await gift_operations.validate_gift_code_immediately(code, "api", force=was_invalid)
 
                                                 if is_valid is None:
-                                                    self.logger.warning(f"API code '{code}' validation inconclusive on first attempt: {validation_msg}. Retrying...")
-
-                                                    for retry_num in range(1, 4):
-                                                        await asyncio.sleep(5)
-                                                        self.logger.info(f"Retry {retry_num}/3 for code '{code}'")
-                                                        is_valid, validation_msg = await gift_operations.validate_gift_code_immediately(code, "api")
-
-                                                        if is_valid is not None:
-                                                            break
-
-                                                    if is_valid is None:
-                                                        self.logger.warning(f"API code '{code}' still inconclusive after 3 retries. Marking as pending.")
+                                                    # Inconclusive (usually the FID's captcha cooldown). Don't rapid-retry
+                                                    # here - that just sustains the throttle. The serialized, spaced
+                                                    # re-validation chain below picks it up cleanly.
+                                                    self.logger.info(f"API code '{code}' not conclusively validated yet ({validation_msg}); scheduling spaced re-validation.")
 
                                                 if is_valid:
                                                     valid_codes_count += 1
                                                     self.logger.info(f"API code '{code}' validated successfully")
 
-                                                    # Check if this code was previously invalid (reactivation detection)
-                                                    is_reactivated = False
+                                                    # A code we held invalid that our OWN re-validation now confirms valid
+                                                    # is a genuine reactivation: clear old redemptions so members can claim again.
                                                     cleared_redemptions = 0
-
-                                                    try:
-                                                        self.cursor.execute(
-                                                            "SELECT validation_status FROM gift_codes WHERE giftcode = ?",
-                                                            (code,)
-                                                        )
-                                                        previous_status_row = self.cursor.fetchone()
-
-                                                        if previous_status_row and previous_status_row[0] == 'invalid':
-                                                            # This is a REACTIVATED code - clear all user redemption history
-                                                            self.logger.info(f"🔄 REACTIVATION DETECTED: Code '{code}' was invalid, now valid again")
-
-                                                            # Count existing redemptions before clearing
-                                                            self.cursor.execute(
-                                                                "SELECT COUNT(*) FROM user_giftcodes WHERE giftcode = ?",
-                                                                (code,)
-                                                            )
+                                                    if was_invalid:
+                                                        try:
+                                                            self.cursor.execute("SELECT COUNT(*) FROM user_giftcodes WHERE giftcode = ?", (code,))
                                                             count_row = self.cursor.fetchone()
                                                             cleared_redemptions = count_row[0] if count_row else 0
-
-                                                            # Clear all user redemption records for this code
-                                                            self.cursor.execute(
-                                                                "DELETE FROM user_giftcodes WHERE giftcode = ?",
-                                                                (code,)
-                                                            )
+                                                            self.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ?", (code,))
                                                             await self._safe_commit(self.conn, f"clear redemption history for reactivated code {code}")
+                                                            self.logger.info(f"🔄 REACTIVATION: '{code}' re-validated valid; cleared {cleared_redemptions} old redemption records")
+                                                        except Exception as e:
+                                                            self.logger.error(f"Error clearing reactivation history for code '{code}': {e}")
 
-                                                            self.logger.info(f"✅ Cleared {cleared_redemptions} redemption records for reactivated code '{code}'")
-                                                            is_reactivated = True
-
-                                                    except Exception as e:
-                                                        self.logger.error(f"Error checking/clearing reactivation status for code '{code}': {e}")
-
-                                                    # Set validation status message
-                                                    if is_reactivated:
-                                                        validation_status = f"✅ Validated (🔄 REACTIVATED - {cleared_redemptions} redemptions cleared)"
-                                                    else:
-                                                        validation_status = "✅ Validated"
+                                                    validation_status = f"✅ Validated (🔄 Reactivated - {cleared_redemptions} cleared)" if was_invalid else "✅ Validated"
 
                                                     try:
                                                         await self._execute_with_retry(
@@ -350,7 +321,7 @@ class GiftCodeAPI:
                                                     auto_alliances = []
                                                 else:
                                                     self.logger.warning(f"API code '{code}' validation inconclusive after retries: {validation_msg}")
-                                                    validation_status = f"{theme.warnIcon} Pending"
+                                                    validation_status = f"{theme.warnIcon} Validating"
                                                     auto_alliances = []
                                                     # Re-test soon instead of waiting for the 2h periodic loop.
                                                     gift_operations.schedule_revalidation(code, "api")
@@ -359,9 +330,13 @@ class GiftCodeAPI:
                                                 validation_status = f"{theme.deniedIcon} Error"
                                                 auto_alliances = []
 
+                                            # A code we already held invalid that didn't re-validate as valid isn't
+                                            # news (avoids re-notifying every sync when the API keeps distributing it).
+                                            notify = (not was_invalid) or (is_valid is True)
+
                                             self.settings_cursor.execute("SELECT id FROM admin WHERE is_initial = 1")
                                             admin_ids = self.settings_cursor.fetchall()
-                                            if admin_ids:
+                                            if notify and admin_ids:
                                                 embed_description = (
                                                     f"**Gift Code Details**\n"
                                                     f"{theme.upperDivider}\n"
@@ -370,12 +345,16 @@ class GiftCodeAPI:
                                                     f"{theme.listIcon} **Validation Status:** `{validation_status}`\n"
                                                     f"{theme.linkIcon} **Source:** `Retrieved from Bot API`\n"
                                                     f"{theme.alarmClockIcon} **Time:** <t:{int(datetime.now().timestamp())}:R>\n"
-                                                    f"{theme.refreshIcon} **Auto Alliance Count:** `{len(auto_alliances)}`\n"
                                                 )
 
-                                                if is_valid is None:
+                                                if is_valid:
+                                                    if auto_alliances:
+                                                        embed_description += f"{theme.refreshIcon} **Auto-redemption:** Queued for `{len(auto_alliances)}` Alliances\n"
+                                                    else:
+                                                        embed_description += f"{theme.refreshIcon} **Auto-redemption** is not enabled\n"
+                                                elif is_valid is None:
                                                     from . import gift_redemption
-                                                    embed_description += f"\n{gift_redemption.PENDING_REVALIDATION_NOTICE}\n"
+                                                    embed_description += f"{gift_redemption.PENDING_REVALIDATION_NOTICE}\n"
 
                                                 embed_description += f"{theme.lowerDivider}\n"
 
@@ -400,14 +379,23 @@ class GiftCodeAPI:
                                                 self.cursor.execute("SELECT DISTINCT channel_id FROM giftcode_channel")
                                                 gift_channels = self.cursor.fetchall()
 
-                                                if gift_channels:
+                                                if notify and gift_channels:
+                                                    channel_desc = (
+                                                        f"**Code:** `{code}`\n"
+                                                        f"**Status:** {validation_status}\n"
+                                                    )
+                                                    if is_valid:
+                                                        if auto_alliances:
+                                                            channel_desc += f"**Auto-redemption:** Queued for {len(auto_alliances)} Alliances"
+                                                        else:
+                                                            channel_desc += "**Auto-redemption** is not enabled"
+                                                    elif is_valid is None:
+                                                        channel_desc += "**Auto-redemption:** Runs automatically as soon as the code validates"
+                                                    else:
+                                                        channel_desc += "**Auto-redemption:** Not redeemed (code is invalid)"
                                                     channel_embed = discord.Embed(
                                                         title="🎁 New Gift Code Retrieved",
-                                                        description=(
-                                                            f"**Code:** `{code}`\n"
-                                                            f"**Status:** {validation_status}\n"
-                                                            f"**Auto-redemption:** {'Started' if auto_alliances else 'Disabled'}"
-                                                        ),
+                                                        description=channel_desc,
                                                         color=embed_color
                                                     )
                                                     channel_embed.set_footer(text="Retrieved via Gift Code Distribution API")
