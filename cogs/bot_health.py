@@ -1682,6 +1682,7 @@ class HealthMenuView(discord.ui.View):
         super().__init__(timeout=7200)
         self.cog = cog
         self._confirming_restart = False
+        self._force_restart = False
         self._build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1699,7 +1700,7 @@ class HealthMenuView(discord.ui.View):
         self.clear_items()
         if self._confirming_restart:
             confirm_btn = discord.ui.Button(
-                label="Confirm Restart",
+                label="Restart Anyway" if self._force_restart else "Confirm Restart",
                 emoji=theme.warnIcon,
                 style=discord.ButtonStyle.danger,
                 row=0,
@@ -1762,7 +1763,7 @@ class HealthMenuView(discord.ui.View):
         back_btn.callback = self._on_back
         self.add_item(back_btn)
 
-    def _build_restart_confirm_embed(self) -> discord.Embed:
+    def _build_restart_confirm_embed(self, busy: str | None = None) -> discord.Embed:
         is_windows_host = sys.platform == 'win32' and not is_container()
         if is_windows_host:
             tail = (
@@ -1773,6 +1774,12 @@ class HealthMenuView(discord.ui.View):
             )
         else:
             tail = "The bot will reconnect automatically."
+        busy_note = (
+            f"\n\n{theme.warnIcon} **{busy} right now.** Restarting interrupts it; "
+            f"interrupted queue work is re-queued and resumes on next start "
+            f"(re-run it if it was stuck)."
+            if busy else ""
+        )
         return discord.Embed(
             title=f"{theme.warnIcon} Restart Bot",
             description=(
@@ -1782,7 +1789,7 @@ class HealthMenuView(discord.ui.View):
                 f"• Running tasks will be cancelled\n"
                 f"• Bot will be offline briefly during restart\n"
                 f"• All data is saved — nothing will be lost\n\n"
-                f"{tail}"
+                f"{tail}{busy_note}"
             ),
             color=0xFF0000,
         )
@@ -1902,16 +1909,11 @@ class HealthMenuView(discord.ui.View):
 
     async def _on_restart_request(self, interaction: discord.Interaction):
         busy = _active_work_summary(self.cog.bot)
-        if busy:
-            await interaction.response.send_message(
-                f"{theme.warnIcon} Restart blocked: {busy}. Wait for it to finish, then try again.",
-                ephemeral=True,
-            )
-            return
         self._confirming_restart = True
+        self._force_restart = bool(busy)
         self._build_components()
         await interaction.response.edit_message(
-            embed=self._build_restart_confirm_embed(), view=self
+            embed=self._build_restart_confirm_embed(busy), view=self
         )
 
     async def _on_confirm_restart(self, interaction: discord.Interaction):
@@ -1919,6 +1921,7 @@ class HealthMenuView(discord.ui.View):
 
     async def _on_cancel_restart(self, interaction: discord.Interaction):
         self._confirming_restart = False
+        self._force_restart = False
         self._build_components()
         # Re-fetch and re-render the dashboard
         wos_api = await self.cog.check_wos_api_status()
