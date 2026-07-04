@@ -71,13 +71,13 @@ async def enqueue_redemption(cog, giftcode, alliance_id, source='manual', batch_
 
 # Shown when a new code can't be confirmed yet; schedule_revalidation re-tests it within minutes.
 PENDING_REVALIDATION_NOTICE = (
-    "⏳ Auto-redemption pending - couldn't confirm the code yet. It'll be "
-    "automatically re-tested over the next few minutes; redemption starts as "
-    "soon as it validates. You can also trigger the redemption manually if needed."
+    "⏳ Not confirmed yet - re-checking automatically; it redeems as soon as it validates."
 )
 
-# Backoff (seconds) for re-testing an inconclusive new code: 1m, 2m, 5m, 15m, then the 2h loop.
-_REVALIDATION_BACKOFFS = [60, 120, 300, 900]
+# Backoff (seconds) for re-testing an inconclusive new code, then the 2h loop.
+# Never sub-60s: the usual cause is WOS's per-FID captcha cooldown (~60s), and
+# retrying sooner just sustains the CAPTCHA_TOO_FREQUENT throttle.
+_REVALIDATION_BACKOFFS = [60, 120, 300, 600, 900]
 
 
 async def handle_gift_validate_process(cog, process):
@@ -105,13 +105,16 @@ async def handle_gift_validate_process(cog, process):
             except Exception:
                 message = None
 
-    # Check if code already exists
-    cog.cursor.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (giftcode,))
-    if cog.cursor.fetchone():
+    # A code we hold as 'invalid' that shows up again is a reactivation candidate:
+    # re-validate it instead of bailing. Other stored statuses stay "already exists".
+    cog.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
+    row = cog.cursor.fetchone()
+    if row and row[0] != 'invalid':
         cog.logger.info(f"Code '{giftcode}' already exists in database.")
         if message and channel:
             await _send_existing_code_response(cog, message, giftcode, channel)
         return
+    was_invalid = row is not None and row[0] == 'invalid'
 
     # Show processing message if from channel
     processing_message = None
@@ -126,15 +129,25 @@ async def handle_gift_validate_process(cog, process):
         except Exception:
             processing_message = None
 
-    # Perform validation
-    is_valid, validation_msg = await validate_gift_code_immediately(cog, giftcode, source)
+    # Perform validation (force a live re-probe for a reactivation candidate).
+    is_valid, validation_msg = await validate_gift_code_immediately(cog, giftcode, source, force=was_invalid)
 
     # Handle validation result
     if message and channel:
         await _send_validation_response(cog, message, giftcode, is_valid, validation_msg, processing_message)
 
-    # Valid -> redeem; inconclusive -> re-test on a short backoff (else the 2h loop).
+    # Valid -> share to API + redeem; inconclusive -> re-test on a short backoff.
     if is_valid:
+        if was_invalid:
+            # Genuine reactivation: clear old redemptions so members can claim again.
+            try:
+                cog.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ?", (giftcode,))
+                cog.conn.commit()
+                cog.logger.info(f"🔄 REACTIVATION: '{giftcode}' re-validated valid via {source}; cleared old redemption records")
+            except Exception as e:
+                cog.logger.error(f"Error clearing reactivation history for '{giftcode}': {e}")
+        if hasattr(cog, 'api') and cog.api:
+            asyncio.create_task(cog.api.add_giftcode(giftcode))
         await _process_auto_use(cog, giftcode)
     elif is_valid is None:
         schedule_revalidation(cog, giftcode, source)
@@ -266,7 +279,7 @@ async def _send_validation_response(cog, message, giftcode, is_valid, validation
         )
         reaction = f"{theme.deniedIcon}"
     else:
-        reply_embed = discord.Embed(title=f"{theme.warnIcon} Gift Code Added (Pending)", color=discord.Color.yellow())
+        reply_embed = discord.Embed(title=f"{theme.warnIcon} Gift Code Added (Validating)", color=discord.Color.yellow())
         reply_embed.description = (
             f"**Gift Code Details**\n{theme.upperDivider}\n"
             f"{theme.userIcon} **Sender:** {message.author.mention}\n"
@@ -553,16 +566,61 @@ async def _update_batch_progress(cog, batch_id):
         cog.logger.warning(f"Failed to update batch progress message: {e}")
 
 
-async def validate_gift_code_immediately(cog, giftcode, source="unknown"):
-    """Immediately validate a gift code when it's added from any source.
+# Conclusive validation outcomes: the API gave a definitive verdict on the code.
+VALID_REDEEM_STATUSES = ("SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE")
+INVALID_REDEEM_STATUSES = ("TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT")
+CONCLUSIVE_REDEEM_STATUSES = VALID_REDEEM_STATUSES + INVALID_REDEEM_STATUSES
 
-    Args:
-        giftcode: The gift code to validate
-        source: Where the code came from ('api', 'button', 'channel')
+# WOS rate-limits captcha GET per-FID, so serialize + space validation by >=60s per FID
+# (matches the JS bot's RATE_LIMIT_DELAY; going lower just sustains the throttle).
+VALIDATION_CAPTCHA_INTERVAL = 60.0
 
-    Returns:
-        tuple: (is_valid, status_message)
-    """
+
+async def serialized_validation_claim(cog, fid, giftcode):
+    """Serialized, per-FID rate-spaced validation captcha request. New-code validations
+    run through here and take priority - the periodic loop yields while any are pending."""
+    cog._priority_validation_pending = getattr(cog, '_priority_validation_pending', 0) + 1
+    try:
+        async with cog._validation_lock:
+            stamps = cog._last_validation_claim_by_fid
+            wait = VALIDATION_CAPTCHA_INTERVAL - (time.monotonic() - stamps.get(str(fid), 0.0))
+            if wait > 0:
+                cog.logger.info(f"GiftOps: spacing validation captcha for '{giftcode}' on FID {fid} - waiting {wait:.0f}s")
+                await asyncio.sleep(wait)
+            try:
+                return await claim_giftcode_rewards_wos(cog, fid, giftcode, skip_cache=True)
+            finally:
+                now = time.monotonic()
+                stamps[str(fid)] = now
+                # Prune stale entries so the per-FID dict can't grow unbounded over time.
+                for k in [k for k, v in stamps.items() if now - v > VALIDATION_CAPTCHA_INTERVAL * 2]:
+                    del stamps[k]
+    finally:
+        cog._priority_validation_pending -= 1
+
+
+async def get_alt_validation_fids(cog, exclude, limit=3):
+    """Random alliance-member FIDs to validate with when the primary FID is throttled or dead."""
+    def _query():
+        with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT fid FROM users WHERE alliance IS NOT NULL AND alliance != '' ORDER BY RANDOM() LIMIT ?",
+                (limit + len(exclude),),
+            )
+            return [row[0] for row in cursor.fetchall()]
+    try:
+        fids = await asyncio.to_thread(_query)
+    except Exception as e:
+        cog.logger.warning(f"GiftOps: could not fetch alternate validation FIDs: {e}")
+        return []
+    excl = {str(e) for e in exclude}
+    return [f for f in fids if str(f) not in excl][:limit]
+
+
+async def validate_gift_code_immediately(cog, giftcode, source="unknown", force=False):
+    """Validate a code against the live game API. Returns (is_valid, message).
+    force=True re-probes even a code already stored as validated/invalid (reactivation)."""
     try:
         # Clean the gift code
         giftcode = cog.clean_gift_code(giftcode)
@@ -572,25 +630,35 @@ async def validate_gift_code_immediately(cog, giftcode, source="unknown"):
 
         cog.logger.info(f"Validating gift code '{giftcode}' from {source} using {fid_source} ID: {validation_fid}")
 
-        # Check if already validated
-        cog.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
-        existing = cog.cursor.fetchone()
+        # Short-circuit on a known verdict unless forced to re-probe (e.g. reactivation).
+        if not force:
+            cog.cursor.execute("SELECT validation_status FROM gift_codes WHERE giftcode = ?", (giftcode,))
+            existing = cog.cursor.fetchone()
+            if existing:
+                status = existing[0]
+                if status == 'invalid':
+                    cog.logger.info(f"Gift code '{giftcode}' already marked as invalid")
+                    return False, "Code already marked as invalid"
+                elif status == 'validated':
+                    cog.logger.info(f"Gift code '{giftcode}' already validated")
+                    return True, "Code already validated"
 
-        if existing:
-            status = existing[0]
-            if status == 'invalid':
-                cog.logger.info(f"Gift code '{giftcode}' already marked as invalid")
-                return False, "Code already marked as invalid"
-            elif status == 'validated':
-                cog.logger.info(f"Gift code '{giftcode}' already validated")
-                return True, "Code already validated"
+        # Perform validation through the serialized, rate-spaced gate so concurrent
+        # immediate/backoff chains don't collide on the test FID's captcha cooldown.
+        status = await serialized_validation_claim(cog, validation_fid, giftcode)
 
-        # Perform validation using the selected ID — skip the cache so we
-        # actually probe the live API (the whole point of validating).
-        status = await claim_giftcode_rewards_wos(cog, validation_fid, giftcode, skip_cache=True)
+        # If the primary FID gave no definitive verdict (usually a persistent per-FID
+        # captcha throttle), rotate to fresh member FIDs that aren't throttled so a
+        # valid code gets confirmed now instead of parking as "Validating".
+        if status not in CONCLUSIVE_REDEEM_STATUSES:
+            for alt_fid in await get_alt_validation_fids(cog, exclude={validation_fid}):
+                cog.logger.info(f"Validation of '{giftcode}' inconclusive on FID {validation_fid} ({status}); retrying with member FID {alt_fid}")
+                status = await serialized_validation_claim(cog, alt_fid, giftcode)
+                if status in CONCLUSIVE_REDEEM_STATUSES:
+                    break
 
         # Handle validation results
-        if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"]:
+        if status in VALID_REDEEM_STATUSES:
             # Valid code - mark as validated
             cog.cursor.execute("""
                 INSERT OR REPLACE INTO gift_codes (giftcode, date, validation_status)
@@ -608,7 +676,7 @@ async def validate_gift_code_immediately(cog, giftcode, source="unknown"):
 
             return True, validation_msg
 
-        elif status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]:
+        elif status in INVALID_REDEEM_STATUSES:
             # Invalid code - mark as invalid
             mark_code_invalid(cog, giftcode)
 
@@ -649,19 +717,147 @@ def encode_data(cog, data):
     return {"sign": sign, **data}
 
 
+# Bidi isolates so RTL names (Arabic/Hebrew) don't flip surrounding LTR text.
+_FSI = "⁨"
+_PDI = "⁩"
+
+
+def _iso(text) -> str:
+    return f"{_FSI}{text}{_PDI}"
+
+
+def get_summary_settings(cog, alliance_id):
+    """Per-alliance redemption-summary config; None-safe, defaults to disabled."""
+    try:
+        cog.settings_cursor.execute(
+            "SELECT enabled, show_success, show_already, show_failed "
+            "FROM redemption_summary_settings WHERE alliance_id = ?",
+            (alliance_id,),
+        )
+        row = cog.settings_cursor.fetchone()
+    except Exception:
+        return {"enabled": 0, "success": 0, "already": 0, "failed": 0}
+    if not row:
+        return {"enabled": 0, "success": 0, "already": 0, "failed": 0}
+    return {"enabled": row[0], "success": row[1], "already": row[2], "failed": row[3]}
+
+
+def set_summary_settings(cog, alliance_id, *, enabled=None, success=None, already=None, failed=None):
+    cur = get_summary_settings(cog, alliance_id)
+    enabled = cur["enabled"] if enabled is None else int(enabled)
+    success = cur["success"] if success is None else int(success)
+    already = cur["already"] if already is None else int(already)
+    failed = cur["failed"] if failed is None else int(failed)
+    cog.settings_cursor.execute(
+        "INSERT INTO redemption_summary_settings "
+        "(alliance_id, enabled, show_success, show_already, show_failed) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(alliance_id) DO UPDATE SET enabled = excluded.enabled, "
+        "show_success = excluded.show_success, show_already = excluded.show_already, "
+        "show_failed = excluded.show_failed",
+        (alliance_id, enabled, success, already, failed),
+    )
+    cog.settings_conn.commit()
+
+
+def _summary_names_block(names, limit=1024) -> str:
+    """One name per line, truncated to fit `limit` chars, with an overflow pointer to Redemption History."""
+    out, used = [], 0
+    for n in names:
+        need = len(n) + 1  # + newline
+        if used + need > limit - 45:  # reserve room for the overflow note
+            break
+        out.append(n)
+        used += need
+    text = "\n".join(out)
+    more = len(names) - len(out)
+    if more > 0:
+        text += f"\n…and {more} more - see Redemption History"
+    return text
+
+
+async def post_redemption_summary(cog, channel, alliance_id, alliance_name, giftcode,
+                                  successful_users, already_used_users, failed_users_dict):
+    """Post the opt-in per-alliance summary as up to three static, silent messages
+    (Redeemed / Already Redeemed / Failed). Separate messages so each gets its own
+    embed budget; silent so they don't ping alongside the redemption progress post.
+    No buttons - it's a persistent public log; the filterable per-player view is the
+    on-demand, in-menu Redemption History screen."""
+    if channel is None:
+        return
+    s = get_summary_settings(cog, alliance_id)
+    if not s or not s["enabled"]:
+        return
+
+    head = f"Alliance: **{alliance_name}**"
+
+    async def _post(embed):
+        try:
+            try:
+                await channel.send(embed=embed, silent=True)
+            except TypeError:  # older discord.py without silent=
+                await channel.send(embed=embed)
+        except Exception as e:
+            cog.logger.exception(f"GiftOps: Error posting redemption summary for {alliance_id}: {e}")
+
+    if s["success"] and successful_users:
+        block = _summary_names_block([_iso(n) for n in successful_users], 3800)
+        await _post(discord.Embed(
+            title=f"{theme.verifiedIcon} Redeemed - {giftcode} ({len(successful_users)})",
+            description=f"{head}\n\n{block}", color=theme.emColor3))
+
+    if s["already"] and already_used_users:
+        block = _summary_names_block([_iso(n) for n in already_used_users], 3800)
+        await _post(discord.Embed(
+            title=f"{theme.giftIcon} Already Redeemed - {giftcode} ({len(already_used_users)})",
+            description=f"{head}\n\n{block}", color=theme.emColor1))
+
+    if s["failed"] and failed_users_dict:
+        by_reason = {}
+        for fid, (nick, reason, _cycles) in failed_users_dict.items():
+            by_reason.setdefault(reason, []).append(f"{_iso(nick)} ({fid})")
+        embed = discord.Embed(
+            title=f"{theme.deniedIcon} Failed - {giftcode} ({len(failed_users_dict)})",
+            description=head, color=theme.emColor2)
+        total = len(head)
+        for reason, names in sorted(by_reason.items(), key=lambda kv: len(kv[1]), reverse=True):
+            value = _summary_names_block(names, 1024)
+            if len(embed.fields) >= 24 or total + len(reason) + len(value) > 5800:
+                embed.add_field(name="…", value="More players listed in Redemption History.", inline=False)
+                break
+            embed.add_field(name=f"{theme.deniedIcon} {reason}", value=value, inline=False)
+            total += len(reason) + len(value)
+        await _post(embed)
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+
 def batch_insert_user_giftcodes(cog, user_giftcode_data):
-    """Batch insert/update user giftcode records for better performance."""
+    """Batch upsert per-account redemption results (success and failure).
+
+    Never downgrades an existing SUCCESS/RECEIVED/SAME TYPE EXCHANGE to a later
+    failure (an account that succeeded on retry stays successful), and refreshes
+    last_attempt_at so the redeem-results viewer can show when it last ran.
+    """
     if not user_giftcode_data:
         return
 
-    try: # Executemany for batch operations - much faster than individual inserts
+    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    rows = [(fid, giftcode, status, ts) for (fid, giftcode, status) in user_giftcode_data]
+    try:
         cog.cursor.executemany("""
-            INSERT OR REPLACE INTO user_giftcodes (fid, giftcode, status)
-            VALUES (?, ?, ?)
-        """, user_giftcode_data)
+            INSERT INTO user_giftcodes (fid, giftcode, status, last_attempt_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(fid, giftcode) DO UPDATE SET
+                status = excluded.status,
+                last_attempt_at = excluded.last_attempt_at
+            WHERE user_giftcodes.status NOT IN ('SUCCESS', 'RECEIVED', 'SAME TYPE EXCHANGE')
+        """, rows)
 
         cog.conn.commit()
-        cog.logger.info(f"GiftOps: Batch inserted/updated {len(user_giftcode_data)} user giftcode records")
+        cog.logger.info(f"GiftOps: Recorded {len(rows)} user giftcode result(s)")
 
     except Exception as e:
         cog.logger.exception(f"GiftOps: Error in batch_insert_user_giftcodes: {e}")
@@ -736,24 +932,20 @@ def batch_process_alliance_results(cog, results_batch):
         return
 
     try:
-        # Separate successful results
-        successful_records = []
-        codes_to_validate = set()
+        codes_to_validate = {
+            giftcode for fid, giftcode, status in results_batch
+            if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]
+        }
 
-        for fid, giftcode, status in results_batch:
-            if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
-                successful_records.append((fid, giftcode, status))
-                codes_to_validate.add(giftcode)
+        # Persist every per-account outcome (success and failure) so Redeem
+        # History has the full picture; the upsert never downgrades a success.
+        batch_insert_user_giftcodes(cog, results_batch)
 
-        # Batch insert successful records
-        if successful_records:
-            batch_insert_user_giftcodes(cog, successful_records)
-
-        # Batch validate codes
+        # Batch validate codes (only codes that had at least one success)
         if codes_to_validate:
             batch_update_gift_codes_validation(cog, list(codes_to_validate))
 
-        cog.logger.info(f"GiftOps: Batch processed {len(successful_records)} successful, {len(codes_to_validate)} validated")
+        cog.logger.info(f"GiftOps: Batch processed {len(results_batch)} result(s), {len(codes_to_validate)} validated")
 
     except Exception as e:
         cog.logger.exception(f"GiftOps: Error in batch_process_alliance_results: {e}")
@@ -967,14 +1159,10 @@ async def claim_giftcode_rewards_wos(cog, player_id, giftcode, *, skip_cache: bo
                         cog.logger.info(f"CACHE HIT - User {player_id} code '{giftcode}' status: {status}")
                         return status
 
-        # Check if OCR Enabled and Solver Ready
-        cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-        ocr_settings_row = cog.settings_cursor.fetchone()
-        ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
-
-        if not (ocr_enabled == 1 and cog.captcha_solver):
-            status = "OCR_DISABLED" if ocr_enabled == 0 else "SOLVER_ERROR"
-            log_msg = f"{datetime.now()} Skipping captcha: OCR disabled (Enabled={ocr_enabled}) or Solver not ready ({cog.captcha_solver is None}) for ID {player_id}.\n"
+        # Captcha solver is always on; only skip if it failed to initialize.
+        if not cog.captcha_solver:
+            status = "SOLVER_ERROR"
+            log_msg = f"{datetime.now()} Skipping captcha: solver not ready for ID {player_id}.\n"
             cog.logger.info(log_msg.strip())
             return status
 
@@ -1229,6 +1417,12 @@ async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_i
                 # Store validation result
                 scan_results['validation_results'][giftcode] = is_valid
 
+                # Valid -> share to the API and auto-redeem for enabled alliances.
+                if is_valid:
+                    if hasattr(cog, 'api') and cog.api:
+                        asyncio.create_task(cog.api.add_giftcode(giftcode))
+                    await _process_auto_use(cog, giftcode)
+
                 # Add appropriate reaction to message
                 if giftcode in message_code_map:
                     message = message_code_map[giftcode]
@@ -1346,7 +1540,7 @@ async def _send_scan_results_message(cog, channel: discord.TextChannel, results:
         if results['existing_invalid']:
             existing_summary += f"{theme.deniedIcon} Previously Invalid: {len(results['existing_invalid'])}\n"
         if results['existing_pending']:
-            existing_summary += f"{theme.warnIcon} Pending Validation: {len(results['existing_pending'])}\n"
+            existing_summary += f"{theme.warnIcon} Validating: {len(results['existing_pending'])}\n"
 
         if existing_summary:
             embed.add_field(
@@ -1415,112 +1609,119 @@ async def periodic_validation_loop_body(cog):
             await cleanup_old_invalid_codes(cog)
             cog._last_cleanup_date = current_date
 
-        # Check if validation is already in progress to avoid conflicts
-        async with cog._validation_lock:
-            # Get codes that need validation (pending or validated)
-            cog.cursor.execute("""
-                SELECT giftcode, validation_status
-                FROM gift_codes
-                WHERE validation_status IN ('pending', 'validated')
-            """)
-            codes_to_check = cog.cursor.fetchall()
+        # Validate one code at a time, locking per code (not the whole run) so an
+        # interactive add isn't blocked behind the entire loop.
+        # Get codes that need validation (pending or validated)
+        cog.cursor.execute("""
+            SELECT giftcode, validation_status
+            FROM gift_codes
+            WHERE validation_status IN ('pending', 'validated')
+        """)
+        codes_to_check = cog.cursor.fetchall()
 
-            if not codes_to_check:
-                cog.logger.info("GiftOps: No codes need periodic validation.")
-                return
+        if not codes_to_check:
+            cog.logger.info("GiftOps: No codes need periodic validation.")
+            return
 
-            cog.logger.info(f"GiftOps: Found {len(codes_to_check)} codes to validate periodically.")
+        cog.logger.info(f"GiftOps: Found {len(codes_to_check)} codes to validate periodically.")
 
-            # Get test ID for validation
-            test_fid, fid_source = await cog.get_validation_fid()
-            cog.logger.info(f"GiftOps: Using {fid_source} ID {test_fid} for periodic validation.")
+        # Get test ID for validation
+        test_fid, fid_source = await cog.get_validation_fid()
+        cog.logger.info(f"GiftOps: Using {fid_source} ID {test_fid} for periodic validation.")
 
-            codes_checked = 0
-            codes_invalidated = 0
-            codes_still_valid = 0
+        codes_checked = 0
+        codes_invalidated = 0
+        codes_still_valid = 0
 
-            for giftcode, current_status in codes_to_check:
-                # Skip if we've checked too many codes (to prevent long-running loops)
-                if codes_checked >= 20:
-                    cog.logger.info("GiftOps: Reached periodic validation limit of 20 codes per run.")
-                    break
+        for giftcode, current_status in codes_to_check:
+            # Skip if we've checked too many codes (to prevent long-running loops)
+            if codes_checked >= 20:
+                cog.logger.info("GiftOps: Reached periodic validation limit of 20 codes per run.")
+                break
 
-                try:
-                    cog.logger.info(f"GiftOps: Periodically validating code '{giftcode}' (current status: {current_status})")
+            # New codes are top priority: yield while any interactive/new-code
+            # validation is pending so periodic checks never delay them.
+            while getattr(cog, '_priority_validation_pending', 0) > 0:
+                await asyncio.sleep(0.5)
 
-                    # Check the code with test ID — skip cache so a previously
-                    # redeemed code still gets probed against the live API.
+            try:
+                cog.logger.info(f"GiftOps: Periodically validating code '{giftcode}' (current status: {current_status})")
+
+                # Check the code with test ID — skip cache so a previously
+                # redeemed code still gets probed against the live API.
+                async with cog._validation_lock:
                     status = await claim_giftcode_rewards_wos(cog, test_fid, giftcode, skip_cache=True)
-                    codes_checked += 1
+                    cog._last_validation_claim_by_fid[str(test_fid)] = time.monotonic()  # share the clock so immediate validations space off this FID
+                codes_checked += 1
 
-                    if status in ["TIME_ERROR", "CDK_NOT_FOUND", "USAGE_LIMIT"]: # Code is now invalid
-                        cog.logger.info(f"GiftOps: Code '{giftcode}' is now invalid (status: {status}). Updating database.")
+                if status in INVALID_REDEEM_STATUSES: # Code is now invalid
+                    cog.logger.info(f"GiftOps: Code '{giftcode}' is now invalid (status: {status}). Updating database.")
 
-                        cog.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
-                        # Clear redemption status for the test fid
-                        cog.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ? AND fid = ?", (giftcode, test_fid))
+                    cog.cursor.execute("UPDATE gift_codes SET validation_status = 'invalid' WHERE giftcode = ?", (giftcode,))
+                    # Clear redemption status for the test fid
+                    cog.cursor.execute("DELETE FROM user_giftcodes WHERE giftcode = ? AND fid = ?", (giftcode, test_fid))
+                    cog.conn.commit()
+
+                    codes_invalidated += 1
+
+                    # Remove from API if present
+                    if hasattr(cog, 'api') and cog.api:
+                        asyncio.create_task(cog.api.remove_giftcode(giftcode, from_validation=True))
+
+                    # Notify admins about invalidated code
+                    await _dm_global_admins(cog, discord.Embed(
+                        title=f"{theme.deniedIcon} Gift Code Invalidated",
+                        description=f"Code `{giftcode}` has been invalidated during periodic validation.\nStatus: {status}",
+                        color=theme.emColor2,
+                        timestamp=datetime.now()
+                    ))
+
+                elif status in VALID_REDEEM_STATUSES:
+                    codes_still_valid += 1
+
+                    if current_status == 'pending':
+                        cog.logger.info(f"GiftOps: Code '{giftcode}' confirmed valid. Updating status to 'validated'.")
+                        cog.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
                         cog.conn.commit()
 
-                        codes_invalidated += 1
-
-                        # Remove from API if present
                         if hasattr(cog, 'api') and cog.api:
-                            asyncio.create_task(cog.api.remove_giftcode(giftcode, from_validation=True))
+                            asyncio.create_task(cog.api.add_giftcode(giftcode))
 
-                        # Notify admins about invalidated code
-                        await _dm_global_admins(cog, discord.Embed(
-                            title=f"{theme.deniedIcon} Gift Code Invalidated",
-                            description=f"Code `{giftcode}` has been invalidated during periodic validation.\nStatus: {status}",
-                            color=theme.emColor2,
-                            timestamp=datetime.now()
-                        ))
+                        try:
+                            await cog._execute_with_retry(
+                                lambda: cog.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
+                            )
+                            auto_alliances = cog.cursor.fetchall() or []
+                        except sqlite3.OperationalError as e:
+                            error_msg = f"Auto-alliance query failed after retries for code '{giftcode}': {e}"
+                            cog.logger.error(error_msg)
+                            print(f"ERROR: {error_msg}")
+                            auto_alliances = []
+                        except Exception as e:
+                            error_msg = f"Unexpected error in auto-alliance query for code '{giftcode}': {e}"
+                            cog.logger.error(error_msg)
+                            print(f"ERROR: {error_msg}")
+                            auto_alliances = []
 
-                    elif status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE", "TOO_SMALL_SPEND_MORE", "TOO_POOR_SPEND_MORE"]:
-                        codes_still_valid += 1
+                        await start_auto_redemption(cog, giftcode, auto_alliances, source='periodic-auto')
 
-                        if current_status == 'pending':
-                            cog.logger.info(f"GiftOps: Code '{giftcode}' confirmed valid. Updating status to 'validated'.")
-                            cog.cursor.execute("UPDATE gift_codes SET validation_status = 'validated' WHERE giftcode = ? AND validation_status = 'pending'", (giftcode,))
-                            cog.conn.commit()
+                else:
+                    cog.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
 
-                            if hasattr(cog, 'api') and cog.api:
-                                asyncio.create_task(cog.api.add_giftcode(giftcode))
+                    # Extra delay for CAPTCHA_TOO_FREQUENT errors
+                    if status == "CAPTCHA_TOO_FREQUENT":
+                        cog.logger.info(f"GiftOps: Encountered CAPTCHA_TOO_FREQUENT, waiting 60-90 seconds before next validation")
+                        await asyncio.sleep(random.uniform(60.0, 90.0))
+                        continue
 
-                            try:
-                                await cog._execute_with_retry(
-                                    lambda: cog.cursor.execute("SELECT alliance_id FROM giftcodecontrol WHERE status = 1 ORDER BY priority ASC, alliance_id ASC")
-                                )
-                                auto_alliances = cog.cursor.fetchall() or []
-                            except sqlite3.OperationalError as e:
-                                error_msg = f"Auto-alliance query failed after retries for code '{giftcode}': {e}"
-                                cog.logger.error(error_msg)
-                                print(f"ERROR: {error_msg}")
-                                auto_alliances = []
-                            except Exception as e:
-                                error_msg = f"Unexpected error in auto-alliance query for code '{giftcode}': {e}"
-                                cog.logger.error(error_msg)
-                                print(f"ERROR: {error_msg}")
-                                auto_alliances = []
+                # Wait between validations to avoid rate limiting
+                await asyncio.sleep(random.uniform(30.0, 60.0))
 
-                            await start_auto_redemption(cog, giftcode, auto_alliances, source='periodic-auto')
+            except Exception as e:
+                cog.logger.exception(f"Error validating code '{giftcode}' during periodic check: {e}")
+                await asyncio.sleep(5) # Longer wait on error
 
-                    else:
-                        cog.logger.info(f"GiftOps: Code '{giftcode}' returned status '{status}' during periodic validation.")
-
-                        # Extra delay for CAPTCHA_TOO_FREQUENT errors
-                        if status == "CAPTCHA_TOO_FREQUENT":
-                            cog.logger.info(f"GiftOps: Encountered CAPTCHA_TOO_FREQUENT, waiting 60-90 seconds before next validation")
-                            await asyncio.sleep(random.uniform(60.0, 90.0))
-                            continue
-
-                    # Wait between validations to avoid rate limiting
-                    await asyncio.sleep(random.uniform(30.0, 60.0))
-
-                except Exception as e:
-                    cog.logger.exception(f"Error validating code '{giftcode}' during periodic check: {e}")
-                    await asyncio.sleep(5) # Longer wait on error
-
-            cog.logger.info(f"GiftOps: Periodic validation complete. Checked: {codes_checked}, Invalidated: {codes_invalidated}, Still valid: {codes_still_valid}")
+        cog.logger.info(f"GiftOps: Periodic validation complete. Checked: {codes_checked}, Invalidated: {codes_invalidated}, Still valid: {codes_still_valid}")
 
         loop_end_time = datetime.now()
         cog.logger.info(f"GiftOps: periodic_validation_loop finished at {loop_end_time.strftime('%Y-%m-%d %H:%M:%S')}. Duration: {loop_end_time - loop_start_time}\n")
@@ -1610,19 +1811,15 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
             cog.logger.error(f"GiftOps: Bot cannot access channel {channel_id} for alliance {alliance_name}.")
             return False
 
-        # Check if OCR is enabled
-        cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-        ocr_settings_row = cog.settings_cursor.fetchone()
-        ocr_enabled = ocr_settings_row[0] if ocr_settings_row else 0
-
-        if not (ocr_enabled == 1 and cog.captcha_solver):
+        # Captcha solver is always on; only bail if it failed to initialize.
+        if not cog.captcha_solver:
             error_embed = discord.Embed(
-                title=f"{theme.deniedIcon} OCR/Captcha Solver Disabled",
+                title=f"{theme.deniedIcon} Captcha Solver Not Ready",
                 description=(
                     f"**Gift Code:** `{giftcode}`\n"
                     f"**Alliance:** `{alliance_name}`\n\n"
-                    f"{theme.warnIcon} Gift code redemption requires the OCR/captcha solver to be enabled.\n"
-                    f"Please enable it first using the settings command."
+                    f"{theme.warnIcon} The captcha solver failed to initialize, so redemption can't run.\n"
+                    f"Reload the Gift Code cog from Maintenance, or check the logs."
                 ),
                 color=theme.emColor2
             )
@@ -2081,6 +2278,12 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
         if batch_results:
             batch_process_alliance_results(cog, batch_results)
             batch_results = []
+
+        # Opt-in per-alliance summary embed after the run.
+        await post_redemption_summary(
+            cog, channel, alliance_id, alliance_name, giftcode,
+            successful_users, already_used_users, failed_users_dict,
+        )
 
         return True
 

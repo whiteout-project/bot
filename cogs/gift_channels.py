@@ -928,7 +928,7 @@ async def channel_history_scan(cog, interaction: discord.Interaction):
                 if existing_invalid > 0:
                     results_text += f"{theme.deniedIcon} Previously Invalid: {existing_invalid}\n"
                 if existing_pending > 0:
-                    results_text += f"{theme.warnIcon} Pending Validation: {existing_pending}\n"
+                    results_text += f"{theme.warnIcon} Validating: {existing_pending}\n"
 
                 results_text += f"\n{theme.editListIcon} **Note:** A detailed summary has been posted in #{channel.name}"
             else:

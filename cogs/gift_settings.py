@@ -9,9 +9,10 @@ import requests
 import json
 import traceback
 
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, notify_view_expired
 from .gift_captchasolver import GiftCaptchaSolver
 from .alliance_member_operations import AllianceSelectView
+from .permission_handler import PermissionManager
 
 logger = logging.getLogger('gift')
 
@@ -171,200 +172,43 @@ async def get_validation_fid(cog):
         return "45379845", 'default'
 
 
-async def show_ocr_settings(cog, interaction: discord.Interaction):
-        """Show OCR settings menu."""
-        try:
-            cog.settings_cursor.execute("SELECT is_initial FROM admin WHERE id = ?", (interaction.user.id,))
-            admin_info = cog.settings_cursor.fetchone()
+def build_solver_status_field(cog):
+    """(name, value) embed field: solver status, validation-FID mode, and redemption stats."""
+    if cog.captcha_solver and getattr(cog.captcha_solver, "is_initialized", False):
+        solver_status = f"{theme.verifiedIcon} Ready"
+    elif cog.captcha_solver is not None:
+        solver_status = f"{theme.warnIcon} Init failed (check logs)"
+    else:
+        solver_status = f"{theme.deniedIcon} Not loaded (reload the Gift Code cog)"
 
-            if not admin_info or admin_info[0] != 1:
-                error_msg = f"{theme.deniedIcon} Only global administrators can access OCR settings."
-                if interaction.response.is_done():
-                    await interaction.followup.send(error_msg, ephemeral=True)
-                else:
-                    await interaction.response.send_message(error_msg, ephemeral=True)
-                return
+    test_fid = get_test_fid(cog)
+    fid_line = f"`{test_fid}` (fixed)" if test_fid and test_fid != "45379845" else "Rotating alliance members"
 
-            cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings = cog.settings_cursor.fetchone()
+    stats = cog.processing_stats
+    submissions = stats["captcha_submissions"]
+    s_ok = stats["server_validation_success"]
+    s_fail = stats["server_validation_failure"]
+    pass_rate = (s_ok / (s_ok + s_fail) * 100) if (s_ok + s_fail) > 0 else 0
 
-            if not ocr_settings:
-                cog.logger.warning("No OCR settings found in DB, inserting defaults.")
-                cog.settings_cursor.execute("INSERT INTO ocr_settings (enabled) VALUES (1)")
-                cog.settings_conn.commit()
-                ocr_settings = (1,)
-
-            enabled = ocr_settings[0]
-            current_test_fid = get_test_fid(cog)
-
-            onnx_available = False
-            solver_status_msg = "N/A"
-            if cog.captcha_solver:
-                if cog.captcha_solver.is_initialized:
-                    onnx_available = True
-                    solver_status_msg = "Initialized & Ready"
-                elif hasattr(cog.captcha_solver, 'is_initialized'):
-                    onnx_available = True
-                    solver_status_msg = "Initialization Failed (Check Logs)"
-                else:
-                    solver_status_msg = "Error (Instance missing flags)"
-            else:
-                try:
-                    # Suppress ONNX C++ GPU warning (writes to fd 2, not sys.stderr)
-                    import sys, os as _os
-                    _fd, _null = sys.stderr.fileno(), _os.open(_os.devnull, _os.O_WRONLY)
-                    _bak = _os.dup(_fd); _os.dup2(_null, _fd); _os.close(_null)
-                    import onnxruntime
-                    _os.dup2(_bak, _fd); _os.close(_bak)
-                    onnx_available = True
-                    solver_status_msg = "Disabled or Init Failed"
-                except ImportError:
-                    onnx_available = False
-                    solver_status_msg = "onnxruntime library missing"
-
-            embed = discord.Embed(
-                title=f"{theme.searchIcon} CAPTCHA Solver Settings (ONNX)",
-                description=(
-                    f"Configure the automatic CAPTCHA solver for gift code redemption.\n\n"
-                    f"**Current Settings**\n"
-                    f"{theme.upperDivider}\n"
-                    f"{theme.robotIcon} **OCR Enabled:** {f'{theme.verifiedIcon} Yes' if enabled == 1 else f'{theme.deniedIcon} No'}\n"
-                    f"{theme.fidIcon} **Test ID:** `{current_test_fid}`\n"
-                    f"{theme.giftIcon} **ONNX Runtime:** {f'{theme.verifiedIcon} Found' if onnx_available else f'{theme.deniedIcon} Missing'}\n"
-                    f"{theme.settingsIcon} **Solver Status:** `{solver_status_msg}`\n"
-                    f"{theme.lowerDivider}\n"
-                ),
-                color=theme.emColor1
-            )
-
-            if not onnx_available:
-                embed.add_field(
-                    name=f"{theme.warnIcon} Missing Library",
-                    value=(
-                        "ONNX Runtime and required libraries are needed for CAPTCHA solving.\n"
-                        "The model files must be in the bot/models/ directory.\n"
-                        "Try installing dependencies:\n"
-                        "```pip install onnxruntime pillow numpy\n"
-                    ), inline=False
-                )
-
-            stats_lines = []
-            stats_lines.append("**Captcha Solver (Raw Format):**")
-            ocr_calls = cog.processing_stats['ocr_solver_calls']
-            ocr_valid = cog.processing_stats['ocr_valid_format']
-            ocr_format_rate = (ocr_valid / ocr_calls * 100) if ocr_calls > 0 else 0
-            stats_lines.append(f"• Solver Calls: `{ocr_calls}`")
-            stats_lines.append(f"• Valid Format Returns: `{ocr_valid}` ({ocr_format_rate:.1f}%)")
-
-            stats_lines.append("\n**Redemption Process (Server Side):**")
-            submissions = cog.processing_stats['captcha_submissions']
-            server_success = cog.processing_stats['server_validation_success']
-            server_fail = cog.processing_stats['server_validation_failure']
-            total_server_val = server_success + server_fail
-            server_pass_rate = (server_success / total_server_val * 100) if total_server_val > 0 else 0
-            stats_lines.append(f"• Captcha Submissions: `{submissions}`")
-            stats_lines.append(f"• Server Validation Success: `{server_success}`")
-            stats_lines.append(f"• Server Validation Failure: `{server_fail}`")
-            stats_lines.append(f"• Server Pass Rate: `{server_pass_rate:.1f}%`")
-
-            total_fids = cog.processing_stats['total_fids_processed']
-            total_time = cog.processing_stats['total_processing_time']
-            avg_time = (total_time / total_fids if total_fids > 0 else 0)
-            stats_lines.append(f"• Avg. ID Processing Time: `{avg_time:.2f}s` (over `{total_fids}` IDs)")
-
-            embed.add_field(
-                name=f"{theme.chartIcon} Processing Statistics (Since Bot Start)",
-                value="\n".join(stats_lines),
-                inline=False
-            )
-
-            view = OCRSettingsView(cog, enabled, onnx_available)
-
-            if interaction.response.is_done():
-                try:
-                    await interaction.edit_original_response(embed=embed, view=view)
-                except discord.NotFound:
-                    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-                except Exception as e_edit:
-                    cog.logger.exception(f"Error editing original response in show_ocr_settings: {e_edit}")
-                    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-            else:
-                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-        except sqlite3.Error as db_err:
-            cog.logger.exception(f"Database error in show_ocr_settings: {db_err}")
-            error_message = f"{theme.deniedIcon} A database error occurred while loading OCR settings."
-            if interaction.response.is_done(): await interaction.followup.send(error_message, ephemeral=True)
-            else: await interaction.response.send_message(error_message, ephemeral=True)
-        except Exception as e:
-            cog.logger.exception(f"Error showing OCR settings: {e}")
-            traceback.print_exc()
-            error_message = f"{theme.deniedIcon} An unexpected error occurred while loading OCR settings."
-            if interaction.response.is_done():
-                await interaction.followup.send(error_message, ephemeral=True)
-            else:
-                await interaction.response.send_message(error_message, ephemeral=True)
+    value = (
+        f"{theme.robotIcon} **Solver:** {solver_status}\n"
+        f"{theme.fidIcon} **Validation ID:** {fid_line}\n"
+        f"{theme.chartIcon} **Captcha Submissions:** `{submissions}`\n"
+        f"{theme.verifiedIcon} **Success:** `{s_ok}` \u00b7 {theme.deniedIcon} **Failure:** `{s_fail}`\n"
+        f"{theme.chartIcon} **Server Pass Rate:** `{pass_rate:.1f}%`"
+    )
+    return f"{theme.searchIcon} CAPTCHA Solver (since startup)", value
 
 
-async def update_ocr_settings(cog, interaction, enabled=None):
-    """Update OCR settings in the database and reinitialize the solver if needed."""
+def clear_test_fid(cog):
+    """Remove any configured test FID so validation rotates through random alliance members."""
     try:
-        cog.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-        current_settings = cog.settings_cursor.fetchone()
-        current_enabled = current_settings[0] if current_settings else 1
-
-        target_enabled = enabled if enabled is not None else current_enabled
-
-        cog.settings_cursor.execute("""
-            UPDATE ocr_settings SET enabled = ?
-            WHERE id = (SELECT MAX(id) FROM ocr_settings)
-            """, (target_enabled,))
-        if cog.settings_cursor.rowcount == 0:
-            cog.settings_cursor.execute("""
-                INSERT INTO ocr_settings (enabled) VALUES (?)
-                """, (target_enabled,))
+        cog.settings_cursor.execute("DELETE FROM test_fid_settings")
         cog.settings_conn.commit()
-        cog.logger.info(f"GiftOps: Updated OCR settings in DB -> Enabled={target_enabled}")
-
-        message_suffix = "Settings updated."
-
-        if enabled is not None and enabled != current_enabled:
-            message_suffix = f"Solver has been {'enabled' if target_enabled == 1 else 'disabled'}."
-            cog.captcha_solver = None
-            if target_enabled == 1:
-                cog.logger.info("GiftOps: OCR is being enabled/reinitialized...")
-                try:
-                    save_captcha = getattr(cog.bot, 'save_captcha', 0)
-                    cog.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
-                    if cog.captcha_solver.is_initialized:
-                        cog.logger.info("GiftOps: ONNX solver reinitialized successfully.")
-                        message_suffix += " Solver reinitialized."
-                    else:
-                        cog.logger.error("GiftOps: ONNX solver FAILED to reinitialize.")
-                        message_suffix += " Solver reinitialization failed."
-                        cog.captcha_solver = None
-                        return False, f"CAPTCHA solver settings updated. {message_suffix}"
-                except ImportError as imp_err:
-                    cog.logger.exception(f"GiftOps: ERROR - Reinitialization failed: Missing library {imp_err}")
-                    message_suffix += f" Solver initialization failed (Missing Library: {imp_err})."
-                    cog.captcha_solver = None
-                    return False, f"CAPTCHA solver settings updated. {message_suffix}"
-                except Exception as e:
-                    cog.logger.exception(f"GiftOps: ERROR - Reinitialization failed: {e}")
-                    message_suffix += f" Solver initialization failed ({e})."
-                    cog.captcha_solver = None
-                    return False, f"CAPTCHA solver settings updated. {message_suffix}"
-            else:
-                cog.logger.info("GiftOps: OCR disabled, solver instance removed/kept None.")
-
-        return True, f"CAPTCHA solver settings: {message_suffix}"
-
-    except sqlite3.Error as db_err:
-        cog.logger.exception(f"Database error updating OCR settings: {db_err}")
-        return False, f"Database error updating OCR settings: {db_err}"
+        return True
     except Exception as e:
-        cog.logger.exception(f"Unexpected error updating OCR settings: {e}")
-        return False, f"Unexpected error updating OCR settings: {e}"
+        cog.logger.exception(f"Error clearing test ID: {e}")
+        return False
 
 
 async def show_redemption_priority(cog, interaction: discord.Interaction):
@@ -702,7 +546,7 @@ async def setup_giftcode_auto(cog, interaction: discord.Interaction):
 # View and Modal classes (kept as-is, they use self.cog internally)
 # ---------------------------------------------------------------------------
 
-class TestIDModal(discord.ui.Modal, title="Change Test ID"):
+class TestIDModal(discord.ui.Modal, title="Set Test ID"):
     def __init__(self, cog):
         super().__init__()
         self.cog = cog
@@ -710,72 +554,40 @@ class TestIDModal(discord.ui.Modal, title="Change Test ID"):
         try:
             self.cog.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
             result = self.cog.settings_cursor.fetchone()
-            current_fid = result[0] if result else "45379845"
+            current_fid = result[0] if result and result[0] != "45379845" else ""
         except Exception:
-            current_fid = "45379845"
+            current_fid = ""
 
         self.test_fid = discord.ui.TextInput(
-            label="Enter New Player ID",
-            placeholder="Example: 45379845",
+            label="Player ID (blank = rotate members)",
+            placeholder="Leave blank to validate with random alliance members",
             default=current_fid,
-            required=True,
-            min_length=1,
+            required=False,
             max_length=20
         )
         self.add_item(self.test_fid)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            # Defer the response since we'll make an API call to validate
-            await interaction.response.defer(ephemeral=True)
-
-            new_fid = self.test_fid.value.strip()
-
-            if not new_fid.isdigit():
-                await interaction.followup.send(f"{theme.deniedIcon} Invalid ID format. Please enter a numeric ID.", ephemeral=True)
+            raw = self.test_fid.value.strip()
+            if not raw:
+                self.cog.clear_test_fid()
+                self.cog.logger.info(f"Test FID cleared by {interaction.user.id}; validation will rotate alliance members.")
+            elif not raw.isdigit():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} Invalid ID. Enter a numeric player ID, or leave it blank to rotate alliance members.",
+                    ephemeral=True)
                 return
-
-            is_valid, message = await self.cog.verify_test_fid(new_fid)
-
-            if is_valid:
-                success = await self.cog.update_test_fid(new_fid)
-
-                if success:
-                    embed = discord.Embed(
-                        title=f"{theme.verifiedIcon} Test ID Updated",
-                        description=(
-                            f"**Test ID Configuration**\n"
-                            f"{theme.upperDivider}\n"
-                            f"{theme.fidIcon} **ID:** `{new_fid}`\n"
-                            f"{theme.verifiedIcon} **Status:** Validated\n"
-                            f"{theme.editListIcon} **Action:** Updated in database\n"
-                            f"{theme.lowerDivider}\n"
-                        ),
-                        color=theme.emColor3
-                    )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-
-                    await self.cog.show_ocr_settings(interaction)
-                else:
-                    await interaction.followup.send(f"{theme.deniedIcon} Failed to update test ID in database. Check logs for details.", ephemeral=True)
             else:
-                embed = discord.Embed(
-                    title=f"{theme.deniedIcon} Invalid Test ID",
-                    description=(
-                        f"**Test ID Validation**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.fidIcon} **ID:** `{new_fid}`\n"
-                        f"{theme.deniedIcon} **Status:** Invalid ID\n"
-                        f"{theme.editListIcon} **Reason:** {message}\n"
-                        f"{theme.lowerDivider}\n"
-                    ),
-                    color=theme.emColor2
-                )
-                await interaction.followup.send(embed=embed, ephemeral=True)
+                await self.cog.update_test_fid(raw)
+                self.cog.logger.info(f"Test FID set to {raw} by {interaction.user.id}.")
 
+            # Refresh the settings menu in place so its solver status shows the new mode.
+            await self.cog.show_settings_menu(interaction)
         except Exception as e:
-            self.cog.logger.exception(f"Error updating test ID: {e}")
-            await interaction.followup.send(f"{theme.deniedIcon} An error occurred: {str(e)}", ephemeral=True)
+            self.cog.logger.exception(f"Error setting test ID: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f"{theme.deniedIcon} An error occurred: {str(e)}", ephemeral=True)
 
 
 class RedemptionPriorityView(discord.ui.View):
@@ -980,239 +792,140 @@ class ClearCacheConfirmView(discord.ui.View):
             item.disabled = True
 
 
-class OCRSettingsView(discord.ui.View):
-    def __init__(self, cog, enabled, onnx_available):
+
+# ---------------------------------------------------------------------------
+# Redemption Summary — per-alliance opt-in channel summary after redemptions
+# ---------------------------------------------------------------------------
+
+async def show_redemption_summary(cog, interaction: discord.Interaction):
+    """Per-alliance config for the post-redemption summary embed."""
+    alliances, _ = PermissionManager.get_admin_alliances(
+        interaction.user.id, interaction.guild_id or 0
+    )
+    if not alliances:
+        msg = f"{theme.deniedIcon} You have no alliances to configure."
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+        return
+    view = RedemptionSummaryView(cog, interaction.user.id, alliances)
+    await safe_edit_message(interaction, embed=view.build_embed(), view=view, content=None)
+    view.message = await interaction.original_response()
+
+
+class RedemptionSummaryView(discord.ui.View):
+    """Pick an alliance, then toggle whether/what its redemption summary posts."""
+
+    def __init__(self, cog, user_id: int, alliances):
         super().__init__(timeout=7200)
         self.cog = cog
-        self.enabled = enabled
-        self.onnx_available = onnx_available
-        self.disable_controls = not onnx_available
+        self.user_id = user_id
+        self.alliances = alliances            # [(alliance_id, name), ...]
+        self.selected_id = None
+        self.message = None
+        self._build_components()
 
-        # Row 0: Enable/Disable Button, Test Button
-        self.enable_ocr_button_item = discord.ui.Button(
-            emoji=f"{theme.verifiedIcon}" if self.enabled == 1 else "🚫",
-            custom_id="enable_ocr", row=0,
-            label="Disable CAPTCHA Solver" if self.enabled == 1 else "Enable CAPTCHA Solver",
-            style=discord.ButtonStyle.danger if self.enabled == 1 else discord.ButtonStyle.success,
-            disabled=self.disable_controls
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_interaction_user(interaction, self.user_id)
+
+    def _settings(self):
+        from .gift_redemption import get_summary_settings
+        return get_summary_settings(self.cog, self.selected_id) if self.selected_id else None
+
+    def _build_components(self):
+        self.clear_items()
+        options = [
+            discord.SelectOption(
+                label=name[:100], value=str(aid),
+                default=str(aid) == str(self.selected_id),
+            )
+            for aid, name in self.alliances[:25]
+        ]
+        select = discord.ui.Select(placeholder="Select an alliance", options=options, row=0)
+        select.callback = self._on_alliance
+        self.add_item(select)
+
+        s = self._settings()
+        if s is not None:
+            self._add_toggle("Summary", theme.redeemIcon, bool(s["enabled"]), self._toggle_enabled, row=1)
+            if s["enabled"]:
+                self._add_toggle("Successful", theme.verifiedIcon, bool(s["success"]), self._toggle_success, row=2)
+                self._add_toggle("Already Redeemed", theme.giftIcon, bool(s["already"]), self._toggle_already, row=2)
+                self._add_toggle("Failed", theme.deniedIcon, bool(s["failed"]), self._toggle_failed, row=2)
+
+        back = discord.ui.Button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary, row=3)
+        back.callback = self._back
+        self.add_item(back)
+
+    def _add_toggle(self, label, emoji, enabled, callback, row):
+        btn = discord.ui.Button(
+            label=f"{label}: {'On' if enabled else 'Off'}",
+            emoji=f"{emoji}",
+            style=discord.ButtonStyle.success if enabled else discord.ButtonStyle.secondary,
+            row=row,
         )
-        self.enable_ocr_button_item.callback = self.enable_ocr_button
-        self.add_item(self.enable_ocr_button_item)
+        btn.callback = callback
+        self.add_item(btn)
 
-        self.test_ocr_button_item = discord.ui.Button(
-            label="Test CAPTCHA Solver", style=discord.ButtonStyle.secondary, emoji=f"{theme.testIcon}",
-            custom_id="test_ocr", row=0,
-            disabled=self.disable_controls
+    def build_embed(self) -> discord.Embed:
+        desc = (
+            "Choose an alliance, then turn its post-redemption summary on or off "
+            "and pick which results it lists.\n\n"
+            "When on, the bot posts one embed in the gift channel after each code "
+            "finishes for that alliance, listing the buckets you enable.\n"
         )
-        self.test_ocr_button_item.callback = self.test_ocr_button
-        self.add_item(self.test_ocr_button_item)
-
-        # Add the Change Test ID Button
-        self.change_test_fid_button_item = discord.ui.Button(
-            label="Change Test ID", style=discord.ButtonStyle.primary, emoji=f"{theme.refreshIcon}",
-            custom_id="change_test_fid", row=0,
-            disabled=self.disable_controls
-        )
-        self.change_test_fid_button_item.callback = self.change_test_fid_button
-        self.add_item(self.change_test_fid_button_item)
-
-        # Add the Clear Redemption Cache Button
-        self.clear_cache_button_item = discord.ui.Button(
-            label="Clear Redemption Cache", style=discord.ButtonStyle.danger, emoji=f"{theme.trashIcon}",
-            custom_id="clear_redemption_cache", row=1,
-            disabled=self.disable_controls
-        )
-        self.clear_cache_button_item.callback = self.clear_redemption_cache_button
-        self.add_item(self.clear_cache_button_item)
-
-
-    async def change_test_fid_button(self, interaction: discord.Interaction):
-        """Handle the change test ID button click."""
-        if not self.onnx_available:
-            await interaction.response.send_message(f"{theme.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-        await interaction.response.send_modal(TestIDModal(self.cog))
-
-    async def enable_ocr_button(self, interaction: discord.Interaction):
-        if not self.onnx_available:
-            await interaction.response.send_message(f"{theme.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        new_enabled = 1 if self.enabled == 0 else 0
-        success, message = await self.cog.update_ocr_settings(interaction, enabled=new_enabled)
-        await self.cog.show_ocr_settings(interaction)
-
-    async def test_ocr_button(self, interaction: discord.Interaction):
-        logger = self.cog.logger
-        user_id = interaction.user.id
-        current_time = time.time()
-
-        if not self.onnx_available:
-            await interaction.response.send_message(f"{theme.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-        if not self.cog.captcha_solver or not self.cog.captcha_solver.is_initialized:
-            await interaction.response.send_message(f"{theme.deniedIcon} CAPTCHA solver is not initialized. Ensure OCR is enabled.", ephemeral=True)
-            return
-
-        last_test_time = self.cog.test_captcha_cooldowns.get(user_id, 0)
-        if current_time - last_test_time < self.cog.test_captcha_delay:
-            remaining_time = int(self.cog.test_captcha_delay - (current_time - last_test_time))
-            await interaction.response.send_message(f"{theme.deniedIcon} Please wait {remaining_time} more seconds before testing again.", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        logger.info(f"[Test Button] User {user_id} triggered test.")
-        self.cog.test_captcha_cooldowns[user_id] = current_time
-
-        captcha_image_base64 = None
-        image_bytes = None
-        error = None
-        captcha_code = None
-        success = False
-        method = "N/A"
-        confidence = 0.0
-        solve_duration = 0.0
-        test_fid = self.cog.get_test_fid()
-        session = None
-
-        try:
-            logger.info(f"[Test Button] First logging in with test ID {test_fid}...")
-            session, response_stove_info = await self.cog.get_stove_info_wos(test_fid)
-
-            try:
-                player_info_json = response_stove_info.json()
-                if player_info_json.get("msg") != "success":
-                    logger.error(f"[Test Button] Login failed for test ID {test_fid}: {player_info_json.get('msg')}")
-                    await interaction.followup.send(f"{theme.deniedIcon} Login failed with test ID {test_fid}. Please check if the ID is valid.", ephemeral=True)
-                    return
-                logger.info(f"[Test Button] Successfully logged in with test ID {test_fid}")
-            except Exception as json_err:
-                logger.error(f"[Test Button] Error parsing login response: {json_err}")
-                await interaction.followup.send(f"{theme.deniedIcon} Error processing login response.", ephemeral=True)
-                return
-
-            logger.info(f"[Test Button] Fetching captcha for test ID {test_fid} using established session...")
-            captcha_image_base64, error = await self.cog.fetch_captcha(test_fid, session)
-            logger.info(f"[Test Button] Captcha fetch result: Error='{error}', HasImage={captcha_image_base64 is not None}")
-
-            if error:
-                await interaction.followup.send(f"{theme.deniedIcon} Error fetching test captcha from the API: `{error}`", ephemeral=True)
-                return
-
-            if captcha_image_base64:
-                try:
-                    if captcha_image_base64.startswith("data:image"):
-                        img_b64_data = captcha_image_base64.split(",", 1)[1]
-                    else:
-                        img_b64_data = captcha_image_base64
-                    image_bytes = base64.b64decode(img_b64_data)
-                    logger.info("[Test Button] Successfully decoded base64 image.")
-                except Exception as decode_err:
-                    logger.error(f"[Test Button] Failed to decode base64 image: {decode_err}")
-                    await interaction.followup.send(f"{theme.deniedIcon} Failed to decode captcha image data.", ephemeral=True)
-                    return
+        s = self._settings()
+        if s is not None:
+            name = next((n for a, n in self.alliances if str(a) == str(self.selected_id)), self.selected_id)
+            if not s["enabled"]:
+                state = f"{theme.deniedIcon} Off"
             else:
-                logger.error("[Test Button] Captcha fetch returned no image data.")
-                await interaction.followup.send(f"{theme.deniedIcon} Failed to retrieve captcha image data from API.", ephemeral=True)
-                return
-
-            if image_bytes:
-                logger.info("[Test Button] Solving fetched captcha...")
-                start_solve_time = time.time()
-                captcha_code, success, method, confidence, _ = await self.cog.captcha_solver.solve_captcha(
-                    image_bytes, fid=f"test-{user_id}", attempt=0
-                )
-                solve_duration = time.time() - start_solve_time
-                log_confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
-                logger.info(f"[Test Button] Solve result: Success={success}, Code='{captcha_code}', Method='{method}', Conf={log_confidence_str}. Duration: {solve_duration:.2f}s")
-            else:
-                 logger.error("[Test Button] Logic error: image_bytes is None before solving.")
-                 await interaction.followup.send(f"{theme.deniedIcon} Internal error before solving captcha.", ephemeral=True)
-                 return
-
-            confidence_str = f'{confidence:.2f}' if isinstance(confidence, float) else 'N/A'
-            embed = discord.Embed(
-                title=f"{theme.searchIcon} CAPTCHA Solver Test Results (ONNX)",
-                description=(
-                    f"**Test Summary**\n{theme.upperDivider}\n"
-                    f"{theme.robotIcon} **OCR Success:** {f'{theme.verifiedIcon} Yes' if success else f'{theme.deniedIcon} No'}\n"
-                    f"{theme.searchIcon} **Recognized Code:** `{captcha_code if success and captcha_code else 'N/A'}`\n"
-                    f"{theme.chartIcon} **Confidence:** `{confidence_str}`\n"
-                    f"{theme.timeIcon} **Solve Time:** `{solve_duration:.2f}s`\n"
-                    f"{theme.lowerDivider}\n"
-                ), color=theme.emColor3 if success else discord.Color.red()
-            )
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            logger.info(f"[Test Button] Test completed for user {user_id}.")
-
-        except requests.exceptions.ConnectionError:
-            logger.warning(f"[Test Button] Connection error for user {user_id}. WOS API may be unavailable.")
-            try:
-                await interaction.followup.send(f"{theme.deniedIcon} Connection error: Unable to reach WOS API. Please check your internet connection.", ephemeral=True)
-            except Exception:
-                pass
-        except requests.exceptions.Timeout:
-            logger.warning(f"[Test Button] Timeout for user {user_id}. WOS API may be slow.")
-            try:
-                await interaction.followup.send(f"{theme.deniedIcon} Connection error: Request timed out. WOS API may be overloaded or unavailable.", ephemeral=True)
-            except Exception:
-                pass
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[Test Button] Request error for user {user_id}: {type(e).__name__}")
-            try:
-                await interaction.followup.send(f"{theme.deniedIcon} Connection error: {type(e).__name__}. Please try again later.", ephemeral=True)
-            except Exception:
-                pass
-        except Exception as e:
-            logger.exception(f"[Test Button] UNEXPECTED Error during test for user {user_id}: {e}")
-            try:
-                await interaction.followup.send(f"{theme.deniedIcon} An unexpected error occurred during the test: `{e}`. Please check the bot logs.", ephemeral=True)
-            except Exception as followup_err:
-                logger.error(f"[Test Button] Failed to send final error followup to user {user_id}: {followup_err}")
-        finally:
-            if session:
-                session.close()
-
-    async def clear_redemption_cache_button(self, interaction: discord.Interaction):
-        """Handle the clear redemption cache button click."""
-        if not self.onnx_available:
-            await interaction.response.send_message(f"{theme.deniedIcon} Required library (onnxruntime) is not installed or failed to load.", ephemeral=True)
-            return
-
-        # Create confirmation embed
-        embed = discord.Embed(
-            title=f"{theme.warnIcon} Clear Redemption Cache",
-            description=(
-                "This will **permanently delete** all gift code redemption records from the database.\n\n"
-                "**What this does:**\n"
-                "• Removes all entries from the `user_giftcodes` table\n"
-                "• Allows users to attempt redeeming gift codes again\n"
-                "• Useful for development testing and image collection\n\n"
-                "**Warning:** This action cannot be undone!"
-            ),
-            color=discord.Color.orange()
+                picked = [lbl for lbl, on in (
+                    ("Successful", s["success"]), ("Already Redeemed", s["already"]), ("Failed", s["failed"])
+                ) if on]
+                state = f"{theme.verifiedIcon} On — " + (", ".join(picked) if picked else "no buckets selected yet")
+            desc += f"\n{theme.upperDivider}\n**{name}:** {state}\n{theme.lowerDivider}"
+        return discord.Embed(
+            title=f"{theme.redeemIcon} Redemption Summary",
+            description=desc,
+            color=theme.emColor1,
         )
 
-        # Get current count for display
-        try:
-            self.cog.cursor.execute("SELECT COUNT(*) FROM user_giftcodes")
-            current_count = self.cog.cursor.fetchone()[0]
-            embed.add_field(
-                name=f"{theme.chartIcon} Current Records",
-                value=f"{current_count:,} redemption records will be deleted",
-                inline=False
-            )
-        except Exception as e:
-            self.cog.logger.error(f"Error getting user_giftcodes count: {e}")
-            embed.add_field(
-                name=f"{theme.chartIcon} Current Records",
-                value="Unable to count records",
-                inline=False
-            )
+    async def _refresh(self, interaction: discord.Interaction):
+        self._build_components()
+        await safe_edit_message(interaction, embed=self.build_embed(), view=self, content=None)
 
-        # Create confirmation view
-        confirm_view = ClearCacheConfirmView(self.cog)
-        await interaction.response.send_message(embed=embed, view=confirm_view, ephemeral=True)
+    async def _on_alliance(self, interaction: discord.Interaction):
+        self.selected_id = int(interaction.data["values"][0])
+        await self._refresh(interaction)
+
+    async def _set(self, interaction, **kwargs):
+        from .gift_redemption import set_summary_settings
+        set_summary_settings(self.cog, self.selected_id, **kwargs)
+        await self._refresh(interaction)
+
+    async def _toggle_enabled(self, interaction):
+        s = self._settings()
+        turning_on = not s["enabled"]
+        kwargs = {"enabled": turning_on}
+        # Sensible default on first enable: show Failed (the actionable bucket).
+        if turning_on and not (s["success"] or s["already"] or s["failed"]):
+            kwargs["failed"] = True
+        await self._set(interaction, **kwargs)
+
+    async def _toggle_success(self, interaction):
+        await self._set(interaction, success=not self._settings()["success"])
+
+    async def _toggle_already(self, interaction):
+        await self._set(interaction, already=not self._settings()["already"])
+
+    async def _toggle_failed(self, interaction):
+        await self._set(interaction, failed=not self._settings()["failed"])
+
+    async def _back(self, interaction: discord.Interaction):
+        await self.cog.show_settings_menu(interaction)
+
+    async def on_timeout(self):
+        await notify_view_expired(self, "redemption summary settings")
 

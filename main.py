@@ -1176,6 +1176,16 @@ if __name__ == "__main__":
             conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_permission_audit_timestamp
                 ON permission_audit_log(timestamp DESC)""")
 
+            # Per-alliance opt-in channel summary posted after each redemption.
+            # No row = disabled (default). Buckets choose what the summary lists.
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS redemption_summary_settings (
+                alliance_id INTEGER PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                show_success INTEGER NOT NULL DEFAULT 0,
+                show_already INTEGER NOT NULL DEFAULT 0,
+                show_failed INTEGER NOT NULL DEFAULT 1
+            )""")
+
         with connections["conn_users"] as conn_users:
             conn_users.execute("""CREATE TABLE IF NOT EXISTS users (
                 fid INTEGER PRIMARY KEY,
@@ -1210,12 +1220,17 @@ if __name__ == "__main__":
             )""")
             
             conn_giftcode.execute("""CREATE TABLE IF NOT EXISTS user_giftcodes (
-                fid INTEGER, 
-                giftcode TEXT, 
-                status TEXT, 
+                fid INTEGER,
+                giftcode TEXT,
+                status TEXT,
+                last_attempt_at TEXT,
                 PRIMARY KEY (fid, giftcode),
                 FOREIGN KEY (giftcode) REFERENCES gift_codes (giftcode)
             )""")
+            # Upgrade path: per-account attempt timestamp for the redeem-results viewer.
+            uc_cols = [row[1] for row in conn_giftcode.execute("PRAGMA table_info(user_giftcodes)").fetchall()]
+            if "last_attempt_at" not in uc_cols:
+                conn_giftcode.execute("ALTER TABLE user_giftcodes ADD COLUMN last_attempt_at TEXT")
 
         with connections["conn_alliance"] as conn_alliance:
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliancesettings (

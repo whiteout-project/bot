@@ -118,6 +118,8 @@ class GiftOperations(commands.Cog):
         # Initialization of Locks and Cooldowns
         self.captcha_solver = None
         self._validation_lock = asyncio.Lock()
+        self._last_validation_claim_by_fid = {}  # fid -> monotonic ts of its last validation captcha request, for per-FID rate-spacing
+        self._priority_validation_pending = 0  # in-flight new-code validations; periodic loop yields while > 0
         self.last_validation_attempt_time = 0
         self.validation_cooldown = 5
         self._last_cleanup_date = None
@@ -145,39 +147,16 @@ class GiftOperations(commands.Cog):
 
         # Captcha Solver Initialization
         try:
-            self.settings_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ocr_settings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enabled INTEGER DEFAULT 1
-                )""")
-            self.settings_conn.commit()
-
-            self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-            ocr_settings = self.settings_cursor.fetchone()
+            # Captcha solver is always on; disabling it isn't exposed (reload the
+            # Gift Code cog from Maintenance to restart it).
             save_captcha = getattr(self.bot, 'save_captcha', 0)
-
-            if ocr_settings:
-                enabled = ocr_settings[0]
-                if enabled == 1:
-                    self.logger.info("GiftOps __init__: OCR is enabled. Initializing ONNX solver...")
-                    self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
-                    if not self.captcha_solver.is_initialized:
-                        self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
-                        self.captcha_solver = None
-                    else:
-                        self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
-                else:
-                    self.logger.info("GiftOps __init__: OCR is disabled in settings.")
+            self.logger.info("GiftOps __init__: Initializing ONNX captcha solver...")
+            self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
+            if not self.captcha_solver.is_initialized:
+                self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
+                self.captcha_solver = None
             else:
-                self.logger.warning("GiftOps __init__: No OCR settings found in DB. Inserting defaults.")
-                self.settings_cursor.execute("INSERT INTO ocr_settings (enabled) VALUES (1)")
-                self.settings_conn.commit()
-                self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
-                if not self.captcha_solver.is_initialized:
-                    self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize with defaults.")
-                    self.captcha_solver = None
-                else:
-                    self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
+                self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
 
         except ImportError as lib_err:
             self.logger.exception(f"GiftOps __init__: Missing required library for OCR: {lib_err}. Captcha solving disabled.")
@@ -241,66 +220,16 @@ class GiftOperations(commands.Cog):
     async def on_ready(self):
         self.logger.info("GiftOps Cog: on_ready triggered.")
         try:
-            # Clean up old columns from ocr_settings if present
-            try:
-                self.logger.info("Checking ocr_settings table schema...")
-                conn_info = sqlite3.connect('db/settings.sqlite')
-                cursor_info = conn_info.cursor()
-                cursor_info.execute("PRAGMA table_info(ocr_settings)")
-                columns = [col[1] for col in cursor_info.fetchall()]
-                columns_to_drop = []
-                if 'use_gpu' in columns: columns_to_drop.append('use_gpu')
-                if 'gpu_device' in columns: columns_to_drop.append('gpu_device')
-                if 'save_images' in columns: columns_to_drop.append('save_images')
-
-                if columns_to_drop:
-                    sqlite_version = sqlite3.sqlite_version_info
-                    if sqlite_version >= (3, 35, 0):
-                        self.logger.info(f"Found old columns {columns_to_drop}. Attempting removal.")
-                        for col_name in columns_to_drop:
-                            try:
-                                self.settings_cursor.execute(f"ALTER TABLE ocr_settings DROP COLUMN {col_name}")
-                                self.logger.info(f"Successfully dropped column: {col_name}")
-                            except Exception as drop_err:
-                                self.logger.error(f"Error dropping column {col_name}: {drop_err}")
-                        self.settings_conn.commit()
-                    else:
-                        self.logger.warning(f"Found old columns {columns_to_drop}, but SQLite {sqlite3.sqlite_version} doesn't support DROP COLUMN.")
-                else:
-                    self.logger.info("ocr_settings table schema is up to date.")
-                conn_info.close()
-            except Exception as schema_err:
-                self.logger.error(f"Error during ocr_settings schema check/cleanup: {schema_err}")
-
-            self.logger.info("Setting up ocr_settings table...")
-            self.settings_cursor.execute("""
-                CREATE TABLE IF NOT EXISTS ocr_settings (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    enabled INTEGER DEFAULT 1
-                )
-            """)
-            self.settings_conn.commit()
-
-            self.settings_cursor.execute("SELECT COUNT(*) FROM ocr_settings")
-            count = self.settings_cursor.fetchone()[0]
-            if count == 0:
-                self.settings_cursor.execute("INSERT INTO ocr_settings (enabled) VALUES (1)")
-                self.settings_conn.commit()
-
+            # Captcha solver is always on; retry init here if __init__ failed.
             if self.captcha_solver is None:
-                self.logger.warning("Captcha solver not initialized in __init__, attempting again in on_ready...")
-                self.settings_cursor.execute("SELECT enabled FROM ocr_settings ORDER BY id DESC LIMIT 1")
-                ocr_settings = self.settings_cursor.fetchone()
-                if ocr_settings:
-                    enabled = ocr_settings[0]
-                    if enabled == 1:
-                        try:
-                            save_captcha = getattr(self.bot, 'save_captcha', 0)
-                            self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
-                            if not self.captcha_solver.is_initialized:
-                                self.captcha_solver = None
-                        except Exception:
-                            self.captcha_solver = None
+                self.logger.warning("Captcha solver not initialized in __init__, retrying in on_ready...")
+                try:
+                    save_captcha = getattr(self.bot, 'save_captcha', 0)
+                    self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
+                    if not self.captcha_solver.is_initialized:
+                        self.captcha_solver = None
+                except Exception:
+                    self.captcha_solver = None
 
             self.logger.info("Validating gift code channels...")
             self.cursor.execute("SELECT channel_id, alliance_id FROM giftcode_channel")
@@ -422,6 +351,8 @@ class GiftOperations(commands.Cog):
                 f"└ View all active, valid codes\n\n"
                 f"{theme.targetIcon} **Redeem Gift Code**\n"
                 f"└ Redeem gift code(s) for one or more alliances\n\n"
+                f"{theme.archiveIcon} **Redemption History**\n"
+                f"└ See which accounts redeemed, already had, or failed a code\n\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Set up a gift code channel, configure auto redemption, and more...\n\n"
                 f"{theme.trashIcon} **Delete Gift Code**\n"
@@ -435,8 +366,8 @@ class GiftOperations(commands.Cog):
 
     # ── Delegation to gift_redemption ─────────────────────────────────
 
-    async def validate_gift_code_immediately(self, giftcode, source="unknown"):
-        return await gift_redemption.validate_gift_code_immediately(self, giftcode, source)
+    async def validate_gift_code_immediately(self, giftcode, source="unknown", force=False):
+        return await gift_redemption.validate_gift_code_immediately(self, giftcode, source, force)
 
     def encode_data(self, data):
         return gift_redemption.encode_data(self, data)
@@ -525,17 +456,17 @@ class GiftOperations(commands.Cog):
     def get_test_fid(self):
         return gift_settings.get_test_fid(self)
 
+    def clear_test_fid(self):
+        return gift_settings.clear_test_fid(self)
+
     async def get_validation_fid(self):
         return await gift_settings.get_validation_fid(self)
 
-    async def show_ocr_settings(self, interaction):
-        return await gift_settings.show_ocr_settings(self, interaction)
-
-    async def update_ocr_settings(self, interaction, enabled=None):
-        return await gift_settings.update_ocr_settings(self, interaction, enabled)
-
     async def show_redemption_priority(self, interaction):
         return await gift_settings.show_redemption_priority(self, interaction)
+
+    async def show_redemption_summary(self, interaction):
+        return await gift_settings.show_redemption_summary(self, interaction)
 
     async def setup_giftcode_auto(self, interaction):
         return await gift_settings.setup_giftcode_auto(self, interaction)
@@ -556,6 +487,10 @@ class GiftOperations(commands.Cog):
 
     async def show_settings_menu(self, interaction):
         from .gift_views import show_settings_menu as _show
+        return await _show(self, interaction)
+
+    async def show_redeem_results(self, interaction):
+        from .gift_redemption_results import show_redeem_results as _show
         return await _show(self, interaction)
 
     async def get_admin_info(self, user_id):
