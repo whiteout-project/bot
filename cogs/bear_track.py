@@ -279,6 +279,11 @@ _RALLIES_MARKER_RE = re.compile(
     re.IGNORECASE,
 )
 _BARE_SMALL_INT_RE = re.compile(r'(?<![\d,\.])\b\d{1,3}\b(?![\d,\.])')
+# Ranking-page title, e.g. "Trap 2 Damage Rewards".
+_REWARDS_TRAP_RE = re.compile(r'Trap\s*(\d)\s*Damage', re.IGNORECASE)
+# Alliance tag: exactly 3 alphanumerics in brackets. Fixed in-game, so a name's
+# own brackets won't match.
+_ALLIANCE_TAG_RE = re.compile(r'\[[A-Za-z0-9]{3}\]')
 _HUNT_DATE_RE = re.compile(r'\b(\d{4})-(\d{2})-(\d{2})')
 _EXPIRES_MARKER_RE = re.compile(
     r'Expire[sd]?|期限|有効期限|만료|تنتهي|Истекает',
@@ -307,12 +312,21 @@ def extract_hunt_date(text: str) -> str | None:
 
 def extract_bear_hunt_stats(text: str):
     """Returns (hunting_trap_str, rallies_str, total_damage_int)."""
+    # Ranking-page title first: won't match a "[Hunting Trap 1]" header.
+    title_match = _REWARDS_TRAP_RE.search(text)
     trap_match = _BRACKETED_TRAP_RE.search(text)
-    if trap_match:
+    if title_match:
+        hunting_trap = title_match.group(1)
+    elif trap_match:
         hunting_trap = trap_match.group(1) or trap_match.group(2)
     else:
         m = _HEADERLESS_TRAP_RE.search(text)
         hunting_trap = m.group(1) if m else ""
+
+    # Ranking pages have no alliance-total/rallies line — don't let max() take
+    # the top player's damage as the total.
+    if len(_ALLIANCE_TAG_RE.findall(text)) >= 3:
+        return hunting_trap, "", 0
 
     # Total damage dwarfs any per-player damage, so max() works.
     number_runs = list(_FORMATTED_NUMBER_RE.finditer(text))
@@ -338,17 +352,24 @@ def extract_bear_hunt_stats(text: str):
 def find_ranking_section_start(text: str):
     """Index where the rank list starts, or None when the image is a
     summary (no rank list to parse — caller must skip row extraction)."""
+    ranking_kw = re.search(r'(?i)\b(?:damage\s+ranking|ranking)\b', text)
+    # Ranking pages carry a tag per row, breaking the "after the last ]"
+    # heuristic. Fallback engines often drop the brackets, so also detect the
+    # page by its "Damage Ranking" title and start at the ranking header.
+    if ranking_kw and (len(_ALLIANCE_TAG_RE.findall(text)) >= 3 or _REWARDS_TRAP_RE.search(text)):
+        return ranking_kw.end()
     last_bracket = text.rfind(']')
     if last_bracket != -1:
         tail = text[last_bracket + 1:]
         if len(_FORMATTED_NUMBER_RE.findall(tail)) >= 3:
             return last_bracket + 1
         return None
-    if _PERSONAL_REWARDS_RE.search(text):
+    # A personal-rewards-only summary has no list; a ranking page shows that tab
+    # label too, so only skip when no ranking list is present.
+    if _PERSONAL_REWARDS_RE.search(text) and not ranking_kw:
         return None
-    m = re.search(r'(?i)\b(?:damage\s+ranking|ranking)\b', text)
-    if m:
-        return m.end()
+    if ranking_kw:
+        return ranking_kw.end()
     return 0
 
 
@@ -373,10 +394,18 @@ def parse_player_rows(text: str, after_pos: int = None):
 
     # Drop the "[Hunting Trap N]" section header from the first chunk.
     chunks[0] = re.sub(r'^.*\][^A-Za-z]*', '', chunks[0], count=1)
-    # Strip the English "Damage Points" suffix from any chunk.
-    _label_suffix_re = re.compile(r'(?i)\s*(?:damage\s+points|damage|points)\s*:?\s*$')
+    # Strip the "Damage Points" suffix; \s* also catches a glued "DamagePoints".
+    _label_suffix_re = re.compile(r'(?i)\s*(?:damage\s*points|damage|points)\s*:?\s*$')
     for i, c in enumerate(chunks):
         chunks[i] = _label_suffix_re.sub('', c).rstrip()
+
+    # Strip the per-row alliance tag so rows aren't dropped by the bracket filter.
+    for i, c in enumerate(chunks):
+        c = _ALLIANCE_TAG_RE.sub(' ', c)
+        # Fallback OCR garbles the ']' into a letter, gluing the 3-char tag onto a
+        # non-Latin name ("[CATI旭東興業"). Strip [ + 3 tag chars + the garbled ].
+        c = re.sub(r'^\s*\[[A-Za-z0-9]{3}[A-Za-z]?(?=[^\x00-\x7F])', '', c)
+        chunks[i] = c
 
     valid = [i for i, c in enumerate(chunks) if not re.search(r'[.?\[\]]', c)]
     if 0 in valid and len(chunks[0].split()) > 8:
@@ -392,7 +421,12 @@ def parse_player_rows(text: str, after_pos: int = None):
     def _name_token_count(c):
         return sum(1 for t in c.split() if not re.fullmatch(r'\d{1,2}', t))
 
-    if 0 in valid and len(valid) > 1:
+    # On the mail, chunk[0] still carries header words before the first name;
+    # trim leading tokens to match the others. Skip on ranking pages, where the
+    # tag strip already isolated the name (trimming would eat a multi-word name
+    # like "Numb Little Bug" down to its last token).
+    is_ranking = len(_ALLIANCE_TAG_RE.findall(text)) >= 3 or bool(_REWARDS_TRAP_RE.search(text))
+    if 0 in valid and len(valid) > 1 and not is_ranking:
         other_counts = [_name_token_count(chunks[i]) for i in valid if i != 0]
         target = max(min(c for c in other_counts if c) if any(other_counts) else 1, 1)
         first_tokens = chunks[0].split()
@@ -1865,10 +1899,25 @@ class BearSession:
                 f"for more screenshots…"
             )
 
+        # Warn when gift-code redemption is running, since it shares the CPU/OCR
+        # and can slow bear OCR to a crawl on smaller hosts.
+        redeem_warning = ""
+        try:
+            pq = self.cog.bot.get_cog('ProcessQueue')
+            if pq and (pq.has_queued_or_active('gift_redeem')
+                       or pq.has_queued_or_active('gift_validate')):
+                redeem_warning = (
+                    f"\n\n{theme.warnIcon} Gift code redemption is running right now, "
+                    f"so bear OCR may be delayed until it finishes."
+                )
+        except Exception:
+            redeem_warning = ""
+
         description = (
             f"{theme.upperDivider}\n"
             f"{summary}"
             f"{status_line}"
+            f"{redeem_warning}"
             f"{footer_line}\n"
             f"{theme.lowerDivider}"
         )
@@ -2310,8 +2359,7 @@ _BEAR_INFO_FINGERPRINTS = (
 
 
 def render_bear_info_message() -> str:
-    """The pinned helper text for a bear score channel. Bear is single-event,
-    so the content is static — it just tells members which mail to upload."""
+    """The pinned helper text for a bear score channel — what to upload."""
     return "\n".join([
         f"{theme.importIcon} **Upload your Bear Hunt results here**",
         "",
@@ -2320,11 +2368,14 @@ def render_bear_info_message() -> str:
         "• The **Bear Hunt result mail** — the one headed **\"Battle Overview\"** "
         "with **Rallies** and **Total Alliance Damage**, followed by the "
         "**Damage Ranking** list.",
+        "• The **Damage Ranking** reward pages — to add everyone below the mail's "
+        "top ranks. Open **Bear Trap → Rewards → Damage Ranking**, or "
+        "**Events → Bear Hunt → Damage Rewards → Damage Ranking**.",
         f"{theme.lowerDivider}",
         "",
         f"{theme.infoIcon} **Tips**",
-        "• Live in-trap damage list or personal rewards-only mail won't work.",
-        "• Drop **multiple screenshots** to capture the full ranking",
+        "• Post the **rewards mail plus a few ranking pages** together to capture every participant.",
+        "• We don't track individual rallies, so the individual rally damage list won't work.",
         "• Set your in-game language to **English** for the best results.",
         "• The bot reads each upload automatically and posts the parsed damage here.",
     ])
@@ -3763,11 +3814,6 @@ class BearHuntReviewView(discord.ui.View):
         parts.append(
             "*Select a player to edit in the drop-down; "
             "clear the name to delete the row.*"
-        )
-        parts.append(
-            f"{theme.infoIcon} *Bear mails only list the top ~10 by damage, so only "
-            f"those are auto-recognized for now. Add others with **Add Player** — "
-            f"capturing further participants via OCR is planned in a future release.*"
         )
         action_lines = [
             f"{theme.addIcon} **Add Player**\n"

@@ -718,12 +718,14 @@ def encode_data(cog, data):
 
 
 # Bidi isolates so RTL names (Arabic/Hebrew) don't flip surrounding LTR text.
-_FSI = "⁨"
-_PDI = "⁩"
+# LRI/PDI: force each name line to LTR base so RTL names (Arabic/Hebrew)
+# left-align in the list instead of drifting to the right edge.
+_LRI = chr(0x2066)
+_PDI = chr(0x2069)
 
 
 def _iso(text) -> str:
-    return f"{_FSI}{text}{_PDI}"
+    return f"{_LRI}{text}{_PDI}"
 
 
 def get_summary_settings(cog, alliance_id):
