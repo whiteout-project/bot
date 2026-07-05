@@ -618,7 +618,7 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
         fid, _ = fuzzy_match_name(r.get("name") or "", roster, alliance_id=alliance_id)
         return fid is None
 
-    def merge(rows, fb_rows, fb_text, _lang):
+    def merge(rows, fb_rows, fb_text, _lang, *, primary_boxed=None, fb_boxed=None):
         # Cheap value-merge first (works when the fallback engine happens to read
         # the number too). Group by value so rows sharing a value aren't dropped.
         fb_by_value: dict = {}
@@ -633,6 +633,20 @@ async def ocr_value_rows(image_bytes: bytes, *, roster, alliance_id, session=Non
                     if fid is not None:
                         r["name"] = fr["name"]
                         break
+        # Box alignment: pair primary/fallback rows geometrically and fill the
+        # name from the aligned fallback row. Attendance keys by 'value'; the box
+        # merge keys by 'damage', so alias value->damage for the call.
+        if any(is_unfilled(r) for r in rows) and primary_boxed and fb_boxed:
+            by_damage = {}
+            for r in rows:
+                r["damage"] = r["value"]
+                by_damage[r["value"]] = r
+            try:
+                bear_track.merge_fallback_rows_by_boxes(
+                    by_damage, primary_boxed, fb_boxed, roster, _lang)
+            finally:
+                for r in rows:
+                    r.pop("damage", None)
         # Non-Latin engines read names well but mangle numbers, so value-merge
         # usually misses them. Fall back to bear's anchor-based position fill
         # (Latin names from the primary pass anchor the script substrings). It

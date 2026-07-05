@@ -284,6 +284,10 @@ _REWARDS_TRAP_RE = re.compile(r'Trap\s*(\d)\s*Damage', re.IGNORECASE)
 # Alliance tag: exactly 3 alphanumerics in brackets. Fixed in-game, so a name's
 # own brackets won't match.
 _ALLIANCE_TAG_RE = re.compile(r'\[[A-Za-z0-9]{3}\]')
+# Trailing "Damage Points" label (\s* also catches a glued "DamagePoints").
+_ROW_LABEL_SUFFIX_RE = re.compile(r'(?i)\s*(?:damage\s*points|damage|points)\s*:?\s*$')
+# Leading <=3-char tokens (a bracket-less alliance tag or label leak) before a real 4+ char name.
+_LEADING_SHORT_TOKEN_RE = re.compile(r'^(?:\S{1,3}\s+)+(?=\S{4,})')
 _HUNT_DATE_RE = re.compile(r'\b(\d{4})-(\d{2})-(\d{2})')
 _EXPIRES_MARKER_RE = re.compile(
     r'Expire[sd]?|期限|有効期限|만료|تنتهي|Истекает',
@@ -395,9 +399,8 @@ def parse_player_rows(text: str, after_pos: int = None):
     # Drop the "[Hunting Trap N]" section header from the first chunk.
     chunks[0] = re.sub(r'^.*\][^A-Za-z]*', '', chunks[0], count=1)
     # Strip the "Damage Points" suffix; \s* also catches a glued "DamagePoints".
-    _label_suffix_re = re.compile(r'(?i)\s*(?:damage\s*points|damage|points)\s*:?\s*$')
     for i, c in enumerate(chunks):
-        chunks[i] = _label_suffix_re.sub('', c).rstrip()
+        chunks[i] = _ROW_LABEL_SUFFIX_RE.sub('', c).rstrip()
 
     # Strip the per-row alliance tag so rows aren't dropped by the bracket filter.
     for i, c in enumerate(chunks):
@@ -445,7 +448,7 @@ def parse_player_rows(text: str, after_pos: int = None):
         name = re.sub(r'\s+', ' ', chunk).strip()
         # Strip leading ≤3-char tokens (label leak from previous row's
         # "Damage Points:") when followed by a real 4+ char name.
-        name = re.sub(r'^(?:\S{1,3}\s+)+(?=\S{4,})', '', name)
+        name = _LEADING_SHORT_TOKEN_RE.sub('', name)
         # Blank when chunk is mostly non-letters (status-bar leak).
         if sum(c.isalpha() for c in name) < 3:
             name = ''
@@ -842,6 +845,81 @@ def _ocr_image_with_engine_boxed(image_bytes, engine) -> list:
     return []
 
 
+def _box_y_bounds(box):
+    """(y_top, y_bottom, y_center, x_left) for a 4-corner box, or None."""
+    try:
+        pts = list(box)
+        if len(pts) < 4:
+            return None
+        ys = [float(p[1]) for p in pts]
+        xs = [float(p[0]) for p in pts]
+    except (TypeError, ValueError, IndexError):
+        return None
+    y_top, y_bottom = min(ys), max(ys)
+    return y_top, y_bottom, (y_top + y_bottom) / 2.0, min(xs)
+
+
+def _boxed_rows(boxed_tokens, y_tol_ratio: float = 0.6):
+    """Cluster [(text, box), ...] into rows by Y. Each row:
+    {'y_center','y_top','y_bottom','tokens':[(text, x_left), ...]}."""
+    items = []
+    heights = []
+    for text, box in boxed_tokens:
+        b = _box_y_bounds(box)
+        if b is None or not str(text).strip():
+            continue
+        y_top, y_bottom, y_center, x_left = b
+        items.append((y_center, y_top, y_bottom, x_left, str(text)))
+        heights.append(y_bottom - y_top)
+    if not items:
+        return []
+    items.sort(key=lambda it: it[0])  # by y_center
+    med_h = sorted(heights)[len(heights) // 2] or 1.0
+    band = med_h * y_tol_ratio
+    rows = []
+    cur = None
+    for y_center, y_top, y_bottom, x_left, text in items:
+        if cur is not None and abs(y_center - cur["y_center"]) <= band:
+            cur["_toks"].append((x_left, text))
+            cur["y_top"] = min(cur["y_top"], y_top)
+            cur["y_bottom"] = max(cur["y_bottom"], y_bottom)
+            # running mean keeps the band centered as tokens accrete
+            cur["y_center"] = (cur["y_top"] + cur["y_bottom"]) / 2.0
+        else:
+            cur = {"y_center": y_center, "y_top": y_top, "y_bottom": y_bottom,
+                   "_toks": [(x_left, text)]}
+            rows.append(cur)
+    for r in rows:
+        r["tokens"] = [(t, x) for x, t in sorted(r.pop("_toks"))]
+    return rows
+
+
+def _y_overlap(a, b) -> float:
+    """Vertical overlap in pixels between two row dicts (0 if disjoint)."""
+    return max(0.0, min(a["y_bottom"], b["y_bottom"]) - max(a["y_top"], b["y_top"]))
+
+
+def _align_rows_by_y(primary_rows, fallback_rows):
+    """Pair each primary row to its best Y-overlapping fallback row (each
+    fallback used once). Returns [(p_row, fb_row|None), ...] in primary order."""
+    used = set()
+    pairs = []
+    for p in primary_rows:
+        best_i, best_ov = None, 0.0
+        for i, f in enumerate(fallback_rows):
+            if i in used:
+                continue
+            ov = _y_overlap(p, f)
+            if ov > best_ov:
+                best_i, best_ov = i, ov
+        if best_i is None:
+            pairs.append((p, None))
+        else:
+            used.add(best_i)
+            pairs.append((p, fallback_rows[best_i]))
+    return pairs
+
+
 async def ocr_bytes_with_boxes(image_bytes: bytes, lang: str = DEFAULT_OCR_LANG,
                                *, session=None) -> list:
     """OCR returning [(text, box), ...]. Box is 4 corner coords. Empty list on failure."""
@@ -887,7 +965,12 @@ async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
     # pass for the scoreboard) so the primary engine isn't run twice per image.
     if progress_callback and primary_text is None:
         await progress_callback('ocr', primary_lang)
-    text = primary_text if primary_text is not None else await ocr_bytes(image_bytes, lang=primary_lang, session=session)
+    primary_boxed = None
+    if primary_text is not None:
+        text = primary_text
+    else:
+        primary_boxed = await ocr_bytes_with_boxes(image_bytes, lang=primary_lang, session=session)
+        text = ' '.join(t for t, _b in primary_boxed)
     if not text.strip():
         return [], ""
     repaired = repair_ocr_digits(text)
@@ -905,7 +988,8 @@ async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
         if progress_callback:
             await progress_callback('fallback', fb)
         try:
-            fb_text = await ocr_bytes(image_bytes, lang=fb, session=session)
+            fb_boxed = await ocr_bytes_with_boxes(image_bytes, lang=fb, session=session)
+            fb_text = ' '.join(t for t, _b in fb_boxed)
         except Exception as e:
             logger.warning(f"OCR fallback {fb} failed: {e}")
             continue
@@ -925,7 +1009,7 @@ async def ocr_rows_with_fallback(image_bytes: bytes, *, primary_lang: str,
             for fr in fb_rows:
                 if fr.get("name"):
                     fr["name"] = _reverse_for_rtl(fr["name"], fb)
-        merge(rows, fb_rows, fb_repaired, fb)
+        merge(rows, fb_rows, fb_repaired, fb, primary_boxed=primary_boxed, fb_boxed=fb_boxed)
     return rows, text
 
 
@@ -1310,6 +1394,69 @@ def _collect_claimed_fids(img_rows: dict, roster: list | None) -> set:
             if cands and cands[0][2] >= MATCH_AUTO_CONFIRM:
                 claimed.add(cands[0][0])
     return claimed
+
+
+def _row_name_from_tokens(tokens) -> str:
+    """Join a row's name tokens, dropping the damage number, its label, and any
+    bare number (rank badge or garbled unformatted damage). Keeps OCR noise for
+    later fuzzy resolution."""
+    parts = []
+    for text, _x in tokens:
+        t = text.strip()
+        if not t:
+            continue
+        if _FORMATTED_NUMBER_RE.search(t):        # the damage number (+ glued label)
+            continue
+        if re.fullmatch(r'[\d,\.]+', t):          # bare number: rank badge or garbled damage
+            continue
+        parts.append(t)
+    name = ' '.join(parts)
+    name = _ALLIANCE_TAG_RE.sub(' ', name)        # drop clean [xyz] tag if present
+    name = re.sub(r'\s+', ' ', name).strip()
+    # Match parse_player_rows cleaning: drop the "Damage Points" label and a
+    # bracket-less tag leak, so box-align names resolve as well as parser names.
+    name = _ROW_LABEL_SUFFIX_RE.sub('', name).rstrip()
+    name = _LEADING_SHORT_TOKEN_RE.sub('', name)
+    return name.strip()
+
+
+def _row_damage(tokens):
+    """Parse the row's damage from its tokens, or None."""
+    for text, _x in tokens:
+        m = _FORMATTED_NUMBER_RE.search(text)
+        if m:
+            return int(re.sub(r'[^\d]', '', m.group(0)))
+    return None
+
+
+def merge_fallback_rows_by_boxes(img_rows, primary_boxed, fb_boxed, roster,
+                                 fb_lang: str = "") -> bool:
+    """Geometric merge: align primary rows to fallback rows by Y overlap and
+    fill each unfilled img_rows[damage] with the aligned fallback name. Never
+    uses the fallback's number. Returns True if any row was filled."""
+    p_rows = _boxed_rows(primary_boxed)
+    f_rows = _boxed_rows(fb_boxed)
+    if not p_rows or not f_rows:
+        return False
+    filled = False
+    for p_row, f_row in _align_rows_by_y(p_rows, f_rows):
+        if f_row is None:
+            continue
+        damage = _row_damage(p_row["tokens"])
+        existing = img_rows.get(damage) if damage is not None else None
+        if not existing or not is_row_unfilled(existing, roster):
+            continue
+        name = _row_name_from_tokens(f_row["tokens"])
+        if fb_lang in _RTL_LANGS and name:
+            name = _reverse_for_rtl(name, fb_lang)
+        if not name:
+            continue
+        if name_match_score(name, roster) > name_match_score(existing.get("name") or "", roster):
+            existing["name"] = name
+            filled = True
+            if fb_lang:
+                logger.info(f"Bear OCR box-align [{fb_lang}] filled {name!r} for damage {damage}")
+    return filled
 
 
 def merge_fallback_rows_by_damage(img_rows: dict, fb_rows: list,
@@ -3049,7 +3196,8 @@ class BearTrack(commands.Cog):
             await progress_callback('ocr', primary_lang)
         try:
             async with self._acquire_ocr_slot():
-                extracted_text = await ocr_bytes(image_bytes, primary_lang, session=session)
+                primary_boxed = await ocr_bytes_with_boxes(image_bytes, primary_lang, session=session)
+            extracted_text = ' '.join(t for t, _b in primary_boxed)
         except Exception as e:
             logger.error(f"Bear OCR error ({primary_lang}) on {filename}: {e}")
             return result
@@ -3095,7 +3243,8 @@ class BearTrack(commands.Cog):
                     await progress_callback('fallback', fb_lang)
                 try:
                     async with self._acquire_ocr_slot():
-                        fb_text = await ocr_bytes(image_bytes, fb_lang, session=session)
+                        fb_boxed = await ocr_bytes_with_boxes(image_bytes, fb_lang, session=session)
+                    fb_text = ' '.join(t for t, _b in fb_boxed)
                 except Exception as e:
                     logger.warning(f"Bear OCR fallback {fb_lang} failed: {e}")
                     continue
@@ -3122,16 +3271,20 @@ class BearTrack(commands.Cog):
                     continue
                 attempts += 1
                 pre_scores = _score_snapshot()
-                filled_via_damage = False
                 fb_rows = parse_player_rows(fb_repaired)
                 if fb_lang in _RTL_LANGS:
                     for fr in fb_rows:
                         if fr.get('name'):
                             fr['name'] = _reverse_for_rtl(fr['name'], fb_lang)
-                filled_via_damage = merge_fallback_rows_by_damage(
+                filled = merge_fallback_rows_by_damage(
                     img_rows, fb_rows, roster, fb_lang
                 )
-                if not filled_via_damage and fb_lang not in _LATIN_ONLY_LANGS:
+                if not filled:
+                    filled = merge_fallback_rows_by_boxes(
+                        img_rows, primary_boxed, fb_boxed, roster, fb_lang
+                    )
+                # Last resort: text-position anchor, only when cheap-merge and box-align both missed.
+                if not filled and fb_lang not in _LATIN_ONLY_LANGS:
                     fill_unfilled_by_position(
                         img_rows, fb_repaired, fb_lang, filename, roster
                     )
