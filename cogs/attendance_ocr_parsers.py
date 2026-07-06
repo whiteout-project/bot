@@ -1421,6 +1421,53 @@ def delete_session(session_id: str) -> None:
         conn.commit()
 
 
+def _bear_session_id(hunt_id) -> str:
+    return f"bear-{hunt_id}"
+
+
+def _bear_trap_label(hunting_trap) -> str:
+    return {1: "Trap 1", 2: "Trap 2", 3: "Both Traps"}.get(
+        int(hunting_trap), f"Trap {hunting_trap}")
+
+
+def sync_bear_attendance_event(*, alliance_id, hunt_id, date, hunting_trap,
+                               event_time, alliance_name, participants) -> None:
+    """Create or replace the attendance event mirroring one bear hunt. Bear is
+    the source of truth: the event's records are fully rewritten to the current
+    participants (all 'present', points=damage). event_time may be None."""
+    session_id = _bear_session_id(hunt_id)
+    trap_label = _bear_trap_label(hunting_trap)
+    session_name = f"{trap_label} - {date}"
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        conn.execute("DELETE FROM attendance_records WHERE session_id = ?", (session_id,))
+        conn.execute(
+            "INSERT OR REPLACE INTO attendance_sessions "
+            "(session_id, event_type, event_date, event_subtype, alliance_id, "
+            " awaiting_result, origin, event_time) "
+            "VALUES (?, 'bear', ?, ?, ?, 0, 'bear', ?)",
+            (session_id, date, trap_label, alliance_id, event_time),
+        )
+        for p in participants:
+            conn.execute(
+                "INSERT INTO attendance_records "
+                "(session_id, session_name, event_type, event_date, player_id, "
+                " player_name, alliance_id, alliance_name, status, points, event_subtype) "
+                "VALUES (?, ?, 'bear', ?, ?, ?, ?, ?, 'present', ?, ?)",
+                (session_id, session_name, date, str(p['fid']), p['name'],
+                 str(alliance_id), alliance_name or "", int(p['damage']), trap_label),
+            )
+        conn.commit()
+
+
+def delete_bear_attendance_event(*, hunt_id) -> None:
+    """Remove the attendance event mirroring a deleted bear hunt."""
+    session_id = _bear_session_id(hunt_id)
+    with sqlite3.connect(_ATT_DB, timeout=30.0) as conn:
+        conn.execute("DELETE FROM attendance_records WHERE session_id = ?", (session_id,))
+        conn.execute("DELETE FROM attendance_sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+
+
 def _unmatched_id_floor(session_id: str) -> int:
     """Most-negative existing player_id for this session, or 0 if none. Callers
     decrement from this to allocate a fresh per-session placeholder id."""

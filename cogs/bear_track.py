@@ -147,6 +147,14 @@ os.makedirs("db", exist_ok=True)
 BEAR_DB_PATH = "db/bear_data.sqlite"
 
 
+def _ensure_bear_hunts_event_time(conn):
+    """Idempotently add the optional event_time column to bear_hunts."""
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(bear_hunts)")]
+    if "event_time" not in cols:
+        conn.execute("ALTER TABLE bear_hunts ADD COLUMN event_time TEXT")
+        conn.commit()
+
+
 def init_bear_database():
     """Initialize bear_hunts + bear_player_damage tables."""
     conn = sqlite3.connect(BEAR_DB_PATH, timeout=30.0)
@@ -164,6 +172,7 @@ def init_bear_database():
             UNIQUE (alliance_id, date, hunting_trap)
         )
     """)
+    _ensure_bear_hunts_event_time(conn)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS bear_player_damage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3338,6 +3347,7 @@ class BearTrack(commands.Cog):
             'rallies': int(primary_event.rallies_value)
                 if primary_event.rallies_value and primary_event.rallies_value.isdigit() else None,
             'total_damage': damage_int or 0,
+            'event_time': None,
         }
         sorted_rows = sorted(
             merged_rows.values(),
@@ -3451,6 +3461,7 @@ class BearTrack(commands.Cog):
             'hunting_trap': int(hunting_trap),
             'rallies': int(rallies) if rallies else None,
             'total_damage': int(total_damage) if total_damage else 0,
+            'event_time': None,
         }
 
         review = BearHuntReviewView(
@@ -4003,10 +4014,13 @@ class BearHuntReviewView(discord.ui.View):
             value=str(self.hunt_meta['rallies']) if self.hunt_meta['rallies'] is not None else "-",
             inline=True,
         )
+        # Time (when set) sits under Date; Total Alliance Damage sits to its right.
+        if self.hunt_meta.get('event_time'):
+            embed.add_field(name="Time (UTC)", value=self.hunt_meta['event_time'], inline=True)
         embed.add_field(
             name="Total Alliance Damage",
             value=format_damage_for_embed(self.hunt_meta['total_damage']) if self.hunt_meta['total_damage'] is not None else "-",
-            inline=False,
+            inline=True,
         )
 
         if not self.rows:
@@ -4495,8 +4509,35 @@ class BearHuntReviewView(discord.ui.View):
         await self.refresh(interaction)
 
 
+def _normalize_event_time(raw):
+    """Blank -> None; a valid H:MM/HH:MM -> zero-padded 'HH:MM'; else ValueError."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    m = re.fullmatch(r'(\d{1,2}):(\d{2})', s)
+    if not m:
+        raise ValueError("time must be HH:MM")
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if hh > 23 or mm > 59:
+        raise ValueError("time out of range")
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _bear_participants(player_rows):
+    """Matched rows only (fid present) as attendance participants."""
+    out = []
+    for r in (player_rows or []):
+        fid = r.get('fid')
+        if not fid:
+            continue
+        out.append({'fid': fid,
+                    'name': r.get('nickname') or r.get('name') or '',
+                    'damage': int(r['damage'])})
+    return out
+
+
 class EditHeaderModal(discord.ui.Modal):
-    """Edit the hunt-level header fields (date / trap / rallies / total)."""
+    """Edit the hunt-level header fields (date / trap / rallies / total / time)."""
 
     def __init__(self, review_view: BearHuntReviewView):
         super().__init__(title="Edit Bear Hunt Info")
@@ -4520,7 +4561,13 @@ class EditHeaderModal(discord.ui.Modal):
             default=format_damage_for_embed(meta['total_damage']) if meta['total_damage'] else "",
             max_length=30,
         )
-        for item in (self.date_input, self.trap_input, self.rallies_input, self.total_input):
+        self.time_input = discord.ui.TextInput(
+            label="Time (UTC, optional) - HH:MM",
+            default=meta.get('event_time') or "",
+            required=False, max_length=5,
+        )
+        for item in (self.date_input, self.trap_input, self.rallies_input,
+                     self.total_input, self.time_input):
             self.add_item(item)
 
     async def on_submit(self, interaction):
@@ -4548,11 +4595,20 @@ class EditHeaderModal(discord.ui.Modal):
                     f"{theme.deniedIcon} Rallies must be a whole number.", ephemeral=True,
                 )
                 return
+        try:
+            event_time = _normalize_event_time(self.time_input.value)
+        except ValueError:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Time must be HH:MM (24-hour UTC), or blank.",
+                ephemeral=True,
+            )
+            return
         self.review_view.hunt_meta = {
             'date': date_norm,
             'hunting_trap': trap,
             'rallies': rallies,
             'total_damage': bear_damage(self.total_input.value),
+            'event_time': event_time,
         }
         await self.review_view.refresh(interaction)
 
@@ -5530,6 +5586,12 @@ class BearDamageEditView(discord.ui.View):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Failed to delete hunt.", ephemeral=True)
             return
+        try:
+            from .attendance_ocr_parsers import delete_bear_attendance_event
+            delete_bear_attendance_event(hunt_id=self.selected_record_id)
+        except Exception as e:
+            logger.error(f"Bear attendance delete failed: {e}")
+            print(f"[ERROR] Bear attendance delete failed: {e}")
         self.selected_record_id = None
         self.date = self.hunting_trap = self.rallies = self.total_damage = None
         self.players = []
@@ -7270,13 +7332,14 @@ class DataSubmit:
             hunting_trap=hunt_meta['hunting_trap'],
             rallies=hunt_meta.get('rallies'),
             total_damage=hunt_meta.get('total_damage') or 0,
+            event_time=hunt_meta.get('event_time'),
             player_rows=player_rows,
             alliance_id=alliance_id, alliance_name=alliance_name,
             existing_hunt_id=existing_hunt_id,
         )
 
     async def _persist_hunt_and_render(self, interaction, *, date, hunting_trap, rallies,
-                                       total_damage, player_rows=None,
+                                       total_damage, event_time=None, player_rows=None,
                                        alliance_id=None, alliance_name=None,
                                        existing_hunt_id=None):
         """Insert one hunt row (and any provided player rows), then build
@@ -7326,8 +7389,8 @@ class DataSubmit:
                     # Edit in place: keep the hunt record, refresh summary + rows.
                     hunt_id = existing[0]
                     self.bear_cursor.execute(
-                        "UPDATE bear_hunts SET rallies=?, total_damage=? WHERE id=?",
-                        (rallies, total_damage, hunt_id),
+                        "UPDATE bear_hunts SET rallies=?, total_damage=?, event_time=? WHERE id=?",
+                        (rallies, total_damage, event_time, hunt_id),
                     )
                     self.bear_cursor.execute(
                         "DELETE FROM bear_player_damage WHERE hunt_id=?", (hunt_id,)
@@ -7336,9 +7399,9 @@ class DataSubmit:
             if not edited:
                 try:
                     self.bear_cursor.execute(
-                        "INSERT INTO bear_hunts (alliance_id, date, hunting_trap, rallies, total_damage) "
-                        "VALUES (?, ?, ?, ?, ?)",
-                        (alliance_id, date, hunting_trap, rallies, total_damage),
+                        "INSERT INTO bear_hunts (alliance_id, date, hunting_trap, rallies, total_damage, event_time) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (alliance_id, date, hunting_trap, rallies, total_damage, event_time),
                     )
                     hunt_id = self.bear_cursor.lastrowid
                 except sqlite3.IntegrityError:
@@ -7382,6 +7445,21 @@ class DataSubmit:
                 learn_alias(alliance_id, name, fid)
             except Exception as e:
                 logger.warning(f"Bear OCR: post-commit learn_alias failed for {name!r}: {e}")
+
+        # Mirror the saved hunt into an attendance event. Best-effort: a sync
+        # failure must never roll back the saved hunt.
+        if player_rows is not None:
+            try:
+                from .attendance_ocr_parsers import sync_bear_attendance_event
+                sync_bear_attendance_event(
+                    alliance_id=alliance_id, hunt_id=hunt_id, date=date,
+                    hunting_trap=hunting_trap, event_time=event_time,
+                    alliance_name=alliance_name,
+                    participants=_bear_participants(player_rows),
+                )
+            except Exception as e:
+                logger.error(f"Bear attendance sync failed for hunt {hunt_id}: {e}")
+                print(f"[ERROR] Bear attendance sync failed for hunt {hunt_id}: {e}")
 
         title_suffix = "Updated Submission" if edited else "Latest Submission"
         if player_rows:

@@ -53,6 +53,7 @@ _OCR_EVENT_DISPLAY = {
     "canyon_clash": ("Canyon Clash", "⚔️"),
     "alliance_showdown": ("Alliance Showdown", "🛡️"),
     "power_rankings": ("Power Rankings", "📊"),
+    "bear": ("Bear Trap", "🐻"),
 }
 
 
@@ -2423,6 +2424,25 @@ class Attendance(commands.Cog):
                         (session_id,)
                     )
                     origin_row = cursor.fetchone()
+                    if origin_row and origin_row[0] == 'bear':
+                        notice = discord.Embed(
+                            title=f"{theme.warnIcon} Managed by Bear Track",
+                            description=(
+                                "This event is created from a Bear Trap submission. "
+                                "To change who took part or their damage, edit the hunt "
+                                "on the Bear side (Bear Damage review or records); the "
+                                "attendance event updates automatically."
+                            ),
+                            color=theme.emColor2,
+                        )
+                        back_view = self._create_back_view(
+                            lambda i: self.show_session_selection_for_marking(i, alliance_id)
+                        )
+                        if interaction.response.is_done():
+                            await interaction.edit_original_response(embed=notice, view=back_view)
+                        else:
+                            await interaction.response.edit_message(embed=notice, view=back_view)
+                        return
                     if origin_row and origin_row[0] == 'ocr':
                         ocr_cog = self.bot.get_cog("AttendanceOCR")
                         opened = False
