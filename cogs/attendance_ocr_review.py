@@ -457,9 +457,9 @@ class EventReviewView(discord.ui.View):
             absent = is_result and self.zero_is_absent and not r["value"]
             icon = theme.deniedIcon if absent else _STATUS_ICON.get(r["status"], "")
             if r["status"] in ("auto", "manual") and r["fid"]:
-                player = f"`{_isolate_rtl(r['nickname'])}` · `{r['fid']}`"
+                player = f"`{_isolate_rtl(r['nickname'])}` (`{r['fid']}`)"
             elif r["status"] in ("likely", "review") and r["fid"]:
-                player = f"`{_isolate_rtl(r['nickname'])}` ({r['status']}) · `{r['fid']}`"
+                player = f"`{_isolate_rtl(r['nickname'])}` ({r['status']}) (`{r['fid']}`)"
             else:
                 player = f"`{_isolate_rtl(r['name'])}` — no match"
             tail = "`Absent`" if absent else f"`{_format_int(r['value'])}`"
