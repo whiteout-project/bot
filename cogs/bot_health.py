@@ -30,8 +30,6 @@ STATUS_ERROR = "error"
 
 # Thresholds
 DB_SIZE_WARNING_MB = 100
-
-
 DB_SIZE_ERROR_MB = 500
 WAL_SIZE_WARNING_MB = 1
 WAL_SIZE_ERROR_MB = 10
@@ -1625,6 +1623,13 @@ class BotHealth(commands.Cog):
             system_lines.append(
                 f"{theme.chartIcon} {status_prefix(system_health['memory_status'])}**Memory:** {system_health['memory_msg']}"
             )
+        pq = self.bot.get_cog("ProcessQueue")
+        if pq is not None:
+            qc = pq.queue_counts()
+            system_lines.append(
+                f"{theme.boltIcon} **Queue:** {qc['queued']} queued, "
+                f"{qc['active']} active, {qc['failed']} failed"
+            )
         embed.add_field(name="System", value="\n".join(system_lines), inline=True)
 
         storage_lines = [
@@ -1648,6 +1653,8 @@ class BotHealth(commands.Cog):
                 f"└ Reload code from disk without restarting the whole bot\n"
                 f"{theme.refreshIcon} **Restart Bot**\n"
                 f"└ Full restart — stops the bot and relaunches it\n"
+                f"{theme.cleanIcon} **Clear Queue**\n"
+                f"└ Remove stuck or pending queued/failed queue items\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Configure cleanup schedule and health thresholds\n"
                 f"{theme.lowerDivider}"
@@ -1683,6 +1690,7 @@ class HealthMenuView(discord.ui.View):
         self.cog = cog
         self._confirming_restart = False
         self._force_restart = False
+        self._confirming_clear = False
         self._build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1698,6 +1706,21 @@ class HealthMenuView(discord.ui.View):
 
     def _build_components(self):
         self.clear_items()
+        if self._confirming_clear:
+            confirm_btn = discord.ui.Button(
+                label="Clear Queue", emoji=theme.warnIcon,
+                style=discord.ButtonStyle.danger, row=0,
+            )
+            confirm_btn.callback = self._on_confirm_clear
+            self.add_item(confirm_btn)
+            cancel_btn = discord.ui.Button(
+                label="Cancel", emoji=theme.deniedIcon,
+                style=discord.ButtonStyle.secondary, row=0,
+            )
+            cancel_btn.callback = self._on_cancel_clear
+            self.add_item(cancel_btn)
+            return
+
         if self._confirming_restart:
             confirm_btn = discord.ui.Button(
                 label="Restart Anyway" if self._force_restart else "Confirm Restart",
@@ -1744,6 +1767,15 @@ class HealthMenuView(discord.ui.View):
         )
         restart_btn.callback = self._on_restart_request
         self.add_item(restart_btn)
+
+        clear_queue_btn = discord.ui.Button(
+            label="Clear Queue",
+            emoji=theme.cleanIcon,
+            style=discord.ButtonStyle.secondary,
+            row=1,
+        )
+        clear_queue_btn.callback = self._on_clear_queue_request
+        self.add_item(clear_queue_btn)
 
         settings_btn = discord.ui.Button(
             label="Settings",
@@ -1936,6 +1968,69 @@ class HealthMenuView(discord.ui.View):
         embed = self.cog._build_health_embed(
             overall, wos_api, gift_api, db_health, log_health, system_health, requirements
         )
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _dashboard_embed(self) -> discord.Embed:
+        wos_api = await self.cog.check_wos_api_status()
+        gift_api = await self.cog.check_gift_distribution_api()
+        db_health = self.cog.get_database_health()
+        log_health = self.cog.get_log_health()
+        system_health = self.cog.get_system_health()
+        requirements = self.cog.get_requirements_health()
+        overall = self.cog.get_overall_status(
+            db_health, log_health, system_health, wos_api, gift_api, requirements
+        )
+        return self.cog._build_health_embed(
+            overall, wos_api, gift_api, db_health, log_health, system_health, requirements
+        )
+
+    def _build_clear_confirm_embed(self, counts: dict) -> discord.Embed:
+        return discord.Embed(
+            title=f"{theme.warnIcon} Clear Queue",
+            description=(
+                f"Remove pending and failed items from the process queue?\n\n"
+                f"**Queued:** {counts['queued']}\n"
+                f"**Failed:** {counts['failed']}\n"
+                f"**Active (kept):** {counts['active']}\n\n"
+                f"This clears stuck or backed-up work (e.g. gift redemptions that "
+                f"piled up after errors or restarts). Anything currently running is "
+                f"left alone. This cannot be undone."
+            ),
+            color=0xFF0000,
+        )
+
+    async def _on_clear_queue_request(self, interaction: discord.Interaction):
+        pq = self.cog.bot.get_cog("ProcessQueue")
+        counts = pq.queue_counts() if pq else {"queued": 0, "active": 0, "completed": 0, "failed": 0}
+        if counts["queued"] + counts["failed"] == 0:
+            await interaction.response.send_message(
+                f"{theme.verifiedIcon} The queue is already clear - nothing pending or failed.",
+                ephemeral=True,
+            )
+            return
+        self._confirming_clear = True
+        self._build_components()
+        await interaction.response.edit_message(
+            embed=self._build_clear_confirm_embed(counts), view=self
+        )
+
+    async def _on_confirm_clear(self, interaction: discord.Interaction):
+        pq = self.cog.bot.get_cog("ProcessQueue")
+        removed = pq.clear_processes(("queued", "failed")) if pq else 0
+        self.cog.logger.info(f"Bot Health: admin cleared {removed} queued/failed process(es)")
+        self._confirming_clear = False
+        self._build_components()
+        embed = await self._dashboard_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.followup.send(
+            f"{theme.verifiedIcon} Cleared {removed} queued/failed queue item(s).",
+            ephemeral=True,
+        )
+
+    async def _on_cancel_clear(self, interaction: discord.Interaction):
+        self._confirming_clear = False
+        self._build_components()
+        embed = await self._dashboard_embed()
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def _on_back(self, interaction: discord.Interaction):

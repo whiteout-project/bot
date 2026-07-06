@@ -183,6 +183,30 @@ class ProcessQueue(commands.Cog):
         )
         self.conn.commit()
 
+    def queue_counts(self) -> Dict[str, int]:
+        """Count of processes by status. Missing statuses default to 0."""
+        counts = {'queued': 0, 'active': 0, 'completed': 0, 'failed': 0}
+        self.cursor.execute("SELECT status, COUNT(*) FROM process_queue GROUP BY status")
+        for status, n in self.cursor.fetchall():
+            counts[status] = n
+        return counts
+
+    def clear_processes(self, statuses=('queued', 'failed')) -> int:
+        """Delete backlog rows whose status is in `statuses`. Defaults to the
+        queued/failed backlog and never touches a running 'active' job. Returns
+        the number of rows removed."""
+        statuses = tuple(statuses)
+        if not statuses:
+            return 0
+        placeholders = ",".join("?" for _ in statuses)
+        self.cursor.execute(
+            f"DELETE FROM process_queue WHERE status IN ({placeholders})", statuses)
+        removed = self.cursor.rowcount
+        self.conn.commit()
+        if removed:
+            logger.info(f"ProcessQueue: Cleared {removed} process(es) with status in {statuses}")
+        return removed
+
     def has_higher_priority_waiting(self, current_priority: int) -> bool:
         """Check if a higher-priority process is queued (for cooperative preemption)."""
         self.cursor.execute("""
