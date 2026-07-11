@@ -1599,12 +1599,13 @@ class AllianceModal(discord.ui.Modal):
 
 class AddAllianceModal(discord.ui.Modal):
     """Two-field alliance creator. Inserts a new alliance with safe defaults
-    (interval=60min, no channel, no start time). The optional State (#) field
-    locks the alliance to a single state so non-matching players are rejected
-    on add — leave blank for no restriction. Channels and sync settings are
-    configured post-creation via Channel Setup / Sync Settings."""
+    (interval=1440min / once a day, no channel, no start time). The optional
+    State (#) field locks the alliance to a single state so non-matching
+    players are rejected on add — leave blank for no restriction. Channels and
+    sync settings are configured post-creation via Channel Setup / Sync Settings."""
 
-    DEFAULT_INTERVAL_MINUTES = 60
+    # Daily by default
+    DEFAULT_INTERVAL_MINUTES = 1440
 
     def __init__(self, cog):
         super().__init__(title="Add Alliance")
