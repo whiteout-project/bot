@@ -42,6 +42,8 @@ class ProcessQueue(commands.Cog):
     between players to yield cooperatively to higher-priority work.
     """
 
+    HANDLER_GRACE_SECONDS = 3  # let sibling cogs (re-)register handlers first
+
     def __init__(self, bot):
         self.bot = bot
         self.conn = sqlite3.connect('db/settings.sqlite', timeout=30.0, check_same_thread=False)
@@ -382,6 +384,23 @@ class ProcessQueue(commands.Cog):
 
         return recovered
 
+    async def _ensure_processor_started(self):
+        """Recover interrupted work and start the processor if it isn't running.
+        Idempotent — safe to call from both on_ready and cog_load."""
+        if self._processor_task and not self._processor_task.done():
+            return  # Already started
+        self.recover_interrupted()
+        # Give other cogs a few seconds to (re-)register handlers before processing.
+        await asyncio.sleep(self.HANDLER_GRACE_SECONDS)
+        await self.start_processor()
+
+    async def cog_load(self):
+        # A hot reload (reload_extension) reruns setup() but never re-fires
+        # on_ready, so the processor on_ready normally starts would never run and
+        # the queue wedges. When reloaded while already connected, start it here.
+        if self.bot.is_ready():
+            asyncio.create_task(self._ensure_processor_started())
+
     @commands.Cog.listener()
     async def on_ready(self):
         """Reset interrupted processes and start the processor.
@@ -389,14 +408,7 @@ class ProcessQueue(commands.Cog):
         Waits briefly before starting so that other cogs have time to register
         their handlers (gift_operations, alliance_sync, alliance_member_operations).
         """
-        if self._processor_task and not self._processor_task.done():
-            return  # Already started
-
-        self.recover_interrupted()
-
-        # Give other cogs a few seconds to register handlers before processing
-        await asyncio.sleep(3)
-        await self.start_processor()
+        await self._ensure_processor_started()
 
 
 async def setup(bot):
