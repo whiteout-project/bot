@@ -386,6 +386,12 @@ def find_ranking_section_start(text: str):
     return 0
 
 
+def _leading_rank(chunk: str):
+    """The bare 1-2 digit rank badge at the start of a row chunk, or None."""
+    m = re.match(r'\s*(\d{1,2})(?!\d)', chunk)
+    return int(m.group(1)) if m else None
+
+
 def parse_player_rows(text: str, after_pos: int = None):
     """Parse the damage-ranking section into [(name, damage, rank), ...].
     Names keep OCR noise — fuzzy resolution happens in the UI layer."""
@@ -419,6 +425,15 @@ def parse_player_rows(text: str, after_pos: int = None):
         c = re.sub(r'^\s*\[[A-Za-z0-9]{3}[A-Za-z]?(?=[^\x00-\x7F])', '', c)
         chunks[i] = c
 
+    # Ranking panels pin the viewer's own row at the bottom out of rank order;
+    # drop it when its rank confirms the break (unreadable rank stays).
+    is_ranking = len(_ALLIANCE_TAG_RE.findall(text)) >= 3 or bool(_REWARDS_TRAP_RE.search(text))
+    if is_ranking and len(chunks) >= 2:
+        last_rank, prev_rank = _leading_rank(chunks[-1]), _leading_rank(chunks[-2])
+        if last_rank is not None and prev_rank is not None and last_rank <= prev_rank:
+            chunks.pop()
+            damages.pop()
+
     valid = [i for i, c in enumerate(chunks) if not re.search(r'[.?\[\]]', c)]
     if 0 in valid and len(chunks[0].split()) > 8:
         valid.remove(0)
@@ -437,7 +452,6 @@ def parse_player_rows(text: str, after_pos: int = None):
     # trim leading tokens to match the others. Skip on ranking pages, where the
     # tag strip already isolated the name (trimming would eat a multi-word name
     # like "Numb Little Bug" down to its last token).
-    is_ranking = len(_ALLIANCE_TAG_RE.findall(text)) >= 3 or bool(_REWARDS_TRAP_RE.search(text))
     if 0 in valid and len(valid) > 1 and not is_ranking:
         other_counts = [_name_token_count(chunks[i]) for i in valid if i != 0]
         target = max(min(c for c in other_counts if c) if any(other_counts) else 1, 1)
@@ -1231,8 +1245,12 @@ def match_roster(detected_name: str, roster):
         processor=_fold,
         limit=None, score_cutoff=MATCH_LIKELY_MIN,
     )
+    detected_fold = _fold(detected_name)
     for _match_str, score, idx in results:
-        fid, _match_name, penalty, display = _roster_parts(roster[idx])
+        fid, match_name, penalty, display = _roster_parts(roster[idx])
+        # A 1-2 char roster nickname needs exact equality to match
+        if sum(c.isalpha() for c in (match_name or '')) < 3 and _fold(match_name or '') != detected_fold:
+            continue
         adj = int(score) - penalty
         if adj < MATCH_LIKELY_MIN:
             continue
@@ -2199,62 +2217,84 @@ class BearSession:
 _active_sessions: dict = {}
 
 
-class BearSessionView(discord.ui.View):
-    """Done Uploading / Cancel buttons attached to the collecting message."""
+async def _ack_component(interaction: discord.Interaction) -> bool:
+    """Defer a component interaction so the click is acknowledged."""
+    if interaction.response.is_done():
+        return True
+    try:
+        await interaction.response.defer()
+        return True
+    except discord.NotFound:
+        logger.warning("Bear session button: interaction expired before defer")
+        return False
+    except Exception as e:
+        logger.warning(f"Bear session button: defer failed ({e!r})")
+        return False
 
-    def __init__(self, session: BearSession):
-        super().__init__(timeout=None)
-        self.session = session
 
-        done_btn = discord.ui.Button(
-            label="Done Uploading",
-            emoji=f"{theme.verifiedIcon}",
-            style=discord.ButtonStyle.success,
-        )
-        done_btn.callback = self._on_done
+async def _retire_stale_recovery(interaction: discord.Interaction) -> None:
+    """Retire a recovery message whose session is gone so its button isn't left dead."""
+    embed = discord.Embed(
+        description=f"{theme.hourglassIcon} This bear upload recovery has expired — nothing to submit.",
+        color=theme.emColor2,
+    )
+    try:
+        await interaction.response.edit_message(embed=embed, view=None)
+    except Exception:
+        try:
+            await interaction.response.defer()
+        except Exception:
+            pass
 
-        cancel_btn = discord.ui.Button(
-            label="Cancel",
-            emoji=f"{theme.deniedIcon}",
-            style=discord.ButtonStyle.secondary,
-        )
-        cancel_btn.callback = self._on_cancel
 
-        self.add_item(done_btn)
-        self.add_item(cancel_btn)
+class BearSessionButton(discord.ui.DynamicItem[discord.ui.Button],
+                        template=r'bearsess:(?P<action>done|cancel):(?P<channel>[0-9]+):(?P<user>[0-9]+)'):
+    """Done/Cancel button with the session key in its custom_id, so clicks survive a restart."""
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.session.user_id:
+    def __init__(self, action: str, channel_id: int, user_id: int):
+        self.action = action
+        self.channel_id = channel_id
+        self.user_id = user_id
+        if action == 'done':
+            label, emoji, style = "Done Uploading", f"{theme.verifiedIcon}", discord.ButtonStyle.success
+        else:
+            label, emoji, style = "Cancel", f"{theme.deniedIcon}", discord.ButtonStyle.secondary
+        super().__init__(discord.ui.Button(
+            label=label, emoji=emoji, style=style,
+            custom_id=f"bearsess:{action}:{channel_id}:{user_id}",
+        ))
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match['action'], int(match['channel']), int(match['user']))
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Only the user who started this session can finalize it.",
                 ephemeral=True,
             )
-            return False
-        return True
-
-    async def _on_done(self, interaction: discord.Interaction):
-        if not await self._ack(interaction):
             return
-        asyncio.create_task(self.session.finalize(timed_out=False))
-
-    async def _on_cancel(self, interaction: discord.Interaction):
-        if not await self._ack(interaction):
+        session = _active_sessions.get((self.channel_id, self.user_id))
+        if session is None:
+            await _retire_stale_recovery(interaction)
             return
-        asyncio.create_task(self.session.cancel())
+        if not await _ack_component(interaction):
+            return
+        if self.action == 'done':
+            asyncio.create_task(session.finalize(timed_out=False))
+        else:
+            asyncio.create_task(session.cancel())
 
-    @staticmethod
-    async def _ack(interaction: discord.Interaction) -> bool:
-        if interaction.response.is_done():
-            return True
-        try:
-            await interaction.response.defer()
-            return True
-        except discord.NotFound:
-            logger.warning("Bear session button: interaction expired before defer")
-            return False
-        except Exception as e:
-            logger.warning(f"Bear session button: defer failed ({e!r})")
-            return False
+
+class BearSessionView(discord.ui.View):
+    """Done/Cancel buttons; DynamicItem-based so they keep working after a restart."""
+
+    def __init__(self, session: "BearSession"):
+        super().__init__(timeout=None)
+        self.session = session
+        self.add_item(BearSessionButton('done', session.channel_id, session.user_id))
+        self.add_item(BearSessionButton('cancel', session.channel_id, session.user_id))
 
 
 # ---------------------------------------------------------------------------
@@ -4658,10 +4698,13 @@ class EditRowModal(discord.ui.Modal):
             await interaction.response.send_message(f"{theme.deniedIcon} {err}", ephemeral=True)
             return
         # Shared resolver: roster match, or game-API lookup + add-to-alliance for an unknown ID.
+        edit_row = self.review_view.rows[self.row_idx]
         await _resolve_and_apply(
             interaction, self.review_view, row_id=self.row_idx,
             text=self.player_input.value, damage=damage, rank=rank,
-            raw_name=self.review_view.rows[self.row_idx].get('name'),
+            raw_name=edit_row.get('name'),
+            current_fid=edit_row.get('fid'),
+            current_name=edit_row.get('nickname') or edit_row.get('name'),
         )
 
 
@@ -4701,11 +4744,24 @@ class AddRowModal(discord.ui.Modal):
         )
 
 
-def _resolve_player(text, roster):
+_QUOTE_PAIRS = (('"', '"'), ("'", "'"), ('“', '”'), ('‘', '’'))
+
+
+def _strip_name_quotes(text):
+    """(clean_text, forced_name). Quotes force name-not-ID resolution, so a
+    digit-only username like "517" can be entered as a name."""
+    t = (text or "").strip()
+    for lo, hi in _QUOTE_PAIRS:
+        if len(t) >= 2 and t[0] == lo and t[-1] == hi:
+            return t[1:-1].strip(), True
+    return t, False
+
+
+def _resolve_player(text, roster, force_name=False):
     """Resolve `text` (FID-digits or a name) to (fid, nickname, candidates)
-    against the roster. Returns (None, None, []) if no match.
+    against the roster. `force_name` resolves an all-digit string as a name.
     """
-    if text.isdigit():
+    if text.isdigit() and not force_name:
         fid = int(text)
         # roster entries may be (fid, nick) or (fid, match_name, penalty, display)
         for entry in roster:
@@ -5880,19 +5936,31 @@ def _fid_in_hunt(view, fid) -> bool:
     return row is not None
 
 
-async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, raw_name):
+async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, raw_name,
+                             current_fid=None, current_name=None):
     """Resolve `text` (a roster name or an ID) and apply it to the target row.
     Known members match immediately (moving the match off any other row). An
     unknown ID is looked up via the player API and offered for confirmation +
     add-to-alliance. `view` must expose cog, alliance_id, hunt_id, roster,
     original_user_id, and an async refresh()."""
-    text = (text or "").strip()
+    raw = (text or "").strip()
+    # Unchanged edit of a matched row: keep the player, just update damage/rank.
+    if row_id is not None and current_fid is not None and raw == (current_name or "").strip():
+        if _write_match_to_row(view, row_id=row_id, fid=current_fid, nick=current_name,
+                               damage=damage, rank=rank):
+            await view.refresh(interaction)
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Failed to update row.", ephemeral=True)
+        return
+
+    text, forced_name = _strip_name_quotes(raw)
     if not text:
         await interaction.response.send_message(
             f"{theme.deniedIcon} Enter an ID or name.", ephemeral=True)
         return
 
-    if text.isdigit():
+    if text.isdigit() and not forced_name:
         fid = int(text)
         # Adding a brand-new row for someone already in the hunt would orphan
         # their existing row — reject it (editing an existing row swaps instead).
@@ -5927,7 +5995,7 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
         return
 
     # Name entered — fuzzy-match the roster only (can't API-lookup by name).
-    fid, nick, _ = _resolve_player(text, view.roster)
+    fid, nick, _ = _resolve_player(text, view.roster, force_name=forced_name)
     if fid is None:
         await interaction.response.send_message(
             f"{theme.deniedIcon} No roster match for `{text}`. Enter the player's **ID** "
@@ -6122,7 +6190,9 @@ class EditSavedPlayerModal(discord.ui.Modal):
         await _resolve_and_apply(
             interaction, self.parent_view, row_id=self.row['id'],
             text=self.player_input.value, damage=damage, rank=rank,
-            raw_name=self.row.get('raw_name'))
+            raw_name=self.row.get('raw_name'),
+            current_fid=self.row.get('fid'),
+            current_name=self.row.get('nickname') or self.row.get('raw_name'))
 
 
 class AddSavedPlayerModal(discord.ui.Modal):
@@ -7689,4 +7759,9 @@ class DataSubmit:
 # ---------------------------------------------------------------------------
 
 async def setup(bot):
+    # Route recovery-button clicks after a restart (messages from a prior process).
+    try:
+        bot.add_dynamic_items(BearSessionButton)
+    except Exception as e:
+        logger.warning(f"Bear session: could not register dynamic buttons: {e}")
     await bot.add_cog(BearTrack(bot))

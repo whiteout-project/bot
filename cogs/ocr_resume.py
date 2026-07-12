@@ -2,10 +2,13 @@
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 os.makedirs("db", exist_ok=True)
 _DB = "db/ocr_resume.sqlite"
+
+# Prune snapshots older than this so a stuck row can't re-post recovery forever.
+STALE_AFTER_HOURS = 6
 
 
 def _conn():
@@ -35,9 +38,12 @@ def save(key, kind, payload):
 
 
 def load_all(kind):
-    """Return [(key, payload_dict), ...] for the given kind."""
+    """Return [(key, payload), ...] for kind, dropping rows older than STALE_AFTER_HOURS."""
     try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=STALE_AFTER_HOURS)).isoformat()
         with _conn() as c:
+            c.execute("DELETE FROM ocr_snapshots WHERE kind = ? AND (updated_at IS NULL OR updated_at < ?)",
+                      (kind, cutoff))
             rows = c.execute("SELECT key, payload FROM ocr_snapshots WHERE kind = ?", (kind,)).fetchall()
         return [(k, json.loads(p)) for k, p in rows]
     except Exception:
