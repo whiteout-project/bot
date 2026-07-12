@@ -155,9 +155,11 @@ class NotificationSystem(commands.Cog):
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.commit()
 
-        # Track when channels were first seen as missing (channel_id -> first_seen_missing timestamp)
-        self.channel_missing_since = {}
-        self.CHANNEL_MISSING_THRESHOLD = 1800  # Confirm and auto-disable after 30 minutes
+        # Channel access is confirmed only when a notification is actually due to send.
+        # (channel_id -> {'fails', 'last'}).
+        self.channel_confirm_state = {}
+        self.CHANNEL_CONFIRM_INTERVAL = 300    # re-confirm at most every 5 minutes
+        self.CHANNEL_CONFIRM_REQUIRED = 3      # confirmation failures before pausing
 
         # repeat_minutes value -1 means weekday-based repeat, 0 means no repeat
         self.cursor.execute("""
@@ -316,27 +318,47 @@ class NotificationSystem(commands.Cog):
         if hasattr(self, 'conn'):
             self.conn.close()
 
-    async def auto_disable_notification(self, channel_id: int):
+    async def _resolve_send_channel(self, channel_id: int):
+        """Resolve the channel to deliver to, checked only when a notification is
+        actually due. Returns a reachable channel (from cache, or a live fetch if
+        it just was not cached), or None if it is unreachable or was recently
+        checked. After repeated confirmed failures it pauses the channel's
+        notifications; a single transient blip does not pause."""
+        channel = self.bot.get_channel(channel_id)
+        if channel is not None:
+            self.channel_confirm_state.pop(channel_id, None)
+            return channel
+
+        # Not in cache - throttle how often we hit the API to confirm access.
+        state = self.channel_confirm_state.setdefault(channel_id, {'fails': 0, 'last': 0.0})
         now = time.time()
-        if channel_id not in self.channel_missing_since:
-            self.channel_missing_since[channel_id] = now
-            return
-        if now - self.channel_missing_since[channel_id] < self.CHANNEL_MISSING_THRESHOLD:
-            return
+        if now - state['last'] < self.CHANNEL_CONFIRM_INTERVAL:
+            return None
+        state['last'] = now
 
         try:
-            await self.bot.fetch_channel(channel_id)
-            self.channel_missing_since.pop(channel_id, None)
-            return
-        except discord.NotFound:
-            reason = "channel_deleted"
-        except discord.Forbidden:
-            reason = "channel_forbidden"
-        except Exception:
-            return  # transient (rate limit, network) — keep waiting
+            channel = await self.bot.fetch_channel(channel_id)
+            # Reachable, it just was not cached - deliver via this and clear state.
+            self.channel_confirm_state.pop(channel_id, None)
+            return channel
+        except discord.NotFound as e:
+            reason, err = "channel_deleted", e
+        except discord.Forbidden as e:
+            reason, err = "channel_forbidden", e
+        except Exception as e:
+            # Transient (rate limit, network) - skip this send, do not count it.
+            logger.warning(f"Notifications: transient error resolving channel {channel_id}: {type(e).__name__}: {e}")
+            return None
 
-        self.channel_missing_since.pop(channel_id, None)
-        await self._pause_and_notify(channel_id=channel_id, reason=reason)
+        state['fails'] += 1
+        logger.warning(
+            f"Notifications: channel {channel_id} unreachable ({reason}: {err}); "
+            f"confirmation {state['fails']}/{self.CHANNEL_CONFIRM_REQUIRED}"
+        )
+        if state['fails'] >= self.CHANNEL_CONFIRM_REQUIRED:
+            self.channel_confirm_state.pop(channel_id, None)
+            await self._pause_and_notify(channel_id=channel_id, reason=reason)
+        return None
 
     async def _pause_and_notify(self, *, channel_id: int | None = None,
                                 guild_id: int | None = None, reason: str):
@@ -363,7 +385,8 @@ class NotificationSystem(commands.Cog):
                 (ts_iso, *where_params),
             )
             self.conn.commit()
-            print(f"[NOTIFICATIONS] Paused {len(affected)} notification(s) — {reason}")
+            logger.info(f"Notifications: paused {len(affected)} notification(s) - {reason} (guild {gid}, channel {channel_id})")
+            print(f"[NOTIFICATIONS] Paused {len(affected)} notification(s) - {reason}")
             await self._send_quarantine_dm(
                 ts_iso=ts_iso, guild_id=gid, channel_id=channel_id,
                 reason=reason, affected=[(r[0], r[1]) for r in affected],
@@ -865,14 +888,6 @@ class NotificationSystem(commands.Cog):
             if not is_enabled:
                 return
 
-            channel = self.bot.get_channel(channel_id)
-            if not channel:
-                await self.auto_disable_notification(channel_id)
-                return
-
-            # Channel found — clear any missing tracker
-            self.channel_missing_since.pop(channel_id, None)
-
             tz = pytz.timezone(timezone)
             now = datetime.now(tz)
             next_time = datetime.fromisoformat(next_notification)
@@ -968,6 +983,11 @@ class NotificationSystem(commands.Cog):
                     break
 
             if should_notify:
+                # Resolve the channel only now, when we are actually about to send.
+                channel = await self._resolve_send_channel(channel_id)
+                if channel is None:
+                    return
+
                 # Delete previous notifications before sending new ones
                 await self.delete_previous_notifications(id, channel_id, event_type, instance_identifier)
 
