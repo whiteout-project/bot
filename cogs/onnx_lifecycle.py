@@ -27,12 +27,34 @@ SWEEP_INTERVAL_SECONDS = 30
 LOW_MEM_THRESHOLD_MB = 768
 
 
+def _cgroup_limit_paths():
+    """Memory-limit files to try: the generic roots plus this process's own
+    cgroup from /proc/self/cgroup, where the real limit lives when a container
+    shares the host cgroup namespace (common on Pterodactyl/Docker)."""
+    yield "/sys/fs/cgroup/memory.max"                     # cgroup v2 root
+    yield "/sys/fs/cgroup/memory/memory.limit_in_bytes"   # cgroup v1 root
+    try:
+        with open("/proc/self/cgroup") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for line in lines:
+        parts = line.strip().split(":", 2)
+        if len(parts) != 3 or not parts[2] or parts[2] == "/":
+            continue
+        controllers, path = parts[1], parts[2]
+        if controllers == "":                              # v2 unified "0::/path"
+            yield f"/sys/fs/cgroup{path}/memory.max"
+        elif "memory" in controllers.split(","):           # v1 memory line
+            yield f"/sys/fs/cgroup/memory{path}/memory.limit_in_bytes"
+
+
 def _detect_memory_limit_mb() -> "int | None":
-    """Best-effort container memory limit in MB, or None if undetectable.
-    Pterodactyl/Docker enforce a cgroup limit we can read; bare Windows hosts
-    expose none, so we return None and stay in normal mode there."""
-    for path in ("/sys/fs/cgroup/memory.max",                     # cgroup v2
-                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):  # cgroup v1
+    """Smallest readable cgroup memory limit in MB, or None if none is set. Reads
+    this process's own cgroup too, so a host-namespace container (whose
+    /sys/fs/cgroup/memory.max is the unlimited host root) is still detected."""
+    best = None
+    for path in _cgroup_limit_paths():
         try:
             with open(path) as f:
                 raw = f.read().strip()
@@ -46,8 +68,10 @@ def _detect_memory_limit_mb() -> "int | None":
             continue
         # cgroup v1 reports a near-INT64 sentinel when memory is unlimited.
         if 0 < val < (1 << 62):
-            return val // (1024 * 1024)
-    return None
+            mb = val // (1024 * 1024)
+            if best is None or mb < best:
+                best = mb
+    return best
 
 
 def _resolve_low_mem() -> "tuple[bool, int | None]":
@@ -70,6 +94,12 @@ if LOW_MEM_MODE:
         f"Low-memory mode ON (limit={MEM_LIMIT_MB or '?'} MB): OCR engines load "
         "one at a time and unload immediately after use."
     )
+    _msg = "OCR engines set for low-memory mode" + (f" ({MEM_LIMIT_MB} MB)" if MEM_LIMIT_MB else "")
+    try:
+        from . import bot_startup_display as _startup
+        _startup.phase_ok(_msg)
+    except Exception:
+        print(f"  {_msg}", flush=True)
 else:
     logger.info(
         f"Low-memory mode OFF (detected limit={MEM_LIMIT_MB or 'none'} MB)."

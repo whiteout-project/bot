@@ -724,6 +724,7 @@ def encode_data(cog, data):
 # left-align in the list instead of drifting to the right edge.
 _LRI = chr(0x2066)
 _PDI = chr(0x2069)
+_LRM = chr(0x200E)  # strong LTR mark; left-aligns a line that contains RTL text
 
 
 def _iso(text) -> str:
@@ -767,10 +768,12 @@ def _summary_names_block(names, limit=1024) -> str:
     """One name per line, truncated to fit `limit` chars, with an overflow pointer to Redemption History."""
     out, used = [], 0
     for n in names:
-        need = len(n) + 1  # + newline
+        need = len(n) + 2  # + newline + LRM
         if used + need > limit - 45:  # reserve room for the overflow note
             break
-        out.append(n)
+        # LRM start keeps Discord left-aligning lines with RTL (Arabic) names;
+        # LRI/PDI isolation alone doesn't set line direction.
+        out.append(_LRM + n)
         used += need
     text = "\n".join(out)
     more = len(names) - len(out)

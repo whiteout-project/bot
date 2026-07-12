@@ -14,9 +14,9 @@ if sys.platform.startswith("linux") and "MALLOC_ARENA_MAX" not in os.environ:
     os.environ.setdefault("MALLOC_TRIM_THRESHOLD_", "131072")
     try:
         from cogs import bot_startup_display as _startup
-        _startup.phase_ok("Low-memory mode enabled")
+        _startup.phase_ok("Optimized memory allocation")
     except Exception:
-        print("  Low-memory mode enabled", flush=True)
+        print("  Optimized memory allocation", flush=True)
     os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
@@ -653,6 +653,7 @@ if __name__ == "__main__":
         with open("version", "r") as f:
             _version = f.read().strip()
     _flags = []
+    if '--autoupdate' in sys.argv: _flags.append('--autoupdate')
     if '--no-update' in sys.argv: _flags.append('--no-update')
     if '--no-venv' in sys.argv: _flags.append('--no-venv')
     if '--no-dm' in sys.argv: _flags.append('--no-dm')
@@ -1254,6 +1255,17 @@ if __name__ == "__main__":
             except sqlite3.OperationalError:
                 conn_alliance.execute(
                     "ALTER TABLE alliancesettings ADD COLUMN silent_notifications INTEGER DEFAULT 0"
+                )
+
+            # Dedicated gift-redemption progress channel
+            try:
+                conn_alliance.execute("SELECT redemption_channel_id FROM alliancesettings LIMIT 1")
+            except sqlite3.OperationalError:
+                conn_alliance.execute(
+                    "ALTER TABLE alliancesettings ADD COLUMN redemption_channel_id INTEGER"
+                )
+                conn_alliance.execute(
+                    "UPDATE alliancesettings SET redemption_channel_id = channel_id"
                 )
 
             conn_alliance.execute("""CREATE TABLE IF NOT EXISTS alliance_list (
