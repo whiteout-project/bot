@@ -951,11 +951,14 @@ class EventReviewView(discord.ui.View):
                     pass
 
     async def _on_submit(self, interaction: discord.Interaction):
+        # Defer first: a power snapshot updates every member and can exceed the 3s window.
+        if not interaction.response.is_done():
+            await interaction.response.defer()
         try:
             session_id, absent_rows = self._persist()
         except Exception as e:
             logger.exception("EventReview submit failed")
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"{theme.deniedIcon} Submit failed: {e}", ephemeral=True,
             )
             return
@@ -963,7 +966,7 @@ class EventReviewView(discord.ui.View):
             embed = self._build_power_snapshot_embed()
         else:
             embed = self._build_scoreboard_embed(session_id, absent_rows)
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.edit_original_response(embed=embed, view=None)
         self.session.cog.end_session(self.session.channel.id, self.session.uploader_id)
         self.stop()
 
