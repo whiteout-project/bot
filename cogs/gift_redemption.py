@@ -222,7 +222,9 @@ async def handle_gift_redeem_process(cog, process):
         await captcha_wrapper.acquire()
 
     try:
-        await use_giftcode_for_alliance(cog, alliance_id, giftcode)
+        # False means it bailed before redeeming anyone (no channel, invalid
+        # code, no members) — record that, don't report a phantom success.
+        ok = await use_giftcode_for_alliance(cog, alliance_id, giftcode, process=process)
     except PreemptedException:
         # Let the processor re-queue this process; don't touch batch state
         raise
@@ -234,7 +236,7 @@ async def handle_gift_redeem_process(cog, process):
         if captcha_wrapper is not None:
             await captcha_wrapper.release()
 
-    await _record_batch_result(cog, batch_id, alliance_id, success=True)
+    await _record_batch_result(cog, batch_id, alliance_id, success=bool(ok))
 
 
 async def _send_existing_code_response(cog, message, giftcode, channel):
@@ -829,11 +831,6 @@ async def post_redemption_summary(cog, channel, alliance_id, alliance_name, gift
             embed.add_field(name=f"{theme.deniedIcon} {reason}", value=value, inline=False)
             total += len(reason) + len(value)
         await _post(embed)
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except Exception:
-                pass
 
 
 def batch_insert_user_giftcodes(cog, user_giftcode_data):
@@ -1784,7 +1781,48 @@ async def fetch_captcha(cog, player_id, session=None):
             session.close()
 
 
-async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
+def _persist_progress_message_id(cog, process, message_id):
+    """Save the progress message id into the process details so a resumed run
+    edits it instead of posting a new one. No-op outside the queue."""
+    if not process:
+        return
+    pq = cog.bot.get_cog('ProcessQueue')
+    if not pq:
+        return
+    details = {**(process.get('details') or {}), 'progress_message_id': message_id}
+    try:
+        pq.update_details(process['id'], details)
+        process['details'] = details  # keep the in-memory copy in sync
+    except Exception as e:
+        cog.logger.warning(f"GiftOps: could not persist progress message id: {e}")
+
+
+async def _resume_or_post_progress(cog, channel, embed, process):
+    """Reuse the persisted progress message on a resumed run; post a new one only
+    when none is saved or it can't be fetched (then persist the new id)."""
+    if channel is None:
+        return None
+    saved_id = ((process or {}).get('details') or {}).get('progress_message_id')
+    if saved_id:
+        try:
+            msg = await channel.fetch_message(saved_id)
+            try:
+                await msg.edit(embed=embed)
+            except Exception:
+                pass
+            return msg
+        except Exception:
+            pass  # deleted/unreachable — fall through to a fresh post
+    try:
+        msg = await channel.send(embed=embed)
+    except Exception as e:
+        cog.logger.exception(f"GiftOps: Error sending initial status embed: {e}")
+        return None
+    _persist_progress_message_id(cog, process, msg.id)
+    return msg
+
+
+async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
     MEMBER_PROCESS_DELAY = 1.0
     API_RATE_LIMIT_COOLDOWN = 60.0
     CAPTCHA_CYCLE_COOLDOWN = 60.0
@@ -1797,21 +1835,25 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
         error_summary = {}
 
         # Initial Setup (Get channel, alliance name)
-        cog.alliance_cursor.execute("SELECT channel_id FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
+        cog.alliance_cursor.execute("SELECT redemption_channel_id FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
         channel_result = cog.alliance_cursor.fetchone()
         cog.alliance_cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (alliance_id,))
         name_result = cog.alliance_cursor.fetchone()
 
-        if not channel_result or not name_result:
-            cog.logger.error(f"GiftOps: Could not find channel or name for alliance {alliance_id}.")
+        if not name_result:
+            cog.logger.error(f"GiftOps: Could not find alliance {alliance_id}.")
             return False
+        alliance_name = name_result[0]
 
-        channel_id, alliance_name = channel_result[0], name_result[0]
-        channel = cog.bot.get_channel(channel_id)
-
-        if not channel:
-            cog.logger.error(f"GiftOps: Bot cannot access channel {channel_id} for alliance {alliance_name}.")
-            return False
+        # A missing/unreachable progress channel must not stop redemption —
+        # redeem anyway and just skip the live progress posts.
+        channel_id = channel_result[0] if channel_result else None
+        channel = cog.bot.get_channel(channel_id) if channel_id else None
+        if channel is None:
+            cog.logger.warning(
+                f"GiftOps: No reachable channel for alliance {alliance_name} "
+                f"(channel_id={channel_id}); redeeming without progress posts."
+            )
 
         # Captcha solver is always on; only bail if it failed to initialize.
         if not cog.captcha_solver:
@@ -1825,7 +1867,8 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
                 ),
                 color=theme.emColor2
             )
-            await channel.send(embed=error_embed)
+            if channel:
+                await channel.send(embed=error_embed)
             cog.logger.info(f"GiftOps: Skipping alliance {alliance_id} - OCR disabled or solver not ready")
             return False
 
@@ -1874,7 +1917,8 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
                 ),
                 color=theme.emColor2
             )
-            await channel.send(embed=error_embed)
+            if channel:
+                await channel.send(embed=error_embed)
             return False
 
         # Get Members
@@ -1966,8 +2010,7 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
 
             return base_description
         embed.description = update_embed_description()
-        try: status_message = await channel.send(embed=embed)
-        except Exception as e: cog.logger.exception(f"GiftOps: Error sending initial status embed: {e}"); return False
+        status_message = await _resume_or_post_progress(cog, channel, embed, process)
 
         # Main Processing Loop
         last_embed_update = time.time()
@@ -2063,10 +2106,11 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
                 )
                 embed.clear_fields()
 
-                try:
-                    await status_message.edit(embed=embed)
-                except Exception as embed_edit_err:
-                    cog.logger.warning(f"GiftOps: Failed to update progress embed to show code invalidation: {embed_edit_err}")
+                if status_message:
+                    try:
+                        await status_message.edit(embed=embed)
+                    except Exception as embed_edit_err:
+                        cog.logger.warning(f"GiftOps: Failed to update progress embed to show code invalidation: {embed_edit_err}")
 
                 if fid not in failed_users_dict:
                     processed_count +=1
@@ -2092,10 +2136,11 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
                 )
                 embed.clear_fields()
 
-                try:
-                    await status_message.edit(embed=embed)
-                except Exception as embed_edit_err:
-                    cog.logger.warning(f"GiftOps: Failed to update progress embed for sign error: {embed_edit_err}")
+                if status_message:
+                    try:
+                        await status_message.edit(embed=embed)
+                    except Exception as embed_edit_err:
+                        cog.logger.warning(f"GiftOps: Failed to update progress embed for sign error: {embed_edit_err}")
 
                 break
 
@@ -2196,7 +2241,7 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
 
             # Update Embed Periodically
             current_time = time.time()
-            if current_time - last_embed_update > 5 and not code_is_invalid:
+            if status_message and current_time - last_embed_update > 5 and not code_is_invalid:
                 embed.description = update_embed_description()
                 try:
                     await status_message.edit(embed=embed)
@@ -2220,8 +2265,9 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode):
             embed.description = update_embed_description(include_errors=True)
 
             try:
-                await status_message.edit(embed=embed)
-                cog.logger.info(f"GiftOps: Successfully edited final status embed for alliance {alliance_id}.")
+                if status_message:
+                    await status_message.edit(embed=embed)
+                    cog.logger.info(f"GiftOps: Successfully edited final status embed for alliance {alliance_id}.")
             except discord.NotFound:
                 cog.logger.warning(f"GiftOps: WARN - Failed to edit final progress embed for alliance {alliance_id}: Original message not found.")
             except discord.Forbidden:
