@@ -1960,6 +1960,9 @@ class BearSession:
             self.events.append(e)
 
     def save_snapshot(self) -> None:
+        if self.finalized:
+            # In-flight batches must not re-create a deleted snapshot (phantom recovery).
+            return
         from . import ocr_resume
         ocr_resume.save(self._snapshot_key(), 'bear', self.snapshot_payload())
 
@@ -2188,9 +2191,10 @@ class BearSession:
             self.finalized = True
             self.stop_timer()
             _active_sessions.pop((self.channel_id, self.user_id), None)
-            self.delete_snapshot()
         try:
             await self.cog._finalize_session(self, timed_out=timed_out)
+            # Delete the crash-resume snapshot only on success so a restart can recover after errors.
+            self.delete_snapshot()
         finally:
             await self._release_all_engines()
 
@@ -3539,6 +3543,17 @@ class BearTrack(commands.Cog):
         if not allowed:
             return
 
+        # Reject bad free-text dates before deferring, or the interaction hangs on "thinking".
+        try:
+            parsed_from = datetime.strptime(from_date, "%Y-%m-%d").date() if from_date else None
+            parsed_to = datetime.strptime(to_date, "%Y-%m-%d").date() if to_date else None
+        except ValueError:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Invalid date - use YYYY-MM-DD (e.g. 2026-07-13).",
+                ephemeral=True
+            )
+            return
+
         await interaction.response.defer()
 
         view = BearDamageView(
@@ -3547,8 +3562,8 @@ class BearTrack(commands.Cog):
             original_user_id=interaction.user.id,
             alliance_id=alliance_id,
             hunting_trap=hunting_trap,
-            from_date=datetime.strptime(from_date, "%Y-%m-%d").date() if from_date else None,
-            to_date=datetime.strptime(to_date, "%Y-%m-%d").date() if to_date else None
+            from_date=parsed_from,
+            to_date=parsed_to
         )
 
         embed, file = await self.data_submit.process_view(
@@ -3564,7 +3579,11 @@ class BearTrack(commands.Cog):
             )
             return
 
-        await interaction.followup.send(embed=embed, file=file if file else None, view=view)
+        # file=None is not discord.py's MISSING sentinel and crashes the send.
+        if file:
+            await interaction.followup.send(embed=embed, file=file, view=view)
+        else:
+            await interaction.followup.send(embed=embed, view=view)
 
     @app_commands.command(name="bear_player_history", description="Show a player's bear hunt damage history")
     @app_commands.autocomplete(alliance=alliance_autocomplete,
@@ -3629,9 +3648,11 @@ class BearTrack(commands.Cog):
             alliance_name=alliance_name, fid=fid, nickname=nickname,
             hunting_trap=hunting_trap, rows=rows,
         )
-        await interaction.followup.send(
-            embed=embed, file=image_file if image_file else None
-        )
+        # file=None is not discord.py's MISSING sentinel and crashes the send.
+        if image_file:
+            await interaction.followup.send(embed=embed, file=image_file)
+        else:
+            await interaction.followup.send(embed=embed)
 
     # -------------------------------------------------------------------
     # Main menu entry point
@@ -7617,9 +7638,10 @@ class DataSubmit:
         except discord.NotFound:
             # Original response unavailable (e.g. OCR flow used channel.send).
             try:
-                await interaction.followup.send(
-                    embeds=embeds, file=image_file if image_file else None,
-                )
+                if image_file:
+                    await interaction.followup.send(embeds=embeds, file=image_file)
+                else:
+                    await interaction.followup.send(embeds=embeds)
             except Exception as e:
                 logger.error(f"Failed to send submission result: {e}")
                 print(f"[ERROR] Failed to send submission result: {e}")

@@ -1201,35 +1201,18 @@ class MinisterMenu(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.defer()
 
-            # Check if the user is already booked for this activity type
-            self.svs_cursor.execute("SELECT time FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
-            existing_booking = self.svs_cursor.fetchone()
-            
-            # If user already has a booking, we'll remove it and add the new one
-            if existing_booking:
-                old_time = existing_booking[0]
-                self.svs_cursor.execute("DELETE FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
-
-            # Check if the time slot is already taken by someone else
-            self.svs_cursor.execute("SELECT fid FROM appointments WHERE appointment_type=? AND time=?", (activity_name, selected_time))
+            # Conflict check runs first so a taken slot leaves the existing booking untouched.
+            self.svs_cursor.execute(
+                "SELECT fid FROM appointments WHERE appointment_type=? AND time=? AND fid != ?",
+                (activity_name, selected_time, fid)
+            )
             conflicting_booking = self.svs_cursor.fetchone()
             if conflicting_booking:
                 booked_fid = conflicting_booking[0]
                 self.users_cursor.execute("SELECT nickname FROM users WHERE fid=?", (booked_fid,))
                 booked_user = self.users_cursor.fetchone()
                 booked_nickname = booked_user[0] if booked_user else "Unknown"
-                
-                # Re-add the old booking if we had removed it
-                if existing_booking:
-                    self.svs_cursor.execute("SELECT alliance FROM users WHERE fid=?", (fid,))
-                    user_alliance = self.svs_cursor.fetchone()
-                    if user_alliance:
-                        self.svs_cursor.execute(
-                            "INSERT INTO appointments (fid, appointment_type, time, alliance) VALUES (?, ?, ?, ?)",
-                            (fid, activity_name, old_time, user_alliance[0])
-                        )
-                        self.svs_conn.commit()
-                
+
                 error_msg = f"The time {selected_time} for {activity_name} is already taken by {booked_nickname}"
                 # Return to user selection with error in embed
                 await self.show_filtered_user_select_with_message(interaction, activity_name, error_msg, is_error=True)
@@ -1240,7 +1223,7 @@ class MinisterMenu(commands.Cog):
             user_data = self.users_cursor.fetchone()
 
             if not user_data:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"{theme.deniedIcon} User {fid} is not registered.",
                     ephemeral=True
                 )
@@ -1253,7 +1236,13 @@ class MinisterMenu(commands.Cog):
             alliance_result = self.alliance_cursor.fetchone()
             alliance_name = alliance_result[0] if alliance_result else "Unknown"
 
-            # Book the slot
+            # Delete and insert commit together so no failure can drop the appointment.
+            self.svs_cursor.execute("SELECT time FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
+            existing_booking = self.svs_cursor.fetchone()
+            old_time = existing_booking[0] if existing_booking else None
+            if existing_booking:
+                self.svs_cursor.execute("DELETE FROM appointments WHERE fid=? AND appointment_type=?", (fid, activity_name))
+
             self.svs_cursor.execute(
                 "INSERT INTO appointments (fid, appointment_type, time, alliance) VALUES (?, ?, ?, ?)",
                 (fid, activity_name, selected_time, alliance_id)

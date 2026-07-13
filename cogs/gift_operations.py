@@ -197,6 +197,14 @@ class GiftOperations(commands.Cog):
                     raise
 
     async def cog_unload(self):
+        # GiftCodeAPI is not a cog - shut it down here or every reload leaks its sync loop.
+        api = getattr(self, 'api', None)
+        if api is not None:
+            try:
+                await api.cog_unload()
+            except Exception as e:
+                self.logger.error(f"Error shutting down GiftCodeAPI client: {e}")
+                print(f"Error shutting down GiftCodeAPI client: {e}")
         if hasattr(self, 'periodic_validation_loop') and self.periodic_validation_loop.is_running():
             self.periodic_validation_loop.cancel()
         for task in list(getattr(self, '_revalidation_tasks', {}).values()):
@@ -282,7 +290,9 @@ class GiftOperations(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         try:
-            if message.author.bot or not message.guild:
+            # Crossposts from a followed announcement channel arrive bot-authored;
+            # they carry official codes and must be processed. Other bots stay ignored.
+            if (message.author.bot and not message.flags.is_crossposted) or not message.guild:
                 return
 
             self.cursor.execute("SELECT alliance_id FROM giftcode_channel WHERE channel_id = ?", (message.channel.id,))
@@ -291,26 +301,25 @@ class GiftOperations(commands.Cog):
                 return
 
             content = message.content.strip()
-            if not content:
-                return
+            candidates = []
+            if content:
+                if len(content.split()) == 1:
+                    if re.match(r'^[a-zA-Z0-9]+$', content):
+                        candidates.append(content)
+                else:
+                    code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
+                    if code_match:
+                        candidates.append(code_match.group(1))
+            candidates.extend(gift_redemption._extract_embed_codes(message))
 
-            giftcode = None
-            if len(content.split()) == 1:
-                if re.match(r'^[a-zA-Z0-9]+$', content):
-                    giftcode = content
-            else:
-                code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
-                if code_match:
-                    giftcode = code_match.group(1)
-
-            if giftcode:
-                giftcode = self.clean_gift_code(giftcode)
-
-            if not giftcode:
-                return
-
-            self.logger.info(f"GiftOps: [on_message] Detected potential code '{giftcode}' in channel {message.channel.id}")
-            await gift_redemption.enqueue_validation(self, giftcode, "channel", message, message.channel)
+            seen = set()
+            for candidate in candidates:
+                giftcode = self.clean_gift_code(candidate)
+                if not giftcode or giftcode in seen:
+                    continue
+                seen.add(giftcode)
+                self.logger.info(f"GiftOps: [on_message] Detected potential code '{giftcode}' in channel {message.channel.id}")
+                await gift_redemption.enqueue_validation(self, giftcode, "channel", message, message.channel)
 
         except Exception as e:
             self.logger.exception(f"GiftOps: UNEXPECTED Error in on_message handler: {str(e)}")

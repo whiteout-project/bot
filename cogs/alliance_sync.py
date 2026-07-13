@@ -177,6 +177,23 @@ class AllianceSync(commands.Cog):
         # Default to 0 (disabled) if not set
         return result[0] if result and result[0] is not None else 0
 
+    async def _notify_transfer_removal(self, *, fid, old_nickname, alliance_name, old_kid, new_kid):
+        """DM the global admin about an auto-removed state transfer; never raises."""
+        try:
+            self.cursor_settings.execute("SELECT id FROM admin WHERE is_initial = 1")
+            admin_data = self.cursor_settings.fetchone()
+            if not admin_data:
+                return
+            user = await self.bot.fetch_user(admin_data[0])
+            if user:
+                await user.send(
+                    f"{theme.deniedIcon} {old_nickname} `{fid}` was removed from "
+                    f"**{alliance_name}** due to state transfer "
+                    f"(State {old_kid} {theme.forwardIcon} {new_kid})."
+                )
+        except Exception as e:
+            self.logger.warning(f"AllianceSync: could not DM transfer notice for {fid}: {e}")
+
     def get_keep_control_log_setting(self, alliance_id):
         """Get the keep_control_log setting for a specific alliance"""
         self.cursor_alliance.execute("""
@@ -505,20 +522,14 @@ class AllianceSync(commands.Cog):
                                     # Remove user from alliance when auto-removal is enabled
                                     self.cursor_users.execute("DELETE FROM users WHERE fid = ?", (fid,))
                                     self.conn_users.commit()
-                                    
+
                                     # Only notify if notifications are enabled for auto-removal
                                     if notify_on_transfer:
-                                        self.cursor_settings.execute("SELECT id FROM admin WHERE is_initial = 1")
-                                        admin_data = self.cursor_settings.fetchone()
-                                        
-                                        if admin_data:
-                                            user = await self.bot.fetch_user(admin_data[0])
-                                            if user:
-                                                await user.send(
-                                                    f"{theme.deniedIcon} {old_nickname} `{fid}` was removed from "
-                                                    f"**{alliance_name}** due to state transfer "
-                                                    f"(State {old_kid} {theme.forwardIcon} {new_kid})."
-                                                )
+                                        await self._notify_transfer_removal(
+                                            fid=fid, old_nickname=old_nickname,
+                                            alliance_name=alliance_name,
+                                            old_kid=old_kid, new_kid=new_kid,
+                                        )
                                 else:
                                     # Just update kid without removing (default behavior)
                                     self.cursor_users.execute("UPDATE users SET kid = ? WHERE fid = ?", (new_kid, fid))

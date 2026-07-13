@@ -1541,13 +1541,14 @@ class OcrUploadSession:
         if self.finalized or self.cancelled:
             return
         self.finalized = True
-        self.delete_snapshot()
         self.stop_timer()
         try:
             # Wait for any in-flight batch so we render the full parsed set, not a
             # partial one (e.g. Done clicked while a second batch is still OCRing).
             async with self._lock:
                 await self.render_review(timed_out=timed_out)
+            # Delete the crash-resume snapshot only on success so a restart can recover after errors.
+            self.delete_snapshot()
         except Exception:
             logger.exception("OcrUploadSession: failed to render review")
 
@@ -1690,6 +1691,9 @@ class OcrUploadSession:
             setattr(self, k, v)
 
     def save_snapshot(self) -> None:
+        if self.finalized or self.cancelled:
+            # In-flight batches must not re-create a deleted snapshot (phantom recovery).
+            return
         from . import ocr_resume
         ocr_resume.save(self._snapshot_key(), 'attendance', self.snapshot_payload())
 

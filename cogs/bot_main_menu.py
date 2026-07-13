@@ -2092,6 +2092,12 @@ class ExternalOcrModal(discord.ui.Modal):
         self.add_item(self.url_input)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Re-verify the submitter - this writes a bot-wide setting.
+        _, submitter_is_global = PermissionManager.is_admin(interaction.user.id)
+        if not submitter_is_global:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Global Admin only.", ephemeral=True)
+            return
         url = self.url_input.value.strip().rstrip("/")
         try:
             from .bear_track import invalidate_remote_ocr_cache
@@ -2264,11 +2270,13 @@ class MaintenanceView(discord.ui.View):
         row=2
     )
     async def toggle_remote_ocr_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.is_global:
+        # Re-verify the clicker: the view is persistent and gated by the opener.
+        _, clicker_is_global = PermissionManager.is_admin(interaction.user.id)
+        if not clicker_is_global:
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Global Admin only.", ephemeral=True)
             return
-        await interaction.response.send_modal(ExternalOcrModal(self.cog, self.is_global))
+        await interaction.response.send_modal(ExternalOcrModal(self.cog, clicker_is_global))
 
     @discord.ui.button(
         label="Main Menu",

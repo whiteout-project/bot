@@ -150,6 +150,16 @@ async def handle_gift_validate_process(cog, process):
             asyncio.create_task(cog.api.add_giftcode(giftcode))
         await _process_auto_use(cog, giftcode)
     elif is_valid is None:
+        # Save as validating ('pending' in the DB) so the 2h loop still sees it after a restart.
+        try:
+            cog.cursor.execute("""
+                INSERT OR IGNORE INTO gift_codes (giftcode, date, validation_status)
+                VALUES (?, date('now'), 'pending')
+            """, (giftcode,))
+            cog.conn.commit()
+        except Exception as e:
+            cog.logger.error(f"Could not mark code '{giftcode}' as validating: {e}")
+            print(f"Could not mark code '{giftcode}' as validating: {e}")
         schedule_revalidation(cog, giftcode, source)
 
 
@@ -1308,6 +1318,21 @@ async def claim_giftcode_rewards_wos(cog, player_id, giftcode, *, skip_cache: bo
     return status
 
 
+def _extract_embed_codes(message) -> list:
+    """Pull Code:-labeled candidates out of a message's embeds (title, description, fields)."""
+    texts = []
+    for embed in message.embeds:
+        texts.extend(t for t in (embed.title, embed.description) if t)
+        for field in embed.fields:
+            texts.extend(t for t in (field.name, field.value) if t)
+
+    codes = []
+    for text in texts:
+        clean = str(text).replace('*', '').replace('`', '').replace('_', '')
+        codes.extend(m.group(1) for m in re.finditer(r'Code:\s*([a-zA-Z0-9]+)', clean, re.IGNORECASE))
+    return codes
+
+
 async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_id: int) -> dict:
     """Scan historical messages in a channel for gift codes with consolidated results.
 
@@ -1326,8 +1351,8 @@ async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_i
         # Collect messages to process
         messages_to_process = []
         async for message in channel.history(limit=fetch_limit, oldest_first=False):
-            # Skip bot messages and empty messages
-            if message.author == cog.bot.user or not message.content:
+            # Skip our own messages and messages with nothing to parse
+            if message.author == cog.bot.user or not (message.content or message.embeds):
                 continue
 
             # Check if we've already reacted to this message
@@ -1355,22 +1380,28 @@ async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_i
         message_code_map = {}
 
         for message in messages_to_process:
+            candidates = []
             content = message.content.strip()
-            giftcode = None
 
             # Check for gift code patterns
-            if len(content.split()) == 1:
-                if re.match(r'^[a-zA-Z0-9]+$', content):
-                    giftcode = content
-            else:
-                code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
-                if code_match:
-                    potential_code = code_match.group(1)
-                    if re.match(r'^[a-zA-Z0-9]+$', potential_code):
-                        giftcode = potential_code
+            if content:
+                if len(content.split()) == 1:
+                    if re.match(r'^[a-zA-Z0-9]+$', content):
+                        candidates.append(content)
+                else:
+                    code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
+                    if code_match:
+                        potential_code = code_match.group(1)
+                        if re.match(r'^[a-zA-Z0-9]+$', potential_code):
+                            candidates.append(potential_code)
 
-            if giftcode:
+            # Official codes usually arrive inside embeds
+            candidates.extend(_extract_embed_codes(message))
+
+            for giftcode in candidates:
                 giftcode = cog.clean_gift_code(giftcode)
+                if not giftcode or giftcode in message_code_map:
+                    continue
                 scan_results['total_codes_found'] += 1
                 message_code_map[giftcode] = message
 
@@ -1399,22 +1430,24 @@ async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_i
             for giftcode in codes_to_validate:
                 # Add to database first
                 cog.cursor.execute("""
-                    INSERT OR IGNORE INTO gift_codes (giftcode, alliance_id, validation_status, created_at)
-                    VALUES (?, ?, 'pending', ?)
-                """, (giftcode, alliance_id, datetime.now().isoformat()))
+                    INSERT OR IGNORE INTO gift_codes (giftcode, date, validation_status)
+                    VALUES (?, date('now'), 'pending')
+                """, (giftcode,))
                 cog.conn.commit()
 
                 # Validate the code silently (no individual messages)
                 is_valid = await _validate_gift_code_silent(cog, giftcode)
 
-                # Update database with result
-                new_status = 'validated' if is_valid else 'invalid'
-                cog.cursor.execute("""
-                    UPDATE gift_codes
-                    SET validation_status = ?
-                    WHERE giftcode = ?
-                """, (new_status, giftcode))
-                cog.conn.commit()
+                if is_valid is None:
+                    # No verdict (usually captcha throttle): stays validating, re-check soon.
+                    schedule_revalidation(cog, giftcode, "history_scan")
+                else:
+                    cog.cursor.execute("""
+                        UPDATE gift_codes
+                        SET validation_status = ?
+                        WHERE giftcode = ?
+                    """, ('validated' if is_valid else 'invalid', giftcode))
+                    cog.conn.commit()
 
                 # Store validation result
                 scan_results['validation_results'][giftcode] = is_valid
@@ -1428,24 +1461,21 @@ async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_i
                 # Add appropriate reaction to message
                 if giftcode in message_code_map:
                     message = message_code_map[giftcode]
-                    emoji = f"{theme.verifiedIcon}" if is_valid else f"{theme.deniedIcon}"
+                    if is_valid is None:
+                        emoji = f"{theme.warnIcon}"
+                    else:
+                        emoji = f"{theme.verifiedIcon}" if is_valid else f"{theme.deniedIcon}"
                     await message.add_reaction(emoji)
 
                 # Small delay between validations
                 await asyncio.sleep(1.0)
 
-        # Add reactions to existing codes
-        for giftcode in scan_results['existing_valid']:
+        # Already-known codes get the info reaction
+        for giftcode in (scan_results['existing_valid']
+                         + scan_results['existing_invalid']
+                         + scan_results['existing_pending']):
             if giftcode in message_code_map:
-                await message_code_map[giftcode].add_reaction(f"{theme.verifiedIcon}")
-
-        for giftcode in scan_results['existing_invalid']:
-            if giftcode in message_code_map:
-                await message_code_map[giftcode].add_reaction(f"{theme.deniedIcon}")
-
-        for giftcode in scan_results['existing_pending']:
-            if giftcode in message_code_map:
-                await message_code_map[giftcode].add_reaction(f"{theme.warnIcon}")
+                await message_code_map[giftcode].add_reaction(f"{theme.infoIcon}")
 
         # Send consolidated results message
         await _send_scan_results_message(cog, channel, scan_results, alliance_id)
@@ -1510,7 +1540,8 @@ async def _send_scan_results_message(cog, channel: discord.TextChannel, results:
         # New codes validation results
         if results['new_codes']:
             new_valid = [code for code, is_valid in results['validation_results'].items() if is_valid]
-            new_invalid = [code for code, is_valid in results['validation_results'].items() if not is_valid]
+            new_invalid = [code for code, is_valid in results['validation_results'].items() if is_valid is False]
+            new_pending = [code for code, is_valid in results['validation_results'].items() if is_valid is None]
 
             validation_text = ""
             if new_valid:
@@ -1527,6 +1558,13 @@ async def _send_scan_results_message(cog, channel: discord.TextChannel, results:
                     validation_text += f"  • `{code}`\n"
                 if len(new_invalid) > 5:
                     validation_text += f"  • ... and {len(new_invalid) - 5} more\n"
+
+            if new_pending:
+                validation_text += f"{theme.warnIcon} **Validating ({len(new_pending)}):**\n"
+                for code in new_pending[:5]:
+                    validation_text += f"  • `{code}`\n"
+                if len(new_pending) > 5:
+                    validation_text += f"  • ... and {len(new_pending) - 5} more\n"
 
             if validation_text:
                 embed.add_field(
@@ -2179,10 +2217,14 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 fail_reason = f"Processing Error ({response_status})"
                 error_summary[response_status] = error_summary.get(response_status, 0) + 1
             elif response_status == "TIMEOUT_RETRY":
-                queue_for_retry = True
-                retry_delay = API_RATE_LIMIT_COOLDOWN
-                fail_reason = "API Rate Limited"
-                if current_cycle_count + 1 >= MAX_RETRY_CYCLES: # Track as error if this is the final attempt
+                if current_cycle_count + 1 < MAX_RETRY_CYCLES:
+                    queue_for_retry = True
+                    retry_delay = API_RATE_LIMIT_COOLDOWN
+                    fail_reason = "API Rate Limited"
+                else:
+                    add_to_failed = True
+                    mark_processed = True
+                    fail_reason = f"API rate limited after {MAX_RETRY_CYCLES} attempts"
                     error_summary["TIMEOUT_RETRY"] = error_summary.get("TIMEOUT_RETRY", 0) + 1
             elif response_status == "TOO_POOR_SPEND_MORE":
                 add_to_failed = True
@@ -2195,12 +2237,18 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 fail_reason = "Furnace level too low"
                 error_summary["TOO_SMALL_SPEND_MORE"] = error_summary.get("TOO_SMALL_SPEND_MORE", 0) + 1
             elif response_status == "CAPTCHA_TOO_FREQUENT":
-                # Queue for retry with rate limit delay (60s max)
-                queue_for_retry = True
-                retry_delay = 60.0
-                fail_reason = "Captcha API rate limited (too frequent)"
-                cog.logger.info(f"GiftOps: ID {fid} hit CAPTCHA_TOO_FREQUENT. Queuing for retry in {retry_delay:.1f}s.")
-                if current_cycle_count + 1 >= MAX_RETRY_CYCLES:
+                if current_cycle_count + 1 < MAX_RETRY_CYCLES:
+                    # Queue for retry with rate limit delay (60s max)
+                    queue_for_retry = True
+                    retry_delay = 60.0
+                    fail_reason = "Captcha API rate limited (too frequent)"
+                    cog.logger.info(f"GiftOps: ID {fid} hit CAPTCHA_TOO_FREQUENT. Queuing for retry in {retry_delay:.1f}s.")
+                else:
+                    # A persistent per-FID penalty never clears: give up so one member can't wedge the queue.
+                    add_to_failed = True
+                    mark_processed = True
+                    fail_reason = f"Captcha rate limited after {MAX_RETRY_CYCLES} attempts"
+                    cog.logger.info(f"GiftOps: ID {fid} still CAPTCHA_TOO_FREQUENT after {MAX_RETRY_CYCLES} cycles. Marking as failed.")
                     error_summary["CAPTCHA_TOO_FREQUENT"] = error_summary.get("CAPTCHA_TOO_FREQUENT", 0) + 1
             elif response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"]:
                 if current_cycle_count + 1 < MAX_RETRY_CYCLES:
@@ -2234,8 +2282,8 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
 
             if queue_for_retry:
                 retry_after_ts = time.time() + retry_delay
-                cycle_for_next_retry = current_cycle_count + 1 if response_status in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] else current_cycle_count
-                retry_queue.append((fid, nickname, cycle_for_next_retry, retry_after_ts))
+                # Every retry advances the cycle counter so rate-limited members still hit MAX_RETRY_CYCLES.
+                retry_queue.append((fid, nickname, current_cycle_count + 1, retry_after_ts))
 
             # Batch process results when reaching batch size
             if len(batch_results) >= batch_size:

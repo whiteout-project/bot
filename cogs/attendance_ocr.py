@@ -1,5 +1,6 @@
 """Attendance OCR cog: routes screenshot uploads in configured channels to event-specific parsers."""
 from __future__ import annotations
+import asyncio
 import logging
 from typing import Optional
 
@@ -34,6 +35,8 @@ class AttendanceOCR(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.active_sessions: dict[tuple[int, int], OcrUploadSession] = {}
+        # Serializes session creation per (channel, uploader) - an 11+ image upload arrives as two messages.
+        self._session_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self._resume_done = False
 
     @commands.Cog.listener()
@@ -49,6 +52,10 @@ class AttendanceOCR(commands.Cog):
                 channel = self.bot.get_channel(payload.get('channel_id'))
                 uploader_id = payload.get('uploader_id')
                 if channel is None or uploader_id is None:
+                    ocr_resume.delete(key)
+                    continue
+                if payload.get('finalized') or payload.get('cancelled'):
+                    # Stale leftover from a finished session - prune, don't resurrect.
                     ocr_resume.delete(key)
                     continue
                 session = build_session_from_snapshot(self, channel, payload)
@@ -205,63 +212,65 @@ class AttendanceOCR(commands.Cog):
                 return
 
         key = (message.channel.id, message.author.id)
-        session = self.active_sessions.get(key)
-        if session is not None and not session.finalized and not session.cancelled:
-            await session.add_attachments(images)
+        lock = self._session_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            session = self.active_sessions.get(key)
+            if session is not None and not session.finalized and not session.cancelled:
+                await session.add_attachments(images)
+                await self._maybe_delete_source(message, settings)
+                return
+
+            # Acknowledge immediately so the uploader sees activity during the slow
+            # classification OCR (mirrors bear's "collecting" message). It's reused
+            # in place once the event is known, or removed if we post nothing usable.
+            status_message = await self._send_reading_ack(message.channel)
+
+            classification, ocr_text = await self._classify_images(
+                message.channel.id, images
+            )
+            event_type = classification[0] if classification else None
+            if event_type is None:
+                await self._discard_status(status_message)
+                # Log the OCR text snippet — invaluable when an admin reports
+                # "the bot can't identify my screenshot" and we need to see
+                # what RapidOCR actually produced.
+                preview = (ocr_text or "<empty>")[:300].replace("\n", " ")
+                logger.info(
+                    f"AttendanceOCR: classification failed in channel {message.channel.id}. "
+                    f"OCR preview: {preview!r}"
+                )
+                enabled = get_enabled_events(message.channel.id)
+                from .attendance_ocr_parsers import EVENT_TYPES
+                enabled_labels = ", ".join(
+                    EVENT_TYPES[et].label for et in enabled if et in EVENT_TYPES
+                ) or "(none)"
+                await message.channel.send(
+                    f"{theme.warnIcon} Couldn't identify the event in that screenshot.\n"
+                    f"This channel accepts: **{enabled_labels}**\n"
+                    f"If your screenshot is for one of these, the bot's text "
+                    f"recognition may have misread it — try a clearer screenshot, "
+                    f"or ask an admin to add the missing event type if your "
+                    f"screenshot is for something else.",
+                    delete_after=30,
+                )
+                return
+
+            new_session = build_session(
+                event_type,
+                cog=self, channel=message.channel,
+                uploader=message.author, alliance_id=settings["alliance_id"],
+            )
+            if new_session is None:
+                await self._discard_status(status_message)
+                await message.channel.send(
+                    f"{theme.warnIcon} Parser for `{event_type}` not implemented yet.",
+                    delete_after=20,
+                )
+                return
+
+            self.active_sessions[key] = new_session
+            await new_session.start(images, status_message=status_message)
             await self._maybe_delete_source(message, settings)
-            return
-
-        # Acknowledge immediately so the uploader sees activity during the slow
-        # classification OCR (mirrors bear's "collecting" message). It's reused
-        # in place once the event is known, or removed if we post nothing usable.
-        status_message = await self._send_reading_ack(message.channel)
-
-        classification, ocr_text = await self._classify_images(
-            message.channel.id, images
-        )
-        event_type = classification[0] if classification else None
-        if event_type is None:
-            await self._discard_status(status_message)
-            # Log the OCR text snippet — invaluable when an admin reports
-            # "the bot can't identify my screenshot" and we need to see
-            # what RapidOCR actually produced.
-            preview = (ocr_text or "<empty>")[:300].replace("\n", " ")
-            logger.info(
-                f"AttendanceOCR: classification failed in channel {message.channel.id}. "
-                f"OCR preview: {preview!r}"
-            )
-            enabled = get_enabled_events(message.channel.id)
-            from .attendance_ocr_parsers import EVENT_TYPES
-            enabled_labels = ", ".join(
-                EVENT_TYPES[et].label for et in enabled if et in EVENT_TYPES
-            ) or "(none)"
-            await message.channel.send(
-                f"{theme.warnIcon} Couldn't identify the event in that screenshot.\n"
-                f"This channel accepts: **{enabled_labels}**\n"
-                f"If your screenshot is for one of these, the bot's text "
-                f"recognition may have misread it — try a clearer screenshot, "
-                f"or ask an admin to add the missing event type if your "
-                f"screenshot is for something else.",
-                delete_after=30,
-            )
-            return
-
-        new_session = build_session(
-            event_type,
-            cog=self, channel=message.channel,
-            uploader=message.author, alliance_id=settings["alliance_id"],
-        )
-        if new_session is None:
-            await self._discard_status(status_message)
-            await message.channel.send(
-                f"{theme.warnIcon} Parser for `{event_type}` not implemented yet.",
-                delete_after=20,
-            )
-            return
-
-        self.active_sessions[key] = new_session
-        await new_session.start(images, status_message=status_message)
-        await self._maybe_delete_source(message, settings)
 
     async def _maybe_delete_source(self, message: discord.Message, settings: dict) -> None:
         """Delete the user's upload message after its attachments have been

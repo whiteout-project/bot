@@ -161,6 +161,9 @@ class NotificationSystem(commands.Cog):
         self.CHANNEL_CONFIRM_INTERVAL = 300    # re-confirm at most every 5 minutes
         self.CHANNEL_CONFIRM_REQUIRED = 3      # confirmation failures before pausing
 
+        # Tracks Forbidden from actual sends, separate from the cache-miss state above.
+        self.send_forbidden_state = {}
+
         # repeat_minutes value -1 means weekday-based repeat, 0 means no repeat
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS bear_notifications (
@@ -359,6 +362,22 @@ class NotificationSystem(commands.Cog):
             self.channel_confirm_state.pop(channel_id, None)
             await self._pause_and_notify(channel_id=channel_id, reason=reason)
         return None
+
+    async def _handle_send_forbidden(self, channel_id: int):
+        """Count throttled 403-send confirmations; pause the channel after repeated failures."""
+        state = self.send_forbidden_state.setdefault(channel_id, {'fails': 0, 'last': 0.0})
+        now = time.time()
+        if now - state['last'] < self.CHANNEL_CONFIRM_INTERVAL:
+            return
+        state['last'] = now
+        state['fails'] += 1
+        logger.warning(
+            f"Notifications: send to channel {channel_id} forbidden; "
+            f"confirmation {state['fails']}/{self.CHANNEL_CONFIRM_REQUIRED}"
+        )
+        if state['fails'] >= self.CHANNEL_CONFIRM_REQUIRED:
+            self.send_forbidden_state.pop(channel_id, None)
+            await self._pause_and_notify(channel_id=channel_id, reason="send_forbidden")
 
     async def _pause_and_notify(self, *, channel_id: int | None = None,
                                 guild_id: int | None = None, reason: str):
@@ -967,7 +986,8 @@ class NotificationSystem(commands.Cog):
             for notify_time in notification_times:
                 time_diff = abs(minutes_until - notify_time)
                 if time_diff < 0.1:
-                    thirty_seconds_ago = (now - timedelta(seconds=30)).strftime('%Y-%m-%d %H:%M:%S')
+                    # sent_at is stored as UTC wall time - compare in UTC, not the notification's timezone.
+                    thirty_seconds_ago = (datetime.now(pytz.UTC) - timedelta(seconds=30)).strftime('%Y-%m-%d %H:%M:%S')
 
                     self.cursor.execute("""
                         SELECT COUNT(*) FROM notification_history 
@@ -986,6 +1006,11 @@ class NotificationSystem(commands.Cog):
                 # Resolve the channel only now, when we are actually about to send.
                 channel = await self._resolve_send_channel(channel_id)
                 if channel is None:
+                    return
+
+                # Recent Forbidden send: skip re-sends until the next confirmation window.
+                fb_state = self.send_forbidden_state.get(channel_id)
+                if fb_state and time.time() - fb_state['last'] < self.CHANNEL_CONFIRM_INTERVAL:
                     return
 
                 # Delete previous notifications before sending new ones
@@ -1239,6 +1264,9 @@ class NotificationSystem(commands.Cog):
                             msg = await channel.send(f"{mention_text} ⏰ **{actual_description}**")
                         sent_message_ids.append(msg.id)
 
+                # Sends succeeded - clear any pending Forbidden confirmations.
+                self.send_forbidden_state.pop(channel_id, None)
+
                 # Calculate when to delete messages
                 scheduled_delete_at = self.calculate_delete_time(
                     guild_id, event_type, custom_delete_delay_minutes,
@@ -1320,6 +1348,9 @@ class NotificationSystem(commands.Cog):
                 if schedule_cog:
                     await schedule_cog.on_notification_sent(guild_id, channel_id)
 
+        except discord.Forbidden:
+            # Send permission lost on a cached channel: quarantine instead of retrying forever.
+            await self._handle_send_forbidden(channel_id)
         except Exception as e:
             notif_id = id if id is not None else "unknown"
             error_msg = f"[ERROR] Error processing notification {notif_id}: {str(e)}\nType: {type(e)}\nTrace: {traceback.format_exc()}"

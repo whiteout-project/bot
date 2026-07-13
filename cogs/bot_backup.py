@@ -282,31 +282,36 @@ class BackupOperations(commands.Cog):
             pass
         return sorted(backup_files, key=os.path.getmtime, reverse=True)
 
-    def _checkpoint_wal_dbs(self):
-        """Flush each DB's WAL into its .sqlite so the zip captures committed data."""
+    def _snapshot_dbs(self, dest_dir):
+        """Snapshot every db/*.sqlite into dest_dir via SQLite's online backup API (WAL-safe)."""
         for f in os.listdir("db"):
             if f.endswith(".sqlite"):
+                src = sqlite3.connect(os.path.join("db", f), timeout=30.0)
                 try:
-                    with sqlite3.connect(os.path.join("db", f), timeout=30.0) as conn:
-                        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except Exception as e:
-                    logger.warning(f"WAL checkpoint failed for {f}: {e}")
+                    dst = sqlite3.connect(os.path.join(dest_dir, f))
+                    try:
+                        src.backup(dst)
+                    finally:
+                        dst.close()
+                finally:
+                    src.close()
 
     def _write_db_zip(self, filepath, password, readme_content):
-        """Zip all db/*.sqlite + README (AES-LZMA if password, else DEFLATED). Sync — use to_thread."""
-        if password:
-            with pyzipper.AESZipFile(filepath, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
-                zf.setpassword(password.encode())
-                for f in os.listdir("db"):
-                    if f.endswith(".sqlite"):
-                        zf.write(os.path.join("db", f), f)
-                zf.writestr("README.txt", readme_content)
-        else:
-            with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for f in os.listdir("db"):
-                    if f.endswith(".sqlite"):
-                        zf.write(os.path.join("db", f), f)
-                zf.writestr("README.txt", readme_content)
+        """Zip snapshots of all db/*.sqlite + README (AES-LZMA if password, else DEFLATED). Sync — use to_thread."""
+        with tempfile.TemporaryDirectory() as snap_dir:
+            self._snapshot_dbs(snap_dir)
+            names = sorted(f for f in os.listdir(snap_dir) if f.endswith(".sqlite"))
+            if password:
+                with pyzipper.AESZipFile(filepath, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
+                    zf.setpassword(password.encode())
+                    for f in names:
+                        zf.write(os.path.join(snap_dir, f), f)
+                    zf.writestr("README.txt", readme_content)
+            else:
+                with zipfile.ZipFile(filepath, 'w', zipfile.ZIP_DEFLATED) as zf:
+                    for f in names:
+                        zf.write(os.path.join(snap_dir, f), f)
+                    zf.writestr("README.txt", readme_content)
 
     async def create_backup(self, user_id: str, backup_type: str = "Manual", save_locally: bool = True):
         try:
@@ -321,8 +326,6 @@ class BackupOperations(commands.Cog):
 
             timestamp = datetime.datetime.now()
             backup_name = f"{backup_type.lower()}_{timestamp.strftime('%Y%m%d_%H%M%S')}"
-
-            self._checkpoint_wal_dbs()
 
             if save_locally:
                 # Save to local backups folder
