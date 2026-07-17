@@ -1200,8 +1200,15 @@ async def claim_giftcode_rewards_wos(cog, player_id, giftcode, *, skip_cache: bo
         login_successful = player_info_json.get("msg") == "success"
 
         if not login_successful:
-            status = "LOGIN_FAILED"
-            log_message = f"{datetime.now()} Login failed for ID {player_id}: {player_info_json.get('msg', 'Unknown')}\n"
+            # Throttles/upstream hiccups are transient: hand them to the retry cycles.
+            if response_stove_info.status_code in (429, 502, 503, 504):
+                status = "TIMEOUT_RETRY"
+            elif player_info_json.get("err_code") == 40001 and "role not exist" in str(player_info_json.get("msg", "")).lower():
+                # Same signature login_handler treats as not_found; alliance sync removes after 3 sightings.
+                status = "ROLE_NOT_EXIST"
+            else:
+                status = "LOGIN_FAILED"
+            log_message = f"{datetime.now()} Login failed for ID {player_id} ({status}): {player_info_json.get('msg', 'Unknown')}\n"
             cog.giftlog.info(log_message.strip())
             return status
 
@@ -2030,6 +2037,7 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                         "TIMEOUT_RETRY": f"{theme.timeIcon} **" + "{count}" + "** members were staring into the void, until the void finally timed out on them.",
                         "LOGIN_EXPIRED_MID_PROCESS": f"{theme.lockIcon} **" + "{count}" + "** members login failed mid-process. How'd that even happen?",
                         "LOGIN_FAILED": f"{theme.lockIcon} **" + "{count}" + "** members failed due to login issues. Try logging it off and on again!",
+                        "ROLE_NOT_EXIST": f"{theme.membersIcon} **" + "{count}" + "** members no longer exist in the game. Ghosts don't redeem codes - remove them from the alliance!",
                         "CAPTCHA_SOLVING_FAILED": f"{theme.robotIcon} **" + "{count}" + "** members lost the battle against CAPTCHA. You sure those weren't just bots?",
                         "CAPTCHA_SOLVER_ERROR": f"{theme.settingsIcon} **" + "{count}" + "** members failed due to a CAPTCHA solver issue. We're still trying to solve that one.",
                         "OCR_DISABLED": f"{theme.deniedIcon} **" + "{count}" + "** members failed since OCR is disabled. Try turning it on first!",
@@ -2211,6 +2219,11 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 mark_processed = True
                 fail_reason = f"Solver Error ({response_status})"
                 error_summary["CAPTCHA_SOLVER_ERROR"] = error_summary.get("CAPTCHA_SOLVER_ERROR", 0) + 1
+            elif response_status == "ROLE_NOT_EXIST":
+                add_to_failed = True
+                mark_processed = True
+                fail_reason = "Account no longer exists"
+                error_summary["ROLE_NOT_EXIST"] = error_summary.get("ROLE_NOT_EXIST", 0) + 1
             elif response_status in ["LOGIN_FAILED", "LOGIN_EXPIRED_MID_PROCESS", "ERROR", "UNKNOWN_API_RESPONSE"]:
                 add_to_failed = True
                 mark_processed = True
