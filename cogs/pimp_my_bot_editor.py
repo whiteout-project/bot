@@ -4,6 +4,7 @@ Theme editor UI. Provides categorized icon, color, and divider editing.
 import discord
 import sqlite3
 import re
+import time
 import logging
 
 from .pimp_my_bot import (
@@ -644,6 +645,7 @@ class IconCategoryView(discord.ui.View):
             'choice_view': view,
             'category_view': self,
             'timeout': 300,
+            'created_at': time.time(),
             'original_message': interaction.message,
             'session': self.session
         }

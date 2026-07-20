@@ -8,6 +8,7 @@ import os
 import re
 import io
 import json
+import time
 import base64
 import unicodedata
 import aiohttp
@@ -1349,6 +1350,8 @@ class ThemeMenuView(discord.ui.View):
             'type': 'theme_import',
             'user_id': interaction.user.id,
             'menu_view': self,
+            'timeout': 300,
+            'created_at': time.time(),
             'original_message': interaction.message
         }
 
@@ -1982,6 +1985,7 @@ class PaginationView(discord.ui.View):
             'themename': self.themename,
             'pagination_view': self,
             'timeout': 300,
+            'created_at': time.time(),
             'original_message': interaction.message
         }
 
@@ -3345,6 +3349,16 @@ class Theme(commands.Cog):
                 delete_after=10
             )
 
+    def claim_emoji_session(self, session_key):
+        """Return the session if it exists and hasn't expired; expired ones are dropped."""
+        session = self.emoji_edit_sessions.get(session_key)
+        if session is None:
+            return None
+        if time.time() - session.get('created_at', 0) > session.get('timeout', 300):
+            del self.emoji_edit_sessions[session_key]
+            return None
+        return session
+
     @commands.Cog.listener()
     async def on_message(self, message):
         """Listen for emoji messages when user is editing, or theme imports."""
@@ -3353,17 +3367,15 @@ class Theme(commands.Cog):
 
         # Check for theme import session
         import_key = f"import_{message.author.id}_{message.channel.id}"
-        if import_key in self.emoji_edit_sessions:
-            session = self.emoji_edit_sessions[import_key]
-            if session.get('type') == 'theme_import':
-                await self._handle_theme_import(message, session, import_key)
-                return
-
-        session_key = f"{message.author.id}_{message.channel.id}"
-        if session_key not in self.emoji_edit_sessions:
+        session = self.claim_emoji_session(import_key)
+        if session is not None and session.get('type') == 'theme_import':
+            await self._handle_theme_import(message, session, import_key)
             return
 
-        session = self.emoji_edit_sessions[session_key]
+        session_key = f"{message.author.id}_{message.channel.id}"
+        session = self.claim_emoji_session(session_key)
+        if session is None:
+            return
 
         emoji_pattern = r'<a?:(\w+):(\d+)>'
         emoji_match = re.search(emoji_pattern, message.content)

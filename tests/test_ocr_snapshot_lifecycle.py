@@ -29,6 +29,7 @@ def _att_session(render_fails=False):
     s._timer_task = None
     s._lock = asyncio.Lock()
     s.channel = SimpleNamespace(id=1)
+    s.progress_message = None
     calls = SimpleNamespace(deleted=0, rendered=0)
 
     async def render_review(timed_out=False):
@@ -46,6 +47,7 @@ def test_attendance_failed_finalize_keeps_snapshot():
     asyncio.run(s.finalize())
     assert calls.rendered == 1
     assert calls.deleted == 0, "snapshot must survive a failed finalize for crash-resume"
+    assert s.finalized is False, "session reopens so Done can be retried"
 
 
 def test_attendance_successful_finalize_deletes_snapshot():

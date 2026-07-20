@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from notification_event_types import (
     get_event_icon, get_event_config, calculate_next_occurrence, validate_time_slot,
-    calculate_crazy_joe_dates
+    calculate_crazy_joe_dates, get_reference_override, set_reference_override
 )
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
@@ -863,6 +863,116 @@ class WizardTimezoneModal(discord.ui.Modal, title="Set Timezone"):
                 ephemeral=True
             )
 
+class EventReferenceDateModal(discord.ui.Modal):
+    """Enter a date the event ran on this server; blank resets to the default rotation."""
+
+    def __init__(self, rotation_view, event_name: str):
+        super().__init__(title=f"Rotation: {event_name}"[:45])
+        self.rotation_view = rotation_view
+        self.event_name = event_name
+        current = get_reference_override(rotation_view.session.guild_id, event_name) or ""
+        self.date_input = discord.ui.TextInput(
+            label="Reference date (YYYY-MM-DD)",
+            placeholder="A date this event ran on your server - blank = default",
+            default=current,
+            required=False,
+            max_length=10,
+        )
+        self.add_item(self.date_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        value = self.date_input.value.strip()
+        guild_id = self.rotation_view.session.guild_id
+        if not value:
+            set_reference_override(guild_id, self.event_name, None)
+            await self.rotation_view.show(interaction)
+            return
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Invalid date - use YYYY-MM-DD (e.g. 2026-07-19).",
+                ephemeral=True,
+            )
+            return
+        config = get_event_config(self.event_name)
+        default_ref = datetime.strptime(config["reference_date"], "%Y-%m-%d")
+        if parsed.weekday() != default_ref.weekday():
+            weekday = default_ref.strftime("%A")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} {self.event_name} runs on a {weekday} - enter a {weekday} date.",
+                ephemeral=True,
+            )
+            return
+        set_reference_override(guild_id, self.event_name, value)
+        await self.rotation_view.show(interaction)
+
+
+class EventRotationView(discord.ui.View):
+    """Per-server rotation overrides so event dates match servers on a different cycle."""
+
+    def __init__(self, cog, session, hub_view):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.session = session
+        self.hub_view = hub_view
+        self.cycle_events = [
+            name for name in hub_view.event_types
+            if (get_event_config(name) or {}).get("reference_date")
+        ]
+
+    async def show(self, interaction: discord.Interaction):
+        lines = []
+        for event in self.cycle_events:
+            config = get_event_config(event)
+            override = get_reference_override(self.session.guild_id, event)
+            ref = override or config["reference_date"]
+            marker = " (custom)" if override else ""
+            nxt = calculate_next_occurrence(event, guild_id=self.session.guild_id)
+            nxt_text = nxt.strftime("%Y-%m-%d") if nxt else "-"
+            lines.append(f"{get_event_icon(event)} **{event}**{marker} - reference `{ref}`, next `{nxt_text}`")
+
+        embed = discord.Embed(
+            title=f"{theme.timeIcon} Event Rotation",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"Servers can run global events on a different rotation. Pick an event and "
+                f"enter a date it actually ran on your server - all its future dates shift "
+                f"to match. Leave the date blank to return to the default rotation.\n\n"
+                + "\n".join(lines) +
+                f"\n{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+
+        self.clear_items()
+        select = discord.ui.Select(
+            placeholder="Pick an event to adjust...",
+            options=[
+                discord.SelectOption(label=event, value=event, emoji=get_event_icon(event))
+                for event in self.cycle_events
+            ],
+        )
+        select.callback = self._picked
+        self.add_item(select)
+
+        back = discord.ui.Button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary)
+        back.callback = self._back
+        self.add_item(back)
+
+        if interaction.response.is_done():
+            await interaction.edit_original_response(embed=embed, view=self)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+
+    async def _picked(self, interaction: discord.Interaction):
+        event = interaction.data["values"][0]
+        await interaction.response.send_modal(EventReferenceDateModal(self, event))
+
+    async def _back(self, interaction: discord.Interaction):
+        await self.hub_view.show(interaction)
+
+
 class EventSelectionHubView(discord.ui.View):
     """Step 2: Select and configure events - returns here after each event config"""
     def __init__(self, cog: NotificationWizard, session: WizardSession):
@@ -904,6 +1014,7 @@ class EventSelectionHubView(discord.ui.View):
                 f"Click an event to configure it. Configured events show {theme.verifiedIcon}\n"
                 "Click a configured event again to unconfigure it.\n\n"
                 "**Available Events:**\n" + "\n".join(event_list) + "\n\n"
+                "Server on a different schedule? **Event Rotation** aligns event dates to your server.\n"
                 "When finished configuring events, click **Continue to Preview**."
             ),
             color=theme.emColor1
@@ -935,6 +1046,16 @@ class EventSelectionHubView(discord.ui.View):
         back_button.callback = self.back_to_settings
         self.add_item(back_button)
 
+        # Event rotation (per-server reference date overrides)
+        rotation_button = discord.ui.Button(
+            label="Event Rotation",
+            emoji=f"{theme.timeIcon}",
+            style=discord.ButtonStyle.secondary,
+            row=2
+        )
+        rotation_button.callback = self.open_event_rotation
+        self.add_item(rotation_button)
+
         # Continue button (only enabled if at least one event configured)
         continue_button = discord.ui.Button(
             label="Continue to Preview",
@@ -950,6 +1071,9 @@ class EventSelectionHubView(discord.ui.View):
             await interaction.edit_original_response(embed=embed, view=self)
         else:
             await interaction.response.edit_message(embed=embed, view=self)
+
+    async def open_event_rotation(self, interaction: discord.Interaction):
+        await EventRotationView(self.cog, self.session, self).show(interaction)
 
     async def event_clicked(self, interaction: discord.Interaction, event_type: str):
         """Handle event click - configure or unconfigure"""
@@ -1388,7 +1512,7 @@ class DualLegionConfigView(discord.ui.View):
     async def show(self, interaction: discord.Interaction):
         """Show event configuration"""
         icon = get_event_icon(self.event_name)
-        next_date = calculate_next_occurrence(self.event_name)
+        next_date = calculate_next_occurrence(self.event_name, guild_id=self.session.guild_id)
         config = get_event_config(self.event_name)
 
         # Get schedule description from config
@@ -1547,7 +1671,7 @@ class MultiTimeSelectView(discord.ui.View):
     async def show(self, interaction: discord.Interaction):
         """Show event configuration"""
         icon = get_event_icon(self.event_name)
-        next_date = calculate_next_occurrence(self.event_name)
+        next_date = calculate_next_occurrence(self.event_name, guild_id=self.session.guild_id)
         config = get_event_config(self.event_name)
 
         # Get schedule description from config
@@ -1645,7 +1769,7 @@ class PhaseToggleConfigView(discord.ui.View):
     async def show(self, interaction: discord.Interaction):
         """Show event configuration with toggles"""
         icon = get_event_icon(self.event_name)
-        next_date = calculate_next_occurrence(self.event_name)
+        next_date = calculate_next_occurrence(self.event_name, guild_id=self.session.guild_id)
         config = get_event_config(self.event_name)
 
         # Build description showing selected notifications
@@ -1773,7 +1897,7 @@ class MercenaryBossesConfigView(discord.ui.View):
         """Show Mercenary Prestige configuration"""
         icon = get_event_icon("Mercenary Prestige")
         config = get_event_config("Mercenary Prestige")
-        next_date = calculate_next_occurrence("Mercenary Prestige")
+        next_date = calculate_next_occurrence("Mercenary Prestige", guild_id=self.session.guild_id)
 
         # Calculate the 3-day window
         window_text = "N/A"
@@ -2281,10 +2405,19 @@ class WizardPreviewView(discord.ui.View):
 
         return instance_id
 
+    @staticmethod
+    def _bear_trap_repeat(event_data: dict) -> tuple:
+        """Map the wizard's Bear Trap answers to (repeat_minutes, selected_weekdays)."""
+        if event_data.get("repeat_days"):
+            return event_data["repeat_days"] * 24 * 60, None
+        if event_data.get("repeat_weekdays"):
+            return -1, event_data["repeat_weekdays"]
+        return 0, None
+
     async def _create_or_update_notification(self, bear_trap_cog, interaction, event_name: str,
                                              instance_id: str, hour: int, minute: int,
                                              start_date, repeat_minutes: int, description: str,
-                                             embed_data: dict) -> tuple:
+                                             embed_data: dict, selected_weekdays: list | None = None) -> tuple:
         """
         Create or update a single notification instance.
         Returns (created, updated, disabled, action) where action is "added", "updated", or "enabled".
@@ -2303,6 +2436,7 @@ class WizardPreviewView(discord.ui.View):
                 notification_type=self.session.notification_type,
                 mention_type=self.session.mention_type,
                 repeat_minutes=repeat_minutes,
+                selected_weekdays=selected_weekdays,
                 event_type=event_name,
                 embed_data=embed_data,
                 instance_identifier=instance_id,
@@ -2329,8 +2463,9 @@ class WizardPreviewView(discord.ui.View):
                 created_by=interaction.user.id,
                 notification_type=self.session.notification_type,
                 mention_type=self.session.mention_type,
-                repeat_enabled=repeat_minutes > 0,
+                repeat_enabled=repeat_minutes != 0,
                 repeat_minutes=repeat_minutes,
+                selected_weekdays=selected_weekdays,
                 event_type=event_name,
                 wizard_batch_id=self.session.wizard_batch_id,
                 instance_identifier=instance_id
@@ -2413,7 +2548,7 @@ class WizardPreviewView(discord.ui.View):
                 event_config = get_event_config(event_name) or {}
 
                 # Calculate next occurrence for global events (returns None for custom events like Bear Trap)
-                event_next_occurrence = calculate_next_occurrence(event_name)
+                event_next_occurrence = calculate_next_occurrence(event_name, guild_id=self.session.guild_id)
                 if not event_next_occurrence:
                     event_next_occurrence = now  # Fallback to now for custom events
 
@@ -2456,9 +2591,7 @@ class WizardPreviewView(discord.ui.View):
                 description = f"{description_prefix}{event_name}"
 
                 if event_name == "Bear Trap":
-                    repeat_minutes = 0
-                    if event_data.get("repeat_days"):
-                        repeat_minutes = event_data["repeat_days"] * 24 * 60
+                    repeat_minutes, selected_weekdays = self._bear_trap_repeat(event_data)
 
                     # Bear Trap 1
                     bt1_datetime = event_data.get("bt1_datetime")
@@ -2466,7 +2599,8 @@ class WizardPreviewView(discord.ui.View):
                         c, u, _, action = await self._create_or_update_notification(
                             bear_trap_cog, interaction, "Bear Trap", "bt1",
                             event_data["bt1_hour"], event_data["bt1_minute"],
-                            bt1_datetime, repeat_minutes, description, embed_data
+                            bt1_datetime, repeat_minutes, description, embed_data,
+                            selected_weekdays=selected_weekdays
                         )
                         created_count += c
                         updated_count += u
@@ -2480,7 +2614,8 @@ class WizardPreviewView(discord.ui.View):
                         c, u, _, action = await self._create_or_update_notification(
                             bear_trap_cog, interaction, "Bear Trap", "bt2",
                             event_data["bt2_hour"], event_data["bt2_minute"],
-                            bt2_datetime, repeat_minutes, description, embed_data
+                            bt2_datetime, repeat_minutes, description, embed_data,
+                            selected_weekdays=selected_weekdays
                         )
                         created_count += c
                         updated_count += u
@@ -2490,7 +2625,7 @@ class WizardPreviewView(discord.ui.View):
 
                 elif event_name == "Crazy Joe":
                     # Tuesday and Thursday every 4 weeks
-                    next_tuesday, next_thursday = calculate_crazy_joe_dates(now)
+                    next_tuesday, next_thursday = calculate_crazy_joe_dates(now, guild_id=self.session.guild_id)
                     repeat_minutes = 28 * 24 * 60  # 4-week repeat
 
                     tuesday_hour = event_data.get("tuesday_hour")

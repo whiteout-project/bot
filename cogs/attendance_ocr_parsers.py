@@ -18,7 +18,8 @@ from . import alliance_power_changes
 
 logger = logging.getLogger("alliance")
 
-DEFAULT_TIMEOUT_SECONDS = 180
+# 15 min idle before auto-finalize, matching bear_track; admins read counts before deciding.
+DEFAULT_TIMEOUT_SECONDS = 900
 
 
 # ── event registry ────────────────────────────────────────────────────────
@@ -967,6 +968,28 @@ def assign_unique_fids(raw_rows: list[dict], roster: list[tuple[int, str]],
     return enriched
 
 
+def _rematch_displaced_fids(bucket, keep_idx, fid, lookup_nick):
+    """A manual edit gave row `keep_idx` this `fid`. Re-match every OTHER row in
+    `bucket` that still holds it to its next free candidate, or mark it unmatched,
+    so a duplicate id never silently folds two rows into one on the merged view.
+    Returns [(old_display, new_fid, new_nick), ...] for the rows it moved."""
+    displaced = []
+    for j, row in enumerate(bucket):
+        if j == keep_idx or row.get("fid") != fid:
+            continue
+        old_disp = row.get("nickname") or row.get("name") or "a row"
+        used = {r["fid"] for k, r in enumerate(bucket) if k != j and r.get("fid")}
+        new_fid = new_nick = None
+        new_status = "no_match"
+        for cand_fid, cand_nick, _score, cand_status in (row.get("candidates") or []):
+            if cand_fid not in used:
+                new_fid, new_nick, new_status = cand_fid, (lookup_nick(cand_fid) or cand_nick), cand_status
+                break
+        row["fid"], row["nickname"], row["status"] = new_fid, new_nick, new_status
+        displaced.append((old_disp, new_fid, new_nick))
+    return displaced
+
+
 def fuzzy_match_name(detected: str, roster: list[tuple[int, str]],
                      *, alliance_id: Optional[int] = None) -> tuple[Optional[int], str]:
     """Single-best fuzzy match against the roster as `(fid, status)` — a
@@ -1551,6 +1574,25 @@ class OcrUploadSession:
             self.delete_snapshot()
         except Exception:
             logger.exception("OcrUploadSession: failed to render review")
+            # Reopen so Done can be retried instead of stranding the upload behind a dead button.
+            self.finalized = False
+            await self._render_review_failed()
+
+    async def _render_review_failed(self) -> None:
+        """Hand the buttons back after a failed review build, with a visible why."""
+        if self.progress_message is None:
+            return
+        embed = self.build_progress_embed()
+        embed.add_field(
+            name=f"{theme.warnIcon} Could not build the review",
+            value=("Something went wrong assembling the review. Click **Done Uploading** "
+                   "to try again, or re-upload the screenshots."),
+            inline=False,
+        )
+        try:
+            await self.progress_message.edit(embed=embed, view=_ProgressView(self))
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     async def cancel(self, *, by_user: bool = False):
         if self.finalized or self.cancelled:
@@ -1576,9 +1618,11 @@ class OcrUploadSession:
         self._timer_task = asyncio.create_task(self._timer_run())
 
     def stop_timer(self):
-        if self._timer_task and not self._timer_task.done():
-            self._timer_task.cancel()
+        task = self._timer_task
         self._timer_task = None
+        # Never self-cancel: the timeout path runs stop_timer from _timer_run and would kill finalize.
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
 
     async def _timer_run(self):
         try:
@@ -1662,6 +1706,9 @@ class OcrUploadSession:
         import datetime as _dt
         import json as _json
         p: dict = {'channel_id': self.channel.id}
+        # Kept so resume() can revive the original message instead of posting a duplicate.
+        if self.progress_message is not None:
+            p['progress_message_id'] = self.progress_message.id
         for k, v in self.__dict__.items():
             if k in self._SNAPSHOT_SKIP:
                 continue
@@ -1716,7 +1763,18 @@ class OcrUploadSession:
             ),
             color=theme.emColor1,
         )
-        self.progress_message = await self.channel.send(embed=embed, view=_ProgressView(self))
+        view = _ProgressView(self)
+        msg_id = getattr(self, 'progress_message_id', None)
+        if msg_id:
+            try:
+                msg = await self.channel.fetch_message(msg_id)
+                await msg.edit(embed=embed, view=view)
+                self.progress_message = msg
+                self.restart_timer()
+                return
+            except (discord.NotFound, discord.HTTPException):
+                pass
+        self.progress_message = await self.channel.send(embed=embed, view=view)
         self.restart_timer()
 
     def extra_progress_lines(self) -> str:

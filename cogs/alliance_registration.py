@@ -122,6 +122,12 @@ class AllianceRegistration(commands.Cog):
         else:
             raise Exception(result.get('error_message', 'Failed to fetch user data'))
 
+    def _alliance_exists(self, alliance_id: int) -> bool:
+        with sqlite3.connect("db/alliance.sqlite", timeout=30.0) as conn:
+            return conn.execute(
+                "SELECT 1 FROM alliance_list WHERE alliance_id = ?", (alliance_id,)
+            ).fetchone() is not None
+
     # ── DB writes ──────────────────────────────────────────────────────────
 
     def _insert_new_user(self, fid: int, user_data: dict, alliance: int,
@@ -181,6 +187,14 @@ class AllianceRegistration(commands.Cog):
 
         caller_id = interaction.user.id
         current_server_id = interaction.guild_id if interaction.guild else None
+
+        # Autocomplete is only a suggestion UI - users can submit any integer.
+        if not self._alliance_exists(alliance):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} That alliance doesn't exist. Pick one from the suggestions.",
+                ephemeral=True,
+            )
+            return
 
         existing = self._get_user_row(fid)
 

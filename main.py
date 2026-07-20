@@ -739,6 +739,13 @@ if __name__ == "__main__":
                 if not is_container():
                     if "--autoupdate" in sys.argv or repair_mode:
                         update = True
+                    elif not sys.stdin or not sys.stdin.isatty():
+                        # Headless host: input() would raise EOFError and crash-loop startup while an update is pending.
+                        startup.phase_fail(
+                            "Update skipped",
+                            details=["Non-interactive terminal - run with --autoupdate to install updates automatically"],
+                        )
+                        return
                     else:
                         print("  Note: If your terminal is not interactive, you can use the --autoupdate argument to skip this prompt.")
                         ask = input("  Do you want to update? (y/n): ").strip().lower()
@@ -772,8 +779,13 @@ if __name__ == "__main__":
 
                     startup.phase_start(f"Downloading update from {source_name}")
                     safe_remove("package.zip")
-                    download_resp = requests.get(download_url, timeout=600)
-                    
+                    try:
+                        download_resp = requests.get(download_url, timeout=600)
+                    except Exception as e:
+                        # A network blip must skip this update attempt, not kill startup.
+                        startup.phase_fail("Update failed", details=[f"Download error: {e}"])
+                        return
+
                     if download_resp.status_code == 200:
                         with open("package.zip", "wb") as f:
                             f.write(download_resp.content)

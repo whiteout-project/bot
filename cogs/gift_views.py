@@ -94,6 +94,7 @@ async def list_gift_codes(cog, interaction: discord.Interaction):
             COUNT(DISTINCT ugc.fid) as used_count
         FROM gift_codes gc
         LEFT JOIN user_giftcodes ugc ON gc.giftcode = ugc.giftcode
+            AND ugc.status IN ('SUCCESS', 'RECEIVED', 'SAME TYPE EXCHANGE')
         WHERE gc.validation_status = 'validated'
         GROUP BY gc.giftcode
         ORDER BY gc.date DESC
@@ -157,6 +158,7 @@ async def delete_gift_code(cog, interaction: discord.Interaction):
                 COUNT(DISTINCT ugc.fid) as used_count
             FROM gift_codes gc
             LEFT JOIN user_giftcodes ugc ON gc.giftcode = ugc.giftcode
+                AND ugc.status IN ('SUCCESS', 'RECEIVED', 'SAME TYPE EXCHANGE')
             GROUP BY gc.giftcode, gc.date, gc.validation_status
             ORDER BY gc.date ASC
         """)

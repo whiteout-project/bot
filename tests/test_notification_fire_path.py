@@ -27,6 +27,8 @@ def _forbidden():
 
 
 class _Chan:
+    name = "bear-trap"
+
     def __init__(self, fail=False):
         self.sent = []
         self.attempts = 0
@@ -49,7 +51,9 @@ def _mk_cog(channel):
         scheduled_delete_at TEXT, sent_at TEXT, deleted_at TEXT)""")
     conn.execute("""CREATE TABLE bear_notifications (
         id INTEGER PRIMARY KEY, is_enabled INTEGER DEFAULT 1,
-        last_notification TEXT, next_notification TEXT, auto_disabled_at TEXT)""")
+        last_notification TEXT, next_notification TEXT, auto_disabled_at TEXT,
+        description TEXT, guild_id INTEGER, event_type TEXT, hour INTEGER,
+        minute INTEGER, timezone TEXT, channel_id INTEGER, channel_name TEXT)""")
     conn.commit()
 
     cog = ns.NotificationSystem.__new__(ns.NotificationSystem)
@@ -126,6 +130,66 @@ def test_forbidden_send_pauses_after_confirmations():
 
     assert pauses, "repeated Forbidden sends must pause via quarantine"
     assert pauses[0]["channel_id"] == 20
+
+
+def test_successful_send_remembers_channel_name():
+    chan = _Chan()
+    cog, _ = _mk_cog(chan)
+    cog.cursor.execute("INSERT INTO bear_notifications (id) VALUES (1)")
+    cog.conn.commit()
+
+    asyncio.run(cog.process_notification(_row("UTC")))
+
+    stored = cog.cursor.execute(
+        "SELECT channel_name FROM bear_notifications WHERE id = 1").fetchone()[0]
+    assert stored == "bear-trap", "sends must refresh the last-known channel name"
+
+
+def test_pause_names_the_deleted_channel():
+    cog, _ = _mk_cog(_Chan())
+    # _mk_cog stubs _pause_and_notify for the Forbidden tests - use the real one here.
+    cog._pause_and_notify = ns.NotificationSystem._pause_and_notify.__get__(cog)
+    cog.cursor.execute(
+        "INSERT INTO bear_notifications (id, is_enabled, description, guild_id, event_type,"
+        " hour, minute, timezone, channel_id, channel_name)"
+        " VALUES (1, 1, 'EMBED_MESSAGE:x', 10, 'Bear Trap', 14, 0, 'UTC', 20, 'bear-trap')")
+    cog.conn.commit()
+    dms = []
+
+    async def capture_dm(**kw):
+        dms.append(kw)
+
+    cog._send_quarantine_dm = capture_dm
+
+    paused = asyncio.run(cog._pause_and_notify(channel_id=20, reason="channel_deleted"))
+
+    assert paused == 1
+    assert dms[0]["channel_label"] == "#bear-trap (deleted)", \
+        "the quarantine DM must name the channel, not just its ID"
+    line = ns._format_paused_line(*dms[0]["affected"][0][3:7], dms[0]["affected"][0][1])
+    assert "Bear Trap 14:00 (UTC)" in line and "(Embed notification)" in line
+
+
+def test_paused_line_is_human_readable():
+    line = ns._format_paused_line("Bear Trap", 14, 0, "UTC", "EMBED_MESSAGE:whatever")
+    assert line == "- **Bear Trap 14:00 (UTC)** - (Embed notification)"
+    assert "ID" not in line
+
+
+def test_paused_line_strips_custom_times_prefix():
+    line = ns._format_paused_line(None, 20, 0, "UTC", "CUSTOM_TIMES:20,22|Meeting starts soon")
+    assert line == "- **Custom 20:00 (UTC)** - Meeting starts soon"
+    assert "CUSTOM_TIMES" not in line
+
+
+def test_pause_reasons_have_friendly_phrases():
+    """Admin-facing pause messages must not leak internal slugs like channel_deleted."""
+    import pathlib
+    import re
+    src = pathlib.Path(ns.__file__).read_text(encoding="utf-8")
+    used = set(re.findall(r'reason="([a-z_]+)"', src)) | {"channel_deleted", "channel_forbidden"}
+    missing = used - set(ns._PAUSE_REASON_PHRASES)
+    assert not missing, f"pause reasons without a friendly phrase: {missing}"
 
 
 def test_forbidden_send_throttles_retry_hammering():

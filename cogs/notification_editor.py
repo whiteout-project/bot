@@ -13,6 +13,17 @@ from .pimp_my_bot import theme
 
 logger = logging.getLogger('notification')
 
+
+def apply_time_edit(next_notification: str, hour: int, minute: int, date_str: str | None = None) -> str:
+    """Apply an hour/minute/date edit to a stored ISO string, preserving its UTC offset."""
+    dt = datetime.fromisoformat(next_notification)
+    dt = dt.replace(hour=hour, minute=minute)
+    if date_str:
+        day, month, year = map(int, date_str.split("/"))
+        dt = dt.replace(day=day, month=month, year=year)
+    return dt.isoformat()
+
+
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
     """
     Check if user typed a literal @mention instead of {tag} or @tag.
@@ -565,8 +576,7 @@ class PlainEditorView(discord.ui.View):
             def __init__(self, parent_view):
                 super().__init__()
                 self.parent_view = parent_view
-                next_notification_str = parent_view.next_notification.replace("+00:00", "")
-                current_dt = datetime.strptime(next_notification_str, "%Y-%m-%dT%H:%M:%S")
+                current_dt = datetime.fromisoformat(parent_view.next_notification)
                 saved_date = current_dt.strftime("%d/%m/%Y")
                 saved_hour = str(current_dt.hour)
                 saved_minute = str(current_dt.minute)
@@ -591,21 +601,18 @@ class PlainEditorView(discord.ui.View):
                                                               ephemeral=True)
                         return
 
-                    current_dt = datetime.strptime(self.parent_view.next_notification, "%Y-%m-%dT%H:%M:%S+00:00")
-                    new_dt = current_dt.replace(hour=new_hours, minute=new_minutes)
-
-                    if new_date:
-                        try:
-                            day, month, year = map(int, new_date.split("/"))
-                            new_dt = new_dt.replace(day=day, month=month, year=year)
-                        except ValueError:
-                            await modal_interaction.followup.send(f"{theme.deniedIcon} Invalid date format! Use DD/MM/YYYY.",
-                                                                  ephemeral=True)
-                            return
+                    try:
+                        updated = apply_time_edit(
+                            self.parent_view.next_notification, new_hours, new_minutes, new_date
+                        )
+                    except ValueError:
+                        await modal_interaction.followup.send(f"{theme.deniedIcon} Invalid date format! Use DD/MM/YYYY.",
+                                                              ephemeral=True)
+                        return
 
                     self.parent_view.hours = new_hours
                     self.parent_view.minutes = new_minutes
-                    self.parent_view.next_notification = new_dt.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+                    self.parent_view.next_notification = updated
 
                     await self.parent_view.cog.update_notification(self.parent_view)
                     await self.parent_view.update_embed(modal_interaction)
@@ -1024,9 +1031,11 @@ class NotificationEditor(commands.Cog):
         else:
             cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (view.notification_id,))
 
+        # Refresh the last-known channel name so quarantine DMs name the right channel.
+        channel_name = getattr(self.bot.get_channel(view.channel_id), "name", None)
         cursor.execute(
-            "UPDATE bear_notifications SET channel_id = ?, hour = ?, minute = ?, description = ?, mention_type = ?, repeat_minutes = ?, next_notification = ?, notification_type = ? WHERE id = ?",
-            (view.channel_id, view.hours, view.minutes, view.description, view.mention, view.repeat,
+            "UPDATE bear_notifications SET channel_id = ?, channel_name = ?, hour = ?, minute = ?, description = ?, mention_type = ?, repeat_minutes = ?, next_notification = ?, notification_type = ? WHERE id = ?",
+            (view.channel_id, channel_name, view.hours, view.minutes, view.description, view.mention, view.repeat,
              view.next_notification, view.notification_type, view.notification_id)
         )
         conn.commit()

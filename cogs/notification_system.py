@@ -19,6 +19,28 @@ from .pimp_my_bot import theme, safe_edit_message
 
 logger = logging.getLogger('notification')
 
+def _format_paused_line(event_type, hour, minute, timezone, description, channel_label=None):
+    """One human-readable line per paused notification for the quarantine DM."""
+    description = description or ""
+    if description.startswith("CUSTOM_TIMES:"):
+        parts = description.split("|", 1)
+        description = parts[1] if len(parts) > 1 else ""
+    short = (description[:50] + "...") if len(description) > 50 else description
+    if "EMBED_MESSAGE:" in short:
+        short = "(Embed notification)"
+    where = f" in {channel_label}" if channel_label else ""
+    return f"- **{event_type or 'Custom'} {hour:02d}:{minute:02d} ({timezone})**{where} - {short}"
+
+
+# Friendly wording for pause reasons shown to admins (console + quarantine DM).
+_PAUSE_REASON_PHRASES = {
+    "channel_deleted": "the channel was deleted",
+    "channel_forbidden": "the bot lost access to the channel",
+    "send_forbidden": "the bot lost permission to send in the channel",
+    "guild_kicked": "the bot was removed from the server",
+    "startup_sweep": "the bot is no longer in the server",
+}
+
 
 def check_mention_placeholder_misuse(text: str, is_embed: bool = False) -> str | None:
     """
@@ -221,6 +243,15 @@ class NotificationSystem(commands.Cog):
             )
         """)
 
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS event_reference_overrides (
+                guild_id INTEGER,
+                event_type TEXT,
+                reference_date TEXT,
+                PRIMARY KEY (guild_id, event_type)
+            )
+        """)
+
         # Fix corrupted weekday-based repeats: "fixed" string was silently converted to 0 by SQLite.
         self.cursor.execute("""
             UPDATE bear_notifications
@@ -267,6 +298,12 @@ class NotificationSystem(commands.Cog):
             self.cursor.execute("SELECT custom_delete_delay_minutes FROM bear_notifications LIMIT 1")
         except sqlite3.OperationalError:
             self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN custom_delete_delay_minutes INTEGER DEFAULT NULL")
+
+        # Last-known channel name, so quarantine messages can name a deleted channel
+        try:
+            self.cursor.execute("SELECT channel_name FROM bear_notifications LIMIT 1")
+        except sqlite3.OperationalError:
+            self.cursor.execute("ALTER TABLE bear_notifications ADD COLUMN channel_name TEXT DEFAULT NULL")
 
         # Add message tracking columns to notification_history
         try:
@@ -389,7 +426,8 @@ class NotificationSystem(commands.Cog):
             return 0
         try:
             self.cursor.execute(
-                f"SELECT id, description, guild_id FROM bear_notifications "
+                f"SELECT id, description, guild_id, event_type, hour, minute, timezone, "
+                f"channel_id, channel_name FROM bear_notifications "
                 f"WHERE {where_sql} AND is_enabled = 1",
                 where_params,
             )
@@ -397,6 +435,7 @@ class NotificationSystem(commands.Cog):
             if not affected:
                 return 0
             gid = affected[0][2]
+            channel_label = self._channel_label(channel_id, affected[0][8]) if channel_id else None
             ts_iso = datetime.now(pytz.UTC).isoformat()
             self.cursor.execute(
                 f"UPDATE bear_notifications SET is_enabled = 0, auto_disabled_at = ? "
@@ -405,10 +444,11 @@ class NotificationSystem(commands.Cog):
             )
             self.conn.commit()
             logger.info(f"Notifications: paused {len(affected)} notification(s) - {reason} (guild {gid}, channel {channel_id})")
-            print(f"[NOTIFICATIONS] Paused {len(affected)} notification(s) - {reason}")
+            in_channel = f" in {channel_label}" if channel_label else ""
+            print(f"[NOTIFICATIONS] Paused {len(affected)} notification(s){in_channel} - {_PAUSE_REASON_PHRASES.get(reason, reason)}")
             await self._send_quarantine_dm(
                 ts_iso=ts_iso, guild_id=gid, channel_id=channel_id,
-                reason=reason, affected=[(r[0], r[1]) for r in affected],
+                channel_label=channel_label, reason=reason, affected=affected,
             )
             return len(affected)
         except Exception as e:
@@ -416,8 +456,17 @@ class NotificationSystem(commands.Cog):
             print(f"[NOTIFICATIONS] Could not pause notifications: {e}")
             return 0
 
+    def _channel_label(self, channel_id, last_known_name=None):
+        """Best available human name for a channel, surviving its deletion."""
+        channel = self.bot.get_channel(channel_id) if channel_id else None
+        if channel is not None:
+            return f"#{channel.name}"
+        if last_known_name:
+            return f"#{last_known_name} (deleted)"
+        return f"channel ID {channel_id}"
+
     async def _send_quarantine_dm(self, *, ts_iso, guild_id, channel_id,
-                                  reason, affected):
+                                  reason, affected, channel_label=None):
         try:
             with sqlite3.connect('db/settings.sqlite') as db:
                 admins = db.cursor().execute(
@@ -427,20 +476,14 @@ class NotificationSystem(commands.Cog):
                 return
             guild = self.bot.get_guild(guild_id)
             guild_label = f"**{guild.name}**" if guild else f"guild `{guild_id}`"
-            scope = (f"channel `{channel_id}` in {guild_label}"
-                     if channel_id else guild_label)
-            reason_phrase = {
-                "channel_deleted": "the channel was deleted",
-                "channel_forbidden": "the bot lost access to the channel",
-                "guild_kicked": "the bot was removed from the server",
-                "startup_sweep": "the bot is no longer in the server",
-            }.get(reason, reason)
+            scope = f"{channel_label} in {guild_label}" if channel_label else guild_label
+            reason_phrase = _PAUSE_REASON_PHRASES.get(reason, reason)
             notif_lines = []
-            for nid, desc in affected[:10]:
-                short = (desc[:50] + "...") if len(desc) > 50 else desc
-                if "EMBED_MESSAGE:" in short:
-                    short = "(Embed notification)"
-                notif_lines.append(f"- **ID {nid}:** {short}")
+            for row in affected[:10]:
+                _nid, desc, _gid, event_type, hour, minute, tz_name, row_channel_id, row_channel_name = row
+                # Guild-wide pauses span channels, so name each one per line.
+                per_line_label = None if channel_label else self._channel_label(row_channel_id, row_channel_name)
+                notif_lines.append(_format_paused_line(event_type, hour, minute, tz_name, desc, per_line_label))
             more = (f"\n*…and {len(affected) - 10} more*"
                     if len(affected) > 10 else "")
             embed = discord.Embed(
@@ -532,14 +575,15 @@ class NotificationSystem(commands.Cog):
             )
             next_notification = tz.localize(naive_dt)
 
+            channel_name = getattr(self.bot.get_channel(channel_id), "name", None)
             self.cursor.execute("""
                 INSERT INTO bear_notifications
                 (guild_id, channel_id, hour, minute, timezone, description, notification_type,
-                mention_type, repeat_enabled, repeat_minutes, created_by, next_notification, event_type, wizard_batch_id, instance_identifier)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mention_type, repeat_enabled, repeat_minutes, created_by, next_notification, event_type, wizard_batch_id, instance_identifier, channel_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (guild_id, channel_id, hour, minute, timezone, notification_description, notification_type,
                   mention_type, 1 if repeat_enabled else 0, repeat_minutes, created_by,
-                  next_notification.isoformat(), event_type, wizard_batch_id, instance_identifier))
+                  next_notification.isoformat(), event_type, wizard_batch_id, instance_identifier, channel_name))
 
             notification_id = self.cursor.lastrowid
 
@@ -593,18 +637,21 @@ class NotificationSystem(commands.Cog):
             self.cursor.execute("""
                 UPDATE bear_notifications
                 SET hour = ?, minute = ?, timezone = ?, description = ?, notification_type = ?,
-                    mention_type = ?, repeat_minutes = ?, event_type = ?, next_notification = ?,
-                    instance_identifier = ?
+                    mention_type = ?, repeat_enabled = ?, repeat_minutes = ?, event_type = ?,
+                    next_notification = ?, instance_identifier = ?
                 WHERE id = ?
             """, (hour, minute, timezone, notification_description, notification_type,
-                  mention_type, repeat_minutes, event_type, next_notification.isoformat(),
-                  instance_identifier, notification_id))
+                  mention_type, 1 if repeat_minutes != 0 else 0, repeat_minutes, event_type,
+                  next_notification.isoformat(), instance_identifier, notification_id))
             if embed_data:
                 self.cursor.execute("DELETE FROM bear_notification_embeds WHERE notification_id = ?", (notification_id,))
                 await self.save_notification_embed(notification_id, embed_data)
             if repeat_minutes == -1 and selected_weekdays:
                 self.cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (notification_id,))
                 await self.save_notification_fixed(notification_id, selected_weekdays)
+            elif repeat_minutes != -1:
+                # Leaving weekday mode drops the day rows, or the startup repair migration re-enables them.
+                self.cursor.execute("DELETE FROM notification_days WHERE notification_id = ?", (notification_id,))
             self.conn.commit()
             if not skip_board_update:
                 schedule_cog = self.bot.get_cog("NotificationSchedule")
@@ -1264,8 +1311,15 @@ class NotificationSystem(commands.Cog):
                             msg = await channel.send(f"{mention_text} ⏰ **{actual_description}**")
                         sent_message_ids.append(msg.id)
 
-                # Sends succeeded - clear any pending Forbidden confirmations.
+                # Sends succeeded: clear Forbidden confirmations and refresh the last-known channel name.
                 self.send_forbidden_state.pop(channel_id, None)
+                channel_name = getattr(channel, "name", None)
+                if channel_name:
+                    self.cursor.execute(
+                        "UPDATE bear_notifications SET channel_name = ? "
+                        "WHERE id = ? AND (channel_name IS NULL OR channel_name != ?)",
+                        (channel_name, id, channel_name),
+                    )
 
                 # Calculate when to delete messages
                 scheduled_delete_at = self.calculate_delete_time(
@@ -3946,12 +4000,12 @@ class BearTrapView(discord.ui.View):
                                             )
                                             return
 
-                                        # Update the notification's channel
+                                        # Update the notification's channel (and its last-known name)
                                         self.cog.cursor.execute("""
                                             UPDATE bear_notifications
-                                            SET channel_id = ?
+                                            SET channel_id = ?, channel_name = ?
                                             WHERE id = ?
-                                        """, (new_channel_id, self.notification_id))
+                                        """, (new_channel_id, getattr(new_channel, "name", None), self.notification_id))
                                         self.cog.conn.commit()
 
                                         await select_interaction.response.send_message(

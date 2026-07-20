@@ -2002,13 +2002,12 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
         cached_member_statuses = batch_get_user_giftcode_status(cog, giftcode, member_ids)
 
         for fid, nickname in members:
-            if fid in cached_member_statuses:
-                status = cached_member_statuses[fid]
-                if status in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
-                    received_count += 1
-                    already_used_users.append(nickname)
+            if cached_member_statuses.get(fid) in ["SUCCESS", "RECEIVED", "SAME TYPE EXCHANGE"]:
+                received_count += 1
+                already_used_users.append(nickname)
                 processed_count += 1
             else:
+                # Cached failures are retried - only conclusive successes skip.
                 active_members_to_process.append((fid, nickname, 0))
         cog.logger.info(f"GiftOps: Pre-processed {len(cached_member_statuses)} members from cache. {len(active_members_to_process)} remaining.")
 
@@ -2292,6 +2291,8 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                     failed_count += 1
                     cycle_failed_on = current_cycle_count + 1 if response_status not in ["CAPTCHA_INVALID", "MAX_CAPTCHA_ATTEMPTS_REACHED", "OCR_FAILED_ATTEMPT"] or (current_cycle_count + 1 >= MAX_RETRY_CYCLES) else MAX_RETRY_CYCLES
                     failed_users_dict[fid] = (nickname, fail_reason, cycle_failed_on)
+                    # Persist the failure so Redeem History has the full picture.
+                    batch_results.append((fid, giftcode, response_status))
 
             if queue_for_retry:
                 retry_after_ts = time.time() + retry_delay

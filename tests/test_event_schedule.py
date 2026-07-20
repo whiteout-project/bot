@@ -104,12 +104,33 @@ def test_cycle_event_is_future_and_aligned(event):
     assert nxt.weekday() == ref.weekday()
 
 
-def test_cycle_event_steps_exactly_one_cycle():
-    """At exactly the reference instant, the next occurrence rolls one cycle on."""
+def test_cycle_event_same_day_is_not_skipped():
+    """Occurrences are midnight-anchored - asking ON event day (before the
+    slots have run) must return today, not a full cycle later."""
     cfg = get_event_config("Foundry Battle")  # global_biweekly, cycle 2
     ref = _reference(cfg)
-    nxt = calculate_next_occurrence("Foundry Battle", ref)
-    assert nxt == ref + timedelta(weeks=cfg["cycle_weeks"])
+    event_day = ref + timedelta(weeks=cfg["cycle_weeks"] * 5)
+    asked = event_day.replace(hour=8, minute=0)
+    nxt = calculate_next_occurrence("Foundry Battle", asked)
+    assert nxt.date() == event_day.date(), "event day itself must not be skipped"
+
+
+def test_cycle_event_steps_one_cycle_after_event_day():
+    """The day after an occurrence, the next one is exactly one cycle on."""
+    cfg = get_event_config("Foundry Battle")
+    ref = _reference(cfg)
+    event_day = ref + timedelta(weeks=cfg["cycle_weeks"] * 5)
+    asked = event_day + timedelta(days=1)
+    nxt = calculate_next_occurrence("Foundry Battle", asked)
+    assert nxt == event_day + timedelta(weeks=cfg["cycle_weeks"])
+
+
+def test_crazy_joe_same_day_tuesday_kept():
+    tue_ref, _ = calculate_crazy_joe_dates(FROM)
+    asked = tue_ref.replace(hour=6, minute=0)
+    tue, thu = calculate_crazy_joe_dates(asked)
+    assert tue.date() == tue_ref.date(), "Crazy Joe Tuesday must survive same-day setup"
+    assert thu == tue + timedelta(days=2)
 
 
 # --- Crazy Joe two-day cycle ---

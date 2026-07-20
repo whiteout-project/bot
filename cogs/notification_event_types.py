@@ -2,11 +2,53 @@
 Notification event type definitions. Configures icons, durations, and time slots per event.
 """
 import logging
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple
 import pytz
 
 logger = logging.getLogger('notification')
+
+_OVERRIDES_DB = 'db/beartime.sqlite'
+
+
+def get_reference_override(guild_id: Optional[int], event_type: str) -> Optional[str]:
+    """Per-server reference date override (YYYY-MM-DD), or None for the default rotation."""
+    if guild_id is None:
+        return None
+    try:
+        with sqlite3.connect(_OVERRIDES_DB, timeout=30.0) as conn:
+            row = conn.execute(
+                "SELECT reference_date FROM event_reference_overrides "
+                "WHERE guild_id = ? AND event_type = ?",
+                (guild_id, event_type),
+            ).fetchone()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+
+
+def set_reference_override(guild_id: int, event_type: str, reference_date: Optional[str]) -> None:
+    """Store or clear (None) a server's reference date override for an event."""
+    with sqlite3.connect(_OVERRIDES_DB, timeout=30.0) as conn:
+        if reference_date is None:
+            conn.execute(
+                "DELETE FROM event_reference_overrides WHERE guild_id = ? AND event_type = ?",
+                (guild_id, event_type),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO event_reference_overrides (guild_id, event_type, reference_date) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(guild_id, event_type) DO UPDATE SET reference_date = excluded.reference_date",
+                (guild_id, event_type, reference_date),
+            )
+        conn.commit()
+
+
+def _reference_dt(config: dict, event_type: str, guild_id: Optional[int]) -> datetime:
+    date_str = get_reference_override(guild_id, event_type) or config["reference_date"]
+    return pytz.UTC.localize(datetime.strptime(date_str, "%Y-%m-%d"))
 
 # Event type configuration metadata
 EVENT_CONFIG = {
@@ -228,13 +270,15 @@ def round_to_5min_slot(dt: datetime) -> datetime:
     minute = (dt.minute // 5) * 5
     return dt.replace(minute=minute, second=0, microsecond=0)
 
-def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = None) -> Optional[datetime]:
+def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = None,
+                              guild_id: Optional[int] = None) -> Optional[datetime]:
     """
     Calculate the next occurrence date for global events
 
     Args:
         event_type: Name of the event type
         from_date: Calculate from this date (defaults to now)
+        guild_id: Apply this server's reference date override, if set
 
     Returns:
         Datetime of next occurrence or None if event has custom scheduling
@@ -270,8 +314,7 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
 
     # Biweekly events (Foundry Battle)
     if schedule_type == "global_biweekly":
-        reference = datetime.strptime(config["reference_date"], "%Y-%m-%d")
-        reference = pytz.UTC.localize(reference)
+        reference = _reference_dt(config, event_type, guild_id)
 
         # Calculate weeks since reference
         weeks_diff = (from_date - reference).days // 7
@@ -284,16 +327,15 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
         cycles_passed = weeks_diff // cycle_weeks
         next_occurrence = reference + timedelta(weeks=cycles_passed * cycle_weeks)
 
-        # If we've passed this occurrence, get the next one
-        if next_occurrence <= from_date:
+        # Midnight-anchored: today's event still counts until the day is over.
+        if next_occurrence.date() < from_date.date():
             next_occurrence += timedelta(weeks=cycle_weeks)
 
         return next_occurrence
 
     # Monthly events (Canyon Clash, Frostfire Mine)
     if schedule_type == "global_monthly":
-        reference = datetime.strptime(config["reference_date"], "%Y-%m-%d")
-        reference = pytz.UTC.localize(reference)
+        reference = _reference_dt(config, event_type, guild_id)
 
         # Calculate months since reference (using 4-week cycles)
         weeks_diff = (from_date - reference).days // 7
@@ -305,15 +347,15 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
         cycles_passed = weeks_diff // cycle_weeks
         next_occurrence = reference + timedelta(weeks=cycles_passed * cycle_weeks)
 
-        if next_occurrence <= from_date:
+        # Midnight-anchored: today's event still counts until the day is over.
+        if next_occurrence.date() < from_date.date():
             next_occurrence += timedelta(weeks=cycle_weeks)
 
         return next_occurrence
 
     # 4-weekly events (Sunfire Castle, SvS)
     if schedule_type in ["global_4weekly", "global_4weekly_alt", "global_4weekly_multiday"]:
-        reference = datetime.strptime(config["reference_date"], "%Y-%m-%d")
-        reference = pytz.UTC.localize(reference)
+        reference = _reference_dt(config, event_type, guild_id)
 
         weeks_diff = (from_date - reference).days // 7
         cycle_weeks = 4
@@ -324,15 +366,15 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
         cycles_passed = weeks_diff // cycle_weeks
         next_occurrence = reference + timedelta(weeks=cycles_passed * cycle_weeks)
 
-        if next_occurrence <= from_date:
+        # Midnight-anchored: today's event still counts until the day is over.
+        if next_occurrence.date() < from_date.date():
             next_occurrence += timedelta(weeks=cycle_weeks)
 
         return next_occurrence
 
     # 3-weekly events (Mercenary Prestige)
     if schedule_type == "global_3weekly_multiday":
-        reference = datetime.strptime(config["reference_date"], "%Y-%m-%d")
-        reference = pytz.UTC.localize(reference)
+        reference = _reference_dt(config, event_type, guild_id)
 
         weeks_diff = (from_date - reference).days // 7
         cycle_weeks = 3
@@ -343,7 +385,8 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
         cycles_passed = weeks_diff // cycle_weeks
         next_occurrence = reference + timedelta(weeks=cycles_passed * cycle_weeks)
 
-        if next_occurrence <= from_date:
+        # Midnight-anchored: today's event still counts until the day is over.
+        if next_occurrence.date() < from_date.date():
             next_occurrence += timedelta(weeks=cycle_weeks)
 
         return next_occurrence
@@ -351,7 +394,8 @@ def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = N
 
     return None
 
-def calculate_crazy_joe_dates(from_date: Optional[datetime] = None) -> Tuple[Optional[datetime], Optional[datetime]]:
+def calculate_crazy_joe_dates(from_date: Optional[datetime] = None,
+                              guild_id: Optional[int] = None) -> Tuple[Optional[datetime], Optional[datetime]]:
     """
     Calculate next Tuesday and Thursday dates for Crazy Joe event
 
@@ -368,8 +412,7 @@ def calculate_crazy_joe_dates(from_date: Optional[datetime] = None) -> Tuple[Opt
     if from_date is None:
         from_date = datetime.now(pytz.UTC)
 
-    reference_tue = datetime.strptime(config["reference_date"], "%Y-%m-%d")
-    reference_tue = pytz.UTC.localize(reference_tue)
+    reference_tue = _reference_dt(config, "Crazy Joe", guild_id)
 
     cycle_weeks = 4
 
@@ -380,7 +423,8 @@ def calculate_crazy_joe_dates(from_date: Optional[datetime] = None) -> Tuple[Opt
     else:
         cycles_passed = weeks_diff // cycle_weeks
         next_tuesday = reference_tue + timedelta(weeks=cycles_passed * cycle_weeks)
-        if next_tuesday <= from_date:
+        # Midnight-anchored: today's Tuesday still counts until the day is over.
+        if next_tuesday.date() < from_date.date():
             next_tuesday += timedelta(weeks=cycle_weeks)
 
     next_thursday = next_tuesday + timedelta(days=2)

@@ -367,7 +367,7 @@ class AttendanceHubView(discord.ui.View):
     actions then act on it directly (no per-action picker), and are disabled
     until one is picked. Settings is always global."""
 
-    _SCOPED_LABELS = ("Mark Attendance", "View Attendance", "Player History", "Screenshot Upload")
+    _SCOPED_LABELS = ("Mark Attendance", "View Attendance", "Player History", "Screenshot Upload", "No-Shows")
 
     def __init__(self, cog, user_id, guild_id, alliance_id, alliance_name, alliances_with_counts):
         super().__init__(timeout=7200)
@@ -450,6 +450,11 @@ class AttendanceHubView(discord.ui.View):
                 f"{theme.deniedIcon} Screenshot Upload module not loaded.", ephemeral=True)
             return
         await ocr_cog.show_channel_setup_menu(interaction, alliance_id=self.alliance_id)
+
+    @discord.ui.button(label="No-Shows", emoji=theme.deniedIcon,
+                       style=discord.ButtonStyle.secondary, row=2)
+    async def no_shows(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.cog.show_no_shows_for(interaction, self.alliance_id)
 
     @discord.ui.button(label="Settings", emoji=theme.settingsIcon,
                        style=discord.ButtonStyle.secondary, row=2)
@@ -2120,6 +2125,13 @@ class Attendance(commands.Cog):
                 except sqlite3.OperationalError:
                     cursor.execute("ALTER TABLE attendance_records ADD COLUMN alliance_rank INTEGER")
 
+                # No-Shows: per-incident excuse flag + optional reason.
+                try:
+                    cursor.execute("SELECT excused FROM attendance_records LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN excused INTEGER DEFAULT 0")
+                    cursor.execute("ALTER TABLE attendance_records ADD COLUMN excused_reason TEXT")
+
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS attendance_sessions (
                         session_id TEXT PRIMARY KEY,
@@ -2296,6 +2308,8 @@ class Attendance(commands.Cog):
                 f"└ One player's participation across all events, with current power\n\n"
                 f"{theme.importIcon} **Screenshot Upload**\n"
                 f"└ Configure this alliance's upload channels; the bot OCRs them\n\n"
+                f"{theme.deniedIcon} **No-Shows**\n"
+                f"└ Rank the alliance by Foundry/Canyon no-shows, excuse individual ones\n\n"
                 f"{theme.settingsIcon} **Settings**\n"
                 f"└ Attendance preferences (global)\n"
                 f"{theme.lowerDivider}"
@@ -2324,6 +2338,22 @@ class Attendance(commands.Cog):
             return
         view = HistoryPlayerSelectView(self, interaction.user.id, alliance_id, alliance_name, players)
         await self._edit_or_send(interaction, embed=view.build_embed(), view=view)
+
+    async def show_no_shows_for(self, interaction: discord.Interaction, alliance_id: int):
+        """Open the ranked No-Shows list for one alliance."""
+        from .attendance_no_shows import NoShowsView
+        alliance_ids, is_global = PermissionManager.get_admin_alliance_ids(
+            interaction.user.id, interaction.guild.id)
+        if not is_global and alliance_id not in alliance_ids:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} You do not have permission to manage this alliance.",
+                ephemeral=True)
+            return
+        alliance_name = await self._get_alliance_name(alliance_id)
+        view = NoShowsView(self, interaction.user.id, alliance_id, alliance_name)
+        await view._load()
+        await self._edit_or_send(interaction, embed=view.build_embed(), view=view)
+        view.message = await interaction.original_response()
 
     async def show_session_selection_for_marking(self, interaction: discord.Interaction, alliance_id: int):
         """Show available sessions for marking/editing attendance"""

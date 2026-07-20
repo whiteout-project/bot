@@ -11,6 +11,7 @@ import sqlite3
 from types import SimpleNamespace
 
 mm = importlib.import_module("cogs.minister_menu")
+ms = importlib.import_module("cogs.minister_schedule")
 
 
 def _dbs():
@@ -116,6 +117,28 @@ def test_reschedule_moves_booking():
         "SELECT time FROM appointments WHERE fid=1 AND appointment_type='Construction'"
     ).fetchall()
     assert rows == [("11:00",)], "old slot must be replaced by the new one"
+
+
+def test_update_time_list_survives_deleted_account():
+    """A booked FID whose game account no longer exists (API returns data=None)
+    must render as Unknown, not crash the whole list update."""
+    svs, users, alliance = _dbs()
+    svs.execute("CREATE TABLE reference (context TEXT, context_id INTEGER)")
+    svs.commit()
+
+    cog = ms.MinisterSchedule.__new__(ms.MinisterSchedule)
+    cog.svs_cursor = svs.cursor()
+    cog.alliance_cursor = alliance.cursor()
+
+    async def fetch(fid):
+        return {"data": None}  # not_found account
+
+    cog.fetch_user_data = fetch
+
+    time_list, booked = asyncio.run(cog.update_time_list({"00:00": (123, 5)}))
+
+    joined = "\n".join(time_list)
+    assert "Unknown" in joined and "123" in joined
 
 
 def test_unregistered_user_reports_cleanly():

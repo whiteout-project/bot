@@ -1110,8 +1110,9 @@ class AllianceSync(commands.Cog):
         try:
             async with self.db_lock:
                 self.cursor_alliance.execute("SELECT alliance_id, channel_id, interval, start_time FROM alliancesettings")
+                # NULL interval (row created by a channel-only setup) counts as disabled.
                 current_settings = {
-                    alliance_id: (channel_id, interval, start_time)
+                    alliance_id: (channel_id, interval or 0, start_time)
                     for alliance_id, channel_id, interval, start_time in self.cursor_alliance.fetchall()
                 }
 

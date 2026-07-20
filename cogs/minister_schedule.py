@@ -530,7 +530,8 @@ class MinisterSchedule(commands.Cog):
                             await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)
 
                         data = await self.fetch_user_data(booked_fid)
-                        if isinstance(data, dict) and "data" in data:
+                        # data can be {"data": None} for a deleted game account.
+                        if isinstance(data, dict) and data.get("data"):
                             fetched_data[booked_fid] = data["data"].get("nickname", "Unknown")
                             if progress_callback: # Immediate progress update after successful fetch
                                 await progress_callback(len(fetched_data), len(fids_to_fetch), waiting=False)

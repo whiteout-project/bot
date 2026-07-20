@@ -2016,9 +2016,11 @@ class BearSession:
             await self.finalize(timed_out=True)
 
     def stop_timer(self):
-        if self.timer_task and not self.timer_task.done():
-            self.timer_task.cancel()
+        task = self.timer_task
         self.timer_task = None
+        # Never self-cancel: the timeout path runs stop_timer from _timer_run and would kill finalize.
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
 
     def build_progress_embed(self) -> discord.Embed:
         title = f"{theme.searchIcon} Bear Hunt — collecting"
