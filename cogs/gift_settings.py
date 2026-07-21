@@ -906,6 +906,8 @@ class StateManagementView(discord.ui.View):
             "└ Give members with no state their alliance's state (instant, no game calls)",
             f"{theme.searchIcon} **Resolve Unknown (API)**",
             f"└ Probe the game for the rest, one at a time (about {max(1, len(missing)) * 2}s total; no rewards sent)",
+            f"{theme.allianceIcon} **Multistate Alliances**",
+            "└ Mark alliances that span many states so they're never auto-bound (set members' states individually)",
             f"\n{theme.infoIcon} Can't auto-bind an alliance (too few known members)? "
             f"Set its state on the alliance itself (Alliance Management -> Set State), then Assign State to Missing.",
         ]

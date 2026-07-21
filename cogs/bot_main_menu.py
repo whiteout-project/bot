@@ -325,7 +325,9 @@ class MainMenu(commands.Cog):
                     f"{theme.editListIcon} **Edit Name**\n"
                     f"└ Rename this alliance\n\n"
                     f"{theme.globeIcon} **Set State**\n"
-                    f"└ Lock this alliance to one State (rejects mismatched adds)\n\n"
+                    f"└ Set this alliance's home state (used for redemption and to fill members)\n\n"
+                    f"{theme.lockIcon} **State Lock**\n"
+                    f"└ When on, reject members from other states when adding (needs a home state)\n\n"
                     f"{theme.listIcon} **History**\n"
                     f"└ Furnace level and nickname change history per member\n\n"
                     f"{theme.chartIcon} **Power Rankings**\n"
@@ -339,6 +341,7 @@ class MainMenu(commands.Cog):
 
             view = AllianceHubView(
                 self, alliance_id, alliance_name, tier, alliances_with_counts,
+                state_locked=state_locked, alliance_kid=alliance_kid,
             )
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
@@ -815,14 +818,53 @@ class AllianceHubView(discord.ui.View):
     """
 
     def __init__(self, cog, alliance_id: int, alliance_name: str,
-                 tier: str, alliances_with_counts: list):
+                 tier: str, alliances_with_counts: list,
+                 state_locked: bool = False, alliance_kid=None):
         super().__init__(timeout=7200)
         self.cog = cog
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
         self.tier = tier
         self.alliances = alliances_with_counts  # [(aid, name, count), ...]
+        self.state_locked = bool(state_locked)
+        self.alliance_kid = alliance_kid
         self._build_select()
+        self._build_lock_toggle()
+
+    def _build_lock_toggle(self):
+        # State Lock reads/writes state_locked; label + color reflect the current state.
+        btn = discord.ui.Button(
+            label=f"State Lock: {'On' if self.state_locked else 'Off'}",
+            emoji=theme.lockIcon,
+            style=discord.ButtonStyle.success if self.state_locked else discord.ButtonStyle.secondary,
+            row=2,
+        )
+        btn.callback = self._on_lock_toggle
+        self.add_item(btn)
+
+    async def _on_lock_toggle(self, interaction: discord.Interaction):
+        if self.alliance_kid is None:
+            await interaction.response.send_message(
+                f"{theme.warnIcon} Set a home state first (**Set State**) before locking.",
+                ephemeral=True,
+            )
+            return
+        new_val = 0 if self.state_locked else 1
+        try:
+            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+                conn.execute(
+                    "UPDATE alliance_list SET state_locked = ? WHERE alliance_id = ?",
+                    (new_val, self.alliance_id),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error toggling state lock on alliance {self.alliance_id}: {e}")
+            print(f"Error toggling state lock on alliance {self.alliance_id}: {e}")
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Failed to update the state lock.", ephemeral=True
+            )
+            return
+        await self.cog.show_alliance_hub(interaction, self.alliance_id)
 
     def _build_select(self):
         # Drop any existing select first (for rebuilds)
