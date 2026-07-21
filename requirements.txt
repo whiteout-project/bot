@@ -3,7 +3,6 @@ certifi>=2025.4.26
 colorama>=0.4.6
 discord.py>=2.5.2
 requests>=2.32.3
-setuptools>=80.3.1
 pyzipper>=0.3.6
 pytz>=2025.2
 aiohttp-socks>=0.10.1
