@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from .pimp_my_bot import theme
 from .login_handler import LoginHandler
 from .alliance import check_alliance_state
+from .gift_state_resolver import verify_add_state
 
 logger = logging.getLogger('alliance')
 
@@ -233,48 +234,20 @@ class AllianceRegistration(commands.Cog):
             await self._send_register_success(interaction, fid, caller_id, action="linked")
             return
 
-        # API lookup can exceed the 3s ack window — defer before the slow call.
+        # Resolve state with one probe; defer first since it's slow.
         await interaction.response.defer(ephemeral=True)
-        try:
-            api_response = await self.fetch_user(fid)
-            if api_response.get("msg") != "success":
-                error_msg = api_response.get("msg", "Unknown error")
-                if "role not exist" in error_msg.lower():
-                    display_msg = f"{theme.deniedIcon} Invalid ID. Please try again."
-                else:
-                    display_msg = f"{theme.deniedIcon} Invalid ID: {error_msg}"
-                await interaction.followup.send(display_msg, ephemeral=True)
-                return
-            if "data" not in api_response:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} Invalid response from server. Please try again later.",
-                    ephemeral=True,
-                )
-                return
-            user_data = api_response["data"]
-        except Exception as e:
-            if str(e) == "RATE_LIMITED":
-                await interaction.followup.send(
-                    "⏳ Rate limit reached. Please wait a minute before trying again.",
-                    ephemeral=True,
-                )
-            else:
-                logger.error(f"Error fetching user data for ID {fid}: {e}")
-                print(f"Error fetching user data for ID {fid}: {e}")
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} Failed to fetch user data. Please try again later.",
-                    ephemeral=True,
-                )
-            return
+        gift_cog = self.bot.get_cog("GiftOperations")
+        if gift_cog is not None:
+            kid, verified = await verify_add_state(gift_cog, fid, alliance)
+        else:
+            kid, verified = None, False
 
-        state_error = check_alliance_state(alliance, user_data.get("kid"))
+        state_error = check_alliance_state(alliance, kid)
         if state_error:
-            await interaction.followup.send(
-                f"{theme.deniedIcon} {state_error}",
-                ephemeral=True,
-            )
+            await interaction.followup.send(f"{theme.deniedIcon} {state_error}", ephemeral=True)
             return
 
+        user_data = {"nickname": f"Player {fid}", "stove_lv": 0, "kid": kid}
         self._insert_new_user(fid, user_data, alliance, caller_id, current_server_id)
         await self._send_register_success(interaction, fid, caller_id, action="registered")
 

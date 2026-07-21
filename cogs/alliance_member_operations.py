@@ -19,6 +19,7 @@ from .pimp_my_bot import theme, safe_edit_message, disable_expired_view
 from .process_queue import MEMBER_ADD, PreemptedException
 from .bot_level_mapping import LEVEL_MAPPING
 from .alliance import resolve_alliance_kid, state_lock_reason, STATE_CHECK_UNAVAILABLE
+from .gift_state_resolver import verify_add_state
 from . import alliance_power_changes
 
 logger = logging.getLogger('alliance')
@@ -623,7 +624,7 @@ class ManageMembersView(MemberListView):
                 f"**Format**\n"
                 f"{theme.upperDivider}\n"
                 f"• Header row with an **`ID`** (or `FID`) column, or the bot's export file as-is.\n"
-                f"• Only the ID column is read; names, levels and state are refreshed from the game API.\n"
+                f"• Only the ID column is read; each member's state is resolved automatically (names and levels can't be looked up anymore).\n"
                 f"• A plain list of IDs (one per line or comma-separated) works too.\n"
                 f"{theme.lowerDivider}\n\n"
                 f"{theme.boltIcon} Direct file upload has no paste size limit, so large alliances can import."
@@ -1606,23 +1607,8 @@ class AllianceMemberOperations(commands.Cog):
         embed.add_field(name=f"{theme.deniedIcon} Failed (0/{total_users})", value="-", inline=False)
         embed.add_field(name=f"{theme.warnIcon} Already Exists (0/{total_users})", value="-", inline=False)
 
-        # Check API availability before starting
-        embed.description = f"{theme.searchIcon} Checking API availability..."
-        await progress.edit(embed)
+        rate_text = ""
 
-        await self.login_handler.check_apis_availability()
-
-        if not self.login_handler.available_apis:
-            # No APIs available
-            embed.description = f"{theme.deniedIcon} Both APIs are unavailable. Cannot proceed."
-            embed.color = discord.Color.red()
-            await progress.edit(embed)
-            await self._notify_invoker_if_headless(progress.message, invoker_id, embed)
-            return
-        
-        # Get processing rate from login handler
-        rate_text = self.login_handler.get_processing_rate()
-        
         # Update embed with rate information
         qs = self._get_queue_size()
         queue_info = f"\n{theme.listIcon} **Operations in queue:** {qs}" if qs > 0 else ""
@@ -1725,135 +1711,25 @@ class AllianceMemberOperations(commands.Cog):
                     embed.description = f"Processing {total_users} members...\n{rate_text}{queue_info}\n\n**Progress:** `{current_progress}/{total_users}`"
                     await progress.edit(embed)
                     
-                    # Fetch player data using login handler
-                    result = await self.login_handler.fetch_player_data(fid)
-                    
-                    with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                        log_file.write(f"\nAPI Response for ID {fid}:\n")
-                        log_file.write(f"Status: {result['status']}\n")
-                        if result.get('api_used'):
-                            log_file.write(f"API Used: {result['api_used']}\n")
-                    
-                    if result['status'] == 'rate_limited':
-                        # Handle rate limiting with countdown
-                        wait_time = result.get('wait_time', 60)
-                        countdown_start = time.time()
-                        remaining_time = wait_time
-                        
-                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                            log_file.write(f"Rate limit reached - Total wait time: {wait_time:.1f} seconds\n")
-                        
-                        # Update display with countdown
-                        while remaining_time > 0:
-                            qs = self._get_queue_size()
-                            queue_info = f"\n{theme.listIcon} **Operations in queue:** {qs}" if qs > 0 else ""
-                            embed.description = f"{theme.warnIcon} Rate limit reached. Waiting {remaining_time:.0f} seconds...{queue_info}"
-                            embed.color = discord.Color.orange()
-                            await progress.edit(embed)
-                            
-                            # Wait for up to 5 seconds before updating
-                            await asyncio.sleep(min(5, remaining_time))
-                            elapsed = time.time() - countdown_start
-                            remaining_time = max(0, wait_time - elapsed)
-                        
-                        embed.color = discord.Color.blue()
-                        continue  # Retry this request
-                    
-                    if result['status'] == 'success':
-                        data = result['data']
-                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                            log_file.write(f"API Response Data: {str(data)}\n")
-                        
-                        nickname = data.get('nickname')
-                        furnace_lv = data.get('stove_lv', 0)
-                        stove_lv_content = data.get('stove_lv_content', None)
-                        kid = data.get('kid', None)
-
-                        state_error = (
-                            STATE_CHECK_UNAVAILABLE if not kid_ok
-                            else state_lock_reason(locked_kid, kid)
-                        )
-                        if state_error:
-                            with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                                log_file.write(f"REJECTED: ID {fid} - {state_error}\n")
-                            error_count += 1
-                            error_users.append(fid)
-                            embed.set_field_at(
-                                1,
-                                name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
-                                value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70
-                                else ", ".join(error_users) or "-",
-                                inline=False
-                            )
-                            await progress.edit(embed)
-                            index += 1
-                            continue
-
-                        if nickname:
-                            try: # Since we pre-filtered, this ID should not exist in database
-                                self.c_users.execute("""
-                                    INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
-                                    VALUES (?, ?, ?, ?, ?, ?)
-                                """, (fid, nickname, furnace_lv, kid, stove_lv_content, alliance_id))
-                                self.conn_users.commit()
-                                
-                                with open(self.log_file, 'a', encoding='utf-8') as f:
-                                    f.write(f"[{timestamp}] Successfully added member - ID: {fid}, Nickname: {nickname}, Level: {furnace_lv}\n")
-                                
-                                added_count += 1
-                                added_users.append((fid, nickname))
-                                
-                                embed.set_field_at(
-                                    0,
-                                    name=f"{theme.verifiedIcon} Successfully Added ({added_count}/{total_users})",
-                                    value="User list cannot be displayed due to exceeding 70 users" if len(added_users) > 70 
-                                    else ", ".join([n for _, n in added_users]) or "-",
-                                    inline=False
-                                )
-                                await progress.edit(embed)
-                                
-                            except sqlite3.IntegrityError as e:
-                                # This shouldn't happen since we pre-filtered, but handle it just in case
-                                with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                                    log_file.write(f"ERROR: Member already exists (race condition?) - ID {fid}: {str(e)}\n")
-                                already_exists_count += 1
-                                already_exists_users.append((fid, nickname))
-                                
-                                embed.set_field_at(
-                                    2,
-                                    name=f"{theme.warnIcon} Already Exists ({already_exists_count}/{total_users})",
-                                    value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70 
-                                    else ", ".join([n for _, n in already_exists_users]) or "-",
-                                    inline=False
-                                )
-                                await progress.edit(embed)
-                                
-                            except Exception as e:
-                                with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                                    log_file.write(f"ERROR: Database error for ID {fid}: {str(e)}\n")
-                                error_count += 1
-                                error_users.append(fid)
-                                
-                                embed.set_field_at(
-                                    1,
-                                    name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
-                                    value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70 
-                                    else ", ".join(error_users) or "-",
-                                    inline=False
-                                )
-                                await progress.edit(embed)
-                        else:
-                            # No nickname in API response
-                            error_count += 1
-                            error_users.append(fid)
+                    # Determine the member's state
+                    gift_cog = self.bot.get_cog("GiftOperations")
+                    if gift_cog is not None:
+                        kid, verified = await verify_add_state(gift_cog, fid, alliance_id)
                     else:
-                        # Handle other error statuses
-                        error_msg = result.get('error_message', 'Unknown error')
+                        kid, verified = None, False
+
+                    if not kid_ok:
+                        state_error = STATE_CHECK_UNAVAILABLE
+                    elif locked_kid is not None and not verified:
+                        state_error = state_lock_reason(locked_kid, kid)
+                    else:
+                        state_error = None
+
+                    if state_error:
                         with open(log_file_path, 'a', encoding='utf-8') as log_file:
-                            log_file.write(f"ERROR: {error_msg} for ID {fid}\n")
+                            log_file.write(f"REJECTED: ID {fid} - {state_error}\n")
                         error_count += 1
-                        if fid not in error_users:
-                            error_users.append(fid)
+                        error_users.append(fid)
                         embed.set_field_at(
                             1,
                             name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
@@ -1862,7 +1738,59 @@ class AllianceMemberOperations(commands.Cog):
                             inline=False
                         )
                         await progress.edit(embed)
-                    
+                        index += 1
+                        continue
+
+                    nickname = f"Player {fid}"
+                    try:  # Pre-filtered, so this ID should not already exist.
+                        self.c_users.execute("""
+                            INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
+                            VALUES (?, ?, 0, ?, NULL, ?)
+                        """, (fid, nickname, kid, alliance_id))
+                        self.conn_users.commit()
+
+                        with open(self.log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"[{timestamp}] Successfully added member - ID: {fid}, State: {kid}\n")
+
+                        added_count += 1
+                        added_users.append((fid, nickname))
+                        embed.set_field_at(
+                            0,
+                            name=f"{theme.verifiedIcon} Successfully Added ({added_count}/{total_users})",
+                            value="User list cannot be displayed due to exceeding 70 users" if len(added_users) > 70
+                            else ", ".join([n for _, n in added_users]) or "-",
+                            inline=False
+                        )
+                        await progress.edit(embed)
+
+                    except sqlite3.IntegrityError as e:
+                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                            log_file.write(f"ERROR: Member already exists (race condition?) - ID {fid}: {str(e)}\n")
+                        already_exists_count += 1
+                        already_exists_users.append((fid, nickname))
+                        embed.set_field_at(
+                            2,
+                            name=f"{theme.warnIcon} Already Exists ({already_exists_count}/{total_users})",
+                            value="Existing user list cannot be displayed due to exceeding 70 users" if len(already_exists_users) > 70
+                            else ", ".join([n for _, n in already_exists_users]) or "-",
+                            inline=False
+                        )
+                        await progress.edit(embed)
+
+                    except Exception as e:
+                        with open(log_file_path, 'a', encoding='utf-8') as log_file:
+                            log_file.write(f"ERROR: Database error for ID {fid}: {str(e)}\n")
+                        error_count += 1
+                        error_users.append(fid)
+                        embed.set_field_at(
+                            1,
+                            name=f"{theme.deniedIcon} Failed ({error_count}/{total_users})",
+                            value="Error list cannot be displayed due to exceeding 70 users" if len(error_users) > 70
+                            else ", ".join(error_users) or "-",
+                            inline=False
+                        )
+                        await progress.edit(embed)
+
                     index += 1
 
                 except PreemptedException:

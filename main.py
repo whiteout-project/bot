@@ -1033,7 +1033,6 @@ if __name__ == "__main__":
 
     class CustomBot(commands.Bot):
         no_dm: bool = False
-        save_captcha: int = 0
 
         async def on_error(self, event_name, *args, **kwargs):
             if event_name == "on_interaction":
@@ -1053,20 +1052,6 @@ if __name__ == "__main__":
 
     bot = CustomBot(command_prefix="/", intents=intents)
     bot.no_dm = '--no-dm' in sys.argv
-
-    # Captcha image saving (dev/debug only)
-    # --save-captcha=1 (failed only), =2 (success only), =3 (all)
-    bot.save_captcha = 0
-    for arg in sys.argv:
-        if arg.startswith('--save-captcha='):
-            try:
-                bot.save_captcha = int(arg.split('=', 1)[1])
-                if bot.save_captcha not in (0, 1, 2, 3):
-                    print(f"Invalid --save-captcha value: {bot.save_captcha}. Must be 0-3. Defaulting to 0.")
-                    bot.save_captcha = 0
-            except ValueError:
-                print("Invalid --save-captcha value. Must be 0-3. Defaulting to 0.")
-                bot.save_captcha = 0
 
     token_file = "bot_token.txt"
     if not os.path.exists(token_file):
@@ -1293,6 +1278,14 @@ if __name__ == "__main__":
             # Upgrade path: per-alliance state lock. NULL = no restriction (legacy behaviour).
             if "kid" not in existing_cols:
                 conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN kid INTEGER")
+            # Upgrade path: multistate flag - members span many states, never auto-bind to one.
+            if "multistate" not in existing_cols:
+                conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN multistate INTEGER DEFAULT 0")
+            # Upgrade path: separate the deliberate state-lock from the (auto-bindable) home state.
+            # Any alliance that already had a kid set was an intentional lock -> preserve it.
+            if "state_locked" not in existing_cols:
+                conn_alliance.execute("ALTER TABLE alliance_list ADD COLUMN state_locked INTEGER DEFAULT 0")
+                conn_alliance.execute("UPDATE alliance_list SET state_locked = 1 WHERE kid IS NOT NULL")
 
     create_tables()
     startup.phase_ok("Database ready")
@@ -1365,26 +1358,13 @@ if __name__ == "__main__":
 
                 try:
                     startup.phase_start("Checking Gift Code Redemption API")
-                    proxy_detail = (
-                        f"via proxy {os.environ.get('HTTPS_PROXY')}"
-                        if os.environ.get("HTTPS_PROXY")
-                        else "no proxy"
-                    )
-                    sync_cog = bot.get_cog("AllianceSync")
-                    login_handler = getattr(sync_cog, 'login_handler', None)
-                    if login_handler:
-                        status = await login_handler.check_apis_availability()
-                        # One retry if both report down — parity with the distribution check.
-                        if not (status.get('api1_available') or status.get('api2_available')):
-                            status = await login_handler.check_apis_availability()
-                        if status.get('api1_available') and status.get('api2_available'):
-                            startup.api_status("Gift Code Redemption API", "ok", "Dual-API mode")
-                        elif status.get('api1_available') or status.get('api2_available'):
-                            startup.api_status("Gift Code Redemption API", "ok", "Single-API mode")
-                        else:
-                            startup.api_status("Gift Code Redemption API", "error", proxy_detail)
+                    health = bot.get_cog("BotHealth")
+                    if health is not None:
+                        result = await health.check_wos_api_status()
+                        ok = result.get("status") in ("healthy", "warning")
+                        startup.api_status("Gift Code Redemption API", "ok" if ok else "error", result.get("message"))
                     else:
-                        startup.api_status("Gift Code Redemption API", "error", "Check failed")
+                        startup.api_status("Gift Code Redemption API", "error", "Health cog not loaded")
                 except Exception:
                     startup.api_status("Gift Code Redemption API", "error", "Check failed")
 

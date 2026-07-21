@@ -1,7 +1,6 @@
 """
 Gift code orchestrator cog. Delegates to gift_redemption, gift_channels,
 gift_settings, gift_views, and gift_operationsapi for the heavy lifting.
-- gift_captchasolver: ONNX-based CAPTCHA solver for gift code redemption
 """
 
 import discord
@@ -16,9 +15,9 @@ import logging
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from .gift_operationsapi import GiftCodeAPI
-from .gift_captchasolver import GiftCaptchaSolver
 from .pimp_my_bot import theme, safe_edit_message
 from . import gift_redemption
+from . import gift_state_resolver
 from . import gift_channels
 from . import gift_settings
 from .gift_views import GiftView
@@ -100,10 +99,8 @@ class GiftOperations(commands.Cog):
         except sqlite3.OperationalError:
             pass
 
-        # WOS API URLs and Key
-        self.wos_player_info_url = "https://wos-giftcode-api.centurygame.com/api/player"
+        # WOS API URLs and key
         self.wos_giftcode_url = "https://wos-giftcode-api.centurygame.com/api/gift_code"
-        self.wos_captcha_url = "https://wos-giftcode-api.centurygame.com/api/captcha"
         self.wos_giftcode_redemption_url = "https://wos-giftcode.centurygame.com"
         self.wos_encrypt_key = "tB87#kPtkxqOS2"
 
@@ -115,17 +112,14 @@ class GiftOperations(commands.Cog):
             allowed_methods=["POST", "GET"]
         )
 
-        # Initialization of Locks and Cooldowns
-        self.captcha_solver = None
+        # Validation pacing (per-FID spacing so validation bursts don't hammer one FID).
         self._validation_lock = asyncio.Lock()
-        self._last_validation_claim_by_fid = {}  # fid -> monotonic ts of its last validation captcha request, for per-FID rate-spacing
+        self._last_validation_claim_by_fid = {}  # fid -> monotonic ts of its last validation probe
         self._priority_validation_pending = 0  # in-flight new-code validations; periodic loop yields while > 0
         self.last_validation_attempt_time = 0
         self.validation_cooldown = 5
         self._last_cleanup_date = None
-
-        self.test_captcha_cooldowns = {}
-        self.test_captcha_delay = 60
+        self._state_nudge_sent = False  # one-time boot nudge about member states
 
         # Batch redemption tracking (in-memory only, for live progress messages)
         self.redemption_batches = {}
@@ -136,34 +130,12 @@ class GiftOperations(commands.Cog):
         self._auto_redeem_started = set()
 
         self.processing_stats = {
-            "ocr_solver_calls": 0,
-            "ocr_valid_format": 0,
-            "captcha_submissions": 0,
+            "redemption_submissions": 0,
             "server_validation_success": 0,
             "server_validation_failure": 0,
             "total_fids_processed": 0,
             "total_processing_time": 0.0
         }
-
-        # Captcha Solver Initialization
-        try:
-            # Captcha solver is always on; disabling it isn't exposed (reload the
-            # Gift Code cog from Maintenance to restart it).
-            save_captcha = getattr(self.bot, 'save_captcha', 0)
-            self.logger.info("GiftOps __init__: Initializing ONNX captcha solver...")
-            self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
-            if not self.captcha_solver.is_initialized:
-                self.logger.error("GiftOps __init__: ONNX solver FAILED to initialize.")
-                self.captcha_solver = None
-            else:
-                self.logger.info("GiftOps __init__: ONNX solver initialized successfully.")
-
-        except ImportError as lib_err:
-            self.logger.exception(f"GiftOps __init__: Missing required library for OCR: {lib_err}. Captcha solving disabled.")
-            self.captcha_solver = None
-        except Exception as e:
-            self.logger.exception(f"GiftOps __init__: Unexpected error during Captcha solver setup: {e}")
-            self.captcha_solver = None
 
         # Test ID Settings Table
         try:
@@ -173,12 +145,19 @@ class GiftOperations(commands.Cog):
                     test_fid TEXT NOT NULL
                 )
             """)
+            cols = [r[1] for r in self.settings_cursor.execute("PRAGMA table_info(test_fid_settings)")]
+            if "kid" not in cols:
+                self.settings_cursor.execute("ALTER TABLE test_fid_settings ADD COLUMN kid INTEGER")
+                self.settings_cursor.execute(
+                    "UPDATE test_fid_settings SET kid = 312 WHERE test_fid = '45379845'")
             self.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
             result = self.settings_cursor.fetchone()
             if not result:
-                self.settings_cursor.execute("INSERT INTO test_fid_settings (test_fid) VALUES (?)", ("45379845",))
+                self.settings_cursor.execute(
+                    "INSERT INTO test_fid_settings (test_fid, kid) VALUES (?, ?)", ("45379845", 312))
                 self.settings_conn.commit()
                 self.logger.info("Initialized default test ID (45379845) in database")
+            self.settings_conn.commit()
         except Exception as e:
             self.logger.exception(f"Error setting up test ID table: {e}")
 
@@ -228,17 +207,6 @@ class GiftOperations(commands.Cog):
     async def on_ready(self):
         self.logger.info("GiftOps Cog: on_ready triggered.")
         try:
-            # Captcha solver is always on; retry init here if __init__ failed.
-            if self.captcha_solver is None:
-                self.logger.warning("Captcha solver not initialized in __init__, retrying in on_ready...")
-                try:
-                    save_captcha = getattr(self.bot, 'save_captcha', 0)
-                    self.captcha_solver = GiftCaptchaSolver(save_images=save_captcha)
-                    if not self.captcha_solver.is_initialized:
-                        self.captcha_solver = None
-                except Exception:
-                    self.captcha_solver = None
-
             self.logger.info("Validating gift code channels...")
             self.cursor.execute("SELECT channel_id, alliance_id FROM giftcode_channel")
             channel_configs = self.cursor.fetchall()
@@ -264,6 +232,11 @@ class GiftOperations(commands.Cog):
 
             if not self.periodic_validation_loop.is_running():
                 self.periodic_validation_loop.start()
+
+            # One-time nudge to global admins if member states need attention.
+            if not self._state_nudge_sent:
+                self._state_nudge_sent = True
+                asyncio.create_task(self._notify_state_migration())
 
             # Register handlers with the ProcessQueue cog
             process_queue_cog = self.bot.get_cog('ProcessQueue')
@@ -396,20 +369,54 @@ class GiftOperations(commands.Cog):
     def batch_process_alliance_results(self, results_batch):
         return gift_redemption.batch_process_alliance_results(self, results_batch)
 
-    async def get_stove_info_wos(self, player_id):
-        return await gift_redemption.get_stove_info_wos(self, player_id)
-
-    async def attempt_gift_code_with_api(self, player_id, giftcode, session):
-        return await gift_redemption.attempt_gift_code_with_api(self, player_id, giftcode, session)
-
     async def claim_giftcode_rewards_wos(self, player_id, giftcode, *, skip_cache: bool = False):
         return await gift_redemption.claim_giftcode_rewards_wos(self, player_id, giftcode, skip_cache=skip_cache)
 
+    def bind_alliance_states(self, *, only_unbound=True):
+        """Bind clear-majority alliances to a state and auto-flag genuinely-mixed ones as
+        multistate. Returns {'bound': [...], 'multistate': [...]}."""
+        bound = gift_state_resolver.bind_all_alliances(only_unbound=only_unbound)
+        flagged = gift_state_resolver.auto_flag_multistate()
+        return {"bound": bound, "multistate": flagged}
+
+    def assign_alliance_state_to_missing(self):
+        """Fast no-API backfill: NULL-kid members inherit their alliance's bound state."""
+        return gift_state_resolver.assign_alliance_kid_to_missing()
+
+    async def resolve_remaining_missing_states(self, *, deep_sweep_max=0):
+        """API-probe the members still missing a state and persist what we find."""
+        fids = await asyncio.to_thread(gift_state_resolver.fids_missing_state)
+        return await gift_state_resolver.resolve_and_persist(self, fids, deep_sweep_max=deep_sweep_max)
+
+    async def _notify_state_migration(self):
+        """Once per boot, DM global admins if member states need attention"""
+        try:
+            missing = await asyncio.to_thread(gift_state_resolver.fids_missing_state)
+            survey = await asyncio.to_thread(gift_state_resolver.survey_alliance_bindings)
+            unbound = [r for r in survey if r["current_kid"] is None and not r["multistate"]]
+            if not missing and not unbound:
+                return
+            bindable = sum(1 for r in unbound if r["proposed_kid"] is not None)
+            embed = discord.Embed(
+                title=f"{theme.warnIcon} Member States Need Attention",
+                description=(
+                    "Gift code redemption now requires each member's state.\n\n"
+                    f"{theme.upperDivider}\n"
+                    f"{theme.membersIcon} **Members missing a state:** `{len(missing)}`\n"
+                    f"{theme.allianceIcon} **Unbound alliances:** `{len(unbound)}` ({bindable} auto-bindable)\n"
+                    f"{theme.lowerDivider}\n\n"
+                    "Open **Alliance Management -> Member States** and run Auto-bind, "
+                    "Assign, then Resolve. Members that already have a correct state redeem fine."
+                ),
+                color=theme.emColor2,
+            )
+            from . import gift_redemption
+            await gift_redemption._dm_global_admins(self, embed)
+        except Exception as e:
+            self.logger.exception(f"Error sending state-migration nudge: {e}")
+
     async def scan_historical_messages(self, channel, alliance_id):
         return await gift_redemption.scan_historical_messages(self, channel, alliance_id)
-
-    async def fetch_captcha(self, player_id, session=None):
-        return await gift_redemption.fetch_captcha(self, player_id, session)
 
     async def use_giftcode_for_alliance(self, alliance_id, giftcode):
         return await gift_redemption.use_giftcode_for_alliance(self, alliance_id, giftcode)
@@ -459,8 +466,8 @@ class GiftOperations(commands.Cog):
     async def verify_test_fid(self, fid):
         return await gift_settings.verify_test_fid(self, fid)
 
-    async def update_test_fid(self, new_fid):
-        return await gift_settings.update_test_fid(self, new_fid)
+    async def update_test_fid(self, new_fid, kid=None):
+        return await gift_settings.update_test_fid(self, new_fid, kid)
 
     def get_test_fid(self):
         return gift_settings.get_test_fid(self)
@@ -476,6 +483,9 @@ class GiftOperations(commands.Cog):
 
     async def show_redemption_summary(self, interaction):
         return await gift_settings.show_redemption_summary(self, interaction)
+
+    async def show_state_management(self, interaction):
+        return await gift_settings.show_state_management(self, interaction)
 
     async def setup_giftcode_auto(self, interaction):
         return await gift_settings.setup_giftcode_auto(self, interaction)

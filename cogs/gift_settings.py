@@ -1,6 +1,7 @@
 """Gift code settings — OCR configuration, test FID management, redemption priority, and auto-redemption setup."""
 
 import discord
+import asyncio
 import sqlite3
 import time
 import base64
@@ -10,7 +11,6 @@ import json
 import traceback
 
 from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, notify_view_expired
-from .gift_captchasolver import GiftCaptchaSolver
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 
@@ -21,80 +21,13 @@ logger = logging.getLogger('gift')
 # Standalone functions (converted from cog methods: self -> cog)
 # ---------------------------------------------------------------------------
 
-async def verify_test_fid(cog, fid):
-    """
-    Verify that a ID is valid by attempting to login to the account.
-
-    Args:
-        fid (str): The ID to verify
-
-    Returns:
-        tuple: (is_valid, message) where is_valid is a boolean and message is a string
-    """
-    session = None
+async def update_test_fid(cog, new_fid, kid=None):
+    """Set the test ID and its state (needed for redemption/validation)."""
     try:
-        cog.logger.info(f"Verifying test ID: {fid}")
-
-        session, response_stove_info = await cog.get_stove_info_wos(fid)
-
-        try:
-            player_info_json = response_stove_info.json()
-        except json.JSONDecodeError:
-            cog.logger.error(f"Invalid JSON response when verifying ID {fid}")
-            return False, "Invalid response from server"
-
-        login_successful = player_info_json.get("msg") == "success"
-
-        if login_successful:
-            try:
-                nickname = player_info_json.get("data", {}).get("nickname", "Unknown")
-                furnace_lv = player_info_json.get("data", {}).get("stove_lv", "Unknown")
-                cog.logger.info(f"Test ID {fid} is valid. Nickname: {nickname}, Level: {furnace_lv}")
-                return True, "Valid account"
-            except Exception as e:
-                cog.logger.exception(f"Error parsing player info for ID {fid}: {e}")
-                return True, "Valid account (but error getting details)"
-        else:
-            error_msg = player_info_json.get("msg", "Unknown error")
-            cog.logger.info(f"Test ID {fid} is invalid. Error: {error_msg}")
-            return False, f"Login failed: {error_msg}"
-
-    except requests.exceptions.ConnectionError:
-        cog.logger.warning(f"Connection error verifying test ID {fid}. Check bot connectivity to the WOS Gift Code API.")
-        return False, "Connection error: WOS API unavailable"
-    except requests.exceptions.Timeout:
-        cog.logger.warning(f"Timeout verifying test ID {fid}. Check bot connectivity to the WOS Gift Code API.")
-        return False, "Connection error: Request timed out"
-    except requests.exceptions.RequestException as e:
-        cog.logger.warning(f"Request error verifying test ID {fid}: {type(e).__name__}")
-        return False, f"Connection error: {type(e).__name__}"
-    except Exception as e:
-        cog.logger.exception(f"Error verifying test ID {fid}: {e}")
-        return False, f"Verification error: {str(e)}"
-    finally:
-        if session:
-            session.close()
-
-
-async def update_test_fid(cog, new_fid):
-    """
-    Update the test ID in the database.
-
-    Args:
-        new_fid (str): The new test ID
-
-    Returns:
-        bool: True if update was successful, False otherwise
-    """
-    try:
-        cog.logger.info(f"Updating test ID to: {new_fid}")
-
-        cog.settings_cursor.execute("""
-            INSERT INTO test_fid_settings (test_fid) VALUES (?)
-        """, (new_fid,))
+        cog.settings_cursor.execute(
+            "INSERT INTO test_fid_settings (test_fid, kid) VALUES (?, ?)", (new_fid, kid))
         cog.settings_conn.commit()
-
-        cog.logger.info(f"Test ID updated successfully to {new_fid}")
+        cog.logger.info(f"Test ID updated to {new_fid} (state {kid})")
         return True
 
     except sqlite3.Error as db_err:
@@ -141,11 +74,10 @@ async def get_validation_fid(cog):
         result = cog.settings_cursor.fetchone()
 
         if result and result[0] != "45379845":
-            # Test ID is configured, verify it's valid
-            is_valid, _ = await verify_test_fid(cog, test_fid)
-            if is_valid:
-                cog.logger.info(f"Using configured test ID for validation: {test_fid}")
-                return test_fid, 'test_fid'
+            # A configured test ID is used as-is; a bad/kid-less one just yields NO_STATE
+            # during validation, which rotates to member FIDs.
+            cog.logger.info(f"Using configured test ID for validation: {test_fid}")
+            return test_fid, 'test_fid'
 
         # Second try: Use a random alliance member
         with sqlite3.connect('db/users.sqlite') as users_conn:
@@ -173,31 +105,23 @@ async def get_validation_fid(cog):
 
 
 def build_solver_status_field(cog):
-    """(name, value) embed field: solver status, validation-FID mode, and redemption stats."""
-    if cog.captcha_solver and getattr(cog.captcha_solver, "is_initialized", False):
-        solver_status = f"{theme.verifiedIcon} Ready"
-    elif cog.captcha_solver is not None:
-        solver_status = f"{theme.warnIcon} Init failed (check logs)"
-    else:
-        solver_status = f"{theme.deniedIcon} Not loaded (reload the Gift Code cog)"
-
+    """(name, value) embed field: validation-FID mode + redemption stats since startup."""
     test_fid = get_test_fid(cog)
     fid_line = f"`{test_fid}` (fixed)" if test_fid and test_fid != "45379845" else "Rotating alliance members"
 
     stats = cog.processing_stats
-    submissions = stats["captcha_submissions"]
+    submissions = stats.get("redemption_submissions", 0)
     s_ok = stats["server_validation_success"]
     s_fail = stats["server_validation_failure"]
     pass_rate = (s_ok / (s_ok + s_fail) * 100) if (s_ok + s_fail) > 0 else 0
 
     value = (
-        f"{theme.robotIcon} **Solver:** {solver_status}\n"
         f"{theme.fidIcon} **Validation ID:** {fid_line}\n"
-        f"{theme.chartIcon} **Captcha Submissions:** `{submissions}`\n"
+        f"{theme.chartIcon} **Redemption Submissions:** `{submissions}`\n"
         f"{theme.verifiedIcon} **Success:** `{s_ok}` \u00b7 {theme.deniedIcon} **Failure:** `{s_fail}`\n"
         f"{theme.chartIcon} **Server Pass Rate:** `{pass_rate:.1f}%`"
     )
-    return f"{theme.searchIcon} CAPTCHA Solver (since startup)", value
+    return f"{theme.searchIcon} Redemption (since startup)", value
 
 
 def clear_test_fid(cog):
@@ -552,11 +476,12 @@ class TestIDModal(discord.ui.Modal, title="Set Test ID"):
         self.cog = cog
 
         try:
-            self.cog.settings_cursor.execute("SELECT test_fid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
+            self.cog.settings_cursor.execute("SELECT test_fid, kid FROM test_fid_settings ORDER BY id DESC LIMIT 1")
             result = self.cog.settings_cursor.fetchone()
             current_fid = result[0] if result and result[0] != "45379845" else ""
+            current_kid = str(result[1]) if result and result[0] != "45379845" and result[1] is not None else ""
         except Exception:
-            current_fid = ""
+            current_fid = current_kid = ""
 
         self.test_fid = discord.ui.TextInput(
             label="Player ID (blank = rotate members)",
@@ -566,10 +491,19 @@ class TestIDModal(discord.ui.Modal, title="Set Test ID"):
             max_length=20
         )
         self.add_item(self.test_fid)
+        self.test_kid = discord.ui.TextInput(
+            label="State # (required when an ID is set)",
+            placeholder="The state this player ID is in",
+            default=current_kid,
+            required=False,
+            max_length=10
+        )
+        self.add_item(self.test_kid)
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             raw = self.test_fid.value.strip()
+            kid_raw = self.test_kid.value.strip()
             if not raw:
                 self.cog.clear_test_fid()
                 self.cog.logger.info(f"Test FID cleared by {interaction.user.id}; validation will rotate alliance members.")
@@ -578,9 +512,14 @@ class TestIDModal(discord.ui.Modal, title="Set Test ID"):
                     f"{theme.deniedIcon} Invalid ID. Enter a numeric player ID, or leave it blank to rotate alliance members.",
                     ephemeral=True)
                 return
+            elif not kid_raw.isdigit():
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} A test ID needs its State number so it can redeem. Enter the state, or clear the ID to rotate members.",
+                    ephemeral=True)
+                return
             else:
-                await self.cog.update_test_fid(raw)
-                self.cog.logger.info(f"Test FID set to {raw} by {interaction.user.id}.")
+                await self.cog.update_test_fid(raw, int(kid_raw))
+                self.cog.logger.info(f"Test FID set to {raw} (state {kid_raw}) by {interaction.user.id}.")
 
             # Refresh the settings menu in place so its solver status shows the new mode.
             await self.cog.show_settings_menu(interaction)
@@ -929,3 +868,204 @@ class RedemptionSummaryView(discord.ui.View):
     async def on_timeout(self):
         await notify_view_expired(self, "redemption summary settings")
 
+
+
+# --- Member state management ---
+
+async def show_state_management(cog, interaction: discord.Interaction):
+    view = StateManagementView(cog, interaction.user.id)
+    await safe_edit_message(interaction, embed=await view.build_embed(), view=view, content=None)
+
+
+class StateManagementView(discord.ui.View):
+    def __init__(self, cog, user_id):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.original_user_id = user_id
+        self.last_result = None
+
+    async def build_embed(self):
+        from . import gift_state_resolver as gsr
+        missing = await asyncio.to_thread(gsr.fids_missing_state)
+        survey = await asyncio.to_thread(gsr.survey_alliance_bindings)
+        multistate = [r for r in survey if r["multistate"]]
+        unbound = [r for r in survey if r["current_kid"] is None and not r["multistate"]]
+        bindable = [r for r in unbound if r["proposed_kid"] is not None]
+
+        lines = [
+            "Redemption now needs each member's state on file. "
+            "Fix wrong or missing states here.\n",
+            f"{theme.upperDivider}",
+            f"{theme.membersIcon} **Members missing a state:** `{len(missing)}`",
+            f"{theme.allianceIcon} **Unbound alliances:** `{len(unbound)}` "
+            f"({len(bindable)} can be auto-bound)",
+            f"{theme.allianceIcon} **Multistate alliances:** `{len(multistate)}` (never auto-bound)\n",
+            f"{theme.chartIcon} **Auto-bind Alliances**",
+            "└ Set each alliance's state from its members' majority",
+            f"{theme.membersIcon} **Assign State to Missing**",
+            "└ Give members with no state their alliance's state (instant, no game calls)",
+            f"{theme.searchIcon} **Resolve Unknown (API)**",
+            f"└ Probe the game for the rest, one at a time (about {max(1, len(missing)) * 2}s total; no rewards sent)",
+            f"\n{theme.infoIcon} Can't auto-bind an alliance (too few known members)? "
+            f"Set its state on the alliance itself (Alliance Management -> Set State), then Assign State to Missing.",
+        ]
+        if self.last_result:
+            lines.append(f"\n{theme.verifiedIcon} {self.last_result}")
+        lines.append(f"{theme.lowerDivider}")
+
+        return discord.Embed(
+            title=f"{theme.fidIcon} Member States",
+            description="\n".join(lines),
+            color=theme.emColor1,
+        )
+
+    @discord.ui.button(label="Auto-bind Alliances", style=discord.ButtonStyle.primary,
+                       emoji=f"{theme.chartIcon}", row=0)
+    async def bind_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        result = await asyncio.to_thread(self.cog.bind_alliance_states)
+        b, m = len(result["bound"]), len(result["multistate"])
+        self.last_result = (
+            f"Bound {b} alliance(s) to a state; flagged {m} as multistate."
+            if (b or m) else "No alliances had a clear majority to bind."
+        )
+        await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
+
+    @discord.ui.button(label="Assign State to Missing", style=discord.ButtonStyle.primary,
+                       emoji=f"{theme.membersIcon}", row=0)
+    async def assign_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        n = await asyncio.to_thread(self.cog.assign_alliance_state_to_missing)
+        self.last_result = f"Assigned an alliance state to {n} member(s) that had none."
+        await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
+
+    @discord.ui.button(label="Resolve Unknown (API)", style=discord.ButtonStyle.secondary,
+                       emoji=f"{theme.searchIcon}", row=1)
+    async def resolve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        from . import gift_state_resolver as gsr
+        missing = await asyncio.to_thread(gsr.fids_missing_state)
+        if not missing:
+            self.last_result = "No members are missing a state."
+            await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
+            return
+        # Probing the game is slow (per-FID paced) - defer so the interaction doesn't expire.
+        await interaction.response.defer()
+        found = await self.cog.resolve_remaining_missing_states()
+        self.last_result = f"Resolved {len(found)} of {len(missing)} unknown state(s) via the game."
+        await interaction.edit_original_response(embed=await self.build_embed(), view=self)
+
+    @discord.ui.button(label="Multistate Alliances", style=discord.ButtonStyle.secondary,
+                       emoji=f"{theme.allianceIcon}", row=1)
+    async def multistate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        view = MultistateView(self.cog, self.original_user_id)
+        await safe_edit_message(interaction, embed=await view.build_embed(), view=view, content=None)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary,
+                       emoji=f"{theme.backIcon}", row=2)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        main_menu = self.cog.bot.get_cog("MainMenu")
+        if main_menu:
+            await main_menu.show_alliance_management(interaction)
+
+    async def on_timeout(self):
+        await notify_view_expired(self, "member states menu")
+
+
+class MultistateView(discord.ui.View):
+    """Toggle which alliances are 'multistate' (members from many states - never auto-bound)."""
+    def __init__(self, cog, user_id, page=0):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.original_user_id = user_id
+        self.page = page
+        self.rows = []
+
+    async def _load(self):
+        from . import gift_state_resolver as gsr
+        self.rows = await asyncio.to_thread(gsr.survey_alliance_bindings)
+        self.rows.sort(key=lambda r: (not r["multistate"], str(r["name"]).lower()))
+
+    async def build_embed(self):
+        await self._load()
+        self.clear_items()
+        pages = max(1, (len(self.rows) + 24) // 25)
+        self.page = max(0, min(self.page, pages - 1))
+        page_rows = self.rows[self.page * 25:(self.page + 1) * 25]
+
+        if page_rows:
+            options = []
+            for r in page_rows:
+                on = r["multistate"]
+                status = "Multistate" if on else (f"State {r['current_kid']}" if r["current_kid"] else "Unbound")
+                options.append(discord.SelectOption(
+                    label=str(r["name"])[:100], value=str(r["alliance_id"]),
+                    description=f"{status} - tap to turn multistate {'off' if on else 'on'}"[:100],
+                    emoji=theme.verifiedIcon if on else None,
+                ))
+            select = discord.ui.Select(placeholder="Toggle an alliance's multistate flag", options=options, row=0)
+            select.callback = self._on_select
+            self.add_item(select)
+
+        if pages > 1:
+            self._add_nav(pages)
+        back = discord.ui.Button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary, row=2)
+        back.callback = self._on_back
+        self.add_item(back)
+
+        lines = [
+            "Mark alliances whose members span many states (public/mixed bots). "
+            "Multistate alliances are never auto-bound to one state and their members "
+            "keep their own resolved states.\n",
+            f"{theme.upperDivider}",
+            f"{theme.allianceIcon} Currently multistate: "
+            f"`{sum(1 for r in self.rows if r['multistate'])}`",
+            f"{theme.lowerDivider}",
+        ]
+        return discord.Embed(title=f"{theme.allianceIcon} Multistate Alliances",
+                             description="\n".join(lines), color=theme.emColor1)
+
+    def _add_nav(self, pages):
+        prev = discord.ui.Button(label="Prev", style=discord.ButtonStyle.secondary, row=1, disabled=self.page == 0)
+        nxt = discord.ui.Button(label="Next", style=discord.ButtonStyle.secondary, row=1, disabled=self.page >= pages - 1)
+        prev.callback = self._on_prev
+        nxt.callback = self._on_next
+        self.add_item(prev)
+        self.add_item(nxt)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        from . import gift_state_resolver as gsr
+        alliance_id = int(interaction.data["values"][0])
+        currently = await asyncio.to_thread(gsr.is_multistate, alliance_id)
+        await asyncio.to_thread(gsr.set_multistate, alliance_id, not currently)
+        await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.page -= 1
+        await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
+
+    async def _on_next(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        self.page += 1
+        await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
+
+    async def _on_back(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        view = StateManagementView(self.cog, self.original_user_id)
+        await safe_edit_message(interaction, embed=await view.build_embed(), view=view, content=None)
+
+    async def on_timeout(self):
+        await notify_view_expired(self, "multistate alliances menu")

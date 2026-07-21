@@ -37,10 +37,12 @@ def _mk_cog(monkeypatch):
 
     cog._send_register_success = send_success
 
-    async def fetch_user(fid):
-        return {"msg": "success", "data": {"nickname": "X", "stove_lv": 30, "kid": 100}}
+    cog.bot = SimpleNamespace(get_cog=lambda name: object())
 
-    cog.fetch_user = fetch_user
+    async def _verify_add_state(gift_cog, fid, alliance):
+        return 100, True
+
+    monkeypatch.setattr(ar, "verify_add_state", _verify_add_state)
     return cog, inserted
 
 

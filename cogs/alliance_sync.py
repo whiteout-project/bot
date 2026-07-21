@@ -307,7 +307,31 @@ class AllianceSync(commands.Cog):
             self.logger.error(f"Failed to remove invalid ID {fid}: {str(e)}")
             return False, None
 
+    async def _notify_sync_unavailable(self, channel, interaction_message=None):
+        """Alliance sync has no player-data source; tell the admin where to set states instead."""
+        embed = discord.Embed(
+            title=f"{theme.warnIcon} Alliance Sync Unavailable",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"Automatic member sync is turned off - member nicknames, levels and states "
+                f"can no longer be refreshed automatically.\n\n"
+                f"Set member states under **Alliance Management -> Member States**.\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor2,
+        )
+        try:
+            if interaction_message is not None:
+                await interaction_message.edit(embed=embed)
+            elif channel is not None:
+                await channel.send(embed=embed)
+        except Exception:
+            pass
+
     async def check_agslist(self, channel, alliance_id, interaction=None, interaction_message=None, alliance_name=None, is_batch=False, batch_info=None, progress_message=None, process_id=None):
+        await self._notify_sync_unavailable(channel, interaction_message)
+        return
+
         async with self.db_lock:
             self.cursor_users.execute("SELECT fid, nickname, furnace_lv, stove_lv_content, kid FROM users WHERE alliance = ?", (alliance_id,))
             users = self.cursor_users.fetchall()
@@ -1033,25 +1057,13 @@ class AllianceSync(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         if not self.monitor_started:
-            self.logger.info("Starting monitor...")
-
-            # Check API availability
-            await self.login_handler.check_apis_availability()
-            self.logger.info(self.login_handler.get_mode_text(for_console=True))
-
-            # Register handlers with the ProcessQueue cog
+            # Automatic sync is disabled - no player-data API to sync from. Manual
+            # triggers still register so they can report the feature is unavailable.
             process_queue_cog = self.bot.get_cog('ProcessQueue')
             if process_queue_cog:
                 process_queue_cog.register_handler('alliance_sync_manual', self.handle_alliance_sync_manual_process)
                 process_queue_cog.register_handler('alliance_sync', self.handle_alliance_sync_process)
-                self.logger.info("AllianceSync: Registered alliance_sync_manual and alliance_sync handlers with ProcessQueue")
-            else:
-                self.logger.error("AllianceSync: ProcessQueue cog not found, alliance operations will not work")
-
-            self.monitor_alliance_changes.start()
-            await self.start_alliance_checks()
             self.monitor_started = True
-            self.logger.info("Monitor and handlers registered successfully")
 
     async def start_alliance_checks(self):
         try:

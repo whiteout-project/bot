@@ -373,22 +373,6 @@ class BotStartup(commands.Cog):
                 admin_user = await self.bot.fetch_user(admin_id)
                 
                 if admin_user:
-                    # Check OCR initialization status
-                    ocr_status = f"{theme.deniedIcon}"
-                    ocr_details = "Not initialized"
-                    try:
-                        gift_operations_cog = self.bot.get_cog('GiftOperations')
-                        if gift_operations_cog and hasattr(gift_operations_cog, 'captcha_solver'):
-                            if gift_operations_cog.captcha_solver and gift_operations_cog.captcha_solver.is_initialized:
-                                ocr_status = f"{theme.verifiedIcon}"
-                                ocr_details = "Gift Code Redeemer (OCR) ready"
-                            else:
-                                ocr_details = "Solver not initialized"
-                        else:
-                            ocr_details = "GiftOperations cog not found"
-                    except Exception as e:
-                        ocr_details = f"Error checking OCR: {str(e)[:30]}..."
-
                     status_embed = discord.Embed(
                         title=f"{theme.robotIcon} Bot Successfully Activated",
                         description=(
@@ -397,7 +381,6 @@ class BotStartup(commands.Cog):
                             f"{theme.verifiedIcon} Bot is now online and operational\n"
                             f"{theme.verifiedIcon} Database connections established\n"
                             f"{theme.verifiedIcon} Command systems initialized\n"
-                            f"{ocr_status} {ocr_details}\n"
                             f"{theme.middleDivider}\n"
                         ),
                         color=discord.Color.green()

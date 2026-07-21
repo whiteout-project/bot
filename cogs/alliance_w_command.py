@@ -1,4 +1,4 @@
-"""The /w "who is" command. Looks up an in-game ID against the game API and shows what the bot knows about that player."""
+"""The /w "who is" command. Shows the stored profile for an in-game ID."""
 import discord
 from discord.ext import commands
 import sqlite3
@@ -77,70 +77,43 @@ class WCommand(commands.Cog):
         try:
             await interaction.response.defer(thinking=True)
 
-            result = await LoginHandler().fetch_player_data(str(fid))
-
-            if result['status'] == 'rate_limited':
-                await interaction.followup.send("API limit reached, please try again later.")
-                return
-
-            if result['status'] == 'not_found':
-                await interaction.followup.send(f"User with ID {fid} not found.")
-                return
-
-            if result['status'] == 'error':
-                await interaction.followup.send(f"An error occurred: {result.get('error_message', 'Unknown error')}")
-                return
-
-            player = result['data']
-            nickname = player['nickname']
-            stove_level = player['stove_lv']
-            kid = player['kid']
-            avatar_image = player['avatar_image']
-            stove_lv_content = player.get('stove_lv_content')
-
-            if stove_level > 30:
-                stove_level_name = self.level_mapping.get(stove_level, f"Level {stove_level}")
-            else:
-                stove_level_name = f"Level {stove_level}"
-
-            user_info = None
-            alliance_info = None
-            power_val = combat_power_val = None
-            power_ts = combat_power_ts = None
-            discord_id_val = discord_id_ts = None
-            user_alliance = None
-
+            # Stored profile only; no live lookup.
             with sqlite3.connect('db/users.sqlite') as users_db:
                 cursor = users_db.cursor()
                 cursor.execute(
-                    "SELECT alliance, power, power_updated_at, combat_power, "
+                    "SELECT nickname, kid, alliance, power, power_updated_at, combat_power, "
                     "combat_power_updated_at, discord_id, discord_id_updated_at "
                     "FROM users WHERE fid=?",
                     (fid,),
                 )
                 row = cursor.fetchone()
-                if row:
-                    user_info = row
-                    (user_alliance, power_val, power_ts,
-                     combat_power_val, combat_power_ts,
-                     discord_id_val, discord_id_ts) = row
 
-                    if user_alliance:
-                        with sqlite3.connect('db/alliance.sqlite') as alliance_db:
-                            acursor = alliance_db.cursor()
-                            acursor.execute(
-                                "SELECT name FROM alliance_list WHERE alliance_id=?",
-                                (user_alliance,),
-                            )
-                            alliance_info = acursor.fetchone()
+            if not row:
+                await interaction.followup.send(
+                    f"User with ID {fid} is not on the list. Live lookups are no longer "
+                    f"available (the game removed the player API), so only added members can be shown."
+                )
+                return
+
+            (nickname, kid, user_alliance, power_val, power_ts,
+             combat_power_val, combat_power_ts, discord_id_val, discord_id_ts) = row
+
+            alliance_info = None
+            if user_alliance:
+                with sqlite3.connect('db/alliance.sqlite') as alliance_db:
+                    acursor = alliance_db.cursor()
+                    acursor.execute(
+                        "SELECT name FROM alliance_list WHERE alliance_id=?",
+                        (user_alliance,),
+                    )
+                    alliance_info = acursor.fetchone()
 
             embed = discord.Embed(
-                title=f"{theme.userIcon} {nickname}",
+                title=f"{theme.userIcon} {nickname or f'Player {fid}'}",
                 description=(
                     f"{theme.upperDivider}\n"
                     f"**{theme.fidIcon} ID:** `{fid}`\n"
-                    f"**{theme.levelIcon} Furnace Level:** `{stove_level_name}`\n"
-                    f"**{theme.globeIcon} State:** `{kid}`\n"
+                    f"**{theme.globeIcon} State:** `{kid if kid is not None else 'unknown'}`\n"
                     f"{theme.middleDivider}\n"
                 ),
                 color=theme.emColor1
@@ -172,14 +145,7 @@ class WCommand(commands.Cog):
                 )
 
             embed.description += f"{theme.lowerDivider}\n"
-
-            registration_status = f"Registered on the List {theme.verifiedIcon}" if user_info else f"Not on the List {theme.deniedIcon}"
-            embed.set_footer(text=registration_status)
-
-            if avatar_image:
-                embed.set_image(url=avatar_image)
-            if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
-                embed.set_thumbnail(url=stove_lv_content)
+            embed.set_footer(text=f"Stored profile {theme.verifiedIcon}")
 
             await interaction.followup.send(embed=embed)
 

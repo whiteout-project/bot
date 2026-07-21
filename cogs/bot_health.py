@@ -9,6 +9,7 @@ import sys
 import platform
 import asyncio
 import subprocess
+import hashlib
 import aiohttp
 import zipfile
 import shutil
@@ -69,7 +70,6 @@ HELPER_FILES = [
     'permission_handler',      # Permission checking utilities
     'login_handler',           # API login handling
     'gift_operationsapi',      # Gift code API class
-    'gift_captchasolver',      # Captcha solving utilities
     'notification_event_types', # Notification constants/types
     'pimp_my_bot_editor',      # Theme editor utilities
     'pimp_my_bot_preview',     # Theme preview utilities
@@ -297,25 +297,30 @@ class BotHealth(commands.Cog):
         return result
 
     async def _probe_wos_api(self) -> dict:
-        """Actual live probe — only called by the cached wrapper or the
-        background refresh loop."""
+        """Live probe of the Gift Redemption API via a signed gift_code_config call."""
         try:
-            # LoginHandler is a singleton helper, not a cog — construct it directly.
-            from .login_handler import LoginHandler
-            handler = LoginHandler()
+            gift = self.bot.get_cog("GiftOperations")
+            if gift is None:
+                return {'status': STATUS_WARNING, 'message': 'Gift Code cog not loaded'}
 
-            status = await handler.check_apis_availability()
+            url = gift.wos_giftcode_url.rsplit("/", 1)[0] + "/gift_code_config"
+            t = str(int(datetime.now(timezone.utc).timestamp()))
+            sign = hashlib.md5(f"time={t}{gift.wos_encrypt_key}".encode()).hexdigest()
 
-            if status['api1_available'] and status['api2_available']:
-                return {'status': STATUS_HEALTHY, 'message': 'Dual-API (fast)'}
-            elif status['api1_available'] or status['api2_available']:
-                api_down = '2' if status['api1_available'] else '1'
-                return {'status': STATUS_WARNING, 'message': f'Single-API (API {api_down} down)'}
-            else:
-                return {'status': STATUS_ERROR, 'message': 'Both APIs unavailable'}
-
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(url, data={"sign": sign, "time": t}, headers=get_headers()) as response:
+                    if response.status == 200:
+                        return {'status': STATUS_HEALTHY, 'message': 'Online'}
+                    if response.status in (429, 1015, 502, 503, 504):
+                        return {'status': STATUS_WARNING, 'message': f'Reachable, rate-limited (HTTP {response.status})'}
+                    return {'status': STATUS_ERROR, 'message': f'Error (HTTP {response.status})'}
+        except asyncio.TimeoutError:
+            return {'status': STATUS_ERROR, 'message': 'Timeout (>5s)'}
+        except aiohttp.ClientError:
+            return {'status': STATUS_ERROR, 'message': 'Connection failed'}
         except Exception as e:
-            self.logger.error(f"Error checking WOS API status: {e}")
+            self.logger.error(f"Error checking Redemption API status: {e}")
             return {'status': STATUS_ERROR, 'message': f'Check failed: {str(e)[:30]}'}
 
     async def check_gift_distribution_api(self) -> dict:

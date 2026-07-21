@@ -15,6 +15,7 @@ from .pimp_my_bot import theme, safe_edit_message
 from .login_handler import LoginHandler
 from .bot_level_mapping import LEVEL_MAPPING
 from .alliance import check_alliance_state
+from .gift_state_resolver import verify_add_state
 
 logger = logging.getLogger('alliance')
 
@@ -287,113 +288,58 @@ class AllianceIDChannel(commands.Cog):
                         f"{existing_alliance[0]}; allowing registration into alliance {alliance_id}"
                     )
 
-            result = await LoginHandler().fetch_player_data(str(fid))
+            gift_cog = self.bot.get_cog("GiftOperations")
+            if gift_cog is not None:
+                kid, verified = await verify_add_state(gift_cog, fid, alliance_id)
+            else:
+                kid, verified = None, False
 
-            if result['status'] == 'rate_limited':
-                wait_time = result.get('wait_time', 60)
-                warning_embed = discord.Embed(
-                    title=f"{theme.warnIcon} API Rate Limit Reached",
-                    description=(
-                        f"Operation is on hold due to API rate limit.\n"
-                        f"**Wait Time:** `{int(wait_time)} seconds`\n\n"
-                        f"Operation will continue automatically, please wait..."
-                    ),
-                    color=discord.Color.orange()
-                )
-                await message.reply(embed=warning_embed)
-                await asyncio.sleep(wait_time)
-                result = await LoginHandler().fetch_player_data(str(fid))
-
-            if result['status'] == 'rate_limited':
+            state_error = check_alliance_state(alliance_id, kid)
+            if state_error:
                 await message.add_reaction(theme.deniedIcon)
-                await message.reply("Operation failed due to API rate limit. Please try again later.", delete_after=delete_after)
+                await message.reply(f"{theme.deniedIcon} {state_error}", delete_after=delete_after)
                 return
 
-            if result['status'] == 'not_found':
-                await message.add_reaction(theme.deniedIcon)
-                await message.reply("No player found for this ID!", delete_after=delete_after)
+            nickname = f"Player {fid}"
+            try:
+                with sqlite3.connect('db/users.sqlite') as users_db:
+                    cursor = users_db.cursor()
+                    cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
+                    if cursor.fetchone():
+                        await message.add_reaction(theme.warnIcon)
+                        await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
+                        return
+
+                    cursor.execute("""
+                        INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
+                        VALUES (?, ?, 0, ?, NULL, ?)
+                    """, (fid, nickname, kid, alliance_id))
+                    users_db.commit()
+            except sqlite3.IntegrityError:
+                await message.add_reaction(theme.warnIcon)
+                await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
                 return
 
-            if result['status'] == 'error':
-                await message.add_reaction(theme.deniedIcon)
-                error_msg = result.get('error_message', 'An error occurred during the process!')
-                await message.reply(error_msg, delete_after=delete_after)
-                return
+            await message.add_reaction(theme.verifiedIcon)
+            success_embed = discord.Embed(
+                title=f"{theme.verifiedIcon} Member Successfully Added",
+                description=(
+                    f"{theme.upperDivider}\n"
+                    f"**{theme.fidIcon} ID:** `{fid}`\n"
+                    f"**{theme.globeIcon} State:** `{kid if kid is not None else 'pending resolution'}`\n"
+                    f"{theme.lowerDivider}"
+                ),
+                color=theme.emColor3
+            )
+            await message.reply(embed=success_embed)
 
-            if result['status'] == 'success' and result['data']:
-                nickname = result['data'].get('nickname')
-                furnace_lv = result['data'].get('stove_lv', 0)
-                stove_lv_content = result['data'].get('stove_lv_content', None)
-                kid = result['data'].get('kid', None)
-                avatar_image = result['data'].get('avatar_image', None)
-
-                state_error = check_alliance_state(alliance_id, kid)
-                if state_error:
-                    await message.add_reaction(theme.deniedIcon)
-                    await message.reply(
-                        f"{theme.deniedIcon} {state_error}",
-                        delete_after=delete_after,
-                    )
-                    return
-
-                try:
-                    with sqlite3.connect('db/users.sqlite') as users_db:
-                        cursor = users_db.cursor()
-                        cursor.execute("SELECT alliance FROM users WHERE fid = ?", (fid,))
-                        if cursor.fetchone():
-                            await message.add_reaction(theme.warnIcon)
-                            await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
-                            return
-
-                        cursor.execute("""
-                            INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (fid, nickname, furnace_lv, kid, stove_lv_content, alliance_id))
-                        users_db.commit()
-                except sqlite3.IntegrityError:
-                    await message.add_reaction(theme.warnIcon)
-                    await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
-                    return
-
-                await message.add_reaction(theme.verifiedIcon)
-
-                if furnace_lv > 30:
-                    furnace_level_name = self.level_mapping.get(furnace_lv, f"Level {furnace_lv}")
-                else:
-                    furnace_level_name = f"Level {furnace_lv}"
-
-                success_embed = discord.Embed(
-                    title=f"{theme.verifiedIcon} Member Successfully Added",
-                    description=(
-                        f"{theme.upperDivider}\n"
-                        f"**{theme.userIcon} Name:** `{nickname}`\n"
-                        f"**{theme.fidIcon} ID:** `{fid}`\n"
-                        f"**{theme.levelIcon} Furnace Level:** `{furnace_level_name}`\n"
-                        f"**{theme.globeIcon} State:** `{kid}`\n"
-                        f"{theme.lowerDivider}"
-                    ),
-                    color=theme.emColor3
-                )
-
-                if avatar_image:
-                    success_embed.set_image(url=avatar_image)
-                if isinstance(stove_lv_content, str) and stove_lv_content.startswith("http"):
-                    success_embed.set_thumbnail(url=stove_lv_content)
-
-                await message.reply(embed=success_embed)
-
-                await self.log_action(
-                    "ADD_MEMBER",
-                    message.author.id,
-                    message.guild.id,
-                    {
-                        "fid": fid,
-                        "nickname": nickname,
-                        "alliance_id": alliance_id,
-                        "furnace_level": furnace_level_name
-                    }
-                )
-                return
+            await self.log_action(
+                "ADD_MEMBER",
+                message.author.id,
+                message.guild.id,
+                {"fid": fid, "nickname": nickname, "alliance_id": alliance_id}
+            )
+            return
 
         except Exception as e:
             logger.error(f"Error in process_fid: {e}")
