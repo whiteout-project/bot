@@ -836,21 +836,15 @@ class MinisterMenu(commands.Cog):
             pass
 
     async def is_admin(self, user_id: int) -> bool:
-        with closing(sqlite3.connect('db/settings.sqlite')) as settings_conn:
-            settings_cursor = settings_conn.cursor()
-
-            if user_id == self.bot.owner_id:
-                return True
-
-            settings_cursor.execute("SELECT 1 FROM admin WHERE id=?", (user_id,))
-            return settings_cursor.fetchone() is not None
+        is_admin, _ = PermissionManager.is_admin(user_id)
+        return is_admin
 
     async def show_minister_channel_menu(self, interaction: discord.Interaction):
         # Store the original interaction for later updates
 
         # Get channel status and permissions
         channel_status, embed_color = await self.get_channel_status_display()
-        _, is_global, _ = await self.get_admin_permissions(interaction.user.id)
+        _, is_global, _ = await self.get_admin_permissions(interaction.user.id, interaction.guild.id if interaction.guild else None)
 
         embed = discord.Embed(
             title="🏛️ Minister Scheduling",
@@ -963,24 +957,20 @@ class MinisterMenu(commands.Cog):
         status_text = "\n".join(status_lines)
         return status_text, embed_color
 
-    async def get_admin_permissions(self, user_id: int):
-        """Get admin permissions - delegates to centralized PermissionManager"""
+    async def get_admin_permissions(self, user_id: int, guild_id: int | None = None):
+        """Get admin permissions - delegates to centralized PermissionManager (role-aware)."""
         is_admin, is_global = PermissionManager.is_admin(user_id)
         if not is_admin:
             return False, False, []
         if is_global:
             return True, True, []
-        # Get alliance-specific permissions for server admin
-        with sqlite3.connect('db/settings.sqlite') as db:
-            cursor = db.cursor()
-            cursor.execute("SELECT alliances_id FROM adminserver WHERE admin=?", (user_id,))
-            alliance_ids = [row[0] for row in cursor.fetchall()]
+        alliance_ids, _ = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
         return True, False, alliance_ids
 
     async def show_filtered_user_select(self, interaction: discord.Interaction, activity_name: str):
         """Show the filtered user selection view"""
         # Check admin permissions
-        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id)
+        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id, interaction.guild.id if interaction.guild else None)
 
         if not is_admin:
             await interaction.response.send_message(f"{theme.deniedIcon} You do not have permission to manage minister appointments.", ephemeral=True)
@@ -1118,7 +1108,7 @@ class MinisterMenu(commands.Cog):
     async def show_clear_confirmation(self, interaction: discord.Interaction, activity_name: str):
         """Show confirmation for clearing appointments"""
         # Check permissions
-        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id)
+        is_admin, is_global_admin, alliance_ids = await self.get_admin_permissions(interaction.user.id, interaction.guild.id if interaction.guild else None)
         
         if is_global_admin:
             # Count all appointments
@@ -1550,7 +1540,7 @@ class MinisterMenu(commands.Cog):
     
     async def show_settings_menu(self, interaction: discord.Interaction):
         """Show the minister settings menu"""
-        _, is_global, _ = await self.get_admin_permissions(interaction.user.id)
+        _, is_global, _ = await self.get_admin_permissions(interaction.user.id, interaction.guild.id if interaction.guild else None)
         embed = discord.Embed(
             title=f"{theme.settingsIcon} Minister Settings",
             description=(

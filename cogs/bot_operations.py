@@ -238,6 +238,12 @@ class BotOperations(commands.Cog):
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
+        # Cache the member's role-derived admin grant before any permission check runs.
+        member = interaction.user
+        role_ids = [r.id for r in getattr(member, "roles", [])]
+        if role_ids:
+            PermissionManager.cache_member_role_grant(member.id, role_ids, interaction.guild_id)
+
         if not interaction.type == discord.InteractionType.component:
             return
 

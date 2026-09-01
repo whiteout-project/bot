@@ -2139,16 +2139,8 @@ class AllianceMemberOperations(commands.Cog):
             logger.warning(f"member_add: could not DM invoker {invoker_id} with headless result ({e})")
 
     async def is_admin(self, user_id):
-        try:
-            with sqlite3.connect('db/settings.sqlite') as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM admin WHERE id = ?", (user_id,))
-                result = cursor.fetchone()
-                is_admin = result is not None
-                return is_admin
-        except Exception as e:
-            logger.error(f"Error in admin check: {e}")
-            return False
+        is_admin, _ = PermissionManager.is_admin(user_id)
+        return is_admin
 
     @commands.Cog.listener()
     async def on_ready(self):

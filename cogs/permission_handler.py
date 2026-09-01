@@ -14,6 +14,7 @@ Bot Owner anchor:
 import sqlite3
 import time
 import logging
+from contextlib import closing
 from datetime import datetime, timezone
 from typing import Tuple, List, Optional
 
@@ -54,20 +55,24 @@ class PermissionManager:
     @staticmethod
     def is_admin(user_id: int) -> Tuple[bool, bool]:
         """
-        Check if user is admin and their level.
+        Check if user is admin and their level, merging any cached role grant.
+        Guild-blind by design; alliance scope is enforced (guild-aware) in get_admin_alliance_ids.
 
         Returns:
             (is_admin, is_global) - is_global True means access to all alliances
         """
         admin_map = PermissionManager._admin_map()
-        if user_id not in admin_map:
-            return False, False
-        return True, admin_map[user_id] == 1
+        user_admin = user_id in admin_map
+        user_global = user_admin and admin_map[user_id] == 1
+        rg = PermissionManager._cached_role_grant(user_id)
+        is_admin = user_admin or bool(rg and rg["is_admin"])
+        is_global = user_global or bool(rg and rg["is_global"])
+        return is_admin, is_global
 
     @staticmethod
     def get_admin_alliance_ids(user_id: int, guild_id: int) -> Tuple[List[int], bool]:
         """
-        Get alliance IDs the admin can access.
+        Get alliance IDs the admin can access, merging any cached role grant.
 
         Returns:
             (alliance_ids, is_global)
@@ -75,83 +80,49 @@ class PermissionManager:
             - If server admin: (list of IDs, False)
         """
         is_admin, is_global = PermissionManager.is_admin(user_id)
-
         if not is_admin:
             return [], False
-
         if is_global:
             return [], True
 
-        # Server admin - check for specific assignments
-        with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
-            cursor = db.cursor()
-            cursor.execute("SELECT alliances_id FROM adminserver WHERE admin = ?", (user_id,))
-            assigned = [row[0] for row in cursor.fetchall()]
-
-        if assigned:
-            # Alliance Admin: Has specific assignments - use ONLY those
-            return assigned, False
-        else:
-            # Server Admin: No assignments - use all alliances on their Discord server
-            with sqlite3.connect(PermissionManager.ALLIANCE_DB) as alliance_db:
-                ac = alliance_db.cursor()
-                ac.execute("SELECT alliance_id FROM alliance_list WHERE discord_server_id = ?", (guild_id,))
-                return [row[0] for row in ac.fetchall()], False
+        rg = PermissionManager._cached_role_grant(user_id) or {"server": False, "alliance_ids": [], "guild_id": None}
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db:
+            user_assigned = [r[0] for r in db.execute(
+                "SELECT alliances_id FROM adminserver WHERE admin = ?", (user_id,)).fetchall()]
+        user_is_server_tier = (user_id in PermissionManager._admin_map()) and not user_assigned
+        # Role server-tier is guild-scoped: only when the cached grant came from this guild.
+        role_server = rg["server"] and rg.get("guild_id") == guild_id
+        if role_server or user_is_server_tier:
+            with closing(sqlite3.connect(PermissionManager.ALLIANCE_DB)) as adb:
+                return [r[0] for r in adb.execute(
+                    "SELECT alliance_id FROM alliance_list WHERE discord_server_id = ?", (guild_id,)).fetchall()], False
+        return sorted(set(user_assigned) | set(rg["alliance_ids"])), False
 
     @staticmethod
     def get_admin_alliances(user_id: int, guild_id: int) -> Tuple[List[Tuple], bool]:
         """
-        Get alliance tuples (id, name) for admin.
+        Get alliance tuples (id, name) for admin, merging any cached role grant.
         Used by most cogs for alliance selection dropdowns.
 
         Returns:
             (alliances, is_global)
         """
         is_admin, is_global = PermissionManager.is_admin(user_id)
-
         if not is_admin:
             return [], False
 
         if is_global:
-            # Global admin - return all alliances
-            with sqlite3.connect(PermissionManager.ALLIANCE_DB) as db:
-                cursor = db.cursor()
-                cursor.execute("""
-                    SELECT DISTINCT alliance_id, name
-                    FROM alliance_list
-                    ORDER BY name
-                """)
-                return cursor.fetchall(), True
+            with closing(sqlite3.connect(PermissionManager.ALLIANCE_DB)) as db:
+                return db.execute("SELECT DISTINCT alliance_id, name FROM alliance_list ORDER BY name").fetchall(), True
 
-        # Server admin - get their allowed alliances
-        with sqlite3.connect(PermissionManager.SETTINGS_DB) as db:
-            cursor = db.cursor()
-            cursor.execute("SELECT alliances_id FROM adminserver WHERE admin = ?", (user_id,))
-            assigned_ids = [row[0] for row in cursor.fetchall()]
-
-        if assigned_ids:
-            # Alliance Admin: Has specific assignments - use ONLY those
-            with sqlite3.connect(PermissionManager.ALLIANCE_DB) as db:
-                cursor = db.cursor()
-                placeholders = ','.join('?' * len(assigned_ids))
-                cursor.execute(f"""
-                    SELECT DISTINCT alliance_id, name
-                    FROM alliance_list
-                    WHERE alliance_id IN ({placeholders})
-                    ORDER BY name
-                """, assigned_ids)
-                return cursor.fetchall(), False
-        else:
-            # Server Admin: No assignments - use all alliances on their Discord server
-            with sqlite3.connect(PermissionManager.ALLIANCE_DB) as db:
-                cursor = db.cursor()
-                cursor.execute("""
-                    SELECT DISTINCT alliance_id, name
-                    FROM alliance_list
-                    WHERE discord_server_id = ?
-                    ORDER BY name
-                """, (guild_id,))
-                return cursor.fetchall(), False
+        ids, _ = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
+        if not ids:
+            return [], False
+        with closing(sqlite3.connect(PermissionManager.ALLIANCE_DB)) as db:
+            ph = ','.join('?' * len(ids))
+            return db.execute(
+                f"SELECT DISTINCT alliance_id, name FROM alliance_list WHERE alliance_id IN ({ph}) ORDER BY name", ids
+            ).fetchall(), False
 
     @staticmethod
     def get_admin_users(user_id: int, guild_id: int = None) -> List[Tuple]:
@@ -469,3 +440,155 @@ class PermissionManager:
                 for r in cur.fetchall()
             ]
         return rows, total
+
+    # ---------------------------------------------------------------
+    # Role-grant CRUD (a Discord role holding a tier, mirroring admin/adminserver)
+    # ---------------------------------------------------------------
+
+    @staticmethod
+    def add_role_grant(role_id: int, guild_id: int, *, tier: str, alliance_ids: Optional[List[int]] = None) -> None:
+        if tier not in (TIER_GLOBAL, TIER_SERVER, TIER_ALLIANCE):
+            raise ValueError(f"Roles cannot be granted tier: {tier}")
+        if tier == TIER_ALLIANCE and not alliance_ids:
+            raise ValueError("Alliance tier requires at least one alliance_id")
+        is_initial = 1 if tier == TIER_GLOBAL else 0
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db, db:
+            db.execute("INSERT OR REPLACE INTO admin_role (role_id, guild_id, is_initial) VALUES (?, ?, ?)",
+                       (role_id, guild_id, is_initial))
+            db.execute("DELETE FROM adminserver_role WHERE role_id = ?", (role_id,))
+            if tier == TIER_ALLIANCE:
+                for aid in alliance_ids or []:
+                    db.execute("INSERT OR IGNORE INTO adminserver_role (role_id, alliances_id) VALUES (?, ?)", (role_id, aid))
+        PermissionManager._bust_role_cache()
+
+    @staticmethod
+    def set_role_tier(role_id: int, tier: str, *, alliance_ids: Optional[List[int]] = None) -> None:
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db:
+            row = db.execute("SELECT guild_id FROM admin_role WHERE role_id = ?", (role_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Role {role_id} is not granted")
+        PermissionManager.add_role_grant(role_id, row[0], tier=tier, alliance_ids=alliance_ids)
+
+    @staticmethod
+    def remove_role_grant(role_id: int) -> None:
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db, db:
+            db.execute("DELETE FROM adminserver_role WHERE role_id = ?", (role_id,))
+            db.execute("DELETE FROM admin_role WHERE role_id = ?", (role_id,))
+        PermissionManager._bust_role_cache()
+
+    @staticmethod
+    def get_role_alliance_assignments(role_id: int) -> List[int]:
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db:
+            return [int(r[0]) for r in db.execute(
+                "SELECT alliances_id FROM adminserver_role WHERE role_id = ?", (role_id,)).fetchall()]
+
+    @staticmethod
+    def get_role_tier(role_id: int) -> str:
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db:
+            row = db.execute("SELECT is_initial FROM admin_role WHERE role_id = ?", (role_id,)).fetchone()
+            if not row:
+                return TIER_NONE
+            if row[0]:
+                return TIER_GLOBAL
+            n = db.execute("SELECT COUNT(*) FROM adminserver_role WHERE role_id = ?", (role_id,)).fetchone()[0]
+        return TIER_ALLIANCE if n else TIER_SERVER
+
+    @staticmethod
+    def list_role_grants() -> List[dict]:
+        with closing(sqlite3.connect(PermissionManager.SETTINGS_DB)) as db:
+            rows = db.execute(
+                "SELECT r.role_id, r.guild_id, r.is_initial, "
+                "(SELECT COUNT(*) FROM adminserver_role s WHERE s.role_id = r.role_id) "
+                "FROM admin_role r ORDER BY r.is_initial DESC, r.role_id").fetchall()
+        out = []
+        for role_id, guild_id, is_initial, count in rows:
+            tier = TIER_GLOBAL if is_initial else (TIER_ALLIANCE if count else TIER_SERVER)
+            out.append({'role_id': int(role_id), 'guild_id': guild_id, 'tier': tier, 'alliance_count': int(count)})
+        return out
+
+    @staticmethod
+    def describe_role_state(role_id: int) -> str:
+        tier = PermissionManager.get_role_tier(role_id)
+        if tier == TIER_GLOBAL:
+            return "Global Admin (role)"
+        if tier == TIER_ALLIANCE:
+            n = len(PermissionManager.get_role_alliance_assignments(role_id))
+            return f"Alliance Admin (role, {n} alliance{'s' if n != 1 else ''})"
+        if tier == TIER_SERVER:
+            return "Server Admin (role)"
+        return "Not a granted role"
+
+    # 5s TTL cache of the role-grant tables ({role_id: (tier, [alliance_ids])}).
+    _role_map_cache = None
+    _role_map_cache_at = 0.0
+    _ROLE_MAP_TTL = 5.0
+
+    @classmethod
+    def _role_admin_map(cls) -> dict:
+        now = time.monotonic()
+        if cls._role_map_cache is None or (now - cls._role_map_cache_at) > cls._ROLE_MAP_TTL:
+            out = {}
+            with closing(sqlite3.connect(cls.SETTINGS_DB)) as db:
+                for role_id, is_initial in db.execute("SELECT role_id, is_initial FROM admin_role").fetchall():
+                    aids = [int(r[0]) for r in db.execute(
+                        "SELECT alliances_id FROM adminserver_role WHERE role_id = ?", (role_id,)).fetchall()]
+                    tier = TIER_GLOBAL if is_initial else (TIER_ALLIANCE if aids else TIER_SERVER)
+                    out[int(role_id)] = (tier, aids)
+            cls._role_map_cache = out
+            cls._role_map_cache_at = now
+        return cls._role_map_cache
+
+    @staticmethod
+    def resolve_member_roles(role_ids: List[int]) -> dict:
+        """Resolve a member's Discord role ids to their effective role-only grant."""
+        role_map = PermissionManager._role_admin_map()
+        is_global = server = is_admin = False
+        alliance_ids = set()
+        for rid in role_ids:
+            grant = role_map.get(int(rid))
+            if not grant:
+                continue
+            is_admin = True
+            tier, aids = grant
+            if tier == TIER_GLOBAL:
+                is_global = True
+            elif tier == TIER_SERVER:
+                server = True
+            else:
+                alliance_ids.update(aids)
+        return {"is_admin": is_admin, "is_global": is_global, "server": server, "alliance_ids": sorted(alliance_ids)}
+
+    # Per-user cache of the resolved role grant, populated by the interaction boundary hook so `is_admin` et al. don't re-resolve roles every call.
+    _role_grant_by_user = {}   # {user_id: (RoleGrant, guild_id, expiry_monotonic)}
+    _ROLE_GRANT_TTL = 30.0
+
+    @classmethod
+    def cache_member_role_grant(cls, user_id: int, role_ids: List[int], guild_id: int | None = None) -> None:
+        grant = cls.resolve_member_roles(role_ids)
+        cls._role_grant_by_user[int(user_id)] = (grant, guild_id, time.monotonic() + cls._ROLE_GRANT_TTL)
+
+    @classmethod
+    def _cached_role_grant(cls, user_id: int) -> Optional[dict]:
+        entry = cls._role_grant_by_user.get(int(user_id))
+        if not entry:
+            return None
+        grant, guild_id, expiry = entry
+        if time.monotonic() > expiry:
+            cls._role_grant_by_user.pop(int(user_id), None)
+            return None
+        return {**grant, "guild_id": guild_id}
+
+    @staticmethod
+    def is_member_admin(user_id: int, role_ids: List[int]) -> Tuple[bool, bool]:
+        """Direct merge of a user's personal grant with their role grant, bypassing
+        the per-user cache. For the message-path site that has roles inline."""
+        admin_map = PermissionManager._admin_map()
+        user_admin = user_id in admin_map
+        user_global = user_admin and admin_map[user_id] == 1
+        rg = PermissionManager.resolve_member_roles(role_ids)
+        return (user_admin or rg["is_admin"], user_global or rg["is_global"])
+
+    @classmethod
+    def _bust_role_cache(cls):
+        cls._role_map_cache = None
+        cls._role_grant_by_user.clear()

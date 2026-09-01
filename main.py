@@ -1263,6 +1263,18 @@ if __name__ == "__main__":
             conn_settings.execute("""CREATE INDEX IF NOT EXISTS idx_permission_audit_timestamp
                 ON permission_audit_log(timestamp DESC)""")
 
+            # Role-based admin grants: a Discord role holding a tier, mirroring admin/adminserver.
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS admin_role (
+                role_id     INTEGER PRIMARY KEY,
+                guild_id    INTEGER,
+                is_initial  INTEGER NOT NULL DEFAULT 0
+            )""")
+            conn_settings.execute("""CREATE TABLE IF NOT EXISTS adminserver_role (
+                role_id      INTEGER NOT NULL,
+                alliances_id INTEGER NOT NULL,
+                PRIMARY KEY (role_id, alliances_id)
+            )""")
+
             # Per-alliance opt-in channel summary posted after each redemption.
             # No row = disabled (default). Buckets choose what the summary lists.
             conn_settings.execute("""CREATE TABLE IF NOT EXISTS redemption_summary_settings (

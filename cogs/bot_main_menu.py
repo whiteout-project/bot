@@ -1287,9 +1287,10 @@ class AdminManagerView(discord.ui.View):
             title=f"{theme.lockIcon} Permissions",
             description=(
                 f"Permissions system allows you to configure access levels for admins. "
-                f"Higher tiers can do everything lower tiers can. Use the dropdowns "
-                f"below to add a new admin or open an existing one to change their tier, "
-                f"scope, or remove them.\n\n"
+                f"Higher tiers can do everything lower tiers can, and when someone holds "
+                f"more than one grant (their own or via roles) the broadest one wins, with "
+                f"alliance scopes combined. Use the dropdowns below to add a new admin or "
+                f"open an existing one to change their tier, scope, or remove them.\n\n"
                 f"**Tiers**\n"
                 f"{theme.upperDivider}\n"
                 f"{theme.crownIcon} **Bot Owner** — recovery anchor; only one; "
@@ -1300,6 +1301,8 @@ class AdminManagerView(discord.ui.View):
                 f"on their Discord server\n"
                 f"{theme.pinIcon} **Alliance Admin** — limited to the specific "
                 f"alliance(s) they're assigned to\n"
+                f"{theme.membersIcon} **Roles** — any tier can also be granted to a "
+                f"Discord role; every holder inherits it (**Manage Roles** below)\n"
                 f"{theme.lowerDivider}\n\n"
                 f"**Current state**\n"
                 f"{theme.upperDivider}\n"
@@ -1416,6 +1419,13 @@ class AdminManagerView(discord.ui.View):
         audit_btn.callback = self._on_view_audit
         self.add_item(audit_btn)
 
+        roles_btn = discord.ui.Button(
+            label="Manage Roles", style=discord.ButtonStyle.secondary,
+            emoji=theme.membersIcon, row=4,
+        )
+        roles_btn.callback = self._on_manage_roles
+        self.add_item(roles_btn)
+
         back_btn = discord.ui.Button(
             label="Back", style=discord.ButtonStyle.secondary,
             emoji=theme.backIcon, row=4,
@@ -1424,6 +1434,13 @@ class AdminManagerView(discord.ui.View):
         self.add_item(back_btn)
 
     # ───── callbacks ─────
+
+    async def _on_manage_roles(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        view = RoleManagerView(self.cog, self.viewer_id, parent_view=self)
+        await view.refresh_data(self.cog.bot)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
 
     async def _on_view_audit(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
@@ -1634,6 +1651,14 @@ async def _resolve_user_name(bot, user_id: int) -> str:
         except Exception:
             user = None
     return user.display_name if user else f"User {user_id}"
+
+
+async def _resolve_role_name(bot, guild_id: int, role_id: int) -> str:
+    """Role name if the guild + role are still cached, else a raw-id fallback
+    (the grant is still removable even when the role no longer exists)."""
+    guild = bot.get_guild(guild_id) if guild_id else None
+    role = guild.get_role(role_id) if guild else None
+    return role.name if role else f"Role {role_id}"
 
 
 async def _return_to_parent(interaction, parent_view, bot):
@@ -2139,6 +2164,488 @@ class TransferOwnerView(discord.ui.View):
         PermissionManager.log_change(
             self.viewer_id, "transfer_owner", target_id,
             before_target, PermissionManager.describe_state(target_id),
+        )
+        await _return_to_parent(interaction, self.parent_view, self.cog.bot)
+
+    async def _refresh_self(self, interaction):
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_back(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        await _return_to_parent(interaction, self.parent_view, self.cog.bot)
+
+
+# ============================================================================
+# Role Grant Views (an admin tier granted to a Discord role instead of a user)
+# ============================================================================
+
+class RoleManagerView(discord.ui.View):
+    """Paginated list of role-based admin grants. Selecting a role opens
+    RoleContextView. Mirrors AdminManagerView, scoped to roles."""
+
+    PAGE_SIZE = 25
+
+    def __init__(self, cog, viewer_id: int, parent_view: AdminManagerView):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.viewer_id = viewer_id
+        self.parent_view = parent_view
+        self.page = 0
+        # Populated by refresh_data():
+        self.grants: list = []
+        self._names: dict = {}
+        self.add_select: discord.ui.RoleSelect = None
+
+    async def refresh_data(self, bot):
+        self.grants = PermissionManager.list_role_grants()
+        names = await asyncio.gather(
+            *(_resolve_role_name(bot, g['guild_id'], g['role_id']) for g in self.grants)
+        )
+        self._names = {g['role_id']: n for g, n in zip(self.grants, names)}
+        self._build()
+
+    def _total_pages(self) -> int:
+        return max(1, -(-len(self.grants) // self.PAGE_SIZE))
+
+    def build_embed(self) -> discord.Embed:
+        counts = {TIER_GLOBAL: 0, TIER_SERVER: 0, TIER_ALLIANCE: 0}
+        for g in self.grants:
+            counts[g['tier']] = counts.get(g['tier'], 0) + 1
+
+        embed = discord.Embed(
+            title=f"{theme.membersIcon} Role Grants",
+            description=(
+                f"Grant an admin tier to a Discord role so every member holding "
+                f"it inherits the permission. Pick a role below to add a grant, "
+                f"or open an existing one to change its tier, scope, or remove it.\n\n"
+                f"{theme.upperDivider}\n"
+                f"**Total role grants:** {len(self.grants)} "
+                f"· {counts[TIER_GLOBAL]} Global · {counts[TIER_SERVER]} Server · "
+                f"{counts[TIER_ALLIANCE]} Alliance\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+        if self.grants:
+            total_pages = self._total_pages()
+            start = self.page * self.PAGE_SIZE
+            end = min(start + self.PAGE_SIZE, len(self.grants))
+            lines = []
+            for g in self.grants[start:end]:
+                name = self._names.get(g['role_id']) or f"Role {g['role_id']}"
+                icon = _tier_icon(g['tier'])
+                tier_text = _tier_label(g['tier'])
+                if g['tier'] == TIER_ALLIANCE:
+                    tier_text += f" ({g['alliance_count']})"
+                lines.append(f"{icon} **{name}** (<@&{g['role_id']}>) — {tier_text}")
+            header = (
+                f"Role Grants {start + 1}–{end} of {len(self.grants)}"
+                if total_pages > 1 else f"Role Grants ({len(self.grants)})"
+            )
+            embed.add_field(name=header, value="\n".join(lines)[:1024], inline=False)
+        else:
+            embed.add_field(
+                name="Role Grants (0)",
+                value="*No role grants yet. Use the role picker below to add the first one.*",
+                inline=False,
+            )
+        return embed
+
+    def _build(self):
+        self.clear_items()
+
+        # Row 0: Add a grant via RoleSelect (single role).
+        self.add_select = discord.ui.RoleSelect(
+            placeholder="+ Add role grant (pick a role)…",
+            min_values=1, max_values=1, row=0,
+        )
+        self.add_select.callback = self._on_add_role_picked
+        self.add_item(self.add_select)
+
+        # Row 1: open-grant Select for the current page.
+        if self.grants:
+            start = self.page * self.PAGE_SIZE
+            end = min(start + self.PAGE_SIZE, len(self.grants))
+            options = []
+            for g in self.grants[start:end]:
+                name = self._names.get(g['role_id']) or f"Role {g['role_id']}"
+                tier = g['tier']
+                desc = {
+                    TIER_GLOBAL: "Global — full access",
+                    TIER_SERVER: "Server — all alliances on the server",
+                    TIER_ALLIANCE: f"Alliance — {g['alliance_count']} alliance(s)",
+                }.get(tier, tier)
+                options.append(discord.SelectOption(
+                    label=f"{name}"[:100],
+                    value=str(g['role_id']),
+                    description=desc[:100],
+                    emoji=_tier_icon(tier),
+                ))
+            role_select = discord.ui.Select(
+                placeholder="Open a role grant…",
+                options=options, min_values=1, max_values=1, row=1,
+            )
+            role_select.callback = self._on_role_picked
+            self.add_item(role_select)
+
+        # Row 2: pagination (only when needed).
+        total_pages = self._total_pages()
+        if total_pages > 1:
+            prev_btn = discord.ui.Button(
+                label="◀ Prev", style=discord.ButtonStyle.secondary,
+                row=2, disabled=(self.page == 0),
+            )
+            prev_btn.callback = self._on_prev
+            page_lbl = discord.ui.Button(
+                label=f"Page {self.page + 1}/{total_pages}",
+                style=discord.ButtonStyle.secondary,
+                row=2, disabled=True,
+            )
+            next_btn = discord.ui.Button(
+                label="Next ▶", style=discord.ButtonStyle.secondary,
+                row=2, disabled=(self.page >= total_pages - 1),
+            )
+            next_btn.callback = self._on_next
+            self.add_item(prev_btn)
+            self.add_item(page_lbl)
+            self.add_item(next_btn)
+
+        # Row 3: Back (to the user-admin list).
+        back_btn = discord.ui.Button(
+            label="Back", style=discord.ButtonStyle.secondary,
+            emoji=theme.backIcon, row=3,
+        )
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    # ───── callbacks ─────
+
+    async def _on_add_role_picked(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        if not self.add_select.values:
+            await interaction.response.defer()
+            return
+        role = self.add_select.values[0]
+        if any(g['role_id'] == role.id for g in self.grants):
+            await interaction.response.send_message(
+                f"{theme.warnIcon} {role.mention} already has a grant. Pick it from the list to edit.",
+                ephemeral=True,
+            )
+            return
+        view = AddRoleView(self.cog, self.viewer_id, role, parent_view=self)
+        await view.refresh_data()
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+    async def _on_role_picked(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        role_id = int(interaction.data['values'][0])
+        grant = next((g for g in self.grants if g['role_id'] == role_id), None)
+        guild_id = grant['guild_id'] if grant else interaction.guild_id
+        view = RoleContextView(self.cog, self.viewer_id, role_id, guild_id, parent_view=self)
+        await view.refresh_data(self.cog.bot)
+        await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+    async def _on_prev(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        if self.page > 0:
+            self.page -= 1
+        self._build()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_next(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        if self.page < self._total_pages() - 1:
+            self.page += 1
+        self._build()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_back(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        await _return_to_parent(interaction, self.parent_view, self.cog.bot)
+
+
+class AddRoleView(discord.ui.View):
+    """Pick tier + (conditional) alliances for a freshly-selected role, then
+    Confirm to insert the grant in one shot. Mirrors AddAdminView for roles."""
+
+    MAX_ALLIANCE_OPTIONS = 25
+
+    def __init__(self, cog, viewer_id: int, role: discord.Role, parent_view: RoleManagerView):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.viewer_id = viewer_id
+        self.role = role
+        self.parent_view = parent_view
+        self.all_alliances: list = []
+        self.staged_tier = TIER_SERVER  # safest default — server-wide, no specific assignments
+        self.staged_alliance_ids: list = []
+
+    async def refresh_data(self):
+        self.all_alliances = PermissionManager.list_alliances()
+        self._build()
+
+    def build_embed(self) -> discord.Embed:
+        return discord.Embed(
+            title=f"{theme.addIcon} Add Role Grant: {self.role.name}",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"**Role:** {self.role.mention} (`{self.role.id}`)\n"
+                f"**Tier:** {_tier_label(self.staged_tier)} {_tier_icon(self.staged_tier)}\n"
+                f"{theme.lowerDivider}\n"
+                f"{_tier_blurb(self.staged_tier, alliance_count=len(self.staged_alliance_ids))}\n\n"
+                f"_Every member holding this role inherits the tier below._"
+            ),
+            color=theme.emColor1,
+        )
+
+    def _build(self):
+        self.clear_items()
+        tier_select = _build_tier_select(self.staged_tier)
+        tier_select.callback = self._on_tier_change
+        self.add_item(tier_select)
+
+        if self.staged_tier == TIER_ALLIANCE and self.all_alliances:
+            alliance_select = _build_alliance_select(
+                self.all_alliances, self.staged_alliance_ids,
+                max_options=self.MAX_ALLIANCE_OPTIONS,
+                placeholder="Pick alliances (one or more)…",
+            )
+            alliance_select.callback = self._on_alliances_change
+            self.add_item(alliance_select)
+
+        confirm_btn = discord.ui.Button(
+            label="Add Role Grant", emoji=theme.verifiedIcon,
+            style=discord.ButtonStyle.success, row=2,
+        )
+        confirm_btn.callback = self._on_confirm
+        self.add_item(confirm_btn)
+
+        cancel_btn = discord.ui.Button(
+            label="Cancel", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=2,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _on_tier_change(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        self.staged_tier = interaction.data['values'][0]
+        if self.staged_tier != TIER_ALLIANCE:
+            self.staged_alliance_ids = []
+        self._build()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_alliances_change(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        self.staged_alliance_ids = [int(v) for v in (interaction.data.get('values') or [])]
+        self._build()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_confirm(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        if self.staged_tier == TIER_ALLIANCE and not self.staged_alliance_ids:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Pick at least one alliance, or switch tier to Server (manages all).",
+                ephemeral=True,
+            )
+            return
+        try:
+            PermissionManager.add_role_grant(
+                self.role.id, self.role.guild.id, tier=self.staged_tier,
+                alliance_ids=self.staged_alliance_ids if self.staged_tier == TIER_ALLIANCE else None,
+            )
+        except ValueError as e:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} {e}", ephemeral=True,
+            )
+            return
+        PermissionManager.log_change(
+            self.viewer_id, "role_add", self.role.id,
+            "Not a granted role", PermissionManager.describe_role_state(self.role.id),
+        )
+        await _return_to_parent(interaction, self.parent_view, self.cog.bot)
+
+    async def _on_cancel(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        await _return_to_parent(interaction, self.parent_view, self.cog.bot)
+
+
+class RoleContextView(discord.ui.View):
+    """Per-role-grant actions: change tier, assign/unassign alliances, remove
+    the grant. Mirrors AdminContextView for roles (no Owner tier, no transfer)."""
+
+    MAX_ALLIANCE_OPTIONS = 25
+
+    def __init__(self, cog, viewer_id: int, role_id: int, guild_id: int, parent_view: RoleManagerView):
+        super().__init__(timeout=7200)
+        self.cog = cog
+        self.viewer_id = viewer_id
+        self.role_id = role_id
+        self.guild_id = guild_id
+        self.parent_view = parent_view
+        # Populated by refresh_data():
+        self.role_name = None
+        self.target_tier = TIER_NONE
+        self.target_alliance_ids: list = []
+        self.all_alliances: list = []
+        self.staged_tier = TIER_GLOBAL          # what the grant will be saved as
+        self.staged_alliance_ids: list = []     # diffed against current on Save
+
+    async def refresh_data(self, bot):
+        self.role_name = await _resolve_role_name(bot, self.guild_id, self.role_id)
+        self.target_tier = PermissionManager.get_role_tier(self.role_id)
+        self.all_alliances = PermissionManager.list_alliances()
+        self.target_alliance_ids = PermissionManager.get_role_alliance_assignments(self.role_id)
+        self.staged_tier = self.target_tier
+        self.staged_alliance_ids = list(self.target_alliance_ids)
+        self._build()
+
+    def build_embed(self) -> discord.Embed:
+        tier = self.target_tier
+        icon = _tier_icon(tier)
+        embed = discord.Embed(
+            title=f"{icon} {self.role_name}",
+            description=(
+                f"{theme.upperDivider}\n"
+                f"**Tier:** {_tier_label(tier)}\n"
+                f"**Role:** <@&{self.role_id}> (`{self.role_id}`)\n"
+                f"{theme.lowerDivider}"
+            ),
+            color=theme.emColor1,
+        )
+        embed.add_field(
+            name="Scope",
+            value=_tier_blurb(tier, alliance_count=len(self.target_alliance_ids)),
+            inline=False,
+        )
+        if tier == TIER_ALLIANCE and self.target_alliance_ids:
+            id_to_name = {aid: name for aid, name in self.all_alliances}
+            assigned = [
+                f"`{id_to_name.get(aid, f'#{aid}')}`"
+                for aid in self.target_alliance_ids
+            ]
+            embed.add_field(
+                name=f"Assigned Alliances ({len(assigned)})",
+                value=", ".join(assigned)[:1024],
+                inline=False,
+            )
+        return embed
+
+    def _build(self):
+        self.clear_items()
+        tier_select = _build_tier_select(self.staged_tier)
+        tier_select.callback = self._on_tier_change
+        self.add_item(tier_select)
+
+        if self.staged_tier == TIER_ALLIANCE and self.all_alliances:
+            alliance_select = _build_alliance_select(
+                self.all_alliances, self.staged_alliance_ids,
+                max_options=self.MAX_ALLIANCE_OPTIONS,
+            )
+            alliance_select.callback = self._on_alliances_change
+            self.add_item(alliance_select)
+
+        # Row 2: Save / Remove / Back
+        save_btn = discord.ui.Button(
+            label="Save", emoji=theme.saveIcon,
+            style=discord.ButtonStyle.success, row=2,
+        )
+        save_btn.callback = self._on_save
+        self.add_item(save_btn)
+
+        remove_btn = discord.ui.Button(
+            label="Remove Grant", emoji=theme.trashIcon,
+            style=discord.ButtonStyle.danger, row=2,
+        )
+        remove_btn.callback = self._on_remove
+        self.add_item(remove_btn)
+
+        back_btn = discord.ui.Button(
+            label="Back", emoji=theme.backIcon,
+            style=discord.ButtonStyle.secondary, row=2,
+        )
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
+
+    # ───── callbacks ─────
+
+    async def _on_tier_change(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        self.staged_tier = interaction.data['values'][0]
+        if self.staged_tier != TIER_ALLIANCE:
+            self.staged_alliance_ids = []
+        self._build()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_alliances_change(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        self.staged_alliance_ids = [int(v) for v in (interaction.data.get('values') or [])]
+        self._build()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def _on_save(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        if self.staged_tier == TIER_ALLIANCE and not self.staged_alliance_ids:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Alliance tier needs at least one alliance picked. "
+                f"Pick alliances or change tier to Server (manages all alliances).",
+                ephemeral=True,
+            )
+            return
+        before_state = PermissionManager.describe_role_state(self.role_id)
+        try:
+            PermissionManager.set_role_tier(
+                self.role_id, self.staged_tier,
+                alliance_ids=self.staged_alliance_ids if self.staged_tier == TIER_ALLIANCE else None,
+            )
+        except ValueError as e:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} {e}", ephemeral=True,
+            )
+            return
+        PermissionManager.log_change(
+            self.viewer_id, "role_set_tier", self.role_id,
+            before_state, PermissionManager.describe_role_state(self.role_id),
+        )
+        await _return_to_parent(interaction, self.parent_view, self.cog.bot)
+
+    async def _on_remove(self, interaction):
+        if not await check_interaction_user(interaction, self.viewer_id):
+            return
+        confirm_view = _ConfirmActionView(
+            self.viewer_id,
+            on_confirm=lambda i: self._do_remove(i),
+            on_cancel=lambda i: self._refresh_self(i),
+        )
+        embed = discord.Embed(
+            title=f"{theme.warnIcon} Confirm Remove",
+            description=(
+                f"Remove the grant on **{self.role_name}** — currently "
+                f"**{_tier_label(self.target_tier)}**?\nThis cannot be undone."
+            ),
+            color=theme.emColor2,
+        )
+        await interaction.response.edit_message(embed=embed, view=confirm_view)
+
+    async def _do_remove(self, interaction):
+        before_state = PermissionManager.describe_role_state(self.role_id)
+        PermissionManager.remove_role_grant(self.role_id)
+        PermissionManager.log_change(
+            self.viewer_id, "role_remove", self.role_id,
+            before_state, "removed",
         )
         await _return_to_parent(interaction, self.parent_view, self.cog.bot)
 

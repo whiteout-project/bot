@@ -203,7 +203,8 @@ class AttendanceOCR(commands.Cog):
         # Per-alliance permission gate. When restricted, only bot admins
         # can post screenshots for processing; others get a self-deleting notice.
         if get_ocr_upload_admin_only(settings["alliance_id"]):
-            is_admin, _ = PermissionManager.is_admin(message.author.id)
+            role_ids = [r.id for r in getattr(message.author, "roles", [])]
+            is_admin, _ = PermissionManager.is_member_admin(message.author.id, role_ids)
             if not is_admin:
                 await message.channel.send(
                     f"{theme.deniedIcon} Only admins can upload screenshots here.",

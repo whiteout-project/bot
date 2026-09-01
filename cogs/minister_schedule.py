@@ -10,6 +10,7 @@ import logging
 import re
 from datetime import datetime
 from .pimp_my_bot import theme
+from .permission_handler import PermissionManager
 
 logger = logging.getLogger('bot')
 
@@ -227,10 +228,8 @@ class MinisterSchedule(commands.Cog):
             print("Error: Could not find the log channel please change it to a valid channel")
 
     async def is_admin(self, user_id: int) -> bool:
-        if user_id == self.bot.owner_id:
-            return True
-        self.settings_cursor.execute("SELECT 1 FROM admin WHERE id=?", (user_id,))
-        return self.settings_cursor.fetchone() is not None
+        is_admin, _ = PermissionManager.is_admin(user_id)
+        return is_admin
 
     async def log_change(self, action_type: str, user, appointment_type: str = None, fid: int = None,
                         nickname: str = None, old_time: str = None, new_time: str = None,
