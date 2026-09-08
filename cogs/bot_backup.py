@@ -16,6 +16,7 @@ import logging
 import asyncio
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
+from .bot_backup_import import show_import_menu
 
 logger = logging.getLogger('bot')
 
@@ -257,7 +258,9 @@ class BackupOperations(commands.Cog):
                 f"{theme.settingsIcon} **Auto Backup Settings**\n"
                 f"└ Schedule automatic backups and retention\n\n"
                 f"{theme.listIcon} **View Local Backups**\n"
-                f"└ List and clean up saved backup files\n"
+                f"└ List and clean up saved backup files\n\n"
+                f"{theme.importIcon} **Import from JS Bot**\n"
+                f"└ Bring alliances, members, and gift data over from the JS bot\n"
                 f"{theme.lowerDivider}"
             ),
             color=theme.emColor1,
@@ -502,6 +505,10 @@ class BackupView(discord.ui.View):
     async def view_backups(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = BackupManageView(self.cog)
         await interaction.response.edit_message(embed=view.build_embed(), view=view)
+
+    @discord.ui.button(label="Import from JS Bot", emoji=f"{theme.importIcon}", style=discord.ButtonStyle.primary, row=1)
+    async def import_from_js(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await show_import_menu(self.cog, interaction)
 
     @discord.ui.button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary, row=1)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
