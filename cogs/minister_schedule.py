@@ -7,19 +7,11 @@ from discord.ext import commands
 import asyncio
 import sqlite3
 import logging
-import re
 from datetime import datetime
 from .pimp_my_bot import theme
 from .permission_handler import PermissionManager
 
 logger = logging.getLogger('bot')
-
-try:
-    import arabic_reshaper
-    from bidi.algorithm import get_display
-    ARABIC_SUPPORT = True
-except ImportError:
-    ARABIC_SUPPORT = False
 
 
 class ChannelSelectView(discord.ui.View):
@@ -266,22 +258,6 @@ class MinisterSchedule(commands.Cog):
         except Exception as e:
             logger.error(f"Error logging change: {e}")
             print(f"Error logging change: {e}")
-
-    def fix_arabic(self, text):
-        """
-        Fix Arabic text rendering by reshaping and applying bidirectional algorithm.
-        """
-        if not text or not ARABIC_SUPPORT:
-            return text
-
-        # Check if text contains Arabic characters
-        if re.search(r'[\u0600-\u06FF]', text):
-            try:
-                reshaped = arabic_reshaper.reshape(text)
-                return get_display(reshaped)
-            except Exception:
-                return text
-        return text
 
     def get_time_slots(self, slot_mode: int):
         """

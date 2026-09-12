@@ -704,12 +704,36 @@ def _isolate_rtl(text: str) -> str:
     return f"⁨{text}⁩"
 
 
+_MPL_SHAPES_RTL: bool | None = None
+
+
+def _mpl_shapes_rtl(version_str: str) -> bool:
+    """matplotlib 3.11+ shapes and reorders RTL text itself (libraqm)."""
+    try:
+        major, minor = (int(re.match(r"\d+", part).group()) for part in version_str.split(".")[:2])
+        return (major, minor) >= (3, 11)
+    except Exception:
+        return False
+
+
+def _installed_mpl_shapes_rtl() -> bool:
+    global _MPL_SHAPES_RTL
+    if _MPL_SHAPES_RTL is None:
+        try:
+            from importlib.metadata import version
+            _MPL_SHAPES_RTL = _mpl_shapes_rtl(version("matplotlib"))
+        except Exception:
+            _MPL_SHAPES_RTL = False
+    return _MPL_SHAPES_RTL
+
+
 def _reshape_for_chart(text) -> str:
-    """Shape Arabic for matplotlib (which doesn't run bidi itself).
+    """Shape Arabic for matplotlib < 3.11, which doesn't run bidi itself; on
+    3.11+ pre-shaping would double-process and reverse the text, so pass through.
     Discord uses `_ltr_line` instead — it shapes Arabic natively."""
-    if not text or not _RESHAPE_AVAILABLE:
+    if not text:
         return text or ""
-    if not _has_rtl(text):
+    if not _has_rtl(text) or _installed_mpl_shapes_rtl() or not _RESHAPE_AVAILABLE:
         return text
     try:
         return _bidi_get_display(_arabic_reshaper.reshape(text))

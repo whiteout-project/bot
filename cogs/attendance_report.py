@@ -12,6 +12,7 @@ import io
 from io import BytesIO
 import os
 from .attendance import SessionSelectView, event_type_display
+from .bear_track import _reshape_for_chart
 from .pimp_my_bot import theme
 
 logger = logging.getLogger('bot')
@@ -809,15 +810,8 @@ class AttendanceReport(commands.Cog):
                 table_color = '#1f77b4'  # Blue for full report
             table_data = []
             
-            def fix_arabic(text):
-                if text and re.search(r'[\u0600-\u06FF]', text):
-                    try:
-                        reshaped = arabic_reshaper.reshape(text)
-                        return get_display(reshaped)
-                    except Exception:
-                        return text
-                return text
-                
+            fix_arabic = _reshape_for_chart  # version-gated: matplotlib 3.11+ shapes RTL itself
+
             def wrap_text(text, width=20):
                 if not text:
                     return ""
