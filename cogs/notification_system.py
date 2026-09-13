@@ -340,6 +340,43 @@ class NotificationSystem(commands.Cog):
 
         self.conn.commit()
         self._apply_instance_descriptions()
+        self._realign_biweekly_cycle()
+
+    def _realign_biweekly_cycle(self):
+        """One-time repair for 2-weekly events that shipped configured as 4-weekly."""
+        from .notification_event_types import EVENT_CONFIG, cycle_repeat_minutes
+
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notification_repairs (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT
+            )
+        """)
+        if self.cursor.execute("SELECT 1 FROM notification_repairs WHERE name = ?",
+                               ("biweekly_cycle",)).fetchone():
+            return
+
+        four_weekly = 28 * 24 * 60
+        updated = 0
+        for event_type, config in EVENT_CONFIG.items():
+            if config.get("cycle_weeks") != 2:
+                continue
+            repeat_minutes = cycle_repeat_minutes(event_type)
+            self.cursor.execute("""
+                UPDATE bear_notifications
+                SET repeat_minutes = ?
+                WHERE event_type = ? AND repeat_minutes = ?
+            """, (repeat_minutes, event_type, four_weekly))
+            updated += self.cursor.rowcount
+
+        self.cursor.execute(
+            "INSERT INTO notification_repairs (name, applied_at) VALUES (?, ?)",
+            ("biweekly_cycle", datetime.now().isoformat(timespec="seconds")))
+        self.conn.commit()
+        if updated:
+            logger.info(f"Corrected {updated} notifications from a 4-week to a 2-week repeat")
+            print(f"[NOTIFICATIONS] Corrected {updated} notification(s) from a 4-week to a 2-week "
+                  f"repeat - the mine event runs every 2 weeks")
 
     def _apply_instance_descriptions(self):
         """One-time repair giving phase and legion embeds their own default text."""
@@ -377,8 +414,9 @@ class NotificationSystem(commands.Cog):
             "INSERT INTO notification_repairs (name, applied_at) VALUES (?, ?)",
             ("instance_descriptions", datetime.now().isoformat(timespec="seconds")))
         self.conn.commit()
-        logger.info(f"Applied per-instance default descriptions to {updated} notification embeds")
-        print(f"Applied per-instance default descriptions to {updated} notification embeds")
+        if updated:
+            logger.info(f"Applied per-instance default descriptions to {updated} notification embeds")
+            print(f"[NOTIFICATIONS] Applied per-instance default descriptions to {updated} notification embeds")
 
     async def cog_load(self):
 

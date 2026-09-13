@@ -15,7 +15,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from notification_event_types import (
     get_event_icon, get_event_config, calculate_next_occurrence, validate_time_slot,
     get_instance_defaults, get_instance_display_name,
-    calculate_crazy_joe_dates, get_reference_override, set_reference_override
+    calculate_crazy_joe_dates, get_reference_override, set_reference_override,
+    cycle_repeat_minutes
 )
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme
@@ -2804,8 +2805,8 @@ class WizardPreviewView(discord.ui.View):
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
 
                 elif event_name in ["Frostfire Mine", "Castle Battle", "SvS"]:
-                    # Every 4 weeks - handle times with phase as instance_id
-                    repeat_minutes = 28 * 24 * 60
+                    # Repeat follows each event's own cycle - Frostfire is 2-weekly, the others 4
+                    repeat_minutes = cycle_repeat_minutes(event_name) or 28 * 24 * 60
                     times = event_data.get("times", [])
                     processed_phases = set()
 

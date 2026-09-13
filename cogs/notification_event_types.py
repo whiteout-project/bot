@@ -130,10 +130,10 @@ EVENT_CONFIG = {
     "Frostfire Mine": {
         "emoji": "⛏️",
         "duration_minutes": 30,
-        "schedule_type": "global_monthly",
-        "fixed_days": "Monthly on Tuesday",
+        "schedule_type": "global_biweekly",
+        "fixed_days": "Every 2 weeks on Tuesday",
         "reference_date": "2025-11-18",
-        "cycle_weeks": 4,
+        "cycle_weeks": 2,
         "available_times": ["03:00", "05:00", "11:00", "14:00", "16:00", "18:00", "21:00"],
         "description": "The %e %n is opening soon! Come online and recall your troops if you are joining at this time.",
         "default_notification_type": 2,
@@ -307,6 +307,12 @@ def round_to_5min_slot(dt: datetime) -> datetime:
     """
     minute = (dt.minute // 5) * 5
     return dt.replace(minute=minute, second=0, microsecond=0)
+
+def cycle_repeat_minutes(event_type: str) -> Optional[int]:
+    """Minutes between occurrences of a fixed-cycle event, or None if it has no cycle."""
+    cycle_weeks = (get_event_config(event_type) or {}).get("cycle_weeks")
+    return cycle_weeks * 7 * 24 * 60 if cycle_weeks else None
+
 
 def calculate_next_occurrence(event_type: str, from_date: Optional[datetime] = None,
                               guild_id: Optional[int] = None) -> Optional[datetime]:

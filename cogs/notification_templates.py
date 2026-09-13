@@ -209,21 +209,25 @@ class NotificationTemplates(commands.Cog):
             image_url = config.get("image_url", "")
             thumbnail_url = config.get("thumbnail_url", "")
             description = config.get("description", "")
+            repeat_config = build_default_repeat_config(event_name, config)
 
             # Only update templates that haven't been customized (is_global = 1)
             self.cursor.execute("""
                 UPDATE notification_templates
-                SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?
+                SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?,
+                    repeat_config = ?
                 WHERE event_type = ? AND is_global = 1 AND instance_identifier IS NULL
-            """, (image_url, thumbnail_url, description, event_name))
+            """, (image_url, thumbnail_url, description, repeat_config, event_name))
 
             # Sub-event rows keep their own default wording
             for instance_id, instance_description in get_instance_defaults(event_name).items():
                 self.cursor.execute("""
                     UPDATE notification_templates
-                    SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?
+                    SET embed_image_url = ?, embed_thumbnail_url = ?, embed_description = ?,
+                        repeat_config = ?
                     WHERE event_type = ? AND is_global = 1 AND instance_identifier = ?
-                """, (image_url, thumbnail_url, instance_description, event_name, instance_id))
+                """, (image_url, thumbnail_url, instance_description, repeat_config,
+                      event_name, instance_id))
 
         self.conn.commit()
 
