@@ -1308,6 +1308,19 @@ async def redeem_giftcode_once(cog, player_id, giftcode, kid, session):
     log_entry_redeem += "-" * 50 + "\n"
     cog.giftlog.info(log_entry_redeem.strip())
 
+    # The server reports its per-minute budget and what is left of it. The
+    # redemption pacer reads cog.wos_rate_limit so it tracks the server's real
+    # number instead of a hardcoded guess.
+    try:
+        _limit = response_giftcode.headers.get("X-RateLimit-Limit")
+        if _limit is not None:
+            cog.wos_rate_limit = int(_limit)
+        _remaining = response_giftcode.headers.get("X-RateLimit-Remaining")
+        if _remaining is not None:
+            cog.wos_rate_remaining = int(_remaining)
+    except (TypeError, ValueError):
+        pass
+
     # Upstream hiccup: hand back to the retry cycle rather than mark the member failed.
     if response_giftcode.status_code in (429, 502, 503, 504):
         cog.processing_stats["server_validation_failure"] += 1
@@ -2125,9 +2138,21 @@ async def _resume_or_post_progress(cog, channel, embed, process):
 
 
 async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
-    MEMBER_PROCESS_DELAY = 1.0
     API_RATE_LIMIT_COOLDOWN = 60.0
     MAX_RETRY_CYCLES = 10
+    # The endpoint publishes its own ceiling and enforces it per-IP:
+    #     X-RateLimit-Limit: 30      (requests per minute)
+    # Measured 2026-09-16. Exceeding it returns HTTP 429, which this file maps
+    # to TIMEOUT_RETRY - so going faster than 30/min does not just fail, it
+    # costs each member a retry cycle and a 60s cooldown and ends up SLOWER.
+    # The old MEMBER_PROCESS_DELAY of 1.0s was 60/min, twice the limit, which is why
+    # large alliances see waves of rate-limit failures partway through a run.
+    #
+    # The window governor below spends the whole budget then waits for the reset,
+    # so this value is only the opening guess for the first window; after the
+    # first response the server's own X-RateLimit-Limit takes over.
+    RATE_LIMIT_PER_MIN = max(1, int(os.environ.get("WOS_RATE_LIMIT_PER_MIN", "27")))
+    REDEEM_CONCURRENCY = max(1, int(os.environ.get("WOS_REDEEM_CONCURRENCY", "3")))
 
     cog.logger.info(f"\nGiftOps: Starting use_giftcode_for_alliance for Alliance {alliance_id}, Code {giftcode}")
 
@@ -2249,6 +2274,78 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 active_members_to_process.append((fid, nickname, 0))
         cog.logger.info(f"GiftOps: Pre-processed {len(cached_member_statuses)} members from cache. {len(active_members_to_process)} remaining.")
 
+        # A duplicate FID would let two in-flight claims race past the cache check
+        # and redeem twice for the same member, so collapse them first.
+        _seen_fids = set()
+        _deduped = []
+        for _entry in active_members_to_process:
+            if _entry[0] in _seen_fids:
+                cog.logger.warning(f"GiftOps: duplicate FID {_entry[0]} in {alliance_name} roster - ignoring the repeat")
+                continue
+            _seen_fids.add(_entry[0])
+            _deduped.append(_entry)
+        active_members_to_process = _deduped
+
+        # --- Redemption pipeline -------------------------------------------
+        # Only the HTTP calls overlap. Everything downstream of the claim stays
+        # serial, so retry_queue, failed_users_dict and the embeds behave exactly
+        # as they did when this loop was one-member-at-a-time.
+        inflight_claims = {}
+        rate_limited_until = 0.0     # shared cooldown: one 40019 pauses every worker
+        # The limit is a FIXED 60s window, not a sliding one: the budget snaps
+        # back to full exactly 60s after the window's first request (measured
+        # 2026-09-16 - Remaining ran 29,28..19 then jumped straight back to 29).
+        #
+        # So evenly spacing requests is the wrong shape. It spends part of the
+        # window's budget and idles through the rest. Instead we spend the whole
+        # budget as fast as the network allows, then sleep until the window
+        # rolls. Same average rate, but no unused allowance and no 429s.
+        #
+        # The budget is read from each response, so this self-calibrates if the
+        # server's number ever changes; RATE_LIMIT_PER_MIN is only the opening
+        # guess before the first response arrives.
+        window_budget = RATE_LIMIT_PER_MIN
+        window_started = 0.0
+        WINDOW = 61.0            # 60s window plus a second of clock skew
+
+        async def _take_budget_slot():
+            """Claim one request from the current window, waiting for the next
+            window if this one is spent. Serialised by the event loop, so two
+            claims cannot take the same slot."""
+            nonlocal window_budget, window_started
+            while True:
+                now = time.time()
+                if now - window_started >= WINDOW:
+                    # First request of a new window starts the clock.
+                    window_started = now
+                    window_budget = getattr(cog, "wos_rate_limit", RATE_LIMIT_PER_MIN)
+                if rate_limited_until > now:
+                    await asyncio.sleep(rate_limited_until - now)
+                    continue
+                if window_budget > 0:
+                    window_budget -= 1
+                    return
+                # Budget spent: wait out the remainder of this window.
+                await asyncio.sleep(max(0.05, window_started + WINDOW - now))
+
+        async def _claim_one(fid):
+            await _take_budget_slot()
+            return await claim_giftcode_rewards_wos(
+                cog, fid, giftcode, removal_collector=removals)
+
+        def _start_claim(fid):
+            return asyncio.create_task(_claim_one(fid))
+
+        def _fill_pipeline():
+            """Keep REDEEM_CONCURRENCY claims in flight, reading ahead in the queue."""
+            if code_is_invalid:
+                return
+            for _f, _n, _c in active_members_to_process:
+                if len(inflight_claims) >= REDEEM_CONCURRENCY - 1:
+                    break
+                if _f not in inflight_claims:
+                    inflight_claims[_f] = _start_claim(_f)
+
         # Progress Embed
         embed = discord.Embed(title=f"{theme.giftIcon} Gift Code Redemption: {giftcode}", color=theme.emColor1)
         def update_embed_description(include_errors=False):
@@ -2324,6 +2421,9 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 if removals:
                     await apply_removals(cog, removals)
                     removals = []
+                for _t in inflight_claims.values():
+                    _t.cancel()
+                inflight_claims.clear()
                 raise PreemptedException()
 
             current_time = time.time()
@@ -2353,11 +2453,14 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
 
             cog.logger.info(f"GiftOps: Processing ID {fid} ({nickname}), Cycle {current_cycle_count + 1}/{MAX_RETRY_CYCLES}")
 
+            # Take this member's in-flight claim if the prefetcher already started
+            # it, otherwise start it now; then top the pipeline back up.
+            claim_task = inflight_claims.pop(fid, None) or _start_claim(fid)
+            _fill_pipeline()
+
             response_status = "ERROR"
             try:
-                await asyncio.sleep(random.uniform(MEMBER_PROCESS_DELAY * 0.7, MEMBER_PROCESS_DELAY * 1.3))
-                response_status = await claim_giftcode_rewards_wos(
-                    cog, fid, giftcode, removal_collector=removals)
+                response_status = await claim_task
             except Exception as claim_err:
                 cog.logger.exception(f"GiftOps: Unexpected error during claim for {fid}: {claim_err}")
                 response_status = "ERROR"
@@ -2460,6 +2563,10 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 fail_reason = f"Processing Error ({response_status})"
                 error_summary[response_status] = error_summary.get(response_status, 0) + 1
             elif response_status == "TIMEOUT_RETRY":
+                # One member being throttled means the whole pipeline backs off,
+                # not just this one - otherwise the other in-flight claims keep
+                # hammering while this member waits.
+                rate_limited_until = time.time() + API_RATE_LIMIT_COOLDOWN
                 if current_cycle_count + 1 < MAX_RETRY_CYCLES:
                     queue_for_retry = True
                     retry_delay = API_RATE_LIMIT_COOLDOWN
@@ -2523,6 +2630,14 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                     last_embed_update = current_time
                 except Exception as embed_edit_err:
                     cog.logger.warning(f"GiftOps: WARN - Failed to edit progress embed: {embed_edit_err}")
+
+        # Any claims still in flight belong to members we will no longer walk
+        # (invalid code, sign error, or an empty queue). Their DB writes already
+        # happened inside the claim, so cancelling only drops the status we were
+        # never going to read.
+        for _t in inflight_claims.values():
+            _t.cancel()
+        inflight_claims.clear()
 
         # Final Embed Update
         if not code_is_invalid:
