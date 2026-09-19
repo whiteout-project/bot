@@ -15,6 +15,7 @@ import discord
 
 from .pimp_my_bot import theme
 from .bear_track import _isolate_rtl, _ltr_line
+from .alliance_member_edit import new_member_name, new_member_name_input
 from . import alliance_power_changes
 from .attendance_ocr_parsers import (
     EVENT_TYPES,
@@ -1561,20 +1562,17 @@ class _StatsMvpEditView(discord.ui.View):
 # ── modals ────────────────────────────────────────────────────────────────
 
 async def _resolve_player_field(interaction: discord.Interaction,
-                                view: "EventReviewView", text: str):
-    """Resolve an ID or name to (fid, nickname, status, note). An ID not in the roster is
-    confirmed against the alliance's state and added with a placeholder name (names can't be
-    looked up anymore); `note` is an ephemeral message for the caller to surface."""
+                                view: "EventReviewView", text: str, new_name=None):
+    """Resolve an ID or name to (fid, nickname, status, note); an unknown ID is added under `new_name`."""
     text = (text or "").strip()
     if text.isdigit():
         fid = int(text)
         nick = view._lookup_nickname(fid)
         if nick:
             return fid, nick, "manual", f"{theme.verifiedIcon} Matched ID `{fid}` to **{_isolate_rtl(nick)}**."
-        # Not in the roster - confirm against the alliance's state and add as 'Player <fid>'.
         if not interaction.response.is_done():
             await interaction.response.defer()
-        added, nick, note = await _add_unknown_fid(interaction, view, fid)
+        added, nick, note = await _add_unknown_fid(interaction, view, fid, new_name=new_name)
         if added:
             view.roster = load_alliance_roster(view.session.alliance_id)
             return fid, nick, "manual", note
@@ -1589,9 +1587,8 @@ async def _resolve_player_field(interaction: discord.Interaction,
     return None, None, "no_match", None
 
 
-async def _add_unknown_fid(interaction, view, fid):
-    """Confirm an unknown fid against the alliance's state (one probe) and add it with a
-    placeholder name. Returns (added, nickname, note). Never moves a player from another alliance."""
+async def _add_unknown_fid(interaction, view, fid, new_name=None):
+    """Add a state-checked unknown fid under `new_name` -> (added, nickname, note); never moves other alliances' players."""
     from . import gift_state_resolver
     alliance_id = view.session.alliance_id
     with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
@@ -1611,14 +1608,14 @@ async def _add_unknown_fid(interaction, view, fid):
     if not verified:
         return False, None, (f"{theme.deniedIcon} Couldn't confirm ID `{fid}` in state `{alliance_kid}`. "
                              f"They may be in another state, or the ID is wrong. Add them under Alliance Management first.")
-    nick = f"Player {fid}"
+    nick = new_member_name(new_name, fid)
     with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
         conn.execute(
             "INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance) "
             "VALUES (?, ?, 0, ?, '', ?)",
             (fid, nick, str(kid), str(alliance_id)))
         conn.commit()
-    return True, nick, f"{theme.verifiedIcon} Added **{nick}** (ID `{fid}`) to the alliance and matched the row."
+    return True, nick, f"{theme.verifiedIcon} Added **{_isolate_rtl(nick)}** (ID `{fid}`) to the alliance and matched the row."
 
 
 class _StatEditModal(discord.ui.Modal):
@@ -1734,6 +1731,8 @@ class _EditMergedRowModal(discord.ui.Modal):
             self.add_item(self.res_value_input)
         else:
             self.res_value_input = None
+        self.name_input = new_member_name_input(merged_row.get("name"), merged_row.get("fid"))
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not self.player_input.value.strip():
@@ -1744,7 +1743,7 @@ class _EditMergedRowModal(discord.ui.Modal):
             return
 
         fid, nickname, status, note = await _resolve_player_field(
-            interaction, self.view, self.player_input.value)
+            interaction, self.view, self.player_input.value, new_name=self.name_input.value)
         name = self.player_input.value.strip()
         displaced = []
         # Update the row in place (keeps its OCR name for the alias DB); if a
@@ -1815,8 +1814,10 @@ class _EditRowModal(discord.ui.Modal):
             default=str(row.get("value") or 0),
             required=True, max_length=15,
         )
+        self.name_input = new_member_name_input(row.get("name"), row.get("fid"))
         self.add_item(self.player_input)
         self.add_item(self.value_input)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not self.player_input.value.strip():
@@ -1832,7 +1833,7 @@ class _EditRowModal(discord.ui.Modal):
             return
 
         fid, nickname, status, note = await _resolve_player_field(
-            interaction, self.view, self.player_input.value)
+            interaction, self.view, self.player_input.value, new_name=self.name_input.value)
         displaced = []
         if self.local_idx is not None and self.local_idx < len(self.bucket):
             # Update in place so the original OCR name (alias key) and _kind survive.
@@ -1867,8 +1868,10 @@ class _AddRowModal(discord.ui.Modal):
             label=f"Value ({value_label})"[:45],
             required=True, max_length=15,
         )
+        self.name_input = new_member_name_input()
         self.add_item(self.player_input)
         self.add_item(self.value_input)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         player_text = self.player_input.value.strip()
@@ -1885,7 +1888,7 @@ class _AddRowModal(discord.ui.Modal):
             return
 
         fid, nickname, status, note = await _resolve_player_field(
-            interaction, self.view, player_text)
+            interaction, self.view, player_text, new_name=self.name_input.value)
         new_row = {
             "name": nickname or player_text,
             "value": value,

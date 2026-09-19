@@ -10,7 +10,7 @@ from .pimp_my_bot import theme
 from .alliance import check_alliance_state
 from .gift_state_resolver import verify_add_state, get_alliance_kid
 from .bot_level_mapping import parse_furnace_level, parse_state
-from .alliance_member_edit import apply_member_edit
+from .alliance_member_edit import apply_member_edit, new_member_name
 
 logger = logging.getLogger('alliance')
 
@@ -267,7 +267,7 @@ class AllianceRegistration(commands.Cog):
             await interaction.followup.send(f"{theme.deniedIcon} {state_error}", ephemeral=True)
             return
 
-        user_data = {"nickname": name or f"Player {fid}", "stove_lv": furnace_lv or 0, "kid": kid}
+        user_data = {"nickname": new_member_name(name, fid), "stove_lv": furnace_lv or 0, "kid": kid}
         self._insert_new_user(fid, user_data, alliance, caller_id, current_server_id)
         await self._send_register_success(interaction, fid, caller_id, action="registered")
 

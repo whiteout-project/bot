@@ -21,6 +21,9 @@ from datetime import datetime, date, timedelta, timezone
 from cogs.attendance import MATPLOTLIB_AVAILABLE
 from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
 from .permission_handler import PermissionManager
+from .alliance_member_edit import (
+    ALLIANCE_TAG_RE as _ALLIANCE_TAG_RE, is_placeholder_name, new_member_name, new_member_name_input,
+)
 import numpy as np
 
 logger = logging.getLogger('bot')
@@ -351,9 +354,6 @@ _RALLIES_MARKER_RE = re.compile(
 _BARE_SMALL_INT_RE = re.compile(r'(?<![\d,\.])\b\d{1,3}\b(?![\d,\.])')
 # Ranking-page title, e.g. "Trap 2 Damage Rewards".
 _REWARDS_TRAP_RE = re.compile(r'Trap\s*(\d)\s*Damage', re.IGNORECASE)
-# Alliance tag: exactly 3 alphanumerics in brackets. Fixed in-game, so a name's
-# own brackets won't match.
-_ALLIANCE_TAG_RE = re.compile(r'\[[A-Za-z0-9]{3}\]')
 # Trailing "Damage Points" label (\s* also catches a glued "DamagePoints").
 _ROW_LABEL_SUFFIX_RE = re.compile(r'(?i)\s*(?:damage\s*points|damage|points)\s*:?\s*$')
 # Leading <=3-char tokens (a bracket-less alliance tag or label leak) before a real 4+ char name.
@@ -363,6 +363,13 @@ _EXPIRES_MARKER_RE = re.compile(
     r'Expire[sd]?|期限|有効期限|만료|تنتهي|Истекает',
     re.IGNORECASE,
 )
+
+
+def is_readable_name(name: str) -> bool:
+    """3+ letters, or one 3+ char letters-and-digits token such as `6m3`."""
+    return sum(c.isalpha() for c in name) >= 3 or any(
+        sum(c.isalnum() for c in token) >= 3 and any(c.isalpha() for c in token)
+        for token in name.split())
 
 
 def extract_hunt_date(text: str) -> str | None:
@@ -533,8 +540,7 @@ def parse_player_rows(text: str, after_pos: int = None):
         # Strip leading ≤3-char tokens (label leak from previous row's
         # "Damage Points:") when followed by a real 4+ char name.
         name = _LEADING_SHORT_TOKEN_RE.sub('', name)
-        # Blank when chunk is mostly non-letters (status-bar leak).
-        if sum(c.isalpha() for c in name) < 3:
+        if not is_readable_name(name):  # status-bar leak
             name = ''
         rows.append({'name': name, 'damage': damages[i], 'rank': rank})
     return rows
@@ -4176,7 +4182,7 @@ class BearHuntReviewView(discord.ui.View):
             )
         unreadable_rows = sum(
             1 for r in self.rows
-            if sum(c.isalpha() for c in (r.get('name') or '')) < 3
+            if not is_readable_name(r.get('name') or '')
         )
         if self.rows and unreadable_rows / len(self.rows) >= 0.25:
             parts.append(
@@ -4883,9 +4889,11 @@ class EditRowModal(discord.ui.Modal):
             default=str(row['rank']) if row['rank'] is not None else "",
             required=False, max_length=3,
         )
+        self.name_input = new_member_name_input(row.get('name'), row.get('fid'))
         self.add_item(self.player_input)
         self.add_item(self.damage_input)
         self.add_item(self.rank_input)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction):
         if self.row_idx >= len(self.review_view.rows):
@@ -4910,6 +4918,7 @@ class EditRowModal(discord.ui.Modal):
             raw_name=edit_row.get('name'),
             current_fid=edit_row.get('fid'),
             current_name=edit_row.get('nickname') or edit_row.get('name'),
+            new_name=self.name_input.value,
         )
 
 
@@ -4928,9 +4937,11 @@ class AddRowModal(discord.ui.Modal):
         self.rank_input = discord.ui.TextInput(
             label="Rank (optional)", required=False, max_length=3,
         )
+        self.name_input = new_member_name_input()
         self.add_item(self.player_input)
         self.add_item(self.damage_input)
         self.add_item(self.rank_input)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction):
         text = self.player_input.value.strip()
@@ -4946,6 +4957,7 @@ class AddRowModal(discord.ui.Modal):
         await _resolve_and_apply(
             interaction, self.review_view, row_id=None,
             text=text, damage=damage, rank=rank, raw_name=text,
+            new_name=self.name_input.value,
         )
 
 
@@ -6280,7 +6292,7 @@ def _fid_in_hunt(view, fid) -> bool:
 
 
 async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, raw_name,
-                             current_fid=None, current_name=None):
+                             current_fid=None, current_name=None, new_name=None):
     """Resolve `text` (a roster name or an ID) and apply it to the target row.
     Known members match immediately (moving the match off any other row). An
     unknown ID is confirmed against the alliance's state and offered for
@@ -6344,7 +6356,7 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
                 ephemeral=True)
             return
         await _offer_add_by_id(interaction, view, row_id=row_id, fid=fid,
-                               damage=damage, rank=rank, raw_name=raw_name)
+                               damage=damage, rank=rank, raw_name=raw_name, new_name=new_name)
         return
 
     # Name entered — fuzzy-match the roster only (can't API-lookup by name).
@@ -6366,10 +6378,8 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
             f"{theme.deniedIcon} Failed to update row.", ephemeral=True)
 
 
-async def _offer_add_by_id(interaction, view, *, row_id, fid, damage, rank, raw_name):
-    """Confirm an unknown fid against the alliance's state (one probe), then show a confirm card.
-    Event participants are in the alliance's state, so a single probe confirms the ID; names
-    can no longer be looked up, so the member is added as 'Player <fid>'."""
+async def _offer_add_by_id(interaction, view, *, row_id, fid, damage, rank, raw_name, new_name=None):
+    """Confirm an unknown fid is in the alliance's state (one probe), then show the add confirm card."""
     await interaction.response.defer()
     from . import gift_state_resolver
     gift_cog = view.cog.bot.get_cog("GiftOperations")
@@ -6396,16 +6406,15 @@ async def _offer_add_by_id(interaction, view, *, row_id, fid, damage, rank, raw_
     parent_message = await interaction.original_response()  # the review/editor message to refresh on confirm
     confirm = PlayerAddConfirmView(
         view=view, parent_message=parent_message, row_id=row_id, fid=fid, kid=kid,
-        damage=damage, rank=rank, raw_name=raw_name)
+        damage=damage, rank=rank, raw_name=raw_name, nickname=new_name)
     await interaction.followup.send(embed=confirm.build_embed(), view=confirm, ephemeral=True)
 
 
 class PlayerAddConfirmView(discord.ui.View):
-    """Confirm adding a typed-in fid to the alliance and matching the row. The fid was
-    confirmed in the alliance's state by a single probe; names can't be looked up, so the
-    member is added as 'Player <fid>'."""
+    """Confirm adding a state-checked fid to the alliance under the typed name, and matching the row."""
 
-    def __init__(self, *, view, parent_message, row_id, fid, kid, damage, rank, raw_name):
+    def __init__(self, *, view, parent_message, row_id, fid, kid, damage, rank, raw_name,
+                 nickname=None):
         super().__init__(timeout=120)
         self.parent = view
         self.parent_message = parent_message
@@ -6416,6 +6425,7 @@ class PlayerAddConfirmView(discord.ui.View):
         self.damage = damage
         self.rank = rank
         self.raw_name = raw_name or ""
+        self.nickname = new_member_name(nickname, fid)
         confirm_btn = discord.ui.Button(label="Confirm & Add", emoji=theme.verifiedIcon,
                                         style=discord.ButtonStyle.success)
         confirm_btn.callback = self._on_confirm
@@ -6425,17 +6435,17 @@ class PlayerAddConfirmView(discord.ui.View):
         self.add_item(confirm_btn)
         self.add_item(cancel_btn)
 
-    def _nickname(self):
-        return f"Player {self.fid}"
-
     def build_embed(self) -> discord.Embed:
+        name_line = f"`{_isolate_rtl(self.nickname)}`"
+        if is_placeholder_name(self.nickname, self.fid):
+            name_line += " - no name given, rename them later from the member list"
         return discord.Embed(
             title=f"{theme.userIcon} Add Player to Alliance?",
             description=(
                 f"{theme.upperDivider}\n"
                 f"**{theme.fidIcon} ID:** `{self.fid}`\n"
                 f"**{theme.globeIcon} State:** `{self.kid}` (confirmed)\n"
-                f"**{theme.userIcon} Name:** `Player {self.fid}` - names can't be looked up, rename later if needed\n"
+                f"**{theme.userIcon} Name:** {name_line}\n"
                 f"{theme.lowerDivider}\n"
                 f"This will add them to **this alliance** and match the bear row."),
             color=theme.emColor1)
@@ -6444,7 +6454,7 @@ class PlayerAddConfirmView(discord.ui.View):
         if not await check_interaction_user(interaction, self.original_user_id):
             return
         cog = self.parent.cog
-        nick = self._nickname()
+        nick = self.nickname
         try:
             cog.users_conn.execute(
                 "INSERT OR REPLACE INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance) "
@@ -6498,9 +6508,11 @@ class EditSavedPlayerModal(discord.ui.Modal):
             label="Rank (optional)",
             default=str(row['rank']) if row['rank'] is not None else "",
             required=False, max_length=3)
+        self.name_input = new_member_name_input(row.get('raw_name'), row.get('fid'))
         self.add_item(self.player_input)
         self.add_item(self.damage_input)
         self.add_item(self.rank_input)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         cur = self.parent_view.cog.bear_cursor
@@ -6536,7 +6548,8 @@ class EditSavedPlayerModal(discord.ui.Modal):
             text=self.player_input.value, damage=damage, rank=rank,
             raw_name=self.row.get('raw_name'),
             current_fid=self.row.get('fid'),
-            current_name=self.row.get('nickname') or self.row.get('raw_name'))
+            current_name=self.row.get('nickname') or self.row.get('raw_name'),
+            new_name=self.name_input.value)
 
 
 class AddSavedPlayerModal(discord.ui.Modal):
@@ -6548,9 +6561,11 @@ class AddSavedPlayerModal(discord.ui.Modal):
         self.player_input = discord.ui.TextInput(label="Player (ID or name)", required=True, max_length=80)
         self.damage_input = discord.ui.TextInput(label="Damage", required=True, max_length=30)
         self.rank_input = discord.ui.TextInput(label="Rank (optional)", required=False, max_length=3)
+        self.name_input = new_member_name_input()
         self.add_item(self.player_input)
         self.add_item(self.damage_input)
         self.add_item(self.rank_input)
+        self.add_item(self.name_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         text = self.player_input.value.strip()
@@ -6574,7 +6589,8 @@ class AddSavedPlayerModal(discord.ui.Modal):
                 return
         await _resolve_and_apply(
             interaction, self.parent_view, row_id=None,
-            text=text, damage=damage, rank=rank, raw_name=text)
+            text=text, damage=damage, rank=rank, raw_name=text,
+            new_name=self.name_input.value)
 
 
 # ---------------------------------------------------------------------------

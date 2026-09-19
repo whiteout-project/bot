@@ -1,12 +1,15 @@
 """Power / Combat Power change history: record, read, and format deltas."""
 import logging
+import os
 import sqlite3
+from contextlib import closing
 
 from .pimp_my_bot import theme
 
 logger = logging.getLogger(__name__)
 
 _CHANGES_DB = "db/changes.sqlite"
+_tables_ready: set[str] = set()
 
 METRICS = {
     "power": {
@@ -23,7 +26,11 @@ METRICS = {
 
 
 def ensure_tables() -> None:
-    with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
+    """Create the history tables once per database file rather than on every read and write."""
+    path = os.path.abspath(_CHANGES_DB)
+    if path in _tables_ready:
+        return
+    with closing(sqlite3.connect(_CHANGES_DB, timeout=30.0)) as conn:
         for m in METRICS.values():
             conn.execute(
                 f"CREATE TABLE IF NOT EXISTS {m['table']} ("
@@ -38,6 +45,7 @@ def ensure_tables() -> None:
                 f"ON {m['table']}(fid)"
             )
         conn.commit()
+    _tables_ready.add(path)
 
 
 def _pct(old, new):
@@ -54,7 +62,7 @@ def record_change(fid, metric, old_value, new_value, change_date) -> None:
     m = METRICS[metric]
     try:
         ensure_tables()
-        with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
+        with closing(sqlite3.connect(_CHANGES_DB, timeout=30.0)) as conn:
             conn.execute(
                 f"INSERT INTO {m['table']} "
                 f"(fid, {m['old_col']}, {m['new_col']}, change_date) "

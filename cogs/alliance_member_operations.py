@@ -9,10 +9,11 @@ import asyncio
 import time
 import logging
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import csv
 import io
+from contextlib import closing
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message, disable_expired_view
 from .process_queue import MEMBER_ADD, PreemptedException
@@ -21,7 +22,7 @@ from .alliance import resolve_alliance_kid, state_lock_reason, STATE_CHECK_UNAVA
 from .gift_state_resolver import verify_add_state
 from .alliance_member_edit import (
     BulkMemberEditModal, MemberEditModal, apply_edit_lines, build_prefill,
-    edit_result_embed, enqueue_catchups, is_placeholder_name,
+    edit_result_embed, enqueue_catchups, is_placeholder_name, new_member_name, parse_power,
 )
 from . import alliance_power_changes
 
@@ -31,21 +32,31 @@ _ID_HEADERS = {"id", "fid", "player id", "player_id"}
 _NAME_HEADERS = {"name", "nickname", "player name", "player_name"}
 _LEVEL_HEADERS = {"fc_level", "fc level", "furnace", "furnace_lv", "furnace level", "level"}
 _STATE_HEADERS = {"state", "kid", "kingdom", "home state"}
+_POWER_HEADERS = {"power"}
+_COMBAT_POWER_HEADERS = {"combat power", "combat_power", "cp"}
+
+
+def _power_cell(value: str) -> str:
+    """Normalize to plain digits so the value survives the comma-separated edit line."""
+    return str(parse_power(value) or value.replace(",", ""))
 
 
 def _extract_profiles_from_csv(text: str) -> dict:
-    """{fid: (name, level, state)} from an export-shaped CSV; {} without a header row."""
+    """{fid: (name, level, state, power, combat_power)} from an export-shaped CSV; {} without a header row."""
     rows = list(csv.reader(io.StringIO(text.strip())))
     if len(rows) < 2:
         return {}
     header = [h.strip().lower() for h in rows[0]]
-    id_col = next((i for i, h in enumerate(header) if h in _ID_HEADERS), None)
+
+    def _col(names):
+        return next((i for i, h in enumerate(header) if h in names), None)
+
+    id_col = _col(_ID_HEADERS)
     if id_col is None:
         return {}
-    name_col = next((i for i, h in enumerate(header) if h in _NAME_HEADERS), None)
-    level_col = next((i for i, h in enumerate(header) if h in _LEVEL_HEADERS), None)
-    state_col = next((i for i, h in enumerate(header) if h in _STATE_HEADERS), None)
-    if name_col is None and level_col is None and state_col is None:
+    cols = [_col(_NAME_HEADERS), _col(_LEVEL_HEADERS), _col(_STATE_HEADERS),
+            _col(_POWER_HEADERS), _col(_COMBAT_POWER_HEADERS)]
+    if all(c is None for c in cols):
         return {}
 
     def _cell(row, col):
@@ -58,9 +69,10 @@ def _extract_profiles_from_csv(text: str) -> dict:
         fid = row[id_col].strip()
         if not fid.isdigit():
             continue
-        name, level, state = _cell(row, name_col), _cell(row, level_col), _cell(row, state_col)
-        if name or level or state:
-            profiles[fid] = (name, level, state)
+        name, level, state, power, combat_power = (_cell(row, c) for c in cols)
+        profile = (name, level, state, _power_cell(power), _power_cell(combat_power))
+        if any(profile):
+            profiles[fid] = profile
     return profiles
 
 
@@ -220,29 +232,8 @@ class MemberListView(discord.ui.View):
         self.filter_id = ""
         self.filter_state = ""
         self.filter_unnamed = False
-        self._load_power()
+        self._reload_members()
         self._build_components()
-
-    def _load_power(self):
-        """Merge Power / Combat Power (+ timestamps) onto each member by fid (may be None)."""
-        for m in self.all_members:
-            m['power'] = m['combat_power'] = None
-            m['power_updated_at'] = m['combat_power_updated_at'] = None
-        try:
-            with sqlite3.connect('db/users.sqlite') as db:
-                rows = db.execute(
-                    "SELECT fid, power, power_updated_at, combat_power, "
-                    "combat_power_updated_at FROM users WHERE alliance = ?",
-                    (self.alliance_id,),
-                ).fetchall()
-        except sqlite3.OperationalError:
-            return
-        by_fid = {r[0]: r for r in rows}
-        for m in self.all_members:
-            r = by_fid.get(m['fid'])
-            if r:
-                (_, m['power'], m['power_updated_at'],
-                 m['combat_power'], m['combat_power_updated_at']) = r
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author_id:
@@ -364,6 +355,10 @@ class MemberListView(discord.ui.View):
              f"**Highest:** `{max_label}`  ·  **Avg:** `{avg_label}`"),
             f"{theme.listIcon} **Sort:** `{self.SORTS[self.sort_idx][0]}`",
         ]
+        if any(m.get('power') is not None or m.get('combat_power') is not None
+               for m in self.all_members):
+            header.append(f"{theme.infoIcon} **PWR / CPWR:** Power and Combat Power, "
+                          "from screenshot uploads or Edit")
         unnamed_count = len(self._unnamed())
         if unnamed_count:
             hint = "  ·  select one and press Edit, or use Bulk Edit" if self.CAN_EDIT else ""
@@ -394,12 +389,12 @@ class MemberListView(discord.ui.View):
                 line1 = _ltr_line(f"`{offset:>3}.` {theme.userIcon} **{nick}**")
                 line2 = f"     `{level}` · `ID {m['fid']}` · `State {m['kid']}`"
                 row_lines = [line1, line2]
-                if m.get('power') is not None or m.get('combat_power') is not None:
-                    pwr = []
-                    if m.get('power') is not None:
-                        pwr.append(f"{theme.chartIcon} PWR: {_compact_power(m['power'])}")
-                    if m.get('combat_power') is not None:
-                        pwr.append(f"{theme.shieldIcon} CPWR: {int(m['combat_power']):,}")
+                pwr = []
+                if m.get('power') is not None:
+                    pwr.append(f"`PWR {_compact_power(m['power'])}`")
+                if m.get('combat_power') is not None:
+                    pwr.append(f"`CPWR {int(m['combat_power']):,}`")
+                if pwr:
                     row_lines.append("     " + " · ".join(pwr))
                 rows.append("\n".join(row_lines))
             body = "\n".join(rows)
@@ -450,19 +445,26 @@ class MemberListView(discord.ui.View):
         await self._rerender(interaction)
 
     def _reload_members(self):
-        """Re-read names/levels/state so the list shows what was just saved."""
+        """Re-read names/levels/state/power so the list shows what is saved."""
+        for m in self.all_members:
+            for key in ('power', 'power_updated_at', 'combat_power', 'combat_power_updated_at'):
+                m.setdefault(key, None)
         try:
-            with sqlite3.connect('db/users.sqlite', timeout=30.0) as db:
+            with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as db:
                 rows = db.execute(
-                    "SELECT fid, nickname, furnace_lv, kid FROM users WHERE alliance = ?",
+                    "SELECT fid, nickname, furnace_lv, kid, power, power_updated_at, "
+                    "combat_power, combat_power_updated_at FROM users WHERE alliance = ?",
                     (str(self.alliance_id),)).fetchall()
         except sqlite3.Error as e:
-            logger.warning(f"Member list: could not reload after edit: {e}")
+            logger.warning(f"Member list: could not load members: {e}")
             return
-        fresh = {fid: (nick or '', fl or 0, kid) for fid, nick, fl, kid in rows}
+        fresh = {row[0]: row for row in rows}
         for m in self.all_members:
-            if m['fid'] in fresh:
-                m['nickname'], m['furnace_lv'], m['kid'] = fresh[m['fid']]
+            row = fresh.get(m['fid'])
+            if row:
+                (_, nick, level, m['kid'], m['power'], m['power_updated_at'],
+                 m['combat_power'], m['combat_power_updated_at']) = row
+                m['nickname'], m['furnace_lv'] = nick or '', level or 0
 
     async def refresh_after_edit(self, interaction: discord.Interaction, note,
                                  already_responded: bool = False):
@@ -489,7 +491,8 @@ class MemberListView(discord.ui.View):
             return
         await interaction.response.send_modal(MemberEditModal(
             self, fid, member['nickname'], member['furnace_lv'], self.alliance_id,
-            kid=member.get('kid')))
+            kid=member.get('kid'), power=member.get('power'),
+            combat_power=member.get('combat_power')))
 
     async def _on_bulk_edit(self, interaction: discord.Interaction):
         """Prefill from the selection, else the current page."""
@@ -715,27 +718,27 @@ class ManageMembersView(MemberListView):
         edit_btn.callback = self._on_edit_selected
         self.add_item(edit_btn)
 
+        bulk_btn = discord.ui.Button(
+            label="Bulk Edit", emoji=theme.editListIcon,
+            style=discord.ButtonStyle.primary, row=3,
+        )
+        bulk_btn.callback = self._on_bulk_edit
+        self.add_item(bulk_btn)
+
+        # Row 4: file transfer + back to alliance hub
         import_btn = discord.ui.Button(
             label="Import", emoji=theme.importIcon,
-            style=discord.ButtonStyle.success, row=3,
+            style=discord.ButtonStyle.success, row=4,
         )
         import_btn.callback = self._on_import
         self.add_item(import_btn)
 
         export_btn = discord.ui.Button(
             label="Export", emoji=theme.exportIcon,
-            style=discord.ButtonStyle.success, row=3,
+            style=discord.ButtonStyle.success, row=4,
         )
         export_btn.callback = self._on_export
         self.add_item(export_btn)
-
-        # Row 4: bulk edit + back to alliance hub
-        bulk_btn = discord.ui.Button(
-            label="Bulk Edit", emoji=theme.editListIcon,
-            style=discord.ButtonStyle.primary, row=4,
-        )
-        bulk_btn.callback = self._on_bulk_edit
-        self.add_item(bulk_btn)
 
         back_btn = discord.ui.Button(
             label="Back", emoji=theme.backIcon,
@@ -768,9 +771,10 @@ class ManageMembersView(MemberListView):
                 f"**Format**\n"
                 f"{theme.upperDivider}\n"
                 f"• Header row with an **`ID`** (or `FID`) column, or the bot's export file as-is.\n"
-                f"• Add a **`Name`** and/or **`FC Level`** column to set them. Members already "
-                f"in the alliance get updated, new ones are added already named.\n"
-                f"• Levels take either form: `82` or `FC 10 - 2`.\n"
+                f"• Add **`Name`**, **`FC Level`**, **`State`**, **`Power`** or **`Combat Power`** "
+                f"columns to set them. Members already in the alliance get updated, new ones "
+                f"are added already named.\n"
+                f"• Levels take either form: `82` or `FC 10 - 2`. Power takes `134512345` or `134.5M`.\n"
                 f"• A plain list of IDs (one per line or comma-separated) works too.\n"
                 f"{theme.lowerDivider}\n\n"
                 f"{theme.boltIcon} Export this alliance, fill in the names in a spreadsheet, "
@@ -829,8 +833,8 @@ class ManageMembersView(MemberListView):
         profiles = _extract_profiles_from_csv(ids)
         known = await asyncio.to_thread(self._known_fids)
         existing_lines = "\n".join(
-            f"{fid}, {name}, {level}, {state}"
-            for fid, (name, level, state) in profiles.items() if fid in known
+            f"{fid}, {', '.join(profile)}"
+            for fid, profile in profiles.items() if fid in known
         )
         updated, skipped, errors, caught = (0, 0, [], 0)
         if existing_lines:
@@ -1926,14 +1930,21 @@ class AllianceMemberOperations(commands.Cog):
 
                     # State comes from the add-path check above so locks still apply;
                     # CSV state only updates existing members.
-                    csv_name, csv_level, _csv_state = (profiles or {}).get(str(fid), ("", "", ""))
-                    nickname = csv_name.strip() or f"Player {fid}"
+                    csv_name, csv_level, _csv_state, csv_power, csv_combat_power = \
+                        (profiles or {}).get(str(fid), ("", "", "", "", ""))
+                    nickname = new_member_name(csv_name, fid)
                     furnace_lv = parse_furnace_level(csv_level) or 0
+                    power = parse_power(csv_power)
+                    combat_power = parse_power(csv_combat_power)
+                    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                     try:  # Pre-filtered, so this ID should not already exist.
                         self.c_users.execute("""
-                            INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance)
-                            VALUES (?, ?, ?, ?, NULL, ?)
-                        """, (fid, nickname, furnace_lv, kid, alliance_id))
+                            INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance,
+                                               power, power_updated_at, combat_power, combat_power_updated_at)
+                            VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+                        """, (fid, nickname, furnace_lv, kid, alliance_id,
+                              power, now_iso if power else None,
+                              combat_power, now_iso if combat_power else None))
                         self.conn_users.commit()
 
                         with open(self.log_file, 'a', encoding='utf-8') as f:

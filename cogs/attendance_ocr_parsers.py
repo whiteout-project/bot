@@ -209,7 +209,7 @@ def _parse_compact_int(token: str) -> Optional[int]:
     if m:
         val = float(m.group(1))
         mult = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}[m.group(2).lower()]
-        return int(val * mult)
+        return round(val * mult)  # int() truncates float error: 4.35M -> 4349999
 
     # No suffix. Strip comma always; strip dot only when it's followed by
     # exactly 3 digits (then a non-digit or end) — that's EU thousands format.

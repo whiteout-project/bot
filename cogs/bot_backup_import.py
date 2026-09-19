@@ -11,6 +11,7 @@ from datetime import datetime
 
 import discord
 
+from .alliance_member_edit import new_member_name
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, notify_view_expired
 
@@ -169,7 +170,7 @@ def _import_players(js, users_db, gt, mapping, stats):
         if users_db.execute("SELECT 1 FROM users WHERE fid = ?", (p["fid"],)).fetchone():
             stats["players_skipped_existing"] += 1
             continue
-        nickname = p["nickname"] or f"Player {p['fid']}"
+        nickname = new_member_name(p["nickname"], p["fid"])
         users_db.execute(
             "INSERT INTO users (fid, nickname, furnace_lv, kid, alliance, discord_id) VALUES (?,?,?,?,?,?)",
             (p["fid"], nickname, p["furnace_level"] or 0, p["state"], local_alliance, _int(p["user_id"])))

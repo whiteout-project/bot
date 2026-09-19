@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from .pimp_my_bot import theme
+from .alliance_member_edit import new_member_name
 from .bot_level_mapping import LEVEL_MAPPING
 
 logger = logging.getLogger('alliance')
@@ -108,7 +109,7 @@ class WCommand(commands.Cog):
                     alliance_info = acursor.fetchone()
 
             embed = discord.Embed(
-                title=f"{theme.userIcon} {nickname or f'Player {fid}'}",
+                title=f"{theme.userIcon} {new_member_name(nickname, fid)}",
                 description=(
                     f"{theme.upperDivider}\n"
                     f"**{theme.fidIcon} ID:** `{fid}`\n"

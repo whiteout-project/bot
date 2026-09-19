@@ -14,7 +14,7 @@ from discord.ext import tasks
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message
 from .bot_level_mapping import LEVEL_MAPPING, format_furnace_level, parse_state
-from .alliance_member_edit import parse_edit_line
+from .alliance_member_edit import new_member_name, parse_edit_line
 from .alliance import check_alliance_state
 from .gift_state_resolver import verify_add_state, is_multistate
 
@@ -30,7 +30,7 @@ def parse_id_post(content):
         parsed = parse_edit_line(text)
         if isinstance(parsed, str):
             return None
-        fid, name, level, state = parsed
+        fid, name, level, state = parsed[:4]  # members can't self-report power
         return int(fid), name, level, state
 
     parts = text.split()
@@ -544,7 +544,7 @@ class AllianceIDChannel(commands.Cog):
                 await message.reply(f"{theme.deniedIcon} {state_error}", delete_after=delete_after)
                 return
 
-            nickname = given_name or f"Player {fid}"
+            nickname = new_member_name(given_name, fid)
             furnace_lv = given_level or 0
             try:
                 with closing(sqlite3.connect('db/users.sqlite')) as users_db, users_db:

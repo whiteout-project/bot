@@ -1,33 +1,68 @@
-"""Editing member names, furnace levels and states by hand.
+"""Editing member names, furnace levels, states and power by hand.
 
 The player API no longer returns names or levels, so admins maintain them here.
 """
 
 import asyncio
 import logging
+import re
 import sqlite3
-from datetime import datetime
+from contextlib import closing
+from datetime import datetime, timezone
 
 import discord
 
+from . import alliance_power_changes
+from .attendance_ocr_parsers import _parse_compact_int
 from .bot_level_mapping import format_furnace_level, parse_furnace_level, parse_state
 from .gift_state_resolver import set_user_kid
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
+from .pimp_my_bot import theme, check_interaction_user
 
 logger = logging.getLogger(__name__)
 
 PLACEHOLDER_PREFIX = "Player "
+NEW_NAME_LABEL = "Name, if adding a new player (optional)"
+# In-game alliance tag: exactly 3 alphanumerics in brackets, so a name's own brackets won't match.
+ALLIANCE_TAG_RE = re.compile(r"\[[A-Za-z0-9]{3}\]")
+
+_POWER_METRICS = (("power", "power"), ("combat_power", "combat power"))
+
+
+def placeholder_name(fid) -> str:
+    return f"{PLACEHOLDER_PREFIX}{fid}"
 
 
 def is_placeholder_name(nickname, fid) -> bool:
     """True when a member still carries the auto-generated 'Player <id>' name."""
-    return str(nickname or "").strip() == f"{PLACEHOLDER_PREFIX}{fid}"
+    return str(nickname or "").strip() == placeholder_name(fid)
+
+
+def new_member_name(name, fid) -> str:
+    """The name typed for a new member, or the placeholder when none was given."""
+    return (name or "").strip() or placeholder_name(fid)
+
+
+def suggested_name(ocr_name) -> str:
+    """The screenshot's name without its [TAG], or "" when it holds no letters."""
+    name = " ".join(ALLIANCE_TAG_RE.sub(" ", ocr_name or "").split())
+    return name[:100] if any(c.isalpha() for c in name) else ""
+
+
+def new_member_name_input(row_name=None, fid=None):
+    """Name field for ID entry forms, pre-filled from an unmatched row's screenshot name."""
+    return discord.ui.TextInput(
+        label=NEW_NAME_LABEL,
+        placeholder="Only used when the ID isn't in the alliance yet",
+        default="" if fid else suggested_name(row_name),
+        required=False,
+        max_length=100,
+    )
 
 
 def _log_change(table: str, fid, old, new):
     """Record a manual edit in the same history the sync used to write."""
     try:
-        with sqlite3.connect('db/changes.sqlite', timeout=30.0) as conn:
+        with closing(sqlite3.connect('db/changes.sqlite', timeout=30.0)) as conn:
             columns = ("old_nickname", "new_nickname") if table == "nickname_changes" \
                 else ("old_furnace_lv", "new_furnace_lv")
             conn.execute(
@@ -40,21 +75,26 @@ def _log_change(table: str, fid, old, new):
         logger.warning(f"Member edit: could not write {table} history for {fid}: {e}")
 
 
-def apply_member_edit(fid, *, nickname=None, furnace_lv=None, kid=None, alliance_id=None):
-    """Write a member's name/level/state; returns the fields that changed.
-    `alliance_id` scopes the edit so an admin can't touch another alliance's member."""
-    changed = []
-    with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
-        if alliance_id is None:
-            row = conn.execute(
-                "SELECT nickname, furnace_lv, kid FROM users WHERE fid = ?", (fid,)).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT nickname, furnace_lv, kid FROM users WHERE fid = ? AND alliance = ?",
-                (fid, str(alliance_id))).fetchone()
+def parse_power(text):
+    """`134512345`, `134,512,345` or `134.5M` -> a positive int, or None."""
+    value = _parse_compact_int(re.sub(r"\s", "", str(text or "")))
+    return value if value and value > 0 else None
+
+
+def apply_member_edit(fid, *, nickname=None, furnace_lv=None, kid=None,
+                      power=None, combat_power=None, alliance_id=None):
+    """Write a member's name/level/state/power, limited to `alliance_id` when given; returns what changed."""
+    changed, power_changes = [], []
+    where, params = ("fid = ?", (fid,)) if alliance_id is None \
+        else ("fid = ? AND alliance = ?", (fid, str(alliance_id)))
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        row = conn.execute(
+            f"SELECT nickname, furnace_lv, kid, power, combat_power FROM users WHERE {where}",
+            params).fetchone()
         if not row:
             return changed
-        old_nickname, old_furnace, old_kid = row
+        old_nickname, old_furnace, old_kid, *old_powers = row
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
         if nickname is not None and nickname != old_nickname:
             conn.execute("UPDATE users SET nickname = ? WHERE fid = ?", (nickname, fid))
@@ -65,6 +105,12 @@ def apply_member_edit(fid, *, nickname=None, furnace_lv=None, kid=None, alliance
         if kid is not None and kid != old_kid:
             set_user_kid(fid, kid, conn=conn)
             changed.append("state")
+        for (column, label), new, old in zip(_POWER_METRICS, (power, combat_power), old_powers):
+            if new is not None and new != old:
+                conn.execute(f"UPDATE users SET {column} = ?, {column}_updated_at = ? WHERE fid = ?",
+                             (new, now, fid))
+                changed.append(label)
+                power_changes.append((column, label, old, new))
         conn.commit()
 
     if "name" in changed:
@@ -75,6 +121,9 @@ def apply_member_edit(fid, *, nickname=None, furnace_lv=None, kid=None, alliance
         logger.info(f"Member edit: {fid} furnace {old_furnace} -> {furnace_lv}")
     if "state" in changed:
         logger.info(f"Member edit: {fid} state {old_kid} -> {kid}")
+    for column, label, old, new in power_changes:
+        alliance_power_changes.record_change(fid, column, old, new, now)
+        logger.info(f"Member edit: {fid} {label} {old} -> {new}")
     return changed
 
 
@@ -97,30 +146,32 @@ def enqueue_catchups(bot, fids):
     return caught
 
 
+_EDIT_LINE_COLUMNS = (
+    (parse_furnace_level, "isn't a furnace level (try `80` or `FC 10`)"),
+    (parse_state, "isn't a state number (try `911`)"),
+    (parse_power, "isn't a power value (try `134500000` or `134.5M`)"),
+    (parse_power, "isn't a combat power value (try `20100000` or `20.1M`)"),
+)
+
+
 def parse_edit_line(line):
-    """`id, name, level, state` -> (fid, nickname, furnace_lv, kid), or an error string.
-    Every field after the id is optional."""
+    """`id, name, level, state, power, combat power` (all but the id optional) -> 6-tuple, or an error string."""
     parts = [p.strip() for p in line.split(",")]
     fid = parts[0]
     if not fid.isdigit():
         return f"`{line.strip()[:60]}` - doesn't start with a player ID"
-    nickname = parts[1] if len(parts) > 1 and parts[1] else None
-    furnace_lv = None
-    if len(parts) > 2 and parts[2]:
-        furnace_lv = parse_furnace_level(parts[2])
-        if furnace_lv is None:
-            return f"`{fid}` - `{parts[2][:30]}` isn't a furnace level (try `80` or `FC 10`)"
-    kid = None
-    if len(parts) > 3 and parts[3]:
-        kid = parse_state(parts[3])
-        if kid is None:
-            return f"`{fid}` - `{parts[3][:30]}` isn't a state number (try `911`)"
-    return (fid, nickname, furnace_lv, kid)
+    values = [parts[1] if len(parts) > 1 and parts[1] else None]
+    for index, (parser, error) in enumerate(_EDIT_LINE_COLUMNS, start=2):
+        raw = parts[index] if len(parts) > index else ""
+        value = parser(raw) if raw else None
+        if raw and value is None:
+            return f"`{fid}` - `{raw[:30]}` {error}"
+        values.append(value)
+    return (fid, *values)
 
 
 def apply_edit_lines(text, alliance_id=None):
-    """Apply `id, name, level, state` lines -> (updated, skipped, errors, state_fids).
-    state_fids are the members needing a code catch-up."""
+    """Apply edit lines -> (updated, skipped, errors, state_fids needing a code catch-up)."""
     updated, skipped, errors, state_fids = 0, 0, [], []
     for line in (text or "").splitlines():
         if not line.strip():
@@ -129,12 +180,13 @@ def apply_edit_lines(text, alliance_id=None):
         if isinstance(parsed, str):
             errors.append(parsed)
             continue
-        fid, nickname, furnace_lv, kid = parsed
-        if nickname is None and furnace_lv is None and kid is None:
+        if all(v is None for v in parsed[1:]):
             skipped += 1
             continue
-        changed = apply_member_edit(fid, nickname=nickname, furnace_lv=furnace_lv,
-                                    kid=kid, alliance_id=alliance_id)
+        fid, nickname, furnace_lv, kid, power, combat_power = parsed
+        changed = apply_member_edit(fid, nickname=nickname, furnace_lv=furnace_lv, kid=kid,
+                                    power=power, combat_power=combat_power,
+                                    alliance_id=alliance_id)
         if changed:
             updated += 1
             if "state" in changed:
@@ -168,10 +220,21 @@ def edit_result_embed(title, updated, skipped, errors, *, added=None, caught=0):
     )
 
 
-class MemberEditModal(discord.ui.Modal):
-    """Edit one member's name, furnace level and state."""
+def _optional_input(label, example, default, max_length):
+    return discord.ui.TextInput(
+        label=label,
+        placeholder=f"e.g. {example}. Leave blank to keep it as it is.",
+        default=default,
+        required=False,
+        max_length=max_length,
+    )
 
-    def __init__(self, parent_view, fid, nickname, furnace_lv, alliance_id, kid=None):
+
+class MemberEditModal(discord.ui.Modal):
+    """Edit one member's name, furnace level, state and power."""
+
+    def __init__(self, parent_view, fid, nickname, furnace_lv, alliance_id, kid=None,
+                 power=None, combat_power=None):
         super().__init__(title="Edit Member")
         self.parent_view = parent_view
         self.fid = fid
@@ -185,66 +248,65 @@ class MemberEditModal(discord.ui.Modal):
             required=False,
             max_length=100,
         )
-        self.level_input = discord.ui.TextInput(
-            label="Furnace level (optional)",
-            placeholder="e.g. FC 10 - 2, or 82. Leave blank to keep it as it is.",
-            default=format_furnace_level(furnace_lv) if furnace_lv else "",
-            required=False,
-            max_length=20,
+        self.level_input = _optional_input(
+            "Furnace level (optional)", "FC 10 - 2, or 82",
+            format_furnace_level(furnace_lv) if furnace_lv else "", 20)
+        self.state_input = _optional_input("State (optional)", "911", str(kid) if kid else "", 5)
+        self.power_input = _optional_input(
+            "Power (optional)", "134500000 or 134.5M", f"{power:,}" if power else "", 20)
+        self.combat_power_input = _optional_input(
+            "Combat Power (optional)", "20100000 or 20.1M",
+            f"{combat_power:,}" if combat_power else "", 20)
+        for field in (self.name_input, self.level_input, self.state_input,
+                      self.power_input, self.combat_power_input):
+            self.add_item(field)
+
+    def _parsed_fields(self):
+        """(field name, input, parser, error) for every optional field."""
+        return (
+            ("furnace_lv", self.level_input, parse_furnace_level,
+             "isn't a furnace level. Try a number like `82`, or the in-game name like `FC 10 - 2`."),
+            ("kid", self.state_input, parse_state,
+             "isn't a state number. Enter digits only, like `911`."),
+            ("power", self.power_input, parse_power,
+             "isn't a power value. Enter the number like `134500000`, or shortened like `134.5M`."),
+            ("combat_power", self.combat_power_input, parse_power,
+             "isn't a combat power value. Enter the number like `20100000`, or shortened like `20.1M`."),
         )
-        self.state_input = discord.ui.TextInput(
-            label="State (optional)",
-            placeholder="e.g. 911. Leave blank to keep it as it is.",
-            default=str(kid) if kid else "",
-            required=False,
-            max_length=5,
-        )
-        self.add_item(self.name_input)
-        self.add_item(self.level_input)
-        self.add_item(self.state_input)
 
     async def on_submit(self, interaction: discord.Interaction):
         if not await check_interaction_user(interaction, self.parent_view.author_id):
             return
-        nickname = self.name_input.value.strip() or None
-        raw_level = self.level_input.value.strip()
-        furnace_lv = parse_furnace_level(raw_level) if raw_level else None
-        if raw_level and furnace_lv is None:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} `{raw_level}` isn't a furnace level. "
-                f"Try a number like `82`, or the in-game name like `FC 10 - 2`.",
-                ephemeral=True)
-            return
-        raw_state = self.state_input.value.strip()
-        kid = parse_state(raw_state) if raw_state else None
-        if raw_state and kid is None:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} `{raw_state}` isn't a state number. Enter digits only, like `911`.",
-                ephemeral=True)
-            return
+        values = {}
+        for key, field, parser, error in self._parsed_fields():
+            raw = field.value.strip()
+            values[key] = parser(raw) if raw else None
+            if raw and values[key] is None:
+                await interaction.response.send_message(
+                    f"{theme.deniedIcon} `{raw}` {error}", ephemeral=True)
+                return
 
         changed = await asyncio.to_thread(
-            apply_member_edit, self.fid, nickname=nickname, furnace_lv=furnace_lv,
-            kid=kid, alliance_id=self.alliance_id)
-        note = f"Nothing changed for `{self.fid}`."
-        if changed:
-            note = f"Updated {', '.join(changed)} for `{self.fid}`."
-            if "state" in changed and enqueue_catchups(self.parent_view.cog.bot, [self.fid]):
-                note += " Redeeming the codes they missed."
+            apply_member_edit, self.fid, nickname=self.name_input.value.strip() or None,
+            alliance_id=self.alliance_id, **values)
+        # The refreshed list shows what changed; only speak up when it can't.
+        note = None if changed else f"Nothing changed for `{self.fid}`."
+        if "state" in changed and enqueue_catchups(self.parent_view.cog.bot, [self.fid]):
+            note = f"Redeeming the codes `{self.fid}` missed while their state was wrong."
         await self.parent_view.refresh_after_edit(interaction, note)
 
 
 class BulkMemberEditModal(discord.ui.Modal):
-    """Edit a whole list of members in one go, one `id, name, level, state` per line."""
+    """Edit a whole list of members in one go, one `id, name, level, state, power, CP` per line."""
 
     def __init__(self, parent_view, alliance_id, prefill=""):
         super().__init__(title="Bulk Edit Members")
         self.parent_view = parent_view
         self.alliance_id = alliance_id
         self.lines_input = discord.ui.TextInput(
-            label="Per line: id, name, level, state",
+            label="Per line: id, name, level, state, power, CP",
             style=discord.TextStyle.paragraph,
-            placeholder="306234280, THANOS IS RIGHT, FC 10 - 2, 2560\n123051289, SKORN, 80, 911",
+            placeholder="306234280, THANOS IS RIGHT, FC 10 - 2, 2560, 134.5M, 20.1M\n123051289, SKORN, 80, 911",
             default=prefill,
             required=True,
             max_length=4000,
@@ -272,6 +334,7 @@ def build_prefill(members, limit=25):
     for m in members[:limit]:
         name = "" if is_placeholder_name(m['nickname'], m['fid']) else m['nickname']
         level = format_furnace_level(m['furnace_lv']) if m.get('furnace_lv') else ""
-        state = m['kid'] if m.get('kid') else ""
-        lines.append(f"{m['fid']}, {name}, {level}, {state}")
+        # Power as exact digits: commas would split the line and rounding would log a fake change.
+        lines.append(f"{m['fid']}, {name}, {level}, {m.get('kid') or ''}, "
+                     f"{m.get('power') or ''}, {m.get('combat_power') or ''}")
     return "\n".join(lines)
