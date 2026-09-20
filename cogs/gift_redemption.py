@@ -16,6 +16,7 @@ import discord
 import requests
 from requests.adapters import HTTPAdapter
 
+from .alliance_member_edit import new_member_name
 from .pimp_my_bot import theme
 from .browser_headers import get_headers
 from .process_queue import GIFT_VALIDATE, GIFT_REDEEM, PreemptedException
@@ -889,6 +890,82 @@ CONCLUSIVE_REDEEM_STATUSES = VALID_REDEEM_STATUSES + INVALID_REDEEM_STATUSES
 # Min seconds between validation probes on the same FID.
 VALIDATION_FID_INTERVAL = 3.0
 
+# The per-IP budget is shared by every redemption from this host, and on shared or panel
+# hosting by other tenants' bots too, so a 429 pauses every claim rather than one member.
+# The per-FID throttle (TOO FREQUENT, 40019) is unrelated and still parks only its member.
+RATE_LIMIT_FALLBACK_COOLDOWN = 60.0
+# The budget refills a fixed 60s after the window's first request, so a spent budget waits
+# out the remainder of the window. The endpoint sends no Retry-After or reset of its own.
+RATE_LIMIT_WINDOW = 61.0
+
+
+def _header_seconds(value):
+    """A Retry-After / reset header as seconds from now; epoch stamps convert, junk is None."""
+    try:
+        seconds = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if seconds > 1_000_000_000:  # an absolute epoch rather than a delta
+        seconds -= time.time()
+    return seconds if seconds > 0 else None
+
+
+def rate_limit_delay(response, window_started=None) -> float:
+    """How long to wait: the server's own headers first, else the rest of the window."""
+    headers = getattr(response, "headers", {}) or {}
+    for name in ("Retry-After", "X-RateLimit-Reset"):
+        seconds = _header_seconds(headers.get(name))
+        if seconds is not None:
+            return seconds
+    if window_started:
+        return max(0.0, window_started + RATE_LIMIT_WINDOW - time.time())
+    return RATE_LIMIT_FALLBACK_COOLDOWN
+
+
+def note_rate_limit(cog, response) -> None:
+    """Record the budget the server reports, and pause every claim when it's gone."""
+    headers = getattr(response, "headers", {}) or {}
+    previous = getattr(cog, "rate_limit_remaining", None)
+    for attr, name in (("rate_limit_limit", "X-RateLimit-Limit"),
+                       ("rate_limit_remaining", "X-RateLimit-Remaining")):
+        try:
+            setattr(cog, attr, int(headers[name]))
+        except (KeyError, TypeError, ValueError):
+            pass
+
+    # A budget that went up means the window rolled; time the next one from here.
+    current = getattr(cog, "rate_limit_remaining", None)
+    if current is not None and (previous is None or current > previous):
+        cog.rate_limit_window_started = time.time()
+
+    status_code = getattr(response, "status_code", 200)
+    spent = str(headers.get("X-RateLimit-Remaining", "")).strip() == "0"  # this response, not a stale one
+    if status_code != 429 and not spent:
+        return
+    delay = rate_limit_delay(response, getattr(cog, "rate_limit_window_started", None))
+    cog.rate_limit_pause_until = time.time() + delay
+    cog.logger.warning(
+        f"GiftOps: gift API rate limit hit (HTTP {status_code}, "
+        f"limit={getattr(cog, 'rate_limit_limit', '?')}, "
+        f"remaining={getattr(cog, 'rate_limit_remaining', '?')}) - "
+        f"pausing all redemption for {delay:.0f}s")
+
+
+def named_members(rows) -> list:
+    """Member rows with a usable name; a blank one would break the run's summary."""
+    return [(fid, new_member_name(nickname, fid)) for fid, nickname in rows]
+
+
+def rate_limit_wait(cog) -> float:
+    """Seconds left on the shared pause, 0 when redemption may proceed."""
+    return max(0.0, getattr(cog, "rate_limit_pause_until", 0.0) - time.time())
+
+
+async def await_rate_limit(cog) -> None:
+    wait = rate_limit_wait(cog)
+    if wait > 0:
+        await asyncio.sleep(wait)
+
 
 async def serialized_validation_claim(cog, fid, giftcode):
     """Serialized, per-FID rate-spaced validation redeem. New-code validations run
@@ -1308,6 +1385,8 @@ async def redeem_giftcode_once(cog, player_id, giftcode, kid, session):
     log_entry_redeem += "-" * 50 + "\n"
     cog.giftlog.info(log_entry_redeem.strip())
 
+    note_rate_limit(cog, response_giftcode)
+
     # Upstream hiccup: hand back to the retry cycle rather than mark the member failed.
     if response_giftcode.status_code in (429, 502, 503, 504):
         cog.processing_stats["server_validation_failure"] += 1
@@ -1551,6 +1630,7 @@ async def claim_giftcode_rewards_wos(cog, player_id, giftcode, *, skip_cache: bo
         session.headers.update(get_headers(cog.wos_giftcode_redemption_url))
 
         cog.logger.info(f"GiftOps: Redeeming '{giftcode}' for ID {player_id} (state {kid})")
+        await await_rate_limit(cog)  # shared per-IP budget: every path waits it out
         status = await redeem_giftcode_once(cog, player_id, giftcode, kid, session)
 
         # Flag only: re-probing here would stall the queue 25+ min per member, so
@@ -2209,7 +2289,7 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
         with sqlite3.connect('db/users.sqlite') as users_conn:
             users_cursor = users_conn.cursor()
             users_cursor.execute("SELECT fid, nickname FROM users WHERE alliance = ?", (str(alliance_id),))
-            members = users_cursor.fetchall()
+            members = named_members(users_cursor.fetchall())
         if not members:
             cog.logger.info(f"GiftOps: No members found for alliance {alliance_id} ({alliance_name}).")
             return False
