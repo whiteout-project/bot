@@ -8,7 +8,7 @@ import asyncio
 import sqlite3
 import logging
 from datetime import datetime
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
 from .permission_handler import PermissionManager
 
 logger = logging.getLogger('bot')
@@ -16,7 +16,7 @@ logger = logging.getLogger('bot')
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, bot, context: str):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.add_item(ChannelSelect(bot, context))
 
 class ChannelSelect(discord.ui.ChannelSelect):

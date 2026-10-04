@@ -12,7 +12,7 @@ import asyncio
 import time
 from discord.ext import tasks
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout
 from .bot_level_mapping import LEVEL_MAPPING, format_furnace_level, parse_state
 from .alliance_member_edit import new_member_name, parse_edit_line
 from .alliance import check_alliance_state
@@ -862,7 +862,7 @@ class DeleteAfterModal(discord.ui.Modal):
 
 class IDChannelSettingsView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
 
     def build_embed(self, settings):
@@ -929,7 +929,7 @@ class AllianceIDChannelView(discord.ui.View):
 
     def __init__(self, cog, alliance_id: int, alliance_name: str, has_channel: bool,
                  post_info: bool = False, pin_info: bool = True):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
@@ -1054,7 +1054,7 @@ class AllianceIDChannelView(discord.ui.View):
                 await cog.refresh_alliance_info_message(channel_interaction.guild_id, alliance_id)
                 await cog.show_id_channel_for(channel_interaction, alliance_id)
 
-        select_view = discord.ui.View(timeout=300)
+        select_view = discord.ui.View(timeout=menu_timeout())
         select_view.add_item(_ChannelSelect())
         select_embed = discord.Embed(
             title=f"{theme.fidIcon} {alliance_name} — Pick ID Channel",
@@ -1105,7 +1105,7 @@ class AllianceIDChannelView(discord.ui.View):
 
 class IDChannelView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
 
     @discord.ui.button(
@@ -1275,7 +1275,7 @@ class IDChannelView(discord.ui.View):
                         else:
                             await select_interaction.message.edit(embed=error_embed, view=None)
 
-            view = discord.ui.View()
+            view = discord.ui.View(timeout=menu_timeout())
             view.cog = self.cog
             view.add_item(ChannelSelect())
             
@@ -1402,7 +1402,7 @@ class IDChannelView(discord.ui.View):
                                 )
                                 await channel_interaction.response.edit_message(embed=error_embed, view=None)
 
-                    channel_view = discord.ui.View()
+                    channel_view = discord.ui.View(timeout=menu_timeout())
                     channel_view.cog = self.view.cog
                     channel_view.add_item(ChannelSelect())
                     
@@ -1413,7 +1413,7 @@ class IDChannelView(discord.ui.View):
                     )
                     await select_interaction.response.edit_message(embed=select_embed, view=channel_view)
 
-            alliance_view = discord.ui.View()
+            alliance_view = discord.ui.View(timeout=menu_timeout())
             alliance_view.cog = self.cog
             alliance_view.add_item(AllianceSelect())
 

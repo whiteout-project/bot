@@ -6,7 +6,7 @@ import asyncio
 import logging
 from contextlib import closing
 from datetime import datetime, timezone
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
 from .alliance import check_alliance_state
 from .gift_state_resolver import verify_add_state, get_alliance_kid
 from .bot_level_mapping import parse_furnace_level, parse_state
@@ -118,40 +118,45 @@ class AllianceRegistration(commands.Cog):
 
     # ── DB writes ──────────────────────────────────────────────────────────
 
+    def _write_users(self, sql: str, params: tuple):
+        # Roll back on failure: this connection lives as long as the cog and would hold the lock.
+        try:
+            self.c_users.execute(sql, params)
+            self.conn_users.commit()
+        except sqlite3.Error:
+            self.conn_users.rollback()
+            raise
+
     def _insert_new_user(self, fid: int, user_data: dict, alliance: int,
                          discord_id: int, server_id: int):
-        self.c_users.execute(
+        self._write_users(
             "INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, "
             "alliance, discord_id, discord_server_id, discord_id_updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (fid, user_data["nickname"], user_data["stove_lv"], user_data["kid"],
              user_data.get("stove_lv_content"), alliance, discord_id, server_id, _now_iso()),
         )
-        self.conn_users.commit()
 
     def _attach_discord_to_existing(self, fid: int, discord_id: int, server_id: int):
-        self.c_users.execute(
+        self._write_users(
             "UPDATE users SET discord_id = ?, discord_server_id = ?, "
             "discord_id_updated_at = ? WHERE fid = ?",
             (discord_id, server_id, _now_iso(), fid),
         )
-        self.conn_users.commit()
 
     def _move_registration_to_server(self, fid: int, new_server_id: int):
-        self.c_users.execute(
+        self._write_users(
             "UPDATE users SET discord_server_id = ?, discord_id_updated_at = ? "
             "WHERE fid = ?",
             (new_server_id, _now_iso(), fid),
         )
-        self.conn_users.commit()
 
     def _detach_discord(self, fid: int):
-        self.c_users.execute(
+        self._write_users(
             "UPDATE users SET discord_id = NULL, discord_server_id = NULL, "
             "discord_id_updated_at = ? WHERE fid = ?",
             (_now_iso(), fid),
         )
-        self.conn_users.commit()
 
     # ── /register ──────────────────────────────────────────────────────────
 
@@ -368,7 +373,7 @@ class AllianceRegistration(commands.Cog):
 class _MoveServerView(discord.ui.View):
     def __init__(self, cog: AllianceRegistration, fid: int, caller_id: int,
                  old_server_id, new_server_id):
-        super().__init__(timeout=120)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.fid = fid
         self.caller_id = caller_id

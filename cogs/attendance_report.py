@@ -13,7 +13,7 @@ from io import BytesIO
 import os
 from .attendance import SessionSelectView, event_type_display
 from .bear_track import _reshape_for_chart
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
 
 logger = logging.getLogger('bot')
 
@@ -52,7 +52,7 @@ EVENT_TYPE_ICONS = {
 
 class ExportFormatSelectView(discord.ui.View):
     def __init__(self, cog, records, session_info):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.records = records
         self.session_info = session_info
@@ -70,7 +70,7 @@ class ExportFormatSelectView(discord.ui.View):
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, cog, embeds, image_file=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.embeds = embeds
         self.image_file = image_file
@@ -147,7 +147,7 @@ class AttendanceReport(commands.Cog):
 
     def _create_back_view(self, callback):
         """Helper to create back button view"""
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=menu_timeout())
         back_button = discord.ui.Button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary)
         back_button.callback = callback
         view.add_item(back_button)
@@ -925,7 +925,7 @@ class AttendanceReport(commands.Cog):
             # Create view based on mode
             if is_preview:
                 # Preview mode - create a simple back button that clears attachments
-                view = discord.ui.View(timeout=7200)
+                view = discord.ui.View(timeout=menu_timeout())
                 back_button = discord.ui.Button(
                     label="Back", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
@@ -943,7 +943,7 @@ class AttendanceReport(commands.Cog):
                 view.add_item(back_button)
             else:
                 # Full report mode - back and export buttons
-                view = discord.ui.View(timeout=7200)
+                view = discord.ui.View(timeout=menu_timeout())
                 
                 # Back button
                 back_button = discord.ui.Button(
@@ -1345,7 +1345,7 @@ class AttendanceReport(commands.Cog):
                 discord_embeds.append(embed)
 
             # Create view with back and export buttons
-            view = discord.ui.View(timeout=7200)
+            view = discord.ui.View(timeout=menu_timeout())
 
             # Back button - different behavior for preview vs regular mode
             if is_preview and marking_view:
@@ -1505,7 +1505,7 @@ class AttendanceReport(commands.Cog):
                 )
                 
                 # Add back button
-                back_view = discord.ui.View(timeout=7200)
+                back_view = discord.ui.View(timeout=menu_timeout())
                 back_button = discord.ui.Button(
                     label="Back", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary

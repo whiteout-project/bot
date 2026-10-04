@@ -21,6 +21,7 @@ from .pimp_my_bot import theme
 from .browser_headers import get_headers
 from .process_queue import GIFT_VALIDATE, GIFT_REDEEM, PreemptedException
 from . import gift_state_resolver
+from . import onnx_lifecycle
 
 
 async def enqueue_validation(cog, giftcode, source, message=None, channel=None):
@@ -303,11 +304,92 @@ async def handle_gift_redeem_process(cog, process):
     await _record_batch_result(cog, batch_id, alliance_id, success=bool(ok))
 
 
-def _state_resolve_targets(scope):
-    """The FIDs a state_resolve job covers."""
-    if scope == 'missing':
-        return gift_state_resolver.fids_missing_state()
-    return [row[0] for row in gift_state_resolver.fids_with_state_mismatch()]
+SCAN_MODES = {'now': (6, 2.2), 'auto': (1, 10.0)}   # (members at once, seconds between probes)
+AUTO_SCAN_HEADROOM = 10                               # API requests auto-scan leaves for redemption
+SAVE_ATTEMPTS = 3
+
+
+def _auto_should_wait(cog):
+    """Auto-scan waits while OCR runs or the shared API budget is nearly spent."""
+    if onnx_lifecycle.any_model_in_use():
+        return True
+    remaining = getattr(cog, "rate_limit_remaining", None)
+    started = getattr(cog, "rate_limit_window_started", None)
+    return (remaining is not None and remaining < AUTO_SCAN_HEADROOM and started is not None
+            and time.time() < started + RATE_LIMIT_WINDOW)
+
+
+async def save_found_kingdom(cog, fid, kid):
+    """Store a found state right away. A locked DB is retried; a lost save costs one rescan."""
+    for attempt in range(SAVE_ATTEMPTS):
+        try:
+            await asyncio.to_thread(gift_state_resolver.set_user_kid, fid, kid)
+            return True
+        except sqlite3.OperationalError as e:
+            cog.logger.warning(f"GiftOps: saving state {kid} for FID {fid} failed "
+                               f"(attempt {attempt + 1}/{SAVE_ATTEMPTS}): {e}")
+            if attempt + 1 < SAVE_ATTEMPTS:
+                await asyncio.sleep(5 * (attempt + 1))
+    msg = f"GiftOps: could not save state {kid} for FID {fid}; it will be scanned again"
+    cog.logger.error(msg)
+    print(msg)
+    return False
+
+
+async def _quietly(cog, fn, *args):
+    """Scan bookkeeping is best-effort: a locked DB here only costs resume precision."""
+    try:
+        await asyncio.to_thread(fn, *args)
+    except sqlite3.Error as e:
+        cog.logger.warning(f"GiftOps: state scan bookkeeping failed ({fn.__name__}): {e}")
+
+
+class _FixedMeanwhile(Exception):
+    """An admin set the member's state while their scan was running."""
+
+
+async def _still_needs_scan(fid):
+    try:
+        return await asyncio.to_thread(gift_state_resolver.needs_scan, fid)
+    except sqlite3.Error:
+        return True  # can't tell; keep scanning rather than drop the member
+
+
+async def scan_one_member(cog, fid, *, mode, settings, wait_until_idle, prefer, on_progress):
+    """Scan one member and store the result at once. Returns the state found or None."""
+    if not await _still_needs_scan(fid):
+        return None
+    _concurrency, pace = SCAN_MODES[mode]
+    lo, hi = settings['min'], settings['max']
+    start_at = await asyncio.to_thread(gift_state_resolver.get_scan_position, fid)
+    if start_at is not None and not lo <= start_at <= hi:
+        start_at = None  # the default range moved since it was saved
+
+    async def checkpoint(next_kid):
+        if not await _still_needs_scan(fid):
+            raise _FixedMeanwhile(fid)
+        await _quietly(cog, gift_state_resolver.save_scan_position, fid, next_kid)
+
+    try:
+        kid = await gift_state_resolver.resolve_state(
+            cog, fid, scan_range=(lo, hi), start_at=start_at, pace=pace,
+            wait_until_idle=wait_until_idle, on_progress=on_progress, on_checkpoint=checkpoint,
+            prefer=prefer)
+    except _FixedMeanwhile:
+        cog.logger.info(f"GiftOps: FID {fid} was given a state by hand; stopping its scan")
+        return None
+    if not await _still_needs_scan(fid):
+        return None  # set by hand during the last stretch; never overwrite an admin's value
+    if kid is None:
+        await _quietly(cog, gift_state_resolver.mark_scan_done, fid)
+        return None
+    if not await save_found_kingdom(cog, fid, kid):
+        return None
+    try:
+        enqueue_member_redemption(cog, fid)
+    except Exception as e:
+        cog.logger.exception(f"GiftOps: could not queue catch-up for FID {fid}: {e}")
+    return kid
 
 
 class _StateScanProgress:
@@ -318,8 +400,9 @@ class _StateScanProgress:
     resume after a restart or a preemption keeps editing the same message instead of
     posting a new one. `on_post` is called whenever that mapping changes so it gets saved."""
 
-    def __init__(self, cog, total, posted=None, on_post=None):
+    def __init__(self, cog, total, posted=None, on_post=None, quiet=False):
         self.cog = cog
+        self.quiet = quiet      # auto-scan runs often; it reports in State Scan, not the logs
         self.total = total
         self.posted = posted if posted is not None else {}
         self.on_post = on_post
@@ -378,7 +461,7 @@ class _StateScanProgress:
     async def update(self, fid, body):
         """Post or edit that member's alliance log message with `body`."""
         alliance_id, nickname = await asyncio.to_thread(self._member_info, fid)
-        if alliance_id is None:
+        if alliance_id is None or self.quiet:
             return nickname
         embed = discord.Embed(
             title=f"{theme.searchIcon} Detecting Member States",
@@ -421,42 +504,74 @@ class _StateScanProgress:
 
 
 async def handle_state_resolve_process(cog, process):
-    """ProcessQueue handler for state_resolve: probe each member's real state.
-    Lowest priority in the bot - yields before every probe and resumes where it left off."""
+    """ProcessQueue handler for the state scan. Lowest priority in the bot: yields before
+    every probe; each member's resume point lives in users, so even a failed run resumes."""
     process_queue_cog = cog.bot.get_cog('ProcessQueue')
     details = dict(process.get('details') or {})
-    scope = details.get('scope', 'mismatch')
+    mode = details.get('mode', 'now')
+    concurrency, _pace = SCAN_MODES[mode]
+    settings = await asyncio.to_thread(gift_state_resolver.get_scan_settings)
 
     if 'remaining' not in details:
-        details['remaining'] = await asyncio.to_thread(_state_resolve_targets, scope)
+        details['remaining'] = await asyncio.to_thread(
+            gift_state_resolver.scan_targets, auto=(mode == 'auto'))
         details['total'] = len(details['remaining'])
-        details['resolved'] = 0
-        details['unresolved'] = 0
+    details.setdefault('resolved', 0)
+    details.setdefault('unresolved', 0)
+    details['started'] = True  # tells the menu "paused" apart from "not started yet"
 
     remaining = list(details['remaining'])
     cog.logger.info(
-        f"GiftOps: state_resolve ({scope}) running - {len(remaining)} of "
+        f"GiftOps: state scan ({mode}) running - {len(remaining)} of "
         f"{details['total']} member(s) still to check"
     )
 
-    def _should_stop():
-        return bool(process_queue_cog and process_queue_cog.should_preempt())
+    switched_off = stopped_by_admin = False
+
+    async def _check_yield():
+        nonlocal switched_off, stopped_by_admin
+        if process_queue_cog and process_queue_cog.stop_requested():
+            stopped_by_admin = True
+            raise gift_state_resolver.StateResolveInterrupted(None)
+        if mode == 'auto' and not await asyncio.to_thread(gift_state_resolver.scan_enabled):
+            switched_off = True
+            raise gift_state_resolver.StateResolveInterrupted(None)
+        if process_queue_cog and process_queue_cog.should_preempt():
+            raise gift_state_resolver.StateResolveInterrupted(None)
+
+    async def _wait_until_idle():
+        await _check_yield()
+        if mode != 'auto' or not _auto_should_wait(cog):
+            return
+        details['waiting'] = True  # shown in the menu while it waits
+        _save()
+        try:
+            while _auto_should_wait(cog):
+                await asyncio.sleep(15)
+                await _check_yield()
+        finally:
+            details['waiting'] = False
+            _save()
 
     def _save():
         details['remaining'] = remaining
-        if process_queue_cog:
+        if not process_queue_cog:
+            return
+        try:
             process_queue_cog.update_details(process['id'], details)
+        except sqlite3.Error as e:
+            cog.logger.warning(f"GiftOps: could not save state scan progress: {e}")
 
     details.setdefault('progress_msgs', {})
-    progress = _StateScanProgress(cog, details['total'],
-                                  posted=details['progress_msgs'], on_post=_save)
+    progress = _StateScanProgress(cog, details['total'], posted=details['progress_msgs'],
+                                  on_post=_save, quiet=(mode == 'auto'))
     progress.checked = details['total'] - len(remaining)
 
     # Fed to the next wave as first guesses.
     found_states = list(details.get('found_states') or [])
 
     while remaining:
-        wave = remaining[:gift_state_resolver.SCAN_CONCURRENCY]
+        wave = remaining[:concurrency]
         lead_name = await progress.update(
             wave[0], f"{theme.hourglassIcon} Scanning `{len(wave)}` member(s) at once...")
 
@@ -468,9 +583,8 @@ async def handle_state_resolve_process(cog, process):
                       f"`{done}/{of_total}` states checked for **{_name}**")
 
         results = await asyncio.gather(*(
-            gift_state_resolver.resolve_state(
-                cog, f, should_stop=_should_stop, prefer=found_states,
-                on_progress=_on_probe if f == wave[0] else None)
+            scan_one_member(cog, f, mode=mode, settings=settings, wait_until_idle=_wait_until_idle,
+                            prefer=found_states, on_progress=_on_probe if f == wave[0] else None)
             for f in wave
         ), return_exceptions=True)
 
@@ -478,16 +592,15 @@ async def handle_state_resolve_process(cog, process):
         for fid, result in zip(wave, results):
             if isinstance(result, gift_state_resolver.StateResolveInterrupted):
                 interrupted = True
-                continue                      # stays in `remaining`, retried on resume
+                continue                      # stays in `remaining`, resumes from its saved point
             if isinstance(result, BaseException):
-                cog.logger.warning(f"GiftOps: state resolve failed for FID {fid}: {result}")
+                cog.logger.warning(f"GiftOps: state scan failed for FID {fid}: {result}")
                 result = None
             remaining.remove(fid)
             progress.checked += 1
             if result is None:
                 details['unresolved'] += 1
                 continue
-            await asyncio.to_thread(gift_state_resolver.set_user_kid, fid, result)
             details['resolved'] += 1
             if result not in found_states:
                 found_states.insert(0, result)
@@ -497,19 +610,21 @@ async def handle_state_resolve_process(cog, process):
         details.pop('probe_total', None)
         _save()
 
-        # Before bailing out: these are off `remaining`, so a skip loses them forever.
-        for fid, result in zip(wave, results):
-            if isinstance(result, int):
-                try:
-                    enqueue_member_redemption(cog, fid)
-                except Exception as e:
-                    cog.logger.exception(f"GiftOps: could not queue catch-up for FID {fid}: {e}")
-
+        if interrupted and stopped_by_admin:
+            await progress.update(
+                wave[0], f"{theme.infoIcon} Stopped by an admin. "
+                         f"`{len(remaining)}` member(s) left unchecked.")
+            cog.logger.info(f"GiftOps: state scan stopped by an admin - {len(remaining)} member(s) left")
+            return
+        if interrupted and switched_off:
+            cog.logger.info(f"GiftOps: auto-scan switched off - stopping with "
+                            f"{len(remaining)} member(s) left")
+            return
         if interrupted:
             await progress.update(
-                wave[0], f"{theme.infoIcon} Paused while gift codes redeem. "
+                wave[0], f"{theme.infoIcon} Paused while other work runs. "
                          f"`{len(remaining)}` member(s) left.")
-            cog.logger.info(f"GiftOps: state_resolve paused for higher-priority work - "
+            cog.logger.info(f"GiftOps: state scan paused for higher-priority work - "
                             f"{len(remaining)} member(s) left")
             raise PreemptedException()
 
@@ -518,30 +633,31 @@ async def handle_state_resolve_process(cog, process):
                      f"`{details['unresolved']}` still unknown.")
 
     cog.logger.info(
-        f"GiftOps: state_resolve ({scope}) complete - fixed {details['resolved']}, "
+        f"GiftOps: state scan ({mode}) complete - found {details['resolved']}, "
         f"still unknown {details['unresolved']}, of {details['total']} member(s)"
     )
     await progress.finish(details['resolved'], details['unresolved'])
-    await _notify_state_resolve_done(cog, scope, details)
+    if mode == 'now':
+        await _notify_state_resolve_done(cog, details)
 
 
-async def _notify_state_resolve_done(cog, scope, details):
-    """DM global admins the outcome; the job runs for hours unattended."""
+async def _notify_state_resolve_done(cog, details):
+    """DM global admins the outcome - the scan runs for hours, nobody is watching a screen."""
     if not details.get('total'):
         return
     unresolved = details.get('unresolved', 0)
     tail = (
-        f"\n\n{theme.infoIcon} The {unresolved} still unknown either left the game or moved "
-        f"far outside their old state. Remove them, or set a state by hand in **Member States**."
+        f"\n\n{theme.infoIcon} The {unresolved} still unknown either left the game or are in a "
+        f"state outside the scan range. Remove them, widen the range under **State Scan**, "
+        f"or set a state by hand under **Members to Fix**."
         if unresolved else ""
     )
-    label = "members with no state" if scope == 'missing' else "members the game rejected"
     embed = discord.Embed(
-        title=f"{theme.verifiedIcon} State Resolution Finished",
+        title=f"{theme.verifiedIcon} State Scan Finished",
         description=(
-            f"Checked {details['total']} {label}.\n\n"
+            f"Checked {details['total']} members with a missing or wrong state.\n\n"
             f"{theme.upperDivider}\n"
-            f"{theme.verifiedIcon} **States fixed:** `{details.get('resolved', 0)}`\n"
+            f"{theme.verifiedIcon} **States found:** `{details.get('resolved', 0)}`\n"
             f"{theme.deniedIcon} **Still unknown:** `{unresolved}`\n"
             f"{theme.lowerDivider}{tail}"
         ),
@@ -550,7 +666,7 @@ async def _notify_state_resolve_done(cog, scope, details):
     try:
         await _dm_global_admins(cog, embed)
     except Exception as e:
-        cog.logger.exception(f"GiftOps: could not DM the state resolution result: {e}")
+        cog.logger.exception(f"GiftOps: could not DM the state scan result: {e}")
 
 
 async def _send_existing_code_response(cog, message, giftcode, channel):
@@ -1388,7 +1504,7 @@ async def redeem_giftcode_once(cog, player_id, giftcode, kid, session):
     note_rate_limit(cog, response_giftcode)
 
     # Upstream hiccup: hand back to the retry cycle rather than mark the member failed.
-    if response_giftcode.status_code in (429, 502, 503, 504):
+    if response_giftcode.status_code in (429, 500, 502, 503, 504):
         cog.processing_stats["server_validation_failure"] += 1
         cog.logger.warning(f"GiftOps: HTTP {response_giftcode.status_code} redeeming for ID {player_id} - will retry")
         return "TIMEOUT_RETRY"
@@ -1545,7 +1661,7 @@ async def post_removal_blocked(cog, alliance_id, flagged, roster):
                 f"{theme.upperDivider}\n"
                 f"That many at once usually means the Gift Redemption API was misreporting, "
                 f"not that your alliance emptied. The members are flagged instead, so you can "
-                f"check them under **Member States -> Wrong States** and clear them from there "
+                f"check them under **Member States -> Members to Fix** and dismiss them there "
                 f"if the transfers were real.\n{theme.lowerDivider}"
             ),
             color=theme.emColor1,
@@ -1640,7 +1756,7 @@ async def claim_giftcode_rewards_wos(cog, player_id, giftcode, *, skip_cache: bo
                 await asyncio.to_thread(gift_state_resolver.flag_state_mismatch, player_id)
                 cog.logger.info(
                     f"GiftOps: flagged FID {player_id} for a wrong state (was {kid}); "
-                    f"fix it in Member States or run Resolve Wrong States."
+                    f"fix it under Member States -> Members to Fix."
                 )
 
         # Handle database updates for successful redemptions
@@ -2355,7 +2471,7 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                         "LOGIN_EXPIRED_MID_PROCESS": f"{theme.lockIcon} **" + "{count}" + "** members login failed mid-process. How'd that even happen?",
                         "ROLE_NOT_EXIST": f"{theme.membersIcon} **" + "{count}" + "** members no longer exist in the game. Ghosts don't redeem codes. Remove them from the alliance!",
                         "NO_STATE": f"{theme.globeIcon} **" + "{count}" + "** members have no state on file. Point them at their state so the codes can redeem themselves!",
-                        "STATE_MISMATCH": f"{theme.globeIcon} **" + "{count}" + "** members are no longer in the state on file. Fix them under Alliance Management -> Member States -> Wrong States and they redeem again.",
+                        "STATE_MISMATCH": f"{theme.globeIcon} **" + "{count}" + "** members are no longer in the state on file. Fix them under Alliance Management -> Member States -> Members to Fix and they redeem again.",
                         "SIGN_ERROR": f"{theme.lockIcon} **" + "{count}" + "** members failed due to a signature error. Something went wrong.",
                         "ERROR": f"{theme.deniedIcon} **" + "{count}" + "** members failed due to a general error. Might want to check the logs.",
                         "UNKNOWN_API_RESPONSE": f"{theme.infoIcon} **" + "{count}" + "** members failed with an unknown API response. Say what?",
@@ -2384,7 +2500,12 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
         # Cooperative preemption: yield to higher-priority work between players
         process_queue_cog = cog.bot.get_cog('ProcessQueue')
 
+        stopped_by_admin = False
         while active_members_to_process or retry_queue:
+            if process_queue_cog and process_queue_cog.stop_requested():
+                cog.logger.info(f"GiftOps: redemption of {giftcode} for {alliance_name} stopped by an admin")
+                stopped_by_admin = True
+                break
             if code_is_invalid:
                 cog.logger.info(f"GiftOps: Code {giftcode} detected as invalid, stopping redemption.")
                 break
@@ -2549,6 +2670,16 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                     mark_processed = True
                     fail_reason = f"API rate limited after {MAX_RETRY_CYCLES} attempts"
                     error_summary["TIMEOUT_RETRY"] = error_summary.get("TIMEOUT_RETRY", 0) + 1
+            elif response_status == "CONNECTION_ERROR":
+                if current_cycle_count + 1 < MAX_RETRY_CYCLES:
+                    queue_for_retry = True
+                    retry_delay = API_RATE_LIMIT_COOLDOWN
+                    fail_reason = "Couldn't reach the WOS API"
+                else:
+                    add_to_failed = True
+                    mark_processed = True
+                    fail_reason = f"Couldn't reach the WOS API after {MAX_RETRY_CYCLES} attempts"
+                    error_summary["CONNECTION_ERROR"] = error_summary.get("CONNECTION_ERROR", 0) + 1
             elif response_status == "TOO_POOR_SPEND_MORE":
                 add_to_failed = True
                 mark_processed = True
@@ -2564,6 +2695,11 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
                 mark_processed = True
                 fail_reason = "Wrong state on file"
                 error_summary["STATE_MISMATCH"] = error_summary.get("STATE_MISMATCH", 0) + 1
+            elif response_status == "NO_STATE":
+                add_to_failed = True
+                mark_processed = True
+                fail_reason = "No state on file"
+                error_summary["NO_STATE"] = error_summary.get("NO_STATE", 0) + 1
             elif response_status == "DB_UNAVAILABLE":
                 add_to_failed = True
                 mark_processed = True
@@ -2607,7 +2743,8 @@ async def use_giftcode_for_alliance(cog, alliance_id, giftcode, process=None):
         # Final Embed Update
         if not code_is_invalid:
             cog.logger.info(f"GiftOps: Alliance {alliance_id} processing loop finished. Preparing final update.")
-            final_title = f"{theme.giftIcon} Gift Code Process Complete: {giftcode}"
+            final_title = (f"{theme.warnIcon} Gift Code Process Stopped by an Admin: {giftcode}"
+                           if stopped_by_admin else f"{theme.giftIcon} Gift Code Process Complete: {giftcode}")
             final_color = discord.Color.green() if failed_count == 0 and total_members > 0 else \
                           discord.Color.orange() if success_count > 0 or received_count > 0 else \
                           discord.Color.red()

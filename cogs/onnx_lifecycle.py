@@ -110,6 +110,11 @@ else:
 _REGISTRY: dict[str, "LazyOnnxModel"] = {}
 
 
+def any_model_in_use() -> bool:
+    """True while any OCR engine is held (bear session, attendance or one-off OCR)."""
+    return any(m._refcount > 0 for m in _REGISTRY.values())
+
+
 async def _evict_other_idle_models(keep_name: str) -> None:
     """Evict every other non-pinned model that's loaded but unused (refcount 0),
     so at most one OCR engine stays resident on a low-memory box."""

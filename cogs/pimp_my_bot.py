@@ -14,6 +14,7 @@ import unicodedata
 import aiohttp
 import logging
 from typing import Tuple
+from contextlib import closing
 
 logger = logging.getLogger('bot')
 from .permission_handler import PermissionManager
@@ -198,11 +199,8 @@ def expired_embed(what: str = "menu") -> discord.Embed:
 
 
 async def notify_view_expired(view: discord.ui.View, what: str = "menu"):
-    """Call from a View.on_timeout to replace a finite-timeout menu with the
-    standard expiry notice. No-op if the view never stored `self.message`.
-    Set `self.message = await interaction.original_response()` when first sending
-    the menu, and `self.stop()` on normal finalize so a stale timeout can't
-    overwrite a completed action."""
+    """Call from a confirmation dialog's on_timeout so a stale Confirm can't be clicked.
+    Menus don't use this: they stay clickable and a late click reopens the main menu."""
     msg = getattr(view, "message", None)
     if msg is None:
         return
@@ -212,20 +210,84 @@ async def notify_view_expired(view: discord.ui.View, what: str = "menu"):
         pass
 
 
-async def disable_expired_view(view: discord.ui.View):
-    """For DATA displays (lists, rankings, charts, reports): on timeout, grey out
-    the controls but KEEP the content visible — never wipe a display to an expiry
-    notice. Use this instead of notify_view_expired for anything the user is
-    reading. No-op if the view never stored `self.message`."""
-    msg = getattr(view, "message", None)
-    if msg is None:
-        return
-    for child in view.children:
-        child.disabled = True
+MENU_TIMEOUT_DEFAULT_MINUTES = 120
+MENU_TIMEOUT_MAX_MINUTES = 1440
+CONFIRM_TIMEOUT_DEFAULT_SECONDS = 60
+CONFIRM_TIMEOUT_MAX_SECONDS = 3600
+_timeout_cache = {}  # setting key -> value; the setters keep it current
+
+
+def _timeout_setting(key: str, default: int) -> int:
+    if key not in _timeout_cache:
+        try:
+            with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
+                row = conn.execute("SELECT setting_value FROM bot_global_settings WHERE setting_key = ?",
+                                   (key,)).fetchone()
+            _timeout_cache[key] = int(row[0]) if row else default
+        except (sqlite3.Error, ValueError):
+            return default  # not cached, so a later read can still succeed
+    return _timeout_cache[key]
+
+
+def _save_timeout_setting(key: str, value: int, maximum: int, unit: str) -> None:
+    if not 0 <= value <= maximum:
+        raise ValueError(f"must be 0-{maximum} {unit}")
+    with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
+        conn.execute("INSERT OR REPLACE INTO bot_global_settings (setting_key, setting_value) "
+                     "VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+    _timeout_cache[key] = value
+
+
+def get_menu_timeout_minutes() -> int:
+    """Bot-wide menu timeout in minutes (0 = never), from Bot Health -> Settings."""
+    return _timeout_setting('menu_timeout_minutes', MENU_TIMEOUT_DEFAULT_MINUTES)
+
+
+def set_menu_timeout_minutes(minutes: int) -> None:
+    _save_timeout_setting('menu_timeout_minutes', minutes, MENU_TIMEOUT_MAX_MINUTES, "minutes")
+
+
+def get_confirm_timeout_seconds() -> int:
+    """Bot-wide timeout for confirmation dialogs in seconds (0 = never), from Bot Health -> Settings."""
+    return _timeout_setting('confirm_timeout_seconds', CONFIRM_TIMEOUT_DEFAULT_SECONDS)
+
+
+def set_confirm_timeout_seconds(seconds: int) -> None:
+    _save_timeout_setting('confirm_timeout_seconds', seconds, CONFIRM_TIMEOUT_MAX_SECONDS, "seconds")
+
+
+def menu_timeout():
+    """View timeout for menus: seconds, or None when menus never time out. Menus opened
+    after a change pick it up; open ones keep theirs."""
+    minutes = get_menu_timeout_minutes()
+    return None if minutes == 0 else minutes * 60.0
+
+
+def confirm_timeout():
+    """View timeout for confirmation dialogs: seconds, or None when they never time out."""
+    seconds = get_confirm_timeout_seconds()
+    return None if seconds == 0 else float(seconds)
+
+
+def has_live_handler(view_store, interaction) -> bool:
+    """True when a live view or dynamic item answers this component click (mirrors
+    discord.py's ViewStore.dispatch_view). Unknown internals count as live, so a
+    discord.py change can never make us hijack a working menu."""
     try:
-        await msg.edit(view=view)
-    except discord.HTTPException:
-        pass
+        views, dynamic = view_store._views, view_store._dynamic_items
+        key = (interaction.data["component_type"], interaction.data["custom_id"])
+        message = interaction.message
+        entities = [None]
+        if message is not None:
+            entities.append(message.id)
+            if getattr(message, "interaction_metadata", None) is not None:
+                entities.append(message.interaction_metadata.id)
+        if any(key in views.get(entity, {}) for entity in entities):
+            return True
+        return any(pattern.fullmatch(key[1]) for pattern in dynamic)
+    except Exception:
+        return True
 
 
 def build_divider(start, pattern, end, length, max_length=99):
@@ -720,7 +782,7 @@ class ThemeMenuView(discord.ui.View):
     """Main theme management menu - entry point from settings."""
 
     def __init__(self, cog, original_user_id, guild_id: int = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.guild_id = guild_id
@@ -1414,7 +1476,7 @@ class DeleteThemeConfirmView(discord.ui.View):
     """Confirmation view for deleting a theme."""
 
     def __init__(self, cog, original_user_id, theme_name, menu_view):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.theme_name = theme_name
@@ -1488,7 +1550,7 @@ class CreateThemeModal(discord.ui.Modal):
 
 class CreateThemeView(discord.ui.View):
     def __init__(self, cog, original_user_id, guild_id: int = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.guild_id = guild_id
@@ -1510,7 +1572,7 @@ class CreateThemeView(discord.ui.View):
 
 class DeleteThemeView(discord.ui.View):
     def __init__(self, cog, original_user_id, themename=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.selected_theme = themename
@@ -1701,7 +1763,7 @@ class MultiFieldEditModal(discord.ui.Modal):
 
 class EditEmojiChoiceView(discord.ui.View):
     def __init__(self, pagination_view, emoji_name, current_url, themename, original_user_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.pagination_view = pagination_view
         self.emoji_name = emoji_name
         self.current_url = current_url
@@ -1789,7 +1851,7 @@ class EditEmojiModal(discord.ui.Modal):
 
 class PaginationView(discord.ui.View):
     def __init__(self, pages, current_page, all_emoji_names, themename, cog, original_user_id, from_menu=False):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.pages = pages
         self.current_page = current_page
         self.all_emoji_names = all_emoji_names
@@ -2085,7 +2147,7 @@ class PaginationView(discord.ui.View):
             color=theme.emColor2
         )
 
-        view = discord.ui.View(timeout=7200)
+        view = discord.ui.View(timeout=menu_timeout())
 
         confirm_btn = discord.ui.Button(
             label="Delete",
@@ -3179,13 +3241,9 @@ class Theme(commands.Cog):
             view = PaginationView(pages, 0, all_emoji_names, themename, self, interaction.user.id, from_menu=from_menu)
 
             if is_new_theme:
-                await interaction.followup.send(
-                    f"{theme.verifiedIcon} **Theme '{themename}' created successfully!**\n\nHere's your new theme preview:",
-                    embeds=pages[0],
-                    view=view
-                )
-            else:
-                await interaction.followup.send(embeds=pages[0], view=view)
+                first = pages[0][0]
+                first.description = f"{theme.verifiedIcon} **Theme '{themename}' created successfully!**\n\n{first.description or ''}"
+            await interaction.followup.send(embeds=pages[0], view=view)
 
         except Exception as e:
             logger.error(f"Fetch theme info error: {e}")

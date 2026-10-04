@@ -19,7 +19,7 @@ from notification_event_types import (
     cycle_repeat_minutes
 )
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
 
 logger = logging.getLogger('notification')
 
@@ -339,7 +339,7 @@ class WizardSession:
 
 class WizardWelcomeView(discord.ui.View):
     def __init__(self, cog: NotificationWizard, session: WizardSession):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
 
@@ -362,7 +362,7 @@ class WizardWelcomeView(discord.ui.View):
 class CommonSettingsHubView(discord.ui.View):
     """Step 1: Configure common settings (channel, mention, notification times, timezone)"""
     def __init__(self, cog: NotificationWizard, session: WizardSession):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
 
@@ -521,7 +521,7 @@ class CommonSettingsHubView(discord.ui.View):
 class WizardChannelSelectView(discord.ui.View):
     """Channel selection for wizard"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, parent_view: CommonSettingsHubView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.parent_view = parent_view
@@ -559,7 +559,7 @@ class WizardChannelSelectView(discord.ui.View):
 class WizardMentionSelectView(discord.ui.View):
     """Mention type selection for wizard"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, parent_view: CommonSettingsHubView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.parent_view = parent_view
@@ -637,7 +637,7 @@ class WizardMentionSelectView(discord.ui.View):
             await self.parent_view.show(select_interaction)
 
         role_select.callback = role_callback
-        view = discord.ui.View(timeout=7200)
+        view = discord.ui.View(timeout=menu_timeout())
         view.add_item(role_select)
 
         embed = discord.Embed(
@@ -661,7 +661,7 @@ class WizardMentionSelectView(discord.ui.View):
             await self.parent_view.show(select_interaction)
 
         member_select.callback = member_callback
-        view = discord.ui.View(timeout=7200)
+        view = discord.ui.View(timeout=menu_timeout())
         view.add_item(member_select)
 
         embed = discord.Embed(
@@ -674,7 +674,7 @@ class WizardMentionSelectView(discord.ui.View):
 class WizardNotificationTypeView(discord.ui.View):
     """Notification times selection for wizard"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, parent_view: CommonSettingsHubView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.parent_view = parent_view
@@ -914,7 +914,7 @@ class EventRotationView(discord.ui.View):
     """Per-server rotation overrides so event dates match servers on a different cycle."""
 
     def __init__(self, cog, session, hub_view):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -978,7 +978,7 @@ class EventRotationView(discord.ui.View):
 class EventSelectionHubView(discord.ui.View):
     """Step 2: Select and configure events - returns here after each event config"""
     def __init__(self, cog: NotificationWizard, session: WizardSession):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
 
@@ -1297,7 +1297,7 @@ class BearTrapModal(discord.ui.Modal):
 class BearTrapWeekdayView(discord.ui.View):
     """Select custom weekdays for Bear Trap repeat schedule"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, hub_view: EventSelectionHubView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -1450,7 +1450,7 @@ class CrazyJoeModal(discord.ui.Modal):
 class DualLegionConfigView(discord.ui.View):
     """Base class for dual-legion event configuration (Foundry Battle, Canyon Clash)"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, hub_view: EventSelectionHubView, event_name: str, session_data_attr: str):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -1629,7 +1629,7 @@ class MultiTimeSelectView(discord.ui.View):
     """Base class for multi-time selection events (Fortress Battle, Frostfire Mine)"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, hub_view: EventSelectionHubView,
                  event_name: str, session_data_attr: str, buttons_per_row: int = 5):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -1751,7 +1751,7 @@ class PhaseToggleConfigView(discord.ui.View):
         phases: List of dicts with keys: 'name', 'emoji', 'time', 'phase_key', 'hour', 'minute'
         Example: [{"name": "Borders Open", "emoji": "🌍", "time": "10:00 UTC", "phase_key": "borders_open", "hour": 10, "minute": 0}]
         """
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -1879,7 +1879,7 @@ class SvSConfigView(PhaseToggleConfigView):
 class MercenaryBossesConfigView(discord.ui.View):
     """Configuration for Mercenary Prestige (up to 5 instances during 3-day window)"""
     def __init__(self, cog: NotificationWizard, session: WizardSession, hub_view: EventSelectionHubView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -2207,7 +2207,7 @@ class DailyResetConfigView:
 class WizardPreviewView(discord.ui.View):
     """Preview all notifications before creation"""
     def __init__(self, cog: NotificationWizard, session: WizardSession):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
 
@@ -2969,7 +2969,7 @@ class WizardPreviewView(discord.ui.View):
 
 class WizardCompletionView(discord.ui.View):
     def __init__(self, cog: NotificationWizard, session: WizardSession):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
 

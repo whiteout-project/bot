@@ -7,7 +7,7 @@ import sqlite3
 import logging
 from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
 
 logger = logging.getLogger('alliance')
 
@@ -122,7 +122,7 @@ class AllianceLogs(commands.Cog):
                 color=theme.emColor1
             )
 
-            view = discord.ui.View()
+            view = discord.ui.View(timeout=menu_timeout())
             view.add_item(discord.ui.Button(
                 label="Set Log Channel",
                 emoji=f"{theme.editListIcon}",
@@ -430,7 +430,7 @@ class AllianceLogs(commands.Cog):
                             color=discord.Color.yellow()
                         )
 
-                        confirm_view = discord.ui.View()
+                        confirm_view = discord.ui.View(timeout=confirm_timeout())
                         
                         async def confirm_callback(button_interaction: discord.Interaction):
                             try:
@@ -610,7 +610,7 @@ class AllianceLogs(commands.Cog):
                         inline=False
                     )
 
-                view = discord.ui.View()
+                view = discord.ui.View(timeout=menu_timeout())
                 view.add_item(discord.ui.Button(
                     label="Back",
                     emoji=f"{theme.prevIcon}",
@@ -637,7 +637,7 @@ class AllianceActivityLogView(discord.ui.View):
     """Per-alliance activity log management — alliance is already known."""
 
     def __init__(self, cog, alliance_id: int, alliance_name: str, has_channel: bool):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
@@ -704,7 +704,7 @@ class AllianceActivityLogView(discord.ui.View):
                     return
                 await cog.show_activity_log_for(channel_interaction, alliance_id)
 
-        select_view = discord.ui.View(timeout=300)
+        select_view = discord.ui.View(timeout=menu_timeout())
         select_view.add_item(_ChannelSelect())
         select_embed = discord.Embed(
             title=f"{theme.documentIcon} {alliance_name} — Pick Activity Log Channel",

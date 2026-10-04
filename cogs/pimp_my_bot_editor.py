@@ -7,6 +7,7 @@ import re
 import time
 import logging
 
+from .pimp_my_bot import menu_timeout
 from .pimp_my_bot import (
     theme, THEME_DB_PATH, DEFAULT_EMOJI, ICON_CATEGORIES, check_interaction_user, build_divider,
     ThemeMenuView, ICON_NAMES, DEFAULT_ICON_VALUES
@@ -188,7 +189,7 @@ class ThemeEditorHub(discord.ui.View):
     """
 
     def __init__(self, cog, session: ThemeWizardSession):
-        super().__init__(timeout=7200)  # 2 hour timeout
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self._build_buttons()
@@ -539,7 +540,7 @@ class IconCategoryView(discord.ui.View):
     """View for editing icons within a specific category."""
 
     def __init__(self, cog, session: ThemeWizardSession, category_name: str, hub_view: ThemeEditorHub):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.category_name = category_name
@@ -665,7 +666,7 @@ class IconEditChoiceView(discord.ui.View):
 
     def __init__(self, cog, session: ThemeWizardSession, icon_name: str, current_value: str,
                  parent_view: IconCategoryView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.icon_name = icon_name
@@ -786,7 +787,7 @@ class DividerEditorView(discord.ui.View):
     """View for editing divider settings."""
 
     def __init__(self, cog, session: ThemeWizardSession, hub_view: ThemeEditorHub):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view
@@ -1214,7 +1215,7 @@ class ColorEditorView(discord.ui.View):
     ]
 
     def __init__(self, cog, session: ThemeWizardSession, hub_view: ThemeEditorHub):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.hub_view = hub_view

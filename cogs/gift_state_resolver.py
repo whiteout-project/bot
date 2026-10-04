@@ -10,7 +10,8 @@ import hashlib
 import random
 import sqlite3
 import string
-from datetime import datetime
+from contextlib import closing
+from datetime import datetime, timedelta
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -21,12 +22,17 @@ PER_FID_INTERVAL = 2.2      # seconds between probes on the SAME fid (per-FID li
 THROTTLE_BACKOFF = 4.0      # extra wait after a TOO FREQUENT (40019)
 MAX_PROBE_RETRIES = 4       # retries for a single (fid,kid) when throttled/transient
 PROGRESS_EVERY = 30         # log a scan-progress heartbeat every N probes (~once a minute at this pace)
+CHECKPOINT_EVERY = 10       # save a range scan's resume point every N probes
 TRANSFER_WINDOW = 200       # state transfers stay within ~200 IDs of the origin (same transfer group)
 SCAN_CONCURRENCY = 6        # fids scanned at once - the limit is per-FID, not per-IP
 
 
 class StateResolveInterrupted(Exception):
-    """Raised mid-sweep when the caller's `should_stop` asks the resolver to yield."""
+    """Raised by the caller's `wait_until_idle` to make the resolver stop and yield."""
+
+
+class StateResolveUnavailable(Exception):
+    """The API gave no answer for a state after every retry; the scan resumes there later."""
 
 
 def _probe_code():
@@ -49,7 +55,7 @@ def _make_session(cog):
 
 def classify_probe(status_code, payload):
     """match | nomatch | throttle | error, from a probe's HTTP status + JSON body."""
-    if status_code in (429, 502, 503, 504):
+    if status_code in (429, 500, 502, 503, 504):
         return "throttle"
     err = payload.get("err_code")
     if err == 40019:                       # TOO FREQUENT
@@ -62,20 +68,25 @@ def classify_probe(status_code, payload):
 
 
 async def _probe(cog, session, fid, kid, code):
+    from . import gift_redemption
     import time as _time
     payload_in = {"fid": str(fid), "cdk": code, "kid": str(kid), "time": str(int(_time.time()))}
     data = _sign(cog.wos_encrypt_key, payload_in)
+
     def _post():
-        r = session.post(cog.wos_giftcode_url, data=data, timeout=(10, 30))
-        try:
-            return r.status_code, r.json()
-        except ValueError:
-            return r.status_code, {}
+        return session.post(cog.wos_giftcode_url, data=data, timeout=(10, 30))
+
+    await gift_redemption.await_rate_limit(cog)  # probes spend the same per-IP budget as redemption
     try:
-        code_status, body = await asyncio.to_thread(_post)
+        response = await asyncio.to_thread(_post)
     except requests.exceptions.RequestException:
         return "error"
-    return classify_probe(code_status, body)
+    gift_redemption.note_rate_limit(cog, response)
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    return classify_probe(response.status_code, body)
 
 
 def _candidate_kids(fid):
@@ -137,23 +148,49 @@ def _window_kids(center, width, exclude):
     return out
 
 
-async def resolve_state(cog, fid, *, window=TRANSFER_WINDOW, deep_sweep_max=0, pace=PER_FID_INTERVAL,
-                        should_stop=None, on_progress=None, prefer=()):
-    """Find `fid`'s true state, or None. Tries alliance/mate states, then a transfer
-    window around the last-known state, then an optional 1..deep_sweep_max sweep.
-
-    A full sweep is ~400 paced probes (25+ min), so never call this on a path anyone is
-    waiting on. `should_stop()` is polled per probe and raises StateResolveInterrupted."""
-    ordered = await asyncio.to_thread(_candidate_kids, fid)
-    # Long-shot first guesses; members don't all land in the same state.
+def _likely_kids(fid, prefer, window):
+    """Alliance and mate states, long-shot guesses, then the transfer window, nearest first."""
+    ordered = _candidate_kids(fid)
     ordered = list(ordered) + [k for k in prefer if k not in set(ordered)]
-    seen = set(ordered)
     if window:
-        center = await asyncio.to_thread(_reference_center, fid)
+        center = _reference_center(fid)
         if center is not None:
-            ordered = list(ordered) + _window_kids(center, window, seen)
-    if deep_sweep_max:
-        ordered = list(ordered) + [k for k in range(1, deep_sweep_max + 1) if k not in seen]
+            ordered = ordered + _window_kids(center, window, set(ordered))
+    return ordered
+
+
+async def _probe_with_retries(cog, session, fid, kid, code, pace, wait_until_idle, *, first):
+    result = "error"
+    for attempt in range(MAX_PROBE_RETRIES):
+        if wait_until_idle is not None:
+            await wait_until_idle()
+        if not (first and attempt == 0):
+            await asyncio.sleep(pace)
+        result = await _probe(cog, session, fid, kid, code)
+        if result in ("match", "nomatch"):
+            return result
+        await asyncio.sleep(THROTTLE_BACKOFF)
+    # An outage is not a "no": moving on would skip the right state and mark the member done.
+    raise StateResolveUnavailable(kid)
+
+
+async def resolve_state(cog, fid, *, scan_range=None, start_at=None, window=TRANSFER_WINDOW,
+                        pace=PER_FID_INTERVAL, wait_until_idle=None, on_progress=None,
+                        on_checkpoint=None, prefer=()):
+    """Find `fid`'s true state, or None: likely states first, then `scan_range` from `start_at`
+    (a resume skips the likely phase). Hours per member on a wide range, so never inline.
+    `wait_until_idle` runs before every probe and raises StateResolveInterrupted to stop;
+    `on_checkpoint(next_kid)` records where a range scan should resume."""
+    likely = await asyncio.to_thread(_likely_kids, fid, prefer, window)
+    if start_at is not None and scan_range:
+        # Resuming: the sweep reaches anything from start_at on; earlier likely states may be new.
+        likely = [k for k in likely if not start_at <= k <= scan_range[1]]
+    tried = set(likely)
+    sweep = []
+    if scan_range:
+        lo, hi = scan_range
+        sweep = [k for k in range(max(lo, start_at or lo), hi + 1) if k not in tried]
+    ordered = likely + sweep
     if not ordered:
         return None
 
@@ -161,24 +198,18 @@ async def resolve_state(cog, fid, *, window=TRANSFER_WINDOW, deep_sweep_max=0, p
     code = _probe_code()
     cog.logger.info(f"GiftOps: resolving state for FID {fid} - up to {len(ordered)} probes "
                     f"(~{int(len(ordered) * (pace + 1)) // 60} min)")
-    probes = 0
-    next_beat = PROGRESS_EVERY
+    probes, next_beat, next_kid = 0, PROGRESS_EVERY, None
     try:
-        first = True
-        for kid in ordered:
-            for _ in range(MAX_PROBE_RETRIES):
-                if should_stop is not None and should_stop():
-                    raise StateResolveInterrupted(fid)
-                if not first:
-                    await asyncio.sleep(pace)
-                first = False
-                probes += 1
-                result = await _probe(cog, session, fid, kid, code)
-                if result == "throttle":
-                    await asyncio.sleep(THROTTLE_BACKOFF)
-                    continue
-                break
+        for index, kid in enumerate(ordered):
+            if index >= len(likely):
+                next_kid = kid
+                if on_checkpoint is not None and (index == len(likely) or probes % CHECKPOINT_EVERY == 0):
+                    await on_checkpoint(kid)
+            result = await _probe_with_retries(cog, session, fid, kid, code, pace, wait_until_idle,
+                                               first=probes == 0)
+            probes += 1
             if result == "match":
+                next_kid = None
                 cog.logger.info(f"GiftOps: resolved state for FID {fid} -> {kid} after {probes} probe(s)")
                 return kid
             if probes >= next_beat:
@@ -186,10 +217,13 @@ async def resolve_state(cog, fid, *, window=TRANSFER_WINDOW, deep_sweep_max=0, p
                 next_beat += PROGRESS_EVERY
                 if on_progress is not None:
                     await on_progress(probes, len(ordered))
+        next_kid = None
         cog.logger.info(f"GiftOps: no state found for FID {fid} after {probes} probe(s)")
         return None
     finally:
         session.close()
+        if next_kid is not None and on_checkpoint is not None:
+            await on_checkpoint(next_kid)  # interrupted mid-range: resume on this unanswered state
 
 
 # --- Alliance -> state binding (majority vote over members' known kid) --------------
@@ -344,9 +378,10 @@ def auto_flag_multistate():
 # --- Member state backfill ----------------------------------------------------------
 
 def set_user_kid(fid, kid, *, conn=None):
-    """Set a member's state and clear any wrong-state flag.
+    """Set a member's state and clear any wrong-state flag and scan progress.
     Pass `conn` to join the caller's transaction (not committed here)."""
-    sql = "UPDATE users SET kid = ?, state_mismatch_at = NULL WHERE fid = ?"
+    sql = ("UPDATE users SET kid = ?, state_mismatch_at = NULL, kingdom_scan_next = NULL, "
+           "kingdom_scan_done_at = NULL WHERE fid = ?")
     if conn is not None:
         conn.execute(sql, (kid, fid))
         return
@@ -445,3 +480,127 @@ async def verify_add_state(cog, fid, alliance_id):
     finally:
         session.close()
     return (alliance_kid, True) if result == "match" else (None, False)
+
+
+# --- State scan: settings, targets, per-member resume point --------------------------
+
+SCAN_RETRY_DAYS = 30          # a member a full scan didn't find is retried after this
+SCAN_MAX_KINGDOM = 99999
+_NEEDS_SCAN = ("(kid IS NULL OR state_mismatch_at IS NOT NULL) "
+               "AND alliance IS NOT NULL AND alliance != ''")
+
+
+def _setting(key):
+    with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
+        row = conn.execute("SELECT setting_value FROM bot_global_settings WHERE setting_key = ?",
+                           (key,)).fetchone()
+    return row[0] if row else None
+
+
+def _put_setting(key, value):
+    with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
+        conn.execute("INSERT OR REPLACE INTO bot_global_settings (setting_key, setting_value) "
+                     "VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+
+
+def _highest_kid_on_file():
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        users_max = conn.execute("SELECT MAX(kid) FROM users").fetchone()[0] or 0
+    with closing(sqlite3.connect('db/alliance.sqlite', timeout=30.0)) as conn:
+        alliance_max = conn.execute("SELECT MAX(kid) FROM alliance_list").fetchone()[0] or 0
+    return max(int(users_max), int(alliance_max), 1)
+
+
+def scan_enabled():
+    return _setting('kingdom_scan_enabled') == '1'
+
+
+def get_scan_settings():
+    """{'enabled', 'min', 'max', 'custom'}; without a saved range: 1 to the highest state on file."""
+    lo, hi = _setting('kingdom_scan_min'), _setting('kingdom_scan_max')
+    custom = lo is not None and hi is not None
+    return {
+        'enabled': scan_enabled(),
+        'min': int(lo) if custom else 1,
+        'max': int(hi) if custom else _highest_kid_on_file(),
+        'custom': custom,
+    }
+
+
+def clear_scan_range():
+    """Back to the default range: 1 to the highest state on file."""
+    with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
+        conn.execute("DELETE FROM bot_global_settings WHERE setting_key IN "
+                     "('kingdom_scan_min', 'kingdom_scan_max')")
+        conn.commit()
+    _write_scan("UPDATE users SET kingdom_scan_next = NULL, kingdom_scan_done_at = NULL", ())
+
+
+def set_scan_enabled(on):
+    _put_setting('kingdom_scan_enabled', '1' if on else '0')
+
+
+def set_scan_range(lo, hi):
+    if not (1 <= lo <= hi <= SCAN_MAX_KINGDOM):
+        raise ValueError(f"range must satisfy 1 <= min <= max <= {SCAN_MAX_KINGDOM}")
+    if (_setting('kingdom_scan_min'), _setting('kingdom_scan_max')) == (str(lo), str(hi)):
+        return
+    _put_setting('kingdom_scan_min', lo)
+    _put_setting('kingdom_scan_max', hi)
+    # Saved resume points and "not found" marks belong to the old range.
+    _write_scan("UPDATE users SET kingdom_scan_next = NULL, kingdom_scan_done_at = NULL", ())
+
+
+def members_to_fix():
+    """[(fid, nickname, kid, 'wrong'|'missing'), ...]: rejected states first, newest first."""
+    wrong = [(fid, nick, kid, 'wrong') for fid, nick, kid, _a, _f in fids_with_state_mismatch()]
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        missing = [(fid, nick, None, 'missing') for fid, nick in conn.execute(
+            "SELECT fid, nickname FROM users WHERE kid IS NULL AND alliance IS NOT NULL "
+            "AND alliance != '' AND state_mismatch_at IS NULL ORDER BY nickname").fetchall()]
+    return wrong + missing
+
+
+def scan_targets(*, auto, now=None):
+    """FIDs that need a scan. Auto-scan skips members a full scan missed in the last 30 days."""
+    sql = f"SELECT fid FROM users WHERE {_NEEDS_SCAN}"
+    params = ()
+    if auto:
+        cutoff = ((now or datetime.now()) - timedelta(days=SCAN_RETRY_DAYS)).isoformat(timespec='seconds')
+        sql += " AND (kingdom_scan_done_at IS NULL OR kingdom_scan_done_at < ?)"
+        params = (cutoff,)
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        return [r[0] for r in conn.execute(sql + " ORDER BY fid", params).fetchall()]
+
+
+def needs_scan(fid):
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        return conn.execute(f"SELECT 1 FROM users WHERE fid = ? AND {_NEEDS_SCAN}",
+                            (fid,)).fetchone() is not None
+
+
+def _write_scan(sql, params):
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        conn.execute(sql, params)
+        conn.commit()
+
+
+def save_scan_position(fid, next_kid):
+    _write_scan("UPDATE users SET kingdom_scan_next = ? WHERE fid = ?", (next_kid, fid))
+
+
+def get_scan_position(fid):
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        row = conn.execute("SELECT kingdom_scan_next FROM users WHERE fid = ?", (fid,)).fetchone()
+    return row[0] if row else None
+
+
+def mark_scan_done(fid):
+    _write_scan("UPDATE users SET kingdom_scan_next = NULL, kingdom_scan_done_at = ? WHERE fid = ?",
+                (datetime.now().isoformat(timespec='seconds'), fid))
+
+
+def reset_scan(fid):
+    _write_scan("UPDATE users SET kingdom_scan_next = NULL, kingdom_scan_done_at = NULL WHERE fid = ?",
+                (fid,))

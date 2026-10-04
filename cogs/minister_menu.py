@@ -7,7 +7,7 @@ import sqlite3
 import logging
 from contextlib import closing
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
 from .alliance_member_edit import apply_member_edit
 
 logger = logging.getLogger('bot')
@@ -101,7 +101,7 @@ class UpdateNamesModal(discord.ui.Modal):
 
 class FilteredUserSelectView(discord.ui.View):
     def __init__(self, bot, cog, activity_name, users, booked_times, page=0):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.activity_name = activity_name
@@ -289,7 +289,7 @@ class FilteredUserSelectView(discord.ui.View):
 
 class ClearConfirmationView(discord.ui.View):
     def __init__(self, bot, cog, activity_name, is_global_admin, alliance_ids):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=confirm_timeout())
         self.bot = bot
         self.cog = cog
         self.activity_name = activity_name
@@ -386,7 +386,7 @@ class ClearConfirmationView(discord.ui.View):
 
 class ActivitySelectView(discord.ui.View):
     def __init__(self, bot, cog, action_type):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.action_type = action_type  # "update_names" or "clear_reservations"
@@ -413,7 +413,7 @@ class ActivitySelectView(discord.ui.View):
 
 class MinisterSettingsView(discord.ui.View):
     def __init__(self, bot, cog, is_global: bool = False):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.is_global = is_global
@@ -497,7 +497,7 @@ class MinisterSettingsView(discord.ui.View):
 
 class MinisterChannelView(discord.ui.View):
     def __init__(self, bot, cog, is_global: bool = False):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.is_global = is_global
@@ -613,7 +613,7 @@ class MinisterChannelView(discord.ui.View):
 
 class ChannelConfigurationView(discord.ui.View):
     def __init__(self, bot, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
 
@@ -650,7 +650,7 @@ class ChannelConfigurationView(discord.ui.View):
         # Create a custom view with a back button
         class ChannelSelectWithBackView(discord.ui.View):
             def __init__(self, bot, context, cog):
-                super().__init__(timeout=None)
+                super().__init__(timeout=menu_timeout())
                 self.bot = bot
                 self.context = context
                 self.cog = cog
@@ -699,7 +699,7 @@ class ChannelConfigurationView(discord.ui.View):
 
 class TimeSelectView(discord.ui.View):
     def __init__(self, bot, cog, activity_name, fid, available_times, current_time=None, page=0):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.activity_name = activity_name
@@ -1417,7 +1417,7 @@ class MinisterMenu(commands.Cog):
         """Show channel selection menu for clearing configurations"""
         class ClearChannelsConfirmView(discord.ui.View):
             def __init__(self, parent_cog):
-                super().__init__(timeout=7200)
+                super().__init__(timeout=confirm_timeout())
                 self.parent_cog = parent_cog
                 
             @discord.ui.select(
@@ -1640,7 +1640,7 @@ class MinisterMenu(commands.Cog):
             color=theme.emColor1
         )
 
-        view = discord.ui.View(timeout=60)
+        view = discord.ui.View(timeout=confirm_timeout())
 
         select = discord.ui.Select(
             placeholder="Choose a time slot mode:",
@@ -1807,7 +1807,7 @@ class MinisterMenu(commands.Cog):
             color=theme.emColor3
         )
 
-        view = discord.ui.View(timeout=60)
+        view = discord.ui.View(timeout=confirm_timeout())
 
         select = discord.ui.Select(
             placeholder=f"Choose a schedule list type:",

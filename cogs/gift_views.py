@@ -7,7 +7,7 @@ import logging
 from contextlib import closing
 from datetime import datetime
 
-from .pimp_my_bot import theme, check_interaction_user
+from .pimp_my_bot import theme, check_interaction_user, menu_timeout, confirm_timeout
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 
@@ -288,7 +288,7 @@ async def delete_gift_code(cog, interaction: discord.Interaction):
             confirm.callback = button_callback
             cancel.callback = button_callback
 
-            confirm_view = discord.ui.View()
+            confirm_view = discord.ui.View(timeout=confirm_timeout())
             confirm_view.add_item(confirm)
             confirm_view.add_item(cancel)
 
@@ -310,7 +310,7 @@ async def delete_gift_code(cog, interaction: discord.Interaction):
             )
 
         select.callback = select_callback
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=menu_timeout())
         view.add_item(select)
 
         # Build description with truncation notice if needed
@@ -548,7 +548,7 @@ class CreateGiftCodeModal(discord.ui.Modal):
 
 class GiftView(discord.ui.View):
     def __init__(self, cog, original_user_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
 
@@ -735,7 +735,7 @@ class GiftView(discord.ui.View):
                                 color=theme.emColor4
                             )
 
-                            confirm_view = discord.ui.View()
+                            confirm_view = discord.ui.View(timeout=confirm_timeout())
 
                             async def confirm_callback(button_interaction: discord.Interaction):
                                 try:
@@ -842,7 +842,7 @@ class GiftView(discord.ui.View):
                             )
 
                     select_giftcode.callback = giftcode_callback
-                    giftcode_view = discord.ui.View()
+                    giftcode_view = discord.ui.View(timeout=menu_timeout())
                     giftcode_view.add_item(select_giftcode)
 
                     await select_interaction.response.edit_message(
@@ -933,7 +933,7 @@ class GiftView(discord.ui.View):
 
 class SettingsMenuView(discord.ui.View):
     def __init__(self, cog, original_user_id, is_global: bool = False):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.is_global = is_global

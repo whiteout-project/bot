@@ -15,7 +15,7 @@ import time
 import re
 from .notification_event_types import get_event_types, get_event_icon
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
 
 logger = logging.getLogger('notification')
 
@@ -1738,7 +1738,7 @@ class NotificationSystem(commands.Cog):
 class RepeatOptionView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, description, channel_id, notification_type,
                  mention_type, original_message, event_type=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -1987,7 +1987,7 @@ class RepeatIntervalModal(discord.ui.Modal):
 
 class DaysMenu(discord.ui.View):
     def __init__(self, repeat_view):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.repeat_view = repeat_view
         self.selected_days = []
 
@@ -2066,7 +2066,7 @@ class TextInputModal(discord.ui.Modal):
 
 class EmbedEditorView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, original_message, event_type=None):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2372,7 +2372,7 @@ class EmbedEditorView(discord.ui.View):
 
 class MessageTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2458,7 +2458,7 @@ class EventTypeSelectView(discord.ui.View):
     """View for selecting event type when creating embed notifications"""
 
     def __init__(self, cog, start_date, hour, minute, timezone, original_message):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2750,7 +2750,7 @@ class TimeSelectModal(discord.ui.Modal):
 
 class NotificationTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, original_message, event_type=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2911,7 +2911,7 @@ class CustomTimesModal(discord.ui.Modal):
 class MentionTypeView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, channel_id, notification_type,
                  original_message, event_type=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour
@@ -2998,7 +2998,7 @@ class MentionTypeView(discord.ui.View):
                     )
 
             select.callback = user_select_callback
-            view = discord.ui.View(timeout=7200)
+            view = discord.ui.View(timeout=menu_timeout())
             view.add_item(select)
 
             await interaction.response.edit_message(
@@ -3039,7 +3039,7 @@ class MentionTypeView(discord.ui.View):
                     )
 
             select.callback = role_select_callback
-            view = discord.ui.View(timeout=7200)
+            view = discord.ui.View(timeout=menu_timeout())
             view.add_item(select)
 
             await interaction.response.edit_message(
@@ -3072,7 +3072,7 @@ class MentionTypeView(discord.ui.View):
 
 class SettingsView(discord.ui.View):
     def __init__(self, cog, delete_enabled: bool, default_delay: int):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.delete_enabled = delete_enabled
         self.default_delay = default_delay
@@ -3214,7 +3214,7 @@ class SettingsView(discord.ui.View):
 
 class BearTrapView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         # Use cog's connection instead of creating new one
         self.conn = cog.conn
@@ -3620,7 +3620,7 @@ class BearTrapView(discord.ui.View):
                         color=theme.emColor1
                     )
 
-                    view = discord.ui.View()
+                    view = discord.ui.View(timeout=menu_timeout())
 
                     class PreviewButton(discord.ui.Button):
                         def __init__(self, cog, notification_id):
@@ -3731,7 +3731,7 @@ class BearTrapView(discord.ui.View):
                                     embed_json = json.dumps(copyable_data, indent=2)
 
                                     # Create view with a "Show Code" button
-                                    view = discord.ui.View()
+                                    view = discord.ui.View(timeout=menu_timeout())
                                     view.add_item(ShowCodeButton(embed_json))
 
                                     await interaction.response.send_message(
@@ -3875,7 +3875,7 @@ class BearTrapView(discord.ui.View):
 
                         async def callback(self, interaction: discord.Interaction):
                             try:
-                                confirm_view = discord.ui.View()
+                                confirm_view = discord.ui.View(timeout=confirm_timeout())
 
                                 confirm_button = discord.ui.Button(label="Confirm", style=discord.ButtonStyle.danger)
                                 cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.primary)
@@ -3885,7 +3885,7 @@ class BearTrapView(discord.ui.View):
                                         result = await self.cog.delete_notification(self.notification_id)
 
                                         if result:
-                                            new_view = discord.ui.View()
+                                            new_view = discord.ui.View(timeout=menu_timeout())
 
                                             for row in interaction.message.components:
                                                 for item in row.children:
@@ -4082,7 +4082,7 @@ class BearTrapView(discord.ui.View):
                                         )
 
                                 channel_select.callback = channel_select_callback
-                                temp_view = discord.ui.View()
+                                temp_view = discord.ui.View(timeout=menu_timeout())
                                 temp_view.add_item(channel_select)
 
                                 await interaction.response.send_message(
@@ -4133,8 +4133,9 @@ class BearTrapView(discord.ui.View):
 
                     help_text += f"- **{theme.trashIcon} Delete:** Remove the selected notification.\n\n"
 
+                    details_embed.description += f"\n{help_text}"
                     await select_interaction.response.edit_message(
-                        content=help_text,
+                        content=None,
                         embed=details_embed,
                         view=view
                     )
@@ -4149,7 +4150,7 @@ class BearTrapView(discord.ui.View):
 
             select.callback = select_callback
 
-            view = discord.ui.View()
+            view = discord.ui.View(timeout=menu_timeout())
             view.add_item(select)
             if total_pages > 1:
                 view.add_item(prev_button)
@@ -4297,7 +4298,7 @@ class BearTrapView(discord.ui.View):
 
 class ChannelSelectView(discord.ui.View):
     def __init__(self, cog, start_date, hour, minute, timezone, message_data, original_message, event_type=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.start_date = start_date
         self.hour = hour

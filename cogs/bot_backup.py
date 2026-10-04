@@ -15,7 +15,7 @@ import traceback
 import logging
 import asyncio
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout, confirm_timeout
 from .bot_backup_import import show_import_menu
 
 logger = logging.getLogger('bot')
@@ -465,7 +465,7 @@ async def _global_admin_check(interaction: discord.Interaction) -> bool:
 
 class BackupView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -518,7 +518,7 @@ class BackupView(discord.ui.View):
 
 class BackupChoiceView(discord.ui.View):
     def __init__(self, cog, user_id):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.cog = cog
         self.user_id = user_id
 
@@ -613,7 +613,7 @@ class BackupManageView(discord.ui.View):
     backups beyond the configured keep count."""
 
     def __init__(self, cog, status_note: str | None = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.status_note = status_note
 
@@ -703,7 +703,7 @@ class BackupSettingsView(discord.ui.View):
     type to keep."""
 
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self._build_components()
 

@@ -1,11 +1,13 @@
 """Admin UI + DB helpers for per-channel OCR config: alliance owner, accepted event types, info-message toggles."""
 from __future__ import annotations
 import sqlite3
+from contextlib import closing
 from typing import Optional
 
 import discord
 
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
+from .permission_handler import EDITOR_MODES, editor_mode_label, next_editor_mode
 from .permission_handler import PermissionManager
 from .attendance_ocr_parsers import EVENT_TYPES
 
@@ -158,6 +160,27 @@ def set_ocr_upload_admin_only(alliance_id: int, value: bool) -> None:
             "VALUES (?, ?) "
             "ON CONFLICT(alliance_id) DO UPDATE SET ocr_upload_admin_only = excluded.ocr_upload_admin_only",
             (alliance_id, int(bool(value))),
+        )
+        conn.commit()
+
+
+def get_ocr_review_editors(alliance_id: int) -> str:
+    """Who may edit an open screenshot review for this alliance: uploader, admins or anyone."""
+    with closing(sqlite3.connect("db/alliance.sqlite", timeout=30.0)) as conn:
+        row = conn.execute(
+            "SELECT ocr_review_editors FROM alliancesettings WHERE alliance_id = ?", (alliance_id,),
+        ).fetchone()
+    return row[0] if row and row[0] in EDITOR_MODES else "uploader"
+
+
+def set_ocr_review_editors(alliance_id: int, mode: str) -> None:
+    if mode not in EDITOR_MODES:
+        raise ValueError(f"unknown review editor mode: {mode}")
+    with closing(sqlite3.connect("db/alliance.sqlite", timeout=30.0)) as conn:
+        conn.execute(
+            "INSERT INTO alliancesettings (alliance_id, ocr_review_editors) VALUES (?, ?) "
+            "ON CONFLICT(alliance_id) DO UPDATE SET ocr_review_editors = excluded.ocr_review_editors",
+            (alliance_id, mode),
         )
         conn.commit()
 
@@ -370,7 +393,7 @@ def build_overview_embed(user_id: int, guild_id: int, alliance_id: int | None = 
 
 class OCRChannelListView(discord.ui.View):
     def __init__(self, cog, user_id: int, guild_id: int, alliance_id: int | None = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
@@ -491,7 +514,7 @@ async def _assign_channel_to_alliance(cog, interaction, *, user_id, guild_id,
 class _ChannelPickerView(discord.ui.View):
     def __init__(self, cog, user_id: int, guild_id: int, parent: OCRChannelListView,
                  alliance_id: int | None = None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
@@ -545,7 +568,7 @@ class _ChannelPickerView(discord.ui.View):
 class _AlliancePickerView(discord.ui.View):
     def __init__(self, cog, user_id: int, guild_id: int, channel_id: int,
                  parent: OCRChannelListView):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
@@ -592,7 +615,7 @@ class _AlliancePickerView(discord.ui.View):
 class OCRChannelEditView(discord.ui.View):
     def __init__(self, cog, user_id: int, guild_id: int, channel_id: int,
                  alliance_id: int, parent: OCRChannelListView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
@@ -646,6 +669,11 @@ class OCRChannelEditView(discord.ui.View):
         lines.append(f"{theme.lockIcon} **Uploaders:** {uploaders_state}")
         lines.append("└ Per-alliance setting. Applies to every Screenshot Upload "
                      f"channel for `{_alliance_name(self.alliance_id)}`")
+        lines.append("")
+        lines.append(f"{theme.editListIcon} **Editors:** "
+                     f"{editor_mode_label(get_ocr_review_editors(self.alliance_id))}")
+        lines.append("└ Who can fix a review before it's submitted: the uploader, also admins, "
+                     "or anyone. Per-alliance, like Uploaders")
         lines.append("")
         auto_delete_on = bool(settings.get("auto_delete_screenshots", True))
         lines.append(
@@ -715,6 +743,16 @@ class OCRChannelEditView(discord.ui.View):
         )
         uploaders_btn.callback = self._toggle_uploaders
         self.add_item(uploaders_btn)
+
+        editors = get_ocr_review_editors(self.alliance_id)
+        editors_btn = discord.ui.Button(
+            label=f"Editors: {editor_mode_label(editors)}",
+            emoji=theme.editListIcon,
+            style=discord.ButtonStyle.secondary if editors == "uploader" else discord.ButtonStyle.success,
+            row=1,
+        )
+        editors_btn.callback = self._cycle_editors
+        self.add_item(editors_btn)
 
         auto_delete_on = bool(settings.get("auto_delete_screenshots", True))
         auto_delete_btn = discord.ui.Button(
@@ -801,6 +839,12 @@ class OCRChannelEditView(discord.ui.View):
         await self.cog.refresh_info_message(self.channel_id)
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
+    async def _cycle_editors(self, interaction: discord.Interaction):
+        # Per-alliance, like Uploaders: covers every Screenshot Upload channel of the alliance.
+        set_ocr_review_editors(self.alliance_id, next_editor_mode(get_ocr_review_editors(self.alliance_id)))
+        self._build_components()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
     async def _toggle_auto_delete(self, interaction: discord.Interaction):
         settings = get_channel_settings(self.channel_id) or {}
         current = bool(settings.get("auto_delete_screenshots", True))
@@ -848,7 +892,7 @@ class _KeywordsView(discord.ui.View):
 
     def __init__(self, cog, user_id: int, guild_id: int, channel_id: int,
                  alliance_id: int, parent: "OCRChannelEditView"):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id

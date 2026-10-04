@@ -6,7 +6,7 @@ from datetime import date, timedelta
 import discord
 
 from .bear_track import _isolate_rtl, _ltr_line
-from .pimp_my_bot import theme, check_interaction_user, safe_edit_message, disable_expired_view
+from .pimp_my_bot import theme, check_interaction_user, safe_edit_message, menu_timeout
 
 _ATT_DB = "db/attendance.sqlite"
 _USERS_DB = "db/users.sqlite"
@@ -144,7 +144,7 @@ class NoShowsView(discord.ui.View):
     PAGE_SIZE = 15
 
     def __init__(self, cog, user_id, alliance_id, alliance_name):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.alliance_id = alliance_id
@@ -159,9 +159,6 @@ class NoShowsView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await check_interaction_user(interaction, self.user_id)
-
-    async def on_timeout(self):
-        await disable_expired_view(self)
 
     @property
     def event_types(self):
@@ -347,7 +344,7 @@ class PlayerExcuseView(discord.ui.View):
     PAGE_SIZE = 20
 
     def __init__(self, cog, user_id, alliance_id, fid, name, event_types, window_days, parent_view):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.alliance_id = alliance_id
@@ -364,9 +361,6 @@ class PlayerExcuseView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await check_interaction_user(interaction, self.user_id)
-
-    async def on_timeout(self):
-        await disable_expired_view(self)
 
     def _total_pages(self) -> int:
         return max(1, (len(self.incidents) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)

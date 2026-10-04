@@ -4,6 +4,7 @@ Theme preview generator. Shows sample embeds that mimic real bot output.
 import discord
 import logging
 
+from .pimp_my_bot import menu_timeout
 from .pimp_my_bot import (
     theme, DEFAULT_EMOJI, check_interaction_user, build_divider
 )
@@ -22,7 +23,7 @@ class ThemePreviewView(discord.ui.View):
     ]
 
     def __init__(self, cog, session, parent_view, from_menu: bool = False):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.session = session
         self.parent_view = parent_view

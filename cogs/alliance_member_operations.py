@@ -15,7 +15,7 @@ import csv
 import io
 from contextlib import closing
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, disable_expired_view
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
 from .process_queue import MEMBER_ADD, PreemptedException
 from .bot_level_mapping import LEVEL_MAPPING, parse_furnace_level
 from .alliance import resolve_alliance_kid, state_lock_reason, STATE_CHECK_UNAVAILABLE
@@ -98,6 +98,37 @@ def _extract_ids_from_csv(text: str) -> list[str]:
             seen.add(v)
             out.append(v)
     return out
+
+
+def _ids_from_table(ids: str) -> list[str]:
+    """IDs from pasted CSV/TSV: the id/fid column, or the first column when there's no header."""
+    lines = [line.strip() for line in ids.split('\n') if line.strip()]
+    if not lines or not any(delimiter in lines[0] for delimiter in [',', '\t']):
+        return []
+    delimiter = '\t' if '\t' in lines[0] else ','
+    try:
+        rows = list(csv.reader(io.StringIO(ids), delimiter=delimiter))
+    except Exception:
+        return []
+    if len(rows) <= 1:
+        return []
+    headers = [h.strip().lower() for h in rows[0]]
+    id_col = next((i for i, h in enumerate(headers) if h in ['id', 'fid']), None)
+    if id_col is None:
+        if not (rows[0] and rows[0][0].strip().isdigit()):
+            return []
+        id_col, rows = 0, [[]] + rows
+    cells = (row[id_col] for row in rows[1:] if len(row) > id_col and row[id_col].strip())
+    return [fid for fid in (''.join(c for c in cell if c.isdigit()) for cell in cells) if fid]
+
+
+def parse_member_ids(ids: str) -> list[str]:
+    """IDs from the add-members box (table, one per line, or comma-separated), duplicates dropped."""
+    ids_list = _ids_from_table(ids)
+    if not ids_list:
+        separator = '\n' if '\n' in ids else ','
+        ids_list = [fid.strip() for fid in ids.split(separator) if fid.strip()]
+    return list(dict.fromkeys(ids_list))
 
 
 class _MemberAddProgress:
@@ -216,7 +247,7 @@ class MemberListView(discord.ui.View):
     ]
 
     def __init__(self, members, alliance_id, alliance_name, cog, author_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.all_members = [
             {'fid': fid, 'nickname': nick or '', 'furnace_lv': fl or 0, 'kid': kid}
             for fid, nick, fl, kid in members
@@ -536,9 +567,6 @@ class MemberListView(discord.ui.View):
         await interaction.response.send_message(
             embed=column_embed, view=column_view, ephemeral=True
         )
-
-    async def on_timeout(self) -> None:
-        await disable_expired_view(self)
 
 
 class ManageMembersView(MemberListView):
@@ -916,7 +944,7 @@ class ManageMembersView(MemberListView):
             placeholder=f"{theme.pinIcon} Choose the target alliance…",
             options=target_options,
         )
-        target_view = discord.ui.View(timeout=300)
+        target_view = discord.ui.View(timeout=menu_timeout())
         target_view.add_item(target_select)
 
         parent_view = self
@@ -1065,7 +1093,7 @@ class _RemoveSelectedConfirmView(discord.ui.View):
     """Yes/no confirmation for ManageMembersView's Remove Selected action."""
 
     def __init__(self, parent_view: ManageMembersView):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.parent_view = parent_view
 
     @discord.ui.button(label="Confirm Remove", emoji=theme.minusIcon,
@@ -1484,7 +1512,7 @@ class AllianceMemberOperations(commands.Cog):
                             options=target_options
                         )
 
-                        target_view = discord.ui.View()
+                        target_view = discord.ui.View(timeout=menu_timeout())
                         target_view.add_item(target_select)
 
                         async def target_callback(target_interaction: discord.Interaction):
@@ -1705,62 +1733,29 @@ class AllianceMemberOperations(commands.Cog):
         except Exception:
             pass  # non-fatal — the operation still runs
 
+    def _insert_member(self, fid, nickname, furnace_lv, kid, alliance_id, power, combat_power):
+        # Roll back on failure: this connection lives as long as the cog and would hold the lock.
+        now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        try:
+            self.c_users.execute("""
+                INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance,
+                                   power, power_updated_at, combat_power, combat_power_updated_at)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+            """, (fid, nickname, furnace_lv, kid, alliance_id,
+                  power, now_iso if power else None,
+                  combat_power, now_iso if combat_power else None))
+            self.conn_users.commit()
+        except sqlite3.Error:
+            self.conn_users.rollback()
+            raise
+
     async def _process_add_user(self, message: Optional[discord.Message], alliance_id: str, alliance_name: str,
                                 ids: str, invoker_id: Optional[int], invoker_name: str,
                                 process_id: Optional[int] = None,
                                 resumed_state: Optional[dict] = None,
                                 profiles: Optional[dict] = None):
         progress = _MemberAddProgress(message)
-        ids_list = []
-        
-        # Check if this is CSV/TSV data with headers
-        lines = [line.strip() for line in ids.split('\n') if line.strip()]
-        if lines and any(delimiter in lines[0] for delimiter in [',', '\t']):
-            # Detect delimiter
-            delimiter = '\t' if '\t' in lines[0] else ','
-            
-            # Try to parse as CSV/TSV
-            try:
-                reader = csv.reader(io.StringIO(ids), delimiter=delimiter)
-                rows = list(reader)
-                
-                if rows and len(rows) > 1:
-                    # Get headers
-                    headers = [h.strip().lower() for h in rows[0]]
-                    
-                    # Find ID column - look for 'id', 'fid'
-                    id_col_index = None
-                    for i, header in enumerate(headers):
-                        if header in ['id', 'fid']:
-                            id_col_index = i
-                            break
-                    
-                    if id_col_index is not None:
-                        # Extract IDs from data rows
-                        for row in rows[1:]:
-                            if len(row) > id_col_index and row[id_col_index].strip():
-                                # Clean the ID
-                                fid = ''.join(c for c in row[id_col_index] if c.isdigit())
-                                if fid:
-                                    ids_list.append(fid)
-                        
-                    else:
-                        # No header found, treat first row as data if it looks like IDs
-                        if rows[0] and rows[0][0].strip().isdigit():
-                            for row in rows:
-                                if row and row[0].strip():
-                                    fid = ''.join(c for c in row[0] if c.isdigit())
-                                    if fid:
-                                        ids_list.append(fid)
-            except Exception:
-                pass  # Fall back to simple parsing
-        
-        # If CSV/TSV parsing didn't work or wasn't applicable, use simple parsing
-        if not ids_list:
-            if '\n' in ids:
-                ids_list = [fid.strip() for fid in ids.split('\n') if fid.strip()]
-            else:
-                ids_list = [fid.strip() for fid in ids.split(",") if fid.strip()]
+        ids_list = parse_member_ids(ids)
 
         # Pre-check which IDs already exist in the database
         already_in_db = []
@@ -1880,6 +1875,9 @@ class AllianceMemberOperations(commands.Cog):
 
             index = 0
             while index < len(fids_to_process):
+                if process_queue_cog and process_queue_cog.stop_requested():
+                    logger.info(f"AllianceMemberOps: member add for {alliance_name} stopped by an admin")
+                    break
                 # Check for higher-priority work
                 if process_queue_cog and process_queue_cog.should_preempt():
                     logger.info(f"AllianceMemberOps: Preempting member add for {alliance_name} - higher priority work waiting")
@@ -1936,16 +1934,8 @@ class AllianceMemberOperations(commands.Cog):
                     furnace_lv = parse_furnace_level(csv_level) or 0
                     power = parse_power(csv_power)
                     combat_power = parse_power(csv_combat_power)
-                    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
                     try:  # Pre-filtered, so this ID should not already exist.
-                        self.c_users.execute("""
-                            INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance,
-                                               power, power_updated_at, combat_power, combat_power_updated_at)
-                            VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
-                        """, (fid, nickname, furnace_lv, kid, alliance_id,
-                              power, now_iso if power else None,
-                              combat_power, now_iso if combat_power else None))
-                        self.conn_users.commit()
+                        self._insert_member(fid, nickname, furnace_lv, kid, alliance_id, power, combat_power)
 
                         with open(self.log_file, 'a', encoding='utf-8') as f:
                             f.write(f"[{timestamp}] Successfully added member - ID: {fid}, State: {kid}\n")
@@ -2407,7 +2397,7 @@ class AddMemberModal(discord.ui.Modal):
 
 class AllianceSelectView(discord.ui.View):
     def __init__(self, alliances_with_counts, cog=None, page=0, context="transfer"):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.alliances = alliances_with_counts
         self.cog = cog
         self.page = page
@@ -2587,7 +2577,7 @@ class IDSearchModal(discord.ui.Modal):
                         color=theme.emColor2
                     )
 
-                    view = discord.ui.View()
+                    view = discord.ui.View(timeout=confirm_timeout())
                     confirm_button = discord.ui.Button(
                         label=f"{theme.verifiedIcon} Confirm Delete",
                         style=discord.ButtonStyle.danger
@@ -2701,7 +2691,7 @@ class IDSearchModal(discord.ui.Modal):
                     ]
                 )
 
-                view = discord.ui.View()
+                view = discord.ui.View(timeout=menu_timeout())
                 view.add_item(select)
 
                 async def select_callback(select_interaction: discord.Interaction):
@@ -2769,7 +2759,7 @@ class IDSearchModal(discord.ui.Modal):
 
 class AllianceSelectViewWithAll(discord.ui.View):
     def __init__(self, alliances_with_counts, cog):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.alliances = alliances_with_counts
         self.cog = cog
         self.current_select = None
@@ -2816,7 +2806,7 @@ class AllianceSelectViewWithAll(discord.ui.View):
 class ExportColumnSelectView(discord.ui.View):
     def __init__(self, alliance_id, alliance_name, cog, include_alliance=False,
                  prefiltered_members=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
         self.cog = cog
@@ -3043,7 +3033,7 @@ class ExportColumnSelectView(discord.ui.View):
 class ExportFormatSelectView(discord.ui.View):
     def __init__(self, alliance_id, alliance_name, selected_columns, cog,
                  prefiltered_members=None):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
         self.selected_columns = selected_columns
@@ -3246,7 +3236,7 @@ class IDMultiSelectModal(discord.ui.Modal):
 
 class MemberSelectView(discord.ui.View):
     def __init__(self, members, source_alliance_name, cog, page=0, is_remove_operation=False, alliance_id=None, alliances=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.members = members
         self.source_alliance_name = source_alliance_name
         self.cog = cog
@@ -3444,7 +3434,7 @@ class MemberSelectView(discord.ui.View):
 
 class DeleteAllConfirmView(discord.ui.View):
     def __init__(self, parent_view):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.parent_view = parent_view
 
     @discord.ui.button(label=f"{theme.verifiedIcon} Confirm Delete All", style=discord.ButtonStyle.danger)
@@ -3470,7 +3460,7 @@ class AlliancePowerRankingsView(discord.ui.View):
 
     def __init__(self, members, alliance_id: int, alliance_name: str,
                  cog, user_id: int):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.members = sorted(
             members,
             key=lambda m: (m[2] if m[2] is not None else -1),
@@ -3483,9 +3473,6 @@ class AlliancePowerRankingsView(discord.ui.View):
         self.current_page = 0
         self.message = None
         self._build_components()
-
-    async def on_timeout(self):
-        await disable_expired_view(self)
 
     def _total_pages(self) -> int:
         if not self.members:

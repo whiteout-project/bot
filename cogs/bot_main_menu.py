@@ -11,7 +11,7 @@ import asyncio
 from .permission_handler import (
     PermissionManager, TIER_OWNER, TIER_GLOBAL, TIER_SERVER, TIER_ALLIANCE, TIER_NONE,
 )
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, has_live_handler, confirm_timeout, notify_view_expired
 
 logger = logging.getLogger('bot')
 
@@ -92,6 +92,23 @@ def _build_alliance_select(all_alliances, staged_ids,
     )
 
 
+DEAD_CLICK_GRACE = 2.0  # seconds; Discord drops an unanswered click after 3
+
+
+async def _report_menu_error(interaction: discord.Interaction, where: str, error: Exception):
+    """Log a menu that failed to open and tell the clicker, so the click never goes unanswered."""
+    logger.error(f"Error in {where}: {error}")
+    print(f"Error in {where}: {error}")
+    text = f"{theme.deniedIcon} This menu couldn't be opened. The error was written to the bot log."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(text, ephemeral=True)
+        else:
+            await interaction.response.send_message(text, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
 class MainMenu(commands.Cog):
     """Centralized main menu cog for bot navigation."""
 
@@ -137,8 +154,29 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            logger.error(f"Error in show_main_menu: {e}")
-            print(f"Error in show_main_menu: {e}")
+            await _report_menu_error(interaction, "show_main_menu", e)
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        """A click on a menu that timed out or predates a restart reopens the main menu in place."""
+        if interaction.type != discord.InteractionType.component or interaction.response.is_done():
+            return
+        if has_live_handler(self.bot._connection._view_store, interaction):
+            return
+        await asyncio.sleep(DEAD_CLICK_GRACE)  # raw on_interaction listeners and stop()-ing views answer first
+        if interaction.response.is_done():
+            return
+        # Only a menu /settings opened, for its opener; Discord's older interaction field names the command.
+        origin = getattr(interaction.message, "_interaction", None)
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if (origin is None or origin.name != "settings" or origin.user.id != interaction.user.id
+                or not is_admin):
+            await interaction.response.send_message(
+                f"{theme.hourglassIcon} This button stopped working because its menu expired "
+                f"or the bot restarted. Open the menu again to continue.",
+                ephemeral=True)
+            return
+        await self.show_main_menu(interaction)
 
     @staticmethod
     def _member_counts() -> dict:
@@ -251,8 +289,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            logger.error(f"Error in show_alliance_management: {e}")
-            print(f"Error in show_alliance_management: {e}")
+            await _report_menu_error(interaction, "show_alliance_management", e)
 
     async def show_alliance_hub(self, interaction: discord.Interaction, alliance_id: int):
         """Per-alliance hub — all per-alliance actions for one alliance."""
@@ -360,8 +397,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            logger.error(f"Error in show_alliance_hub: {e}")
-            print(f"Error in show_alliance_hub: {e}")
+            await _report_menu_error(interaction, "show_alliance_hub", e)
 
 
     def _fc_label(self, fl: int) -> str:
@@ -377,8 +413,7 @@ class MainMenu(commands.Cog):
             view = SelfRegistrationView(self)
             await view.show(interaction)
         except Exception as e:
-            logger.error(f"Error in show_self_registration: {e}")
-            print(f"Error in show_self_registration: {e}")
+            await _report_menu_error(interaction, "show_self_registration", e)
 
     async def show_permissions(self, interaction: discord.Interaction):
         """Display the Permissions sub-menu (admin management).
@@ -403,8 +438,7 @@ class MainMenu(commands.Cog):
             embed = view.build_embed()
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
         except Exception as e:
-            logger.error(f"Error in show_permissions: {e}")
-            print(f"Error in show_permissions: {e}")
+            await _report_menu_error(interaction, "show_permissions", e)
 
     async def show_maintenance(self, interaction: discord.Interaction):
         """Display the Maintenance sub-menu."""
@@ -440,8 +474,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            logger.error(f"Error in show_maintenance: {e}")
-            print(f"Error in show_maintenance: {e}")
+            await _report_menu_error(interaction, "show_maintenance", e)
 
 
 # ============================================================================
@@ -643,7 +676,7 @@ class AllianceManagementEntryView(discord.ui.View):
     them all; Alliance tier can only use Transfer if they cover 2+ alliances)."""
 
     def __init__(self, cog, alliances_with_counts, tier: str):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliances = alliances_with_counts  # [(alliance_id, name, count), ...]
         self.tier = tier
@@ -821,7 +854,7 @@ class AllianceHubView(discord.ui.View):
                  tier: str, alliances_with_counts: list,
                  state_locked: bool = False, alliance_kid=None,
                  auto_remove: bool = False):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
@@ -1027,7 +1060,7 @@ class SelfRegistrationView(discord.ui.View):
     }
 
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
 
     def _get_settings(self, guild_id):
@@ -1244,7 +1277,7 @@ class AdminManagerView(discord.ui.View):
     PAGE_SIZE = 25  # Discord SelectOption max per dropdown
 
     def __init__(self, cog, viewer_id: int):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.page = 0
@@ -1545,7 +1578,7 @@ class AuditLogView(discord.ui.View):
     PAGE_SIZE = 10
 
     def __init__(self, bot, viewer_id: int):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.viewer_id = viewer_id
         self.page = 0
@@ -1683,7 +1716,7 @@ class AdminContextView(discord.ui.View):
     MAX_ALLIANCE_OPTIONS = 25  # Discord SelectOption limit
 
     def __init__(self, cog, viewer_id: int, target_id: int, parent_view: AdminManagerView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.target_id = target_id
@@ -1885,7 +1918,7 @@ class AdminContextView(discord.ui.View):
             ),
             color=theme.emColor2,
         )
-        await interaction.response.edit_message(embed=embed, view=confirm_view)
+        await confirm_view.show(interaction, embed)
 
     async def _do_remove(self, interaction):
         before_state = PermissionManager.describe_state(self.target_id)
@@ -1921,21 +1954,31 @@ class AdminContextView(discord.ui.View):
 class _ConfirmActionView(discord.ui.View):
     """Generic Yes/No confirmation. Yes/No callbacks receive the interaction."""
     def __init__(self, viewer_id, *, on_confirm, on_cancel):
-        super().__init__(timeout=120)
+        super().__init__(timeout=confirm_timeout())
         self.viewer_id = viewer_id
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
+        self.message = None
+
+    async def show(self, interaction, embed):
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.message = interaction.message
+
+    async def on_timeout(self):
+        await notify_view_expired(self, "confirmation")
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, emoji=theme.verifiedIcon, row=0)
     async def confirm(self, interaction, _btn):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
+        self.stop()
         await self._on_confirm(interaction)
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=0)
     async def cancel(self, interaction, _btn):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
+        self.stop()
         await self._on_cancel(interaction)
 
 
@@ -1950,7 +1993,7 @@ class AddAdminView(discord.ui.View):
     MAX_ALLIANCE_OPTIONS = 25
 
     def __init__(self, cog, viewer_id: int, target_id: int, parent_view: AdminManagerView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.target_id = target_id
@@ -2071,7 +2114,7 @@ class TransferOwnerView(discord.ui.View):
     Recipient must already be Global tier."""
 
     def __init__(self, cog, viewer_id: int, parent_view: AdminManagerView):
-        super().__init__(timeout=600)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.parent_view = parent_view
@@ -2150,7 +2193,7 @@ class TransferOwnerView(discord.ui.View):
             ),
             color=theme.emColor2,
         )
-        await interaction.response.edit_message(embed=embed, view=confirm_view)
+        await confirm_view.show(interaction, embed)
 
     async def _do_transfer(self, interaction, target_id):
         before_target = PermissionManager.describe_state(target_id)
@@ -2187,7 +2230,7 @@ class RoleManagerView(discord.ui.View):
     PAGE_SIZE = 25
 
     def __init__(self, cog, viewer_id: int, parent_view: AdminManagerView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.parent_view = parent_view
@@ -2377,7 +2420,7 @@ class AddRoleView(discord.ui.View):
     MAX_ALLIANCE_OPTIONS = 25
 
     def __init__(self, cog, viewer_id: int, role: discord.Role, parent_view: RoleManagerView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.role = role
@@ -2487,7 +2530,7 @@ class RoleContextView(discord.ui.View):
     MAX_ALLIANCE_OPTIONS = 25
 
     def __init__(self, cog, viewer_id: int, role_id: int, guild_id: int, parent_view: RoleManagerView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.viewer_id = viewer_id
         self.role_id = role_id
@@ -2638,7 +2681,7 @@ class RoleContextView(discord.ui.View):
             ),
             color=theme.emColor2,
         )
-        await interaction.response.edit_message(embed=embed, view=confirm_view)
+        await confirm_view.show(interaction, embed)
 
     async def _do_remove(self, interaction):
         before_state = PermissionManager.describe_role_state(self.role_id)
@@ -2712,7 +2755,7 @@ class MaintenanceView(discord.ui.View):
     """Maintenance sub-menu."""
 
     def __init__(self, cog, is_global: bool = False):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.is_global = is_global
 

@@ -47,9 +47,36 @@ def test_http_429_routes_to_timeout_retry():
     assert _redeem(FakeResponse(429, {"message": "Too Many Attempts."})) == "TIMEOUT_RETRY"
 
 
-@pytest.mark.parametrize("http_status", [502, 503, 504])
+@pytest.mark.parametrize("http_status", [500, 502, 503, 504])
 def test_http_5xx_routes_to_timeout_retry(http_status):
     assert _redeem(FakeResponse(http_status, {"message": "upstream error"})) == "TIMEOUT_RETRY"
+
+
+def test_retry_config_hands_back_final_5xx_instead_of_raising():
+    # A raised RetryError was reported as CONNECTION_ERROR and never reached the retry cycle.
+    import http.server
+    import threading
+    import requests
+    from requests.adapters import HTTPAdapter
+    from cogs.gift_operations import API_RETRY
+
+    class Always503(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(503)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Always503)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        session = requests.Session()
+        session.mount("http://", HTTPAdapter(max_retries=API_RETRY))
+        response = session.post(f"http://127.0.0.1:{server.server_port}/", timeout=5)
+        assert response.status_code == 503
+    finally:
+        server.shutdown()
 
 
 def test_success():
@@ -241,7 +268,7 @@ def test_no_state_is_terminal_after_one_attempt(monkeypatch):
     assert result is True
     assert claims["n"] == 1  # not retried - retrying won't conjure a state
     nickname, reason, cycles = captured["failed"][1]
-    assert "NO_STATE" in reason
+    assert reason == "No state on file"
 
 
 def test_db_unavailable_is_terminal_with_clean_reason(monkeypatch):
@@ -251,3 +278,14 @@ def test_db_unavailable_is_terminal_with_clean_reason(monkeypatch):
     assert claims["n"] == 1  # not retried in-run - the DB won't recover mid-loop
     nickname, reason, cycles = captured["failed"][1]
     assert reason == "Bot couldn't read its database"
+
+
+def test_stop_request_ends_redemption_early_with_a_summary(monkeypatch):
+    cog, claims, captured = _setup_alliance_run(monkeypatch, "SUCCESS")
+    pq = types.SimpleNamespace(stop_requested=lambda: True, should_preempt=lambda: True)
+    cog.bot = types.SimpleNamespace(get_channel=lambda cid: None,
+                                    get_cog=lambda name: pq if name == "ProcessQueue" else None)
+    result = asyncio.run(gr.use_giftcode_for_alliance(cog, 5, "CODE"))
+    assert result is True                         # finished normally, not requeued
+    assert claims["n"] == 0
+    assert "failed" in captured                   # the summary still went out

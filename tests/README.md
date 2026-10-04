@@ -54,6 +54,35 @@ python -m pytest tests -v                                # all unit tests
 Layer 1 tests + the 3.11 compat scan are what get run after every code change;
 layer 2 is the once-a-session reality check (~5-30s per fixture).
 
+## SimCord UI suite (`tests/sim/`)
+
+Runs every production cog against SimCord's in-memory Discord and clicks through the `/settings` menus: every hub and every hub button, permission tiers, expired menus and stale confirmations. `python -m pytest tests` skips it.
+
+Install once into the bot venv:
+
+```
+python -m pip install "simcord[pytest]>=2.2.1,<3" tzdata
+```
+
+Run (about 35s):
+
+```
+python -m pytest tests/sim --sim
+```
+
+Known bugs are listed in `KNOWN_BUGS` in `test_hubs.py` or marked `xfail`. A known bug that stops reproducing fails the run until its entry is removed.
+
+### Screenshot gallery
+
+Renders every screen the suite visits into `tests/sim/gallery/index.html` (about 30s):
+
+```
+python -m pip install "simcord[screenshot]>=2.2.1,<3" tzdata
+python -m playwright install chromium
+python tests/sim/gallery.py
+python tests/sim/gallery.py --hub "Gift Codes"
+```
+
 ## The 3.11 compat scan
 
 Production runs on Python 3.11. Two f-string features added in 3.12

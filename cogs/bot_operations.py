@@ -11,7 +11,7 @@ import asyncio
 import requests
 import logging
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout
 
 logger = logging.getLogger('bot')
 
@@ -22,7 +22,7 @@ class _UpdateAndRestartView(discord.ui.View):
     can install the pending release."""
 
     def __init__(self, bot):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
 
     @discord.ui.button(
@@ -496,7 +496,7 @@ class BotPresenceView(discord.ui.View):
     """Lets a Global admin pick the bot's activity type + edit its text/URL."""
 
     def __init__(self, cog: 'BotOperations'):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self._build_components()
 

@@ -10,7 +10,7 @@ import requests
 import json
 import traceback
 
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, notify_view_expired
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, confirm_timeout
 from .alliance_member_operations import AllianceSelectView
 from .permission_handler import PermissionManager
 
@@ -349,7 +349,7 @@ async def setup_giftcode_auto(cog, interaction: discord.Interaction):
                 color=discord.Color.yellow()
             )
 
-            confirm_view = discord.ui.View()
+            confirm_view = discord.ui.View(timeout=confirm_timeout())
 
             async def button_callback(button_interaction: discord.Interaction):
                 try:
@@ -531,7 +531,7 @@ class TestIDModal(discord.ui.Modal, title="Set Test ID"):
 
 class RedemptionPriorityView(discord.ui.View):
     def __init__(self, cog, alliances_with_priority):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliances = alliances_with_priority  # List of (alliance_id, name, priority)
         self.selected_alliance_id = None
@@ -688,7 +688,7 @@ class RedemptionPriorityView(discord.ui.View):
 
 class ClearCacheConfirmView(discord.ui.View):
     def __init__(self, parent_cog):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.parent_cog = parent_cog
 
     @discord.ui.button(label="Confirm Clear", style=discord.ButtonStyle.danger, emoji=f"{theme.verifiedIcon}")
@@ -757,7 +757,7 @@ class RedemptionSummaryView(discord.ui.View):
     """Pick an alliance, then toggle whether/what its redemption summary posts."""
 
     def __init__(self, cog, user_id: int, alliances):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.alliances = alliances            # [(alliance_id, name), ...]
@@ -864,6 +864,3 @@ class RedemptionSummaryView(discord.ui.View):
 
     async def _back(self, interaction: discord.Interaction):
         await self.cog.show_settings_menu(interaction)
-
-    async def on_timeout(self):
-        await notify_view_expired(self, "redemption summary settings")

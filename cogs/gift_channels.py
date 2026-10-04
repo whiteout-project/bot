@@ -4,7 +4,7 @@ import discord
 import sqlite3
 import logging
 
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout, confirm_timeout
 from .alliance_member_operations import AllianceSelectView
 from .alliance import PaginatedChannelView
 
@@ -224,7 +224,7 @@ async def delete_gift_channel(cog, interaction: discord.Interaction):
                 color=discord.Color.yellow()
             )
 
-            confirm_view = discord.ui.View()
+            confirm_view = discord.ui.View(timeout=confirm_timeout())
 
             async def confirm_callback(button_interaction: discord.Interaction):
                 try:
@@ -349,7 +349,7 @@ async def delete_gift_channel_for_alliance(cog, interaction: discord.Interaction
         )
 
         # Create confirmation buttons
-        confirm_view = discord.ui.View()
+        confirm_view = discord.ui.View(timeout=confirm_timeout())
 
         async def confirm_removal(button_interaction: discord.Interaction):
             try:
@@ -484,7 +484,7 @@ async def manage_channel_settings(cog, interaction: discord.Interaction):
             inline=False
         )
 
-    main_view = discord.ui.View(timeout=300)
+    main_view = discord.ui.View(timeout=menu_timeout())
 
     # Configure/Change Channel button
     config_button = discord.ui.Button(
@@ -589,7 +589,7 @@ async def manage_channel_settings(cog, interaction: discord.Interaction):
             )
 
         alliance_select.callback = alliance_select_callback
-        alliance_view = discord.ui.View(timeout=300)
+        alliance_view = discord.ui.View(timeout=menu_timeout())
         alliance_view.add_item(alliance_select)
 
         await config_interaction.response.edit_message(
@@ -663,7 +663,7 @@ async def manage_channel_settings(cog, interaction: discord.Interaction):
                     color=theme.emColor2
                 )
 
-                confirm_view = discord.ui.View(timeout=60)
+                confirm_view = discord.ui.View(timeout=confirm_timeout())
 
                 confirm_button = discord.ui.Button(
                     label="Yes, Remove",
@@ -718,7 +718,7 @@ async def manage_channel_settings(cog, interaction: discord.Interaction):
                 )
 
             remove_select.callback = remove_select_callback
-            remove_view = discord.ui.View(timeout=300)
+            remove_view = discord.ui.View(timeout=menu_timeout())
             remove_view.add_item(remove_select)
 
             await remove_interaction.response.edit_message(
@@ -879,7 +879,7 @@ async def channel_history_scan(cog, interaction: discord.Interaction):
             color=discord.Color.yellow()
         )
 
-        confirm_view = discord.ui.View(timeout=60)
+        confirm_view = discord.ui.View(timeout=confirm_timeout())
 
         confirm_button = discord.ui.Button(
             label="Start Scan",
@@ -964,7 +964,7 @@ async def channel_history_scan(cog, interaction: discord.Interaction):
         )
 
     alliance_select.callback = alliance_select_callback
-    alliance_view = discord.ui.View(timeout=300)
+    alliance_view = discord.ui.View(timeout=menu_timeout())
     alliance_view.add_item(alliance_select)
 
     await interaction.response.send_message(

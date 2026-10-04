@@ -7,13 +7,13 @@ import sqlite3
 import logging
 from datetime import datetime
 import json
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
 
 logger = logging.getLogger('bot')
 
 class ArchiveDetailsView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, archive_info, type_counts):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.archive_id = archive_id
@@ -46,7 +46,7 @@ class ArchiveDetailsView(discord.ui.View):
 
 class ArchiveAppointmentsView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, appointment_type, appointments, page=0):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.archive_id = archive_id
@@ -118,7 +118,7 @@ class ArchiveAppointmentsView(discord.ui.View):
 
 class ArchiveListView(discord.ui.View):
     def __init__(self, bot, cog, archives, page=0):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.archives = archives
@@ -204,7 +204,7 @@ class ArchiveListView(discord.ui.View):
 
 class ClearAfterSaveView(discord.ui.View):
     def __init__(self, bot, cog, archive_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.archive_id = archive_id
@@ -225,7 +225,7 @@ class ClearAfterSaveView(discord.ui.View):
 
 class DeleteArchiveConfirmView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, archive_info):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=confirm_timeout())
         self.bot = bot
         self.cog = cog
         self.archive_id = archive_id
@@ -263,7 +263,7 @@ class PostArchiveChannelSelect(discord.ui.ChannelSelect):
 
 class PostArchiveChannelView(discord.ui.View):
     def __init__(self, bot, cog, archive_id, appointment_type, appointments):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.archive_id = archive_id
@@ -303,7 +303,7 @@ class SaveArchiveModal(discord.ui.Modal, title="Save Minister Schedule Archive")
 
 class ArchiveMenuView(discord.ui.View):
     def __init__(self, bot, cog):
-        super().__init__(timeout=None)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
 
@@ -328,7 +328,7 @@ class ArchiveMenuView(discord.ui.View):
 
 class ChangeHistoryView(discord.ui.View):
     def __init__(self, bot, cog, history_records, page=0, archive_id=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.history_records = history_records
@@ -693,7 +693,7 @@ class MinisterArchive(commands.Cog):
                     description="No archives found.\n\nUse the **Save Current Schedule** button to create your first archive.",
                     color=theme.emColor1
                 )
-                view = discord.ui.View(timeout=7200)
+                view = discord.ui.View(timeout=menu_timeout())
                 back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
 
                 async def back_callback(inter: discord.Interaction):
@@ -797,7 +797,7 @@ class MinisterArchive(commands.Cog):
                     description=f"No appointments found for {appointment_type} in this archive.",
                     color=theme.emColor1
                 )
-                view = discord.ui.View(timeout=7200)
+                view = discord.ui.View(timeout=menu_timeout())
                 back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
 
                 async def back_callback(inter: discord.Interaction):
@@ -1120,7 +1120,7 @@ class MinisterArchive(commands.Cog):
                     description="No change history found.",
                     color=theme.emColor1
                 )
-                view = discord.ui.View(timeout=7200)
+                view = discord.ui.View(timeout=menu_timeout())
                 back_button = discord.ui.Button(label="Back", style=discord.ButtonStyle.primary, emoji=f"{theme.backIcon}")
 
                 async def back_callback(inter: discord.Interaction):

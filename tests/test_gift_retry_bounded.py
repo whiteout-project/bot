@@ -86,6 +86,16 @@ def test_captcha_too_frequent_gives_up_after_max_cycles(monkeypatch):
         f"rate-limited member must stop after MAX_RETRY_CYCLES, made {claims['n']} attempts"
 
 
+def test_connection_error_is_retried_then_gives_up(monkeypatch):
+    cog, claims = _setup(monkeypatch, "CONNECTION_ERROR")
+
+    result = asyncio.run(gr.use_giftcode_for_alliance(cog, 5, "CODE"))
+
+    assert result is True
+    assert 1 < claims["n"] <= 10, \
+        f"a network blip must be retried, but only up to MAX_RETRY_CYCLES; made {claims['n']} attempts"
+
+
 def test_timeout_retry_gives_up_after_max_cycles(monkeypatch):
     cog, claims = _setup(monkeypatch, "TIMEOUT_RETRY")
 

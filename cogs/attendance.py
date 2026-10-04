@@ -10,7 +10,7 @@ from datetime import datetime
 import os
 import uuid
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout, confirm_timeout
 from .bot_level_mapping import LEVEL_MAPPING as FC_LEVEL_MAPPING
 
 logger = logging.getLogger('bot')
@@ -85,7 +85,7 @@ def parse_points(points_str):
 
 class AttendanceSettingsView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
 
     @discord.ui.button(
@@ -187,7 +187,7 @@ class AttendanceSettingsView(discord.ui.View):
 
 class ReportTypeSelectView(discord.ui.View):
     def __init__(self, cog, current_setting):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.current_setting = current_setting
 
@@ -264,7 +264,7 @@ class ReportTypeSelectView(discord.ui.View):
 
 class ReportSortSelectView(discord.ui.View):
     def __init__(self, cog, report_cog, current_setting):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.report_cog = report_cog
         self.current_setting = current_setting
@@ -370,7 +370,7 @@ class AttendanceHubView(discord.ui.View):
     _SCOPED_LABELS = ("Mark Attendance", "View Attendance", "Player History", "Screenshot Upload", "No-Shows")
 
     def __init__(self, cog, user_id, guild_id, alliance_id, alliance_name, alliances_with_counts):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.guild_id = guild_id
@@ -485,7 +485,7 @@ class AttendanceHubView(discord.ui.View):
 
 class EventTypeSelectView(discord.ui.View):
     def __init__(self, session_data, cog, alliance_id, alliance_name):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=menu_timeout())
         self.session_data = session_data
         self.cog = cog
         self.alliance_id = alliance_id
@@ -652,7 +652,7 @@ class SessionNameModal(discord.ui.Modal, title="Attendance Session"):
 
 class EditEventDetailsView(discord.ui.View):
     def __init__(self, session_id, session_name, current_event_type, current_event_date, parent_view, is_edit=True, current_event_subtype=None):
-        super().__init__(timeout=1800)
+        super().__init__(timeout=menu_timeout())
         self.session_id = session_id
         self.session_name = session_name
         self.current_event_type = current_event_type
@@ -988,7 +988,7 @@ class RenameSessionModal(discord.ui.Modal, title="Rename Session"):
 
 class ConfirmDeleteView(discord.ui.View):
     def __init__(self, session_id, parent_view, alliance_id):
-        super().__init__(timeout=300)
+        super().__init__(timeout=confirm_timeout())
         self.session_id = session_id
         self.parent_view = parent_view
         self.alliance_id = alliance_id
@@ -1007,7 +1007,7 @@ class ConfirmDeleteView(discord.ui.View):
             )
             
             # Create back button to return to session list
-            back_view = discord.ui.View(timeout=7200)
+            back_view = discord.ui.View(timeout=menu_timeout())
             back_button = discord.ui.Button(
                 label="Back", emoji=f"{theme.backIcon}",
                 style=discord.ButtonStyle.secondary
@@ -1056,7 +1056,7 @@ class PlayerFilterModal(discord.ui.Modal, title="Filter Players"):
 
 class PlayerSelectView(discord.ui.View):
     def __init__(self, players, alliance_name, session_name, cog, alliance_id=None, session_id=None, is_edit=False, page=0, event_type="Other", event_date=None, event_subtype=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.players = players
         self.alliance_name = alliance_name
         self.session_name = session_name
@@ -1363,7 +1363,7 @@ class PlayerSelectView(discord.ui.View):
                 description="No attendance has been marked yet.",
                 color=discord.Color.orange()
             )
-            back_view = discord.ui.View(timeout=7200)
+            back_view = discord.ui.View(timeout=menu_timeout())
             back_button = discord.ui.Button(
                 label="Close", emoji=f"{theme.backIcon}",
                 style=discord.ButtonStyle.secondary
@@ -1385,7 +1385,7 @@ class PlayerSelectView(discord.ui.View):
                     description="No attendance has been marked yet.",
                     color=discord.Color.orange()
                 )
-                back_view = discord.ui.View(timeout=7200)
+                back_view = discord.ui.View(timeout=menu_timeout())
                 back_button = discord.ui.Button(
                     label="Close", emoji=f"{theme.backIcon}",
                     style=discord.ButtonStyle.secondary
@@ -1775,7 +1775,7 @@ class AttendanceModal(discord.ui.Modal):
 
 class PlayerAttendanceView(discord.ui.View):
     def __init__(self, player, parent_view):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.player = player
         self.parent_view = parent_view
         self.event_type = parent_view.event_type if hasattr(parent_view, 'event_type') else "Other"
@@ -1992,7 +1992,7 @@ class Attendance(commands.Cog):
 
     def _create_back_view(self, callback):
         """Helper to create back button view"""
-        view = discord.ui.View(timeout=7200)
+        view = discord.ui.View(timeout=menu_timeout())
         back_button = discord.ui.Button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary)
         back_button.callback = callback
         view.add_item(back_button)
@@ -2757,7 +2757,7 @@ class SessionSelectView(discord.ui.View):
     PAGE_SIZE = 25  # Discord's hard cap on select options
 
     def __init__(self, sessions, alliance_id, cog, is_viewing=False, page=0):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.sessions = sessions
         self.alliance_id = alliance_id
         self.cog = cog

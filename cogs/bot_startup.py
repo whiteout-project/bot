@@ -7,7 +7,7 @@ from discord import app_commands
 import sqlite3
 import logging
 from datetime import datetime
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
 
 logger = logging.getLogger('bot')
 
@@ -16,7 +16,7 @@ class OrphanViewBase(discord.ui.View):
     """Base class for orphan cleanup views with shared functionality."""
 
     def __init__(self, orphaned_users: dict, bot, cog):
-        super().__init__(timeout=3600)
+        super().__init__(timeout=menu_timeout())
         self.orphaned_users = orphaned_users
         self.bot = bot
         self.cog = cog

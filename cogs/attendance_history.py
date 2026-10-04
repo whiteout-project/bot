@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 import discord
 
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
 from .attendance_ocr_parsers import EVENT_TYPES
 from .bear_track import _isolate_rtl, _ltr_line
 
@@ -191,7 +191,7 @@ class HistoryPlayerSelectView(discord.ui.View):
     PAGE_SIZE = 25
 
     def __init__(self, cog, user_id, alliance_id, alliance_name, players):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.alliance_id = alliance_id
@@ -340,7 +340,7 @@ class PlayerHistoryView(discord.ui.View):
     PAGE_SIZE = 10
 
     def __init__(self, cog, user_id, alliance_id, alliance_name, fid, parent=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.alliance_id = alliance_id

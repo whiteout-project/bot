@@ -37,6 +37,33 @@ for _test_file, _needed in _REQUIRES.items():
     if not (_REPO / _needed).exists():
         collect_ignore.append(_test_file)
 
+SIM_INSTALL_HINT = 'python -m pip install "simcord[pytest]>=2.2.1,<3" tzdata'
+
+
+def pytest_addoption(parser):
+    parser.addoption("--sim", action="store_true", help="run the SimCord UI suite in tests/sim")
+
+
+def pytest_ignore_collect(collection_path, config):
+    if collection_path.name != "sim" or collection_path.parent != _HERE:
+        return None
+    if not config.getoption("--sim"):
+        return True
+    try:
+        import simcord  # noqa: F401
+    except ImportError:
+        raise pytest.UsageError(f"--sim needs SimCord: {SIM_INSTALL_HINT}")
+    return None
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--sim"):
+        return
+    skip = pytest.mark.skip(reason="SimCord UI suite: add --sim to run it")
+    for item in items:
+        if _HERE / "sim" in item.path.parents:
+            item.add_marker(skip)
+
 
 @pytest.fixture
 def make_templates_cog():

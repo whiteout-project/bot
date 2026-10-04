@@ -27,6 +27,8 @@ STATE_RESOLVE = 600         # slowest work in the bot; always yields to everythi
 # design and yields cooperatively instead.
 HANDLER_TIMEOUT_SECONDS = 7200
 HANDLER_TIMEOUT_EXEMPT = ('state_resolve',)
+# Handlers that call should_preempt() between steps, so a stop request takes effect mid-run.
+STOPPABLE_ACTIONS = ('gift_redeem', 'member_add', 'state_resolve')
 
 
 class PreemptedException(Exception):
@@ -62,6 +64,8 @@ class ProcessQueue(commands.Cog):
         self._processor_task: Optional[asyncio.Task] = None
         self._wake_event = asyncio.Event()
         self._current_process: Optional[Dict] = None
+        self._current_started: Optional[datetime] = None
+        self._cancel_requested: set = set()
         self._shutting_down = False
         # Runtime context for non-serializable references (Discord interactions, messages).
         # Lost on restart by design — handlers should fall back gracefully when missing.
@@ -174,6 +178,13 @@ class ProcessQueue(commands.Cog):
         )
         self.conn.commit()
 
+    def mark_cancelled(self, process_id: int):
+        self.cursor.execute(
+            "UPDATE process_queue SET status = 'cancelled', completed_at = ? WHERE id = ?",
+            (datetime.now().isoformat(), process_id)
+        )
+        self.conn.commit()
+
     def requeue(self, process_id: int):
         """Set a process back to 'queued' (used when preempted by higher priority work)."""
         self.cursor.execute(
@@ -232,7 +243,38 @@ class ProcessQueue(commands.Cog):
         """
         if not self._current_process:
             return False
+        if self._current_process['id'] in self._cancel_requested:
+            return True
         return self.has_higher_priority_waiting(self._current_process['priority'])
+
+    def stop_requested(self) -> bool:
+        """True when an admin asked the running job to stop (it should finish up early)."""
+        return bool(self._current_process) and self._current_process['id'] in self._cancel_requested
+
+    def running_info(self) -> Optional[Dict]:
+        """The running job with its start time, or None when the queue is idle."""
+        if not self._current_process:
+            return None
+        return {**self._current_process, 'started': self._current_started,
+                'stopping': self._current_process['id'] in self._cancel_requested}
+
+    def cancel_process(self, process_id: int) -> str:
+        """'removed' for a queued job, 'stopping' for the running one (it finishes up early at its
+        next check), 'unstoppable' when it can't stop mid-run, 'gone' when it no longer exists."""
+        if self._current_process and self._current_process['id'] == process_id:
+            if self._current_process['action'] not in STOPPABLE_ACTIONS:
+                return 'unstoppable'
+            self._cancel_requested.add(process_id)
+            logger.info(f"ProcessQueue: stop requested for running process id={process_id}")
+            return 'stopping'
+        self.cursor.execute("DELETE FROM process_queue WHERE id = ? AND status = 'queued'", (process_id,))
+        removed = self.cursor.rowcount
+        self.conn.commit()
+        if removed:
+            self.clear_runtime_context(process_id)
+            logger.info(f"ProcessQueue: removed queued process id={process_id}")
+            return 'removed'
+        return 'gone'
 
     def get_queue_info(self) -> Dict:
         """Get queue size and processing state for UI display."""
@@ -242,6 +284,14 @@ class ProcessQueue(commands.Cog):
             'queue_size': queue_size,
             'is_processing': self._current_process is not None,
         }
+
+    def queued_processes(self) -> list:
+        """Every waiting job, in the order the processor will run them."""
+        self.cursor.execute("""
+            SELECT id, action, status, priority, alliance_id, details, created_at
+            FROM process_queue WHERE status = 'queued' ORDER BY priority ASC, id ASC
+        """)
+        return [self._row_to_dict(row) for row in self.cursor.fetchall()]
 
     def get_queued_processes_by_action(self, action: str, statuses=('queued',)) -> list:
         """Get processes for a given action type. Pass statuses=('queued','active') to
@@ -346,6 +396,7 @@ class ProcessQueue(commands.Cog):
                     continue
 
                 self._current_process = process
+                self._current_started = datetime.now()
                 self.mark_active(process['id'])
 
                 preempted = False
@@ -364,16 +415,22 @@ class ProcessQueue(commands.Cog):
                     print(msg)
                     self.mark_failed(process['id'])
                 except PreemptedException:
-                    preempted = True
-                    self.requeue(process['id'])
-                    logger.info(f"ProcessQueue: Preempted {action} (id={process['id']}); re-queued for later")
+                    if process['id'] in self._cancel_requested:
+                        self.mark_cancelled(process['id'])
+                        logger.info(f"ProcessQueue: Stopped {action} (id={process['id']}) on admin request")
+                    else:
+                        preempted = True
+                        self.requeue(process['id'])
+                        logger.info(f"ProcessQueue: Preempted {action} (id={process['id']}); re-queued for later")
                 except Exception as e:
                     logger.exception(f"ProcessQueue: Handler for {action} failed (id={process['id']}): {e}")
                     self.mark_failed(process['id'])
                 finally:
                     if not preempted:
                         self.clear_runtime_context(process['id'])
+                    self._cancel_requested.discard(process['id'])
                     self._current_process = None
+                    self._current_started = None
 
             except asyncio.CancelledError:
                 logger.info("ProcessQueue: Processor cancelled")

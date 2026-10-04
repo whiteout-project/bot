@@ -592,3 +592,27 @@ class PermissionManager:
     def _bust_role_cache(cls):
         cls._role_map_cache = None
         cls._role_grant_by_user.clear()
+
+
+EDITOR_MODES = ('uploader', 'admins', 'anyone')
+_EDITOR_LABELS = {'uploader': "Uploader only", 'admins': "Uploader + admins", 'anyone': "Anyone"}
+
+
+def editor_mode_label(mode: str) -> str:
+    return _EDITOR_LABELS.get(mode, _EDITOR_LABELS['uploader'])
+
+
+def next_editor_mode(mode: str) -> str:
+    index = EDITOR_MODES.index(mode) if mode in EDITOR_MODES else 0
+    return EDITOR_MODES[(index + 1) % len(EDITOR_MODES)]
+
+
+def can_edit_upload(user_id: int, uploader_id: int, mode: str, alliance_id, guild_id) -> bool:
+    """Who may edit an uploaded screenshot review: always the uploader; per the alliance's
+    setting, also that alliance's admins ('admins') or anyone in the channel ('anyone')."""
+    if user_id == uploader_id or mode == 'anyone':
+        return True
+    if mode != 'admins':
+        return False
+    alliance_ids, is_global = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
+    return is_global or int(alliance_id) in {int(a) for a in alliance_ids}

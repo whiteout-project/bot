@@ -13,7 +13,8 @@ from typing import Optional
 
 import discord
 
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout
+from .permission_handler import can_edit_upload
 from . import alliance_power_changes
 
 logger = logging.getLogger("alliance")
@@ -1819,21 +1820,34 @@ async def _safe_defer(interaction: discord.Interaction) -> None:
         pass
 
 
+def _review_editor_mode(channel_id: int) -> tuple:
+    """(alliance_id, editor mode) for the Screenshot Upload channel."""
+    from .attendance_ocr_setup import get_channel_settings, get_ocr_review_editors
+    settings = get_channel_settings(channel_id) or {}
+    alliance_id = settings.get("alliance_id") or 0
+    return alliance_id, (get_ocr_review_editors(alliance_id) if alliance_id else "uploader")
+
+
+async def can_edit_session(session, interaction: discord.Interaction) -> bool:
+    """Uploader, or whoever the alliance's Editors setting allows; denies with an ephemeral."""
+    alliance_id, mode = _review_editor_mode(session.channel.id)
+    if can_edit_upload(interaction.user.id, session.uploader_id, mode, alliance_id, interaction.guild_id):
+        return True
+    await interaction.response.send_message(
+        f"{theme.deniedIcon} Only the uploader can change this. Admins can let others help "
+        f"with the Editors setting on the Screenshot Upload channel.", ephemeral=True)
+    return False
+
+
 class _ProgressView(discord.ui.View):
     def __init__(self, session: OcrUploadSession):
         # Long timeout so the Done Uploading button stays clickable while
         # the admin reads through the parsed counts before deciding.
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.session = session
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.session.uploader_id:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Only the uploader can finalize this session.",
-                ephemeral=True,
-            )
-            return False
-        return True
+        return await can_edit_session(self.session, interaction)
 
     @discord.ui.button(label="Done Uploading", style=discord.ButtonStyle.success,
                        emoji=f"{theme.verifiedIcon}")

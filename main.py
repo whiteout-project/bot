@@ -1303,6 +1303,8 @@ if __name__ == "__main__":
                 ("discord_server_id",       "INTEGER"),
                 ("discord_id_updated_at",   "TEXT"),
                 ("state_mismatch_at",       "TEXT"),
+                ("kingdom_scan_next",       "INTEGER"),
+                ("kingdom_scan_done_at",    "TEXT"),
             ]
             for _col, _typ in _users_columns_to_add:
                 try:
@@ -1380,6 +1382,14 @@ if __name__ == "__main__":
                 conn_alliance.execute(
                     "ALTER TABLE alliancesettings ADD COLUMN ocr_upload_admin_only INTEGER DEFAULT 0"
                 )
+
+            # Who may edit an uploaded screenshot review: 'uploader', 'admins' or 'anyone'.
+            for _col in ("ocr_review_editors", "bear_review_editors"):
+                try:
+                    conn_alliance.execute(f"SELECT {_col} FROM alliancesettings LIMIT 1")
+                except sqlite3.OperationalError:
+                    conn_alliance.execute(
+                        f"ALTER TABLE alliancesettings ADD COLUMN {_col} TEXT DEFAULT 'uploader'")
 
             # Per-alliance toggle for @silent sync posts (0 = ring, 1 = no notification ping).
             try:

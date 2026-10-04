@@ -16,7 +16,7 @@ from notification_event_types import (
     EVENT_CONFIG, get_event_icon, get_event_config, get_instance_display_name,
     get_instance_defaults, get_instance_labels
 )
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout, confirm_timeout
 from .permission_handler import PermissionManager
 
 logger = logging.getLogger('notification')
@@ -458,7 +458,7 @@ class NotificationTemplates(commands.Cog):
 
 class TemplateBrowseView(discord.ui.View):
     def __init__(self, cog: NotificationTemplates, templates: List[Dict], event_filter: Optional[str] = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.templates = templates
         self.event_filter = event_filter
@@ -694,7 +694,7 @@ class ApplyDescriptionView(discord.ui.View):
     """Confirmation for copying a template's description onto its sub-event templates"""
 
     def __init__(self, cog: NotificationTemplates, template: Dict, labels: List[str]):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.cog = cog
         self.template = template
         self.labels = labels
@@ -744,7 +744,7 @@ class ApplyDescriptionView(discord.ui.View):
 
 class TemplatePreviewView(discord.ui.View):
     def __init__(self, cog: NotificationTemplates, template: Dict, all_templates: List[Dict] = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.template = template
         self.all_templates = all_templates or []
@@ -920,7 +920,7 @@ class ResetConfirmView(discord.ui.View):
     """Confirmation view for resetting a template to default"""
 
     def __init__(self, cog: NotificationTemplates, template: Dict, all_templates: List[Dict] = None):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.cog = cog
         self.template = template
         self.all_templates = all_templates or []

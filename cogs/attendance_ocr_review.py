@@ -13,7 +13,8 @@ from typing import Optional
 
 import discord
 
-from .pimp_my_bot import theme
+from .pimp_my_bot import theme, menu_timeout, confirm_timeout
+from .attendance_ocr_parsers import can_edit_session
 from .bear_track import _isolate_rtl, _ltr_line
 from .alliance_member_edit import new_member_name, new_member_name_input
 from . import alliance_power_changes
@@ -100,7 +101,7 @@ class EventReviewView(discord.ui.View):
                  existing_session_id: Optional[str] = None,
                  enriching_open_session_id: Optional[str] = None,
                  edit_mode: bool = False):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.session = session
         # Opened from the settings/Mark flow to edit a saved session: each edit
         # autosaves, so we show Back instead of Submit/Cancel.
@@ -814,13 +815,7 @@ class EventReviewView(discord.ui.View):
     # ── interaction guards ────────────────────────────────────────────────
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.session.uploader_id:
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Only the uploader can edit this review.",
-                ephemeral=True,
-            )
-            return False
-        return True
+        return await can_edit_session(self.session, interaction)
 
     async def on_timeout(self):
         """Replace the big review embed with a small expiry notice so the
@@ -1465,7 +1460,7 @@ class _ConfirmDeleteEventView(discord.ui.View):
     """Ephemeral-style inline confirm for deleting a saved event."""
 
     def __init__(self, parent: "EventReviewView"):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.parent = parent
         confirm = discord.ui.Button(
             label="Delete", emoji=theme.trashIcon, style=discord.ButtonStyle.danger)
@@ -1494,7 +1489,7 @@ class _StatsMvpEditView(discord.ui.View):
     a time. Pick a stat -> a modal edits its total + MVP together."""
 
     def __init__(self, parent: "EventReviewView"):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.parent = parent
         self._build()
 
@@ -1914,7 +1909,7 @@ class _AddRowBucketView(discord.ui.View):
     """Bucket picker shown only in complete mode."""
 
     def __init__(self, parent: EventReviewView):
-        super().__init__(timeout=120)
+        super().__init__(timeout=menu_timeout())
         self.parent = parent
 
         reg_btn = discord.ui.Button(
@@ -2006,7 +2001,7 @@ class _TimeSlotPickerView(discord.ui.View):
     """Ephemeral UTC time-slot dropdown."""
 
     def __init__(self, parent: EventReviewView, slots: tuple[str, ...]):
-        super().__init__(timeout=120)
+        super().__init__(timeout=menu_timeout())
         self.parent = parent
         current = parent.session.detected_time
         options = [

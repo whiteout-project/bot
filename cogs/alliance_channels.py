@@ -6,7 +6,7 @@ from discord.ext import commands
 import sqlite3
 import logging
 from datetime import datetime
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout
 
 logger = logging.getLogger('alliance')
 
@@ -46,7 +46,7 @@ class ChannelSetupView(discord.ui.View):
     }
 
     def __init__(self, alliance_id: int, alliance_name: str, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.alliance_id = alliance_id
         self.alliance_name = alliance_name
         self.cog = cog
@@ -290,7 +290,7 @@ class _ChannelPickerView(discord.ui.View):
     PAGE_SIZE = 25
 
     def __init__(self, channels, kind: str, parent: ChannelSetupView):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.channels = list(channels)
         self.kind = kind
         self.parent = parent

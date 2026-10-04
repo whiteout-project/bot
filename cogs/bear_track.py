@@ -19,8 +19,8 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta, timezone
 from cogs.attendance import MATPLOTLIB_AVAILABLE
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user
-from .permission_handler import PermissionManager
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, confirm_timeout
+from .permission_handler import PermissionManager, can_edit_upload, editor_mode_label, next_editor_mode
 from .alliance_member_edit import (
     ALLIANCE_TAG_RE as _ALLIANCE_TAG_RE, is_placeholder_name, new_member_name, new_member_name_input,
 )
@@ -2361,13 +2361,15 @@ class BearSessionButton(discord.ui.DynamicItem[discord.ui.Button],
         return cls(match['action'], int(match['channel']), int(match['user']))
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
+        session = _active_sessions.get((self.channel_id, self.user_id))
+        mode = session.cog.get_bear_settings(session.alliance_id).get("review_editors") if session else None
+        if not can_edit_upload(interaction.user.id, self.user_id, mode,
+                               session.alliance_id if session else 0, interaction.guild_id):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Only the user who started this session can finalize it.",
                 ephemeral=True,
             )
             return
-        session = _active_sessions.get((self.channel_id, self.user_id))
         if session is None:
             await _retire_stale_recovery(interaction)
             return
@@ -2920,7 +2922,7 @@ class BearTrack(commands.Cog):
             "bear_admin_only_view, bear_admin_only_add, "
             "bear_session_timeout_min, bear_auto_delete_screenshots, "
             "bear_match_all_history, bear_post_info_message, "
-            "bear_pin_info_message, bear_info_message_id "
+            "bear_pin_info_message, bear_info_message_id, bear_review_editors "
             "FROM alliancesettings WHERE alliance_id = ?",
             (alliance_id,)
         )
@@ -2938,6 +2940,7 @@ class BearTrack(commands.Cog):
                 "post_info_message": 1,
                 "pin_info_message": 1,
                 "info_message_id": None,
+                "review_editors": "uploader",
             }
         return {
             "channel_id": row[0],
@@ -2951,6 +2954,7 @@ class BearTrack(commands.Cog):
             "post_info_message": row[8] if row[8] is not None else 1,
             "pin_info_message": row[9] if row[9] is not None else 1,
             "info_message_id": row[10],
+            "review_editors": row[11] or "uploader",
         }
 
     def update_bear_setting(self, alliance_id: int, column: str, value):
@@ -2959,12 +2963,13 @@ class BearTrack(commands.Cog):
                     "bear_admin_only_view", "bear_admin_only_add",
                     "bear_session_timeout_min", "bear_auto_delete_screenshots",
                     "bear_match_all_history", "bear_post_info_message",
-                    "bear_pin_info_message", "bear_info_message_id"}
+                    "bear_pin_info_message", "bear_info_message_id", "bear_review_editors"}
         if column not in allowed:
             return
         self.alliance_cursor.execute(
-            f"UPDATE alliancesettings SET {column} = ? WHERE alliance_id = ?",
-            (value, alliance_id)
+            f"INSERT INTO alliancesettings (alliance_id, {column}) VALUES (?, ?) "
+            f"ON CONFLICT(alliance_id) DO UPDATE SET {column} = excluded.{column}",
+            (alliance_id, value)
         )
         self.alliance_conn.commit()
 
@@ -3858,7 +3863,7 @@ class RetryOcrLanguagePicker(discord.ui.View):
     review's `_run_retry_ocr`."""
 
     def __init__(self, parent_review, current_primary):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.parent_review = parent_review
 
         # Offer every configured engine except the one already in use as
@@ -3885,7 +3890,7 @@ class RetryOcrLanguagePicker(discord.ui.View):
 
 class RetryOcrPreviewView(discord.ui.View):
     def __init__(self, parent_review, new_primary_lang: str, proposal: dict):
-        super().__init__(timeout=300)
+        super().__init__(timeout=menu_timeout())
         self.parent_review = parent_review
         self.new_primary_lang = new_primary_lang
         self.proposal = proposal
@@ -3893,7 +3898,7 @@ class RetryOcrPreviewView(discord.ui.View):
     @discord.ui.button(label="Apply Changes", style=discord.ButtonStyle.success,
                        emoji=theme.verifiedIcon)
     async def apply(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await check_interaction_user(interaction, self.parent_review.original_user_id):
+        if not await self.parent_review._can_edit(interaction):
             return
         applied = self.parent_review._apply_retry_proposal(self.proposal)
         if self.parent_review.message is not None:
@@ -3928,7 +3933,7 @@ class RetryOcrPreviewView(discord.ui.View):
     @discord.ui.button(label="Discard", style=discord.ButtonStyle.danger,
                        emoji=theme.deniedIcon)
     async def discard(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not await check_interaction_user(interaction, self.parent_review.original_user_id):
+        if not await self.parent_review._can_edit(interaction):
             return
         await interaction.response.edit_message(
             content=(
@@ -3948,7 +3953,7 @@ class BearHuntReviewView(discord.ui.View):
                  alliance_id, alliance_name, original_user_id,
                  auto_delete_tracker=None, source_messages=None,
                  existing_hunt_id=None, existing_rows=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.data_submit = data_submit
         self.hunt_meta = hunt_meta
@@ -3979,6 +3984,16 @@ class BearHuntReviewView(discord.ui.View):
         self._resolve_unique_assignments()
         self._sort_rows()
         self._build_components()
+
+    async def _can_edit(self, interaction: discord.Interaction) -> bool:
+        mode = self.cog.get_bear_settings(self.alliance_id).get("review_editors", "uploader")
+        if can_edit_upload(interaction.user.id, self.original_user_id, mode,
+                           self.alliance_id, interaction.guild_id):
+            return True
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} Only the person who uploaded these screenshots can edit this hunt. "
+            f"Admins can change who may edit under Bear Settings.", ephemeral=True)
+        return False
 
     def _recheck_existing(self):
         """Refresh the edit-in-place target for the current date+slot (banner + save)."""
@@ -4409,7 +4424,7 @@ class BearHuntReviewView(discord.ui.View):
     # ---------- button callbacks ----------
 
     async def _on_row_selected(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         idx = int(interaction.data['values'][0])
         if idx >= len(self.rows):
@@ -4421,7 +4436,7 @@ class BearHuntReviewView(discord.ui.View):
         await interaction.response.send_modal(EditRowModal(self, idx))
 
     async def _on_slot_selected(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         new_slot = int(interaction.data['values'][0])
         if new_slot != self.hunt_meta.get('hunting_trap'):
@@ -4429,17 +4444,17 @@ class BearHuntReviewView(discord.ui.View):
         await self.refresh(interaction)
 
     async def _on_edit_header(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         await interaction.response.send_modal(EditHeaderModal(self))
 
     async def _on_add_row(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         await interaction.response.send_modal(AddRowModal(self))
 
     async def _on_submit(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         errors = validate_bear_submission(
             self.hunt_meta['date'], self.hunt_meta['hunting_trap'],
@@ -4488,7 +4503,7 @@ class BearHuntReviewView(discord.ui.View):
             self.stop()  # resolve so a stale timeout can't later deface the message
 
     async def _on_cancel(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         embed = discord.Embed(
             description=f"{theme.deniedIcon} Bear hunt review canceled.",
@@ -4521,7 +4536,7 @@ class BearHuntReviewView(discord.ui.View):
         """Send a single ephemeral with a language picker. The picked
         language drives `_run_retry_ocr`, which merges the new engine's
         results into the existing review (additive — never destructive)."""
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         if not self.source_messages:
             await interaction.response.send_message(
@@ -4736,14 +4751,14 @@ class BearHuntReviewView(discord.ui.View):
         return "\n".join(lines)
 
     async def _on_prev(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         if self.page > 0:
             self.page -= 1
         await self.refresh(interaction)
 
     async def _on_next(self, interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
+        if not await self._can_edit(interaction):
             return
         if self.page < self._total_pages() - 1:
             self.page += 1
@@ -5041,7 +5056,7 @@ def _bear_viewer_embed() -> discord.Embed:
 
 class BearMenuView(discord.ui.View):
     def __init__(self, cog, original_user_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
 
@@ -5185,7 +5200,7 @@ class BearFarmLinkView(discord.ui.View):
     still rolls up to the main alliance."""
 
     def __init__(self, cog, original_user_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.main_alliance_id = None
@@ -5310,7 +5325,7 @@ class BearDamageView(discord.ui.View):
     def __init__(self, data_submit, *, cog, original_user_id,
                  alliance_id: int | None = None, hunting_trap: int | None = None,
                  from_date: date | None = None, to_date: date | None = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.data_submit = data_submit
         self.cog = cog
         self.original_user_id = original_user_id
@@ -5519,7 +5534,7 @@ class BearTimeRangeView(discord.ui.View):
                ('3m', '3 Months'), ('1y', '1 Year'), ('all', 'All Time')]
 
     def __init__(self, chart_view: 'BearDamageView'):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.chart = chart_view
         self.original_user_id = chart_view.original_user_id
         self._build_components()
@@ -5588,7 +5603,7 @@ class BearDamageEditView(discord.ui.View):
     PLAYER_PAGE = 20  # < 25 so the row-edit select never exceeds Discord's cap
 
     def __init__(self, cog, original_user_id, alliance_id=None, chart_view=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.chart_view = chart_view
@@ -6415,7 +6430,7 @@ class PlayerAddConfirmView(discord.ui.View):
 
     def __init__(self, *, view, parent_message, row_id, fid, kid, damage, rank, raw_name,
                  nickname=None):
-        super().__init__(timeout=120)
+        super().__init__(timeout=confirm_timeout())
         self.parent = view
         self.parent_message = parent_message
         self.original_user_id = view.original_user_id
@@ -6462,6 +6477,7 @@ class PlayerAddConfirmView(discord.ui.View):
                 (self.fid, nick, 0, str(self.kid), '', str(self.parent.alliance_id)))
             cog.users_conn.commit()
         except Exception as e:
+            cog.users_conn.rollback()
             logger.error(f"Failed to add user {self.fid}: {e}")
             print(f"[ERROR] Failed to add user {self.fid}: {e}")
             await interaction.response.send_message(
@@ -6603,7 +6619,7 @@ class BearLeaderboardView(discord.ui.View):
 
     def __init__(self, *, cog, original_user_id, alliance_id, alliance_name,
                  hunting_trap, from_date, to_date, chart_view=None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.alliance_id = alliance_id
@@ -6752,7 +6768,7 @@ class BearLeaderboardView(discord.ui.View):
 class PlayerHistoryView(discord.ui.View):
     def __init__(self, *, cog, original_user_id, alliance_id, alliance_name, fid,
                  hunting_trap, parent_view):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.alliance_id = alliance_id
@@ -6889,7 +6905,7 @@ class PlayerHistoryView(discord.ui.View):
 
 class BearSettingsView(discord.ui.View):
     def __init__(self, cog, original_user_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.alliance_id: int | None = None
@@ -6917,6 +6933,10 @@ class BearSettingsView(discord.ui.View):
         view_perm_btn = discord.ui.Button(label="Toggle View Permission", style=discord.ButtonStyle.primary, emoji=theme.eyeIcon, row=1, disabled=not has_alliance)
         view_perm_btn.callback = self._toggle_view_callback
         self.add_item(view_perm_btn)
+
+        edit_perm_btn = discord.ui.Button(label="Toggle Edit Permission", style=discord.ButtonStyle.primary, emoji=theme.editListIcon, row=1, disabled=not has_alliance)
+        edit_perm_btn.callback = self._toggle_edit_callback
+        self.add_item(edit_perm_btn)
 
         # History toggle sits to the left of Back on row 2 — it doesn't belong
         # in the row-1 "Toggle X" cluster (it's an opt-in matching tweak, not a
@@ -6951,6 +6971,8 @@ class BearSettingsView(discord.ui.View):
                 f"└ Delete uploaded screenshots after event submission\n\n"
                 f"{theme.lockIcon} **Toggle Permissions**\n"
                 f"└ Who can add hunts and view saved data\n\n"
+                f"{theme.editListIcon} **Toggle Edit Permission**\n"
+                f"└ Who can fix an uploaded hunt before it's saved: the uploader, also admins, or anyone\n\n"
                 f"{theme.listIcon} **Toggle Full Name History Match**\n"
                 f"└ Whether to match players by all their past names\n"
                 f"└ Their current & event-date names are always matched\n\n"
@@ -6983,6 +7005,7 @@ class BearSettingsView(discord.ui.View):
                 f"**Info Message:** {info_text}\n"
                 f"**Add Permission:** {add_text}\n"
                 f"**View Permission:** {view_text}\n"
+                f"**Edit Permission:** {editor_mode_label(settings['review_editors'])}\n"
                 f"{theme.lowerDivider}"
             )
             embed.add_field(name="Current Settings", value=current_settings, inline=False)
@@ -7092,6 +7115,19 @@ class BearSettingsView(discord.ui.View):
             return
         await self._toggle_permission(interaction, "view")
 
+    async def _toggle_edit_callback(self, interaction: discord.Interaction):
+        if not await check_interaction_user(interaction, self.original_user_id):
+            return
+        allowed = await self.cog.check_bear_permission(interaction, self.alliance_id, "manage")
+        if not allowed:
+            return
+        settings = self.cog.get_bear_settings(self.alliance_id)
+        new_mode = next_editor_mode(settings["review_editors"])
+        self.cog.update_bear_setting(self.alliance_id, "bear_review_editors", new_mode)
+        embed = self._build_embed()
+        embed.description += f"\n{theme.verifiedIcon} Edit permission is now: {editor_mode_label(new_mode)}."
+        await safe_edit_message(interaction, embed=embed, view=self, content=None)
+
     async def _toggle_permission(self, interaction: discord.Interaction, mode: str):
         settings = self.cog.get_bear_settings(self.alliance_id)
         key = f"admin_only_{mode}"
@@ -7123,7 +7159,7 @@ class BearOcrLanguagesView(discord.ui.View):
     """
 
     def __init__(self, cog, alliance_id, original_user_id, parent_view):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliance_id = alliance_id
         self.original_user_id = original_user_id
@@ -7379,7 +7415,7 @@ class BearChannelSetupView(discord.ui.View):
     `BearSettingsView`."""
 
     def __init__(self, cog, original_user_id):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.original_user_id = original_user_id
         self.alliance_id: int | None = None
@@ -7529,7 +7565,7 @@ class BearChannelSetupView(discord.ui.View):
 
 class BearChannelSelectView(discord.ui.View):
     def __init__(self, cog, alliance_id: int, parent_view, parent_message: discord.Message = None):
-        super().__init__(timeout=180)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.alliance_id = alliance_id
         self.parent_view = parent_view

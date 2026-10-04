@@ -11,7 +11,7 @@ import zipfile
 import io
 import asyncio
 from datetime import datetime, timezone, timedelta
-from .pimp_my_bot import theme, safe_edit_message
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout
 from .permission_handler import PermissionManager
 
 logger = logging.getLogger('bot')
@@ -58,7 +58,7 @@ class SupportOperations(commands.Cog):
 
         about_embed.set_footer(text=f"Made with {theme.heartIcon} by the WOSLand Bot Team.")
 
-        view = discord.ui.View()
+        view = discord.ui.View(timeout=menu_timeout())
         view.add_item(discord.ui.Button(
             label="Back",
             emoji=f"{theme.backIcon}",
@@ -264,7 +264,7 @@ class _BackToMaintenanceView(discord.ui.View):
     before heading back to Maintenance."""
 
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
 
     @discord.ui.button(label="Gather Logs", emoji=f"{theme.documentIcon}",

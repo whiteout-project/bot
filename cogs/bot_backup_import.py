@@ -13,7 +13,7 @@ import discord
 
 from .alliance_member_edit import new_member_name
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, notify_view_expired
+from .pimp_my_bot import theme, notify_view_expired, menu_timeout, confirm_timeout
 
 logger = logging.getLogger('bot')
 
@@ -351,7 +351,7 @@ class ImportSourceView(discord.ui.View):
     or an upload in the channel."""
 
     def __init__(self, cog, note: str | None = None):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.note = note
         self.message = None
@@ -360,9 +360,6 @@ class ImportSourceView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await _check_global_admin(interaction)
-
-    async def on_timeout(self):
-        await notify_view_expired(self, "import menu")
 
     def build_embed(self) -> discord.Embed:
         found_lines = "\n".join(f"{theme.documentIcon} `{p}`" for p in self.found[:3])
@@ -594,7 +591,7 @@ async def _prepare_confirmation(cog, interaction, js_db_path, cleanup_dir,
 
 class ConfirmImportView(discord.ui.View):
     def __init__(self, cog, js_db_path, cleanup_dir, user_id):
-        super().__init__(timeout=60)
+        super().__init__(timeout=confirm_timeout())
         self.cog = cog
         self.js_db_path = js_db_path
         self.cleanup_dir = cleanup_dir
@@ -665,16 +662,12 @@ class ConfirmImportView(discord.ui.View):
 
 class ImportResultView(discord.ui.View):
     def __init__(self, cog):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.message = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return await _check_global_admin(interaction)
-
-    async def on_timeout(self):
-        from .pimp_my_bot import disable_expired_view
-        await disable_expired_view(self)
 
     @discord.ui.button(label="Back", emoji=f"{theme.backIcon}", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -7,7 +7,7 @@ import logging
 
 import discord
 
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, disable_expired_view
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout
 from .permission_handler import PermissionManager
 
 logger = logging.getLogger('gift')
@@ -112,7 +112,7 @@ class RedeemHistoryView(discord.ui.View):
     until a code is selected."""
 
     def __init__(self, cog, user_id, codes, alliances, allowed_ids):
-        super().__init__(timeout=7200)
+        super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.user_id = user_id
         self.codes = codes                  # [(giftcode, date), ...]
@@ -329,6 +329,3 @@ class RedeemHistoryView(discord.ui.View):
 
     async def _back(self, interaction: discord.Interaction):
         await self.cog.show_gift_menu(interaction)
-
-    async def on_timeout(self):
-        await disable_expired_view(self)
