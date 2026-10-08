@@ -666,15 +666,6 @@ class OCRChannelEditView(discord.ui.View):
         lines.append(f"{theme.documentIcon} **Info message:** {info_state}")
         lines.append("└ Pinned helper message that explains how to upload screenshots")
         lines.append("")
-        lines.append(f"{theme.lockIcon} **Uploaders:** {uploaders_state}")
-        lines.append("└ Per-alliance setting. Applies to every Screenshot Upload "
-                     f"channel for `{_alliance_name(self.alliance_id)}`")
-        lines.append("")
-        lines.append(f"{theme.editListIcon} **Editors:** "
-                     f"{editor_mode_label(get_ocr_review_editors(self.alliance_id))}")
-        lines.append("└ Who can fix a review before it's submitted: the uploader, also admins, "
-                     "or anyone. Per-alliance, like Uploaders")
-        lines.append("")
         auto_delete_on = bool(settings.get("auto_delete_screenshots", True))
         lines.append(
             f"{theme.trashIcon} **Auto-delete screenshots:** "
@@ -686,6 +677,15 @@ class OCRChannelEditView(discord.ui.View):
         lines.append(f"{theme.editListIcon} **Edit Keywords**")
         lines.append("└ Optional. Only OCR on uploads whose message text contains "
                      "a keyword; blank = read every image (the default)")
+        lines.append("")
+        lines.append(f"{theme.lockIcon} **Uploaders:** {uploaders_state}")
+        lines.append("└ Per-alliance setting. Applies to every Screenshot Upload "
+                     f"channel for `{_alliance_name(self.alliance_id)}`")
+        lines.append("")
+        lines.append(f"{theme.editListIcon} **Editors:** "
+                     f"{editor_mode_label(get_ocr_review_editors(self.alliance_id))}")
+        lines.append("└ Who can fix a review before it's submitted: the uploader, also admins, "
+                     "or anyone. Per-alliance, like Uploaders")
         lines.append("")
         lines.append(f"{theme.trashIcon} **Remove Channel**")
         lines.append("└ Stop processing screenshots here and remove the info message")
@@ -739,7 +739,7 @@ class OCRChannelEditView(discord.ui.View):
             label=f"Uploaders: {'Admins only' if admin_only else 'Anyone'}",
             emoji=theme.lockIcon,
             style=discord.ButtonStyle.success if admin_only else discord.ButtonStyle.secondary,
-            row=1,
+            row=2,
         )
         uploaders_btn.callback = self._toggle_uploaders
         self.add_item(uploaders_btn)
@@ -749,7 +749,7 @@ class OCRChannelEditView(discord.ui.View):
             label=f"Editors: {editor_mode_label(editors)}",
             emoji=theme.editListIcon,
             style=discord.ButtonStyle.secondary if editors == "uploader" else discord.ButtonStyle.success,
-            row=1,
+            row=2,
         )
         editors_btn.callback = self._cycle_editors
         self.add_item(editors_btn)
@@ -766,7 +766,7 @@ class OCRChannelEditView(discord.ui.View):
 
         keywords_btn = discord.ui.Button(
             label="Edit Keywords", emoji=theme.editListIcon,
-            style=discord.ButtonStyle.primary, row=2,
+            style=discord.ButtonStyle.primary, row=1,
         )
         keywords_btn.callback = self._open_keywords
         self.add_item(keywords_btn)

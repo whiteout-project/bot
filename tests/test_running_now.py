@@ -3,7 +3,7 @@ import asyncio
 import types
 from datetime import datetime, timedelta
 
-from cogs import bot_health
+from cogs import bot_health, onnx_lifecycle
 
 
 def _job(pid, action, details=None, alliance_id=None):
@@ -49,7 +49,7 @@ def _build(view):
 
 def test_lists_running_and_queued_and_offers_them_for_stopping(monkeypatch):
     monkeypatch.setattr(bot_health, "_alliance_names", lambda: NAMES)
-    monkeypatch.setattr(bot_health, "_ocr_sessions_in_use", lambda: 0)
+    monkeypatch.setattr(onnx_lifecycle, "models_in_use", lambda: 0)
     running = {**_job(1, 'gift_redeem', {'giftcode': 'ABC'}, 5),
                'started': datetime.now() - timedelta(minutes=12), 'stopping': False}
     pq = _pq(running, [_job(2, 'member_add', {'alliance_name': 'Wolves'})])
@@ -68,7 +68,7 @@ def test_lists_running_and_queued_and_offers_them_for_stopping(monkeypatch):
 
 def test_job_that_cannot_stop_mid_run_is_not_offered(monkeypatch):
     monkeypatch.setattr(bot_health, "_alliance_names", lambda: NAMES)
-    monkeypatch.setattr(bot_health, "_ocr_sessions_in_use", lambda: 0)
+    monkeypatch.setattr(onnx_lifecycle, "models_in_use", lambda: 0)
     running = {**_job(1, 'gift_validate', {'giftcode': 'ABC'}), 'started': datetime.now(), 'stopping': False}
 
     async def run():
@@ -83,7 +83,7 @@ def test_job_that_cannot_stop_mid_run_is_not_offered(monkeypatch):
 
 def test_confirmed_stop_cancels_the_job(monkeypatch):
     monkeypatch.setattr(bot_health, "_alliance_names", lambda: NAMES)
-    monkeypatch.setattr(bot_health, "_ocr_sessions_in_use", lambda: 0)
+    monkeypatch.setattr(onnx_lifecycle, "models_in_use", lambda: 0)
     cancelled = []
     pq = _pq(None, [_job(2, 'member_add', {'alliance_name': 'Wolves'})], cancelled)
     edits = []
@@ -107,7 +107,7 @@ def test_confirmed_stop_cancels_the_job(monkeypatch):
 
 def test_stopping_the_auto_scan_switches_it_off(monkeypatch):
     monkeypatch.setattr(bot_health, "_alliance_names", lambda: NAMES)
-    monkeypatch.setattr(bot_health, "_ocr_sessions_in_use", lambda: 0)
+    monkeypatch.setattr(onnx_lifecycle, "models_in_use", lambda: 0)
     switched = []
     monkeypatch.setattr(bot_health.gift_state_resolver, "set_scan_enabled", lambda on: switched.append(on))
     running = {**_job(1, 'state_resolve', {'mode': 'auto', 'total': 3, 'remaining': [1, 2, 3]}),

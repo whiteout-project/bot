@@ -3986,6 +3986,8 @@ class BearHuntReviewView(discord.ui.View):
         self._build_components()
 
     async def _can_edit(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.original_user_id:
+            return True
         mode = self.cog.get_bear_settings(self.alliance_id).get("review_editors", "uploader")
         if can_edit_upload(interaction.user.id, self.original_user_id, mode,
                            self.alliance_id, interaction.guild_id):
@@ -6917,45 +6919,44 @@ class BearSettingsView(discord.ui.View):
         self.add_item(AllianceSelect(self, options, action="manage"))
 
         has_alliance = self.alliance_id is not None
+        settings = self.cog.get_bear_settings(self.alliance_id) if has_alliance else {}
 
+        def access(key):
+            return "Admins only" if settings.get(key) else "Everyone"
+
+        # Rows: session behaviour, permissions, info message, then Back.
         timeout_btn = discord.ui.Button(label="Session Timeout", style=discord.ButtonStyle.primary, emoji=theme.hourglassIcon, row=1, disabled=not has_alliance)
         timeout_btn.callback = self._session_timeout_callback
         self.add_item(timeout_btn)
+        self._add_setting_button("Auto-Delete", settings.get("auto_delete_screenshots"), theme.trashIcon, self._toggle_auto_delete_callback, 1)
+        self._add_setting_button("Name History", settings.get("match_all_history"), theme.listIcon, self._toggle_history_callback, 1)
 
-        auto_delete_btn = discord.ui.Button(label="Toggle Auto-Delete", style=discord.ButtonStyle.primary, emoji=theme.trashIcon, row=1, disabled=not has_alliance)
-        auto_delete_btn.callback = self._toggle_auto_delete_callback
-        self.add_item(auto_delete_btn)
+        self._add_setting_button("Uploaders", settings.get("admin_only_add"), theme.lockIcon, self._toggle_add_callback, 2,
+                                 state=access("admin_only_add"))
+        self._add_setting_button("Viewers", settings.get("admin_only_view"), theme.eyeIcon, self._toggle_view_callback, 2,
+                                 state=access("admin_only_view"))
+        editors = settings.get("review_editors", "uploader")
+        self._add_setting_button("Editors", editors != "uploader", theme.editListIcon, self._toggle_edit_callback, 2,
+                                 state=editor_mode_label(editors))
 
-        add_perm_btn = discord.ui.Button(label="Toggle Add Permission", style=discord.ButtonStyle.primary, emoji=theme.lockIcon, row=1, disabled=not has_alliance)
-        add_perm_btn.callback = self._toggle_add_callback
-        self.add_item(add_perm_btn)
+        self._add_setting_button("Info Message", settings.get("post_info_message"), theme.documentIcon, self._toggle_info_message_callback, 3)
+        self._add_setting_button("Pin Info", settings.get("pin_info_message"), theme.pinIcon, self._toggle_pin_info_callback, 3)
 
-        view_perm_btn = discord.ui.Button(label="Toggle View Permission", style=discord.ButtonStyle.primary, emoji=theme.eyeIcon, row=1, disabled=not has_alliance)
-        view_perm_btn.callback = self._toggle_view_callback
-        self.add_item(view_perm_btn)
-
-        edit_perm_btn = discord.ui.Button(label="Toggle Edit Permission", style=discord.ButtonStyle.primary, emoji=theme.editListIcon, row=1, disabled=not has_alliance)
-        edit_perm_btn.callback = self._toggle_edit_callback
-        self.add_item(edit_perm_btn)
-
-        # History toggle sits to the left of Back on row 2 — it doesn't belong
-        # in the row-1 "Toggle X" cluster (it's an opt-in matching tweak, not a
-        # session/permission knob), but it also doesn't warrant its own row.
-        history_btn = discord.ui.Button(label="Toggle Name History Match", style=discord.ButtonStyle.primary, emoji=theme.listIcon, row=2, disabled=not has_alliance)
-        history_btn.callback = self._toggle_history_callback
-        self.add_item(history_btn)
-
-        info_btn = discord.ui.Button(label="Toggle Info Message", style=discord.ButtonStyle.primary, emoji=theme.documentIcon, row=2, disabled=not has_alliance)
-        info_btn.callback = self._toggle_info_message_callback
-        self.add_item(info_btn)
-
-        pin_btn = discord.ui.Button(label="Toggle Pin Info", style=discord.ButtonStyle.primary, emoji=theme.pinIcon, row=2, disabled=not has_alliance)
-        pin_btn.callback = self._toggle_pin_info_callback
-        self.add_item(pin_btn)
-
-        back_btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=3)
+        back_btn = discord.ui.Button(label="Back", style=discord.ButtonStyle.secondary, emoji=theme.backIcon, row=4)
         back_btn.callback = self._back_callback
         self.add_item(back_btn)
+
+    def _add_setting_button(self, name, highlighted, emoji, callback, row, state=None):
+        """A setting shows its value ("Auto-Delete: On") and turns green when on or restricted."""
+        if self.alliance_id is None:
+            label, style = name, discord.ButtonStyle.secondary
+        else:
+            label = f"{name}: {state or ('On' if highlighted else 'Off')}"
+            style = discord.ButtonStyle.success if highlighted else discord.ButtonStyle.secondary
+        button = discord.ui.Button(label=label, style=style, emoji=emoji, row=row,
+                                   disabled=self.alliance_id is None)
+        button.callback = callback
+        self.add_item(button)
 
     def _build_embed(self) -> discord.Embed:
         embed = discord.Embed(
@@ -6967,16 +6968,16 @@ class BearSettingsView(discord.ui.View):
                 f"{theme.upperDivider}\n"
                 f"{theme.hourglassIcon} **Session Timeout**\n"
                 f"└ Minutes to wait for more screenshots before finalising the event (1-60)\n\n"
-                f"{theme.trashIcon} **Toggle Auto-Delete**\n"
+                f"{theme.trashIcon} **Auto-Delete**\n"
                 f"└ Delete uploaded screenshots after event submission\n\n"
-                f"{theme.lockIcon} **Toggle Permissions**\n"
-                f"└ Who can add hunts and view saved data\n\n"
-                f"{theme.editListIcon} **Toggle Edit Permission**\n"
-                f"└ Who can fix an uploaded hunt before it's saved: the uploader, also admins, or anyone\n\n"
-                f"{theme.listIcon} **Toggle Full Name History Match**\n"
+                f"{theme.listIcon} **Name History**\n"
                 f"└ Whether to match players by all their past names\n"
                 f"└ Their current & event-date names are always matched\n\n"
-                f"{theme.documentIcon} **Toggle Info Message / Pin Info**\n"
+                f"{theme.lockIcon} **Uploaders / Viewers**\n"
+                f"└ Who can add hunts and who can view saved data: everyone or admins only\n\n"
+                f"{theme.editListIcon} **Editors**\n"
+                f"└ Who can fix an uploaded hunt before it's saved: the uploader, also admins, or anyone\n\n"
+                f"{theme.documentIcon} **Info Message / Pin Info**\n"
                 f"└ Pinned helper in the bear channel explaining which mail to upload\n"
                 f"{theme.lowerDivider}"
             ),
@@ -7001,11 +7002,11 @@ class BearSettingsView(discord.ui.View):
                 f"{theme.upperDivider}\n"
                 f"**Session Timeout:** {timeout_min} min\n"
                 f"**Auto-Delete Screenshots:** {auto_delete_text}\n"
-                f"**Full Name History Match:** {history_text}\n"
+                f"**Name History:** {history_text}\n"
                 f"**Info Message:** {info_text}\n"
-                f"**Add Permission:** {add_text}\n"
-                f"**View Permission:** {view_text}\n"
-                f"**Edit Permission:** {editor_mode_label(settings['review_editors'])}\n"
+                f"**Uploaders:** {add_text}\n"
+                f"**Viewers:** {view_text}\n"
+                f"**Editors:** {editor_mode_label(settings['review_editors'])}\n"
                 f"{theme.lowerDivider}"
             )
             embed.add_field(name="Current Settings", value=current_settings, inline=False)
@@ -7040,6 +7041,7 @@ class BearSettingsView(discord.ui.View):
         settings = self.cog.get_bear_settings(self.alliance_id)
         new_value = 0 if settings["auto_delete_screenshots"] else 1
         self.cog.update_bear_setting(self.alliance_id, "bear_auto_delete_screenshots", new_value)
+        self._build_components()
         embed = self._build_embed()
         on_off = "On" if new_value else "Off"
         embed.description += f"\n{theme.verifiedIcon} Auto-delete is now **{on_off}**."
@@ -7054,9 +7056,10 @@ class BearSettingsView(discord.ui.View):
         settings = self.cog.get_bear_settings(self.alliance_id)
         new_value = 0 if settings["match_all_history"] else 1
         self.cog.update_bear_setting(self.alliance_id, "bear_match_all_history", new_value)
+        self._build_components()
         embed = self._build_embed()
         on_off = "On" if new_value else "Off"
-        embed.description += f"\n{theme.verifiedIcon} Full Name History Match is now **{on_off}**."
+        embed.description += f"\n{theme.verifiedIcon} Name History is now **{on_off}**."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
 
     async def _toggle_info_message_callback(self, interaction: discord.Interaction):
@@ -7068,6 +7071,7 @@ class BearSettingsView(discord.ui.View):
         new_value = 0 if settings["post_info_message"] else 1
         self.cog.update_bear_setting(self.alliance_id, "bear_post_info_message", new_value)
         note = await self._apply_info_refresh(settings["channel_id"])
+        self._build_components()
         embed = self._build_embed()
         on_off = "On" if new_value else "Off"
         embed.description += f"\n{theme.verifiedIcon} Info message is now **{on_off}**.{note}"
@@ -7082,6 +7086,7 @@ class BearSettingsView(discord.ui.View):
         new_value = 0 if settings["pin_info_message"] else 1
         self.cog.update_bear_setting(self.alliance_id, "bear_pin_info_message", new_value)
         note = await self._apply_info_refresh(settings["channel_id"])
+        self._build_components()
         embed = self._build_embed()
         on_off = "On" if new_value else "Off"
         embed.description += f"\n{theme.verifiedIcon} Pin info is now **{on_off}**.{note}"
@@ -7124,8 +7129,9 @@ class BearSettingsView(discord.ui.View):
         settings = self.cog.get_bear_settings(self.alliance_id)
         new_mode = next_editor_mode(settings["review_editors"])
         self.cog.update_bear_setting(self.alliance_id, "bear_review_editors", new_mode)
+        self._build_components()
         embed = self._build_embed()
-        embed.description += f"\n{theme.verifiedIcon} Edit permission is now: {editor_mode_label(new_mode)}."
+        embed.description += f"\n{theme.verifiedIcon} Editors now: {editor_mode_label(new_mode)}."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
 
     async def _toggle_permission(self, interaction: discord.Interaction, mode: str):
@@ -7137,8 +7143,10 @@ class BearSettingsView(discord.ui.View):
         column = f"bear_admin_only_{mode}"
         self.cog.update_bear_setting(self.alliance_id, column, new_value)
 
+        self._build_components()
         embed = self._build_embed()
-        embed.description += f"\n{theme.verifiedIcon} {mode.capitalize()} permission updated."
+        who = "Uploaders" if mode == "add" else "Viewers"
+        embed.description += f"\n{theme.verifiedIcon} {who} now: {'Admins only' if new_value else 'Everyone'}."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
 
     async def _back_callback(self, interaction: discord.Interaction):

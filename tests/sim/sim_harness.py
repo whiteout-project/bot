@@ -36,11 +36,16 @@ def build_schema() -> None:
     """Runs main.py's own create_tables() against db/ in the current folder."""
     databases = ast.literal_eval(_main_node(
         lambda n: isinstance(n, ast.Assign) and getattr(n.targets[0], "id", None) == "databases").value)
-    create_tables = _main_node(lambda n: isinstance(n, ast.FunctionDef) and n.name == "create_tables")
+    functions = {n.name: n for n in ast.walk(ast.parse(MAIN_SOURCE)) if isinstance(n, ast.FunctionDef)}
+    create_tables = functions["create_tables"]
+    # main.py helpers create_tables calls (e.g. data cleanups) come along with it.
+    called = {n.func.id for n in ast.walk(create_tables)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in functions}
+    body = [functions[name] for name in sorted(called - {"create_tables"})] + [create_tables]
     Path("db").mkdir(exist_ok=True)
     connections = {name: sqlite3.connect(path) for name, path in databases.items()}
     namespace = {"sqlite3": sqlite3, "connections": connections}
-    exec(compile(ast.Module(body=[create_tables], type_ignores=[]), "main.py", "exec"), namespace)
+    exec(compile(ast.Module(body=body, type_ignores=[]), "main.py", "exec"), namespace)
     try:
         namespace["create_tables"]()
     finally:
@@ -93,6 +98,23 @@ class Sim:
         value = next(o.value for o in menu.options if o.label == option)
         return await self._interact(self.users[user].select(message, [value], custom_id=menu.custom_id))
 
+    async def walk(self, *steps: str, user: str = "owner") -> discord.Message:
+        """Clicks through menus from /settings; each step is a button label."""
+        message = await self.open_settings(user)
+        for label in steps:
+            click = await self.click(message, label, user=user)
+            assert not click.problems(), (label, click.problems())
+            message = click.screen[0]
+        return message
+
+    async def submit_modal(self, shown: Click, values_by_label: dict[str, str], user: str = "owner") -> Click:
+        """Submits the modal as a user would: pre-filled values stay unless overridden."""
+        from simcord.actors import _modal_components
+        values = {c["custom_id"]: c["value"] for c in _modal_components(shown.result.modal) if c.get("value")}
+        fields = modal_fields(shown)
+        values.update({fields[label]: value for label, value in values_by_label.items()})
+        return await self._interact(self.users[user].submit_modal(shown.result, values))
+
     async def _interact(self, action) -> Click:
         error_mark, log_mark = self.env.error_cursor, len(self.logged_errors)
         result = await action
@@ -138,6 +160,12 @@ def screen_problems(message: discord.Message, ephemeral: bool) -> list[str]:
     if not ephemeral and not way_out(message) and not title(message).endswith(SETTINGS_TITLE):
         found.append(f"no Back or Main Menu on {title(message)!r}, the user is stranded")
     return found
+
+
+def modal_fields(shown: Click) -> dict[str, str]:
+    """Label -> custom_id of the text fields in the modal a click opened."""
+    from simcord.actors import _modal_components
+    return {c["label"]: c["custom_id"] for c in _modal_components(shown.result.modal)}
 
 
 def labels(message: discord.Message, *, enabled_only: bool = False) -> list[str]:

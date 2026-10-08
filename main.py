@@ -679,6 +679,26 @@ except ImportError:
 except Exception:
     pass  # SSL patch error, continue anyway
 
+def unwrap_markdown_gift_codes(conn):
+    """Store gift codes saved with chat markdown (`CODE`) bare; the API answers those with
+    Sign Error forever. Returns how many rows were fixed. Their attempts held no real results."""
+    wrapped = [row[0] for row in conn.execute("SELECT giftcode FROM gift_codes")
+               if any(mark in row[0] for mark in "`*_")]
+    # The gift cog adds validation_status after this runs; on a pre-cog DB a missing status already means pending.
+    has_status = "validation_status" in {row[1] for row in conn.execute("PRAGMA table_info(gift_codes)")}
+    rename = ("UPDATE gift_codes SET giftcode = ?, validation_status = 'pending' WHERE giftcode = ?"
+              if has_status else "UPDATE gift_codes SET giftcode = ? WHERE giftcode = ?")
+    for code in wrapped:
+        clean = code.replace("`", "").replace("*", "").replace("_", "").strip()
+        conn.execute("DELETE FROM user_giftcodes WHERE giftcode = ?", (code,))
+        clean_exists = conn.execute("SELECT 1 FROM gift_codes WHERE giftcode = ?", (clean,)).fetchone()
+        if clean.isalnum() and clean.isascii() and not clean_exists:
+            conn.execute(rename, (clean, code))
+        else:
+            conn.execute("DELETE FROM gift_codes WHERE giftcode = ?", (code,))
+    return len(wrapped)
+
+
 def raise_open_file_limit(floor=1024, target=4096):
     """Raise a too-low FD limit (macOS defaults to 256) so SQLite can't fail with 'unable to open database file'. No-op on Windows and on already-healthy limits (>=floor)."""
     try:
@@ -1333,6 +1353,9 @@ if __name__ == "__main__":
             uc_cols = [row[1] for row in conn_giftcode.execute("PRAGMA table_info(user_giftcodes)").fetchall()]
             if "last_attempt_at" not in uc_cols:
                 conn_giftcode.execute("ALTER TABLE user_giftcodes ADD COLUMN last_attempt_at TEXT")
+            fixed_codes = unwrap_markdown_gift_codes(conn_giftcode)
+            if fixed_codes:
+                logging.getLogger('bot').info(f"Stored {fixed_codes} markdown-wrapped gift code(s) without the markdown")
 
         with connections["conn_id_channel"] as conn_id_channel:
             conn_id_channel.execute("""CREATE TABLE IF NOT EXISTS id_channels (

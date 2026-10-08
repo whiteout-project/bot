@@ -66,6 +66,22 @@ _ATTENDANCE_ICON = {
 _MATCH_PRIORITY = {"no_match": 0, "no_name": 0, "review": 1,
                    "likely": 2, "auto": 3, "manual": 3}
 
+# What the #number on a scoreboard card is called in this game.
+CARD_NUMBER_WORD = "State"
+
+
+def _card_name(card: dict) -> str:
+    tag = f"[{card['tag']}] " if card.get("tag") else ""
+    return f"{tag}{card.get('name') or ''}".strip()
+
+
+def _repeated_text(numbers: list[int]) -> Optional[str]:
+    """The '#449 is on more than one card.' sentence for numbers used twice, else None."""
+    repeated = sorted({n for n in numbers if numbers.count(n) > 1})
+    if not repeated:
+        return None
+    return f"{CARD_NUMBER_WORD} #{', #'.join(map(str, repeated))} is on more than one card."
+
 
 def _format_int(n: Optional[int]) -> str:
     return f"{int(n):,}" if n is not None else "—"
@@ -398,11 +414,11 @@ class EventReviewView(discord.ui.View):
             medal = ["🥇", "🥈", "🥉"]
             for i, sc in enumerate(self.session.alliance_scores):
                 m = medal[i] if i < len(medal) else "•"
-                tag = f"[{sc['tag']}]" if sc.get("tag") else ""
-                name = sc.get("name") or ""
                 legion = f" · {sc['legion']}" if sc.get("legion") else ""
+                number = (f"#{sc['rank']}" if sc.get("rank") is not None
+                          else f"{theme.warnIcon} {CARD_NUMBER_WORD.lower()} number missing")
                 desc_lines.append(
-                    f"{m} #{sc['rank']} {tag}{name} — `{_format_int(sc.get('score'))}`{legion}"
+                    f"{m} {number} {_card_name(sc)} — `{_format_int(sc.get('score'))}`{legion}"
                 )
 
         if self.session.stats:
@@ -807,6 +823,9 @@ class EventReviewView(discord.ui.View):
                 ("Submit", theme.verifiedIcon, discord.ButtonStyle.success, self._on_submit),
                 ("Cancel", theme.deniedIcon, discord.ButtonStyle.danger, self._on_cancel),
             ]
+        if self.session.alliance_scores:
+            row3.insert(0, ("Edit Scoreboard", theme.shieldIcon, discord.ButtonStyle.secondary,
+                            self._on_edit_scoreboard))
         for label, emoji, style, cb in row3:
             btn = discord.ui.Button(label=label, emoji=emoji, style=style, row=3)
             btn.callback = cb
@@ -887,6 +906,9 @@ class EventReviewView(discord.ui.View):
 
     async def _on_edit_header(self, interaction: discord.Interaction):
         await interaction.response.send_modal(_EditEventInfoModal(self))
+
+    async def _on_edit_scoreboard(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(_EditScoreboardModal(self))
 
     async def _on_set_time(self, interaction: discord.Interaction):
         allowed = _allowed_time_slots(self.session.db_event_type)
@@ -971,7 +993,24 @@ class EventReviewView(discord.ui.View):
                 except Exception:
                     pass
 
+    def _scoreboard_problem(self) -> Optional[str]:
+        """Why the scoreboard can't be saved yet: each card is stored under its own number."""
+        cards = self.session.alliance_scores
+        word = CARD_NUMBER_WORD.lower()
+        missing = [_card_name(sc) for sc in cards if sc.get("rank") is None]
+        if missing:
+            return (f"{theme.warnIcon} The {word} number is missing for {', '.join(missing)}. "
+                    f"Use **Edit Scoreboard** to fill it in, then Submit again.")
+        repeated = _repeated_text([sc["rank"] for sc in cards])
+        if repeated:
+            return f"{theme.warnIcon} {repeated} Use **Edit Scoreboard** to correct it, then Submit again."
+        return None
+
     async def _on_submit(self, interaction: discord.Interaction):
+        problem = self._scoreboard_problem()
+        if problem:
+            await interaction.response.send_message(problem, ephemeral=True)
+            return
         # Defer first: a power snapshot updates every member and can exceed the 3s window.
         if not interaction.response.is_done():
             await interaction.response.defer()
@@ -1333,11 +1372,9 @@ class EventReviewView(discord.ui.View):
             medal = ["🥇", "🥈", "🥉"]
             for i, sc in enumerate(self.session.alliance_scores):
                 m = medal[i] if i < len(medal) else "•"
-                tag = f"[{sc['tag']}]" if sc.get("tag") else ""
-                name = sc.get("name") or ""
                 own = " **(you)**" if self._is_own_scoreboard_entry(sc) else ""
                 desc.append(
-                    f"{m} #{sc['rank']} {tag}{name}{own} — `{_format_int(sc.get('score'))}`"
+                    f"{m} #{sc['rank']} {_card_name(sc)}{own} — `{_format_int(sc.get('score'))}`"
                 )
             desc.append("")
 
@@ -1994,6 +2031,40 @@ class _EditEventInfoModal(discord.ui.Modal):
             elif not rank_raw:
                 session.alliance_rank = None
 
+        await self.view._save_edit(interaction)
+
+
+class _EditScoreboardModal(discord.ui.Modal):
+    """One field per scoreboard card, for a #number the screenshot reader missed or misread."""
+
+    def __init__(self, view: EventReviewView):
+        super().__init__(title="Edit Scoreboard")
+        self.view = view
+        self.fields = []
+        for card in view.session.alliance_scores[:5]:
+            field = discord.ui.TextInput(
+                label=f"{CARD_NUMBER_WORD} number: {_card_name(card)}"[:45],
+                default=str(card["rank"]) if card.get("rank") is not None else "",
+                placeholder="e.g. 449", required=True, max_length=6,
+            )
+            self.add_item(field)
+            self.fields.append((card, field))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        raw = [field.value.strip() for _, field in self.fields]
+        if not all(value.isdigit() and int(value) > 0 for value in raw):
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Each {CARD_NUMBER_WORD.lower()} number must be a whole number, "
+                f"like 449.", ephemeral=True)
+            return
+        numbers = [int(value) for value in raw]
+        repeated = _repeated_text(numbers)
+        if repeated:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} {repeated} Each card needs its own number.", ephemeral=True)
+            return
+        for (card, _), number in zip(self.fields, numbers):
+            card["rank"] = number
         await self.view._save_edit(interaction)
 
 

@@ -270,6 +270,51 @@ def confirm_timeout():
     return None if seconds == 0 else float(seconds)
 
 
+async def report_failed_click(interaction: discord.Interaction, where: str, error: Exception,
+                              text: str = "That didn't work. The error was written to the bot log."):
+    """Log a click that failed and tell the clicker privately, so it never goes unanswered."""
+    logger.error(f"Error in {where}: {error}")
+    print(f"Error in {where}: {error}")
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(f"{theme.deniedIcon} {text}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"{theme.deniedIcon} {text}", ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
+class MenuView(discord.ui.View):
+    """Base for menus: the menu timeout setting, opener-only clicks when an opener is
+    given, and a private reply instead of 'This interaction failed' when a button breaks."""
+
+    def __init__(self, owner_id: int | None = None):
+        super().__init__(timeout=menu_timeout())
+        self.original_user_id = owner_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return self.original_user_id is None or await check_interaction_user(interaction, self.original_user_id)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        await report_failed_click(interaction, type(self).__name__, error)
+
+
+class ConfirmView(discord.ui.View):
+    """Base for confirmation dialogs: the confirm timeout setting, then the expired notice.
+    Set `self.message` when sending, and call `self.stop()` once it's answered."""
+
+    def __init__(self, what: str = "confirmation"):
+        super().__init__(timeout=confirm_timeout())
+        self.message = None
+        self._what = what
+
+    async def on_timeout(self):
+        await notify_view_expired(self, self._what)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        await report_failed_click(interaction, type(self).__name__, error)
+
+
 def has_live_handler(view_store, interaction) -> bool:
     """True when a live view or dynamic item answers this component click (mirrors
     discord.py's ViewStore.dispatch_view). Unknown internals count as live, so a

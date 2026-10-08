@@ -19,14 +19,11 @@ import logging
 from importlib.metadata import version as get_package_version, PackageNotFoundError
 from packaging.version import parse as parse_version
 import re
-import time
-from contextlib import closing
 from .permission_handler import PermissionManager
-from .pimp_my_bot import (theme, safe_edit_message, menu_timeout,
+from .pimp_my_bot import (theme, safe_edit_message, menu_timeout, MenuView, ConfirmView,
                           get_menu_timeout_minutes, set_menu_timeout_minutes,
                           MENU_TIMEOUT_MAX_MINUTES, get_confirm_timeout_seconds,
-                          set_confirm_timeout_seconds, CONFIRM_TIMEOUT_MAX_SECONDS, confirm_timeout,
-                          notify_view_expired)
+                          set_confirm_timeout_seconds, CONFIRM_TIMEOUT_MAX_SECONDS, confirm_timeout)
 from .bot_restart import is_container, restart_process
 from .browser_headers import get_headers
 from . import process_queue
@@ -152,7 +149,7 @@ def _active_work_summary(bot) -> str | None:
         try:
             info = pq.get_queue_info()
             # The kingdom scan saves its place and resumes after a reload, so it never blocks one.
-            current = getattr(pq, '_current_process', None) or {}
+            current = pq.running_info() or {}
             if info.get('is_processing') and current.get('action') != 'state_resolve':
                 parts.append("a process queue operation is running")
             queue_size = info.get('queue_size', 0) - len(pq.get_queued_processes_by_action('state_resolve'))
@@ -162,7 +159,7 @@ def _active_work_summary(bot) -> str | None:
             pass
     try:
         from cogs import onnx_lifecycle
-        ocr_active = sum(1 for m in onnx_lifecycle._REGISTRY.values() if m._refcount > 0)
+        ocr_active = onnx_lifecycle.models_in_use()
         if ocr_active:
             parts.append(f"{ocr_active} OCR session(s) in flight")
     except Exception:
@@ -1443,12 +1440,7 @@ class BotHealth(commands.Cog):
     async def perform_restart(self, interaction: discord.Interaction,
                               allow_update: bool = False):
         """
-        Perform a bot restart.
-        - Container: Clean exit (orchestrator restarts).
-        - Windows: Exit cleanly and print restart instructions. subprocess.Popen
-          leaves the terminal in a bad state where the parent shell can race
-          input with the spawned bot, so we don't auto-relaunch.
-        - Linux/Mac: os.execl() for in-process replacement.
+        Perform a bot restart through restart_process, which has the per-platform behaviour.
 
         When allow_update=True, the --no-update flag is filtered out of the
         relaunch args so the bot's startup updater can pick up a pending
@@ -1596,7 +1588,7 @@ class BotHealth(commands.Cog):
 
             overall = self.get_overall_status(db_health, log_health, system_health, wos_api, gift_api, requirements)
 
-            embed = self._build_health_embed(overall, wos_api, gift_api, db_health, log_health, system_health, requirements)
+            embed = await self._build_health_embed(overall, wos_api, gift_api, db_health, log_health, system_health, requirements)
             view = HealthMenuView(self)
 
             await interaction.followup.edit_message(
@@ -1616,7 +1608,7 @@ class BotHealth(commands.Cog):
             except Exception:
                 pass
 
-    def _build_health_embed(self, overall: str, wos_api: dict, gift_api: dict,
+    async def _build_health_embed(self, overall: str, wos_api: dict, gift_api: dict,
                             db_health: dict, log_health: dict, system_health: dict,
                             requirements: dict | None = None) -> discord.Embed:
         """Build the health dashboard embed."""
@@ -1662,7 +1654,7 @@ class BotHealth(commands.Cog):
         )
         disk_health = self.get_disk_health()
         disk_msg = disk_health['message']
-        error_count, errors_by_file = count_recent_errors(self.log_path)
+        error_count, errors_by_file = await asyncio.to_thread(count_recent_errors, self.log_path)
 
         uptime = system_health['uptime']
         if uptime.startswith('0h '):
@@ -1708,14 +1700,17 @@ class BotHealth(commands.Cog):
             f"{theme.saveIcon} {status_prefix(disk_health['status'])}**Disk:** {disk_msg}",
             f"{theme.archiveIcon} {status_prefix(db_health['status'])}**Databases:** {db_health['message']}",
             f"{theme.documentIcon} {status_prefix(log_health['status'])}**Logs:** {log_health['message']}",
+        ]
+        embed.add_field(name="Storage", value="\n".join(storage_lines), inline=True)
+
+        # Full width: these messages are too long for a narrow column.
+        check_lines = [
             f"{theme.documentIcon} {status_prefix(error_count_status(error_count))}**Logged Errors:** "
             f"{error_count_message(error_count, errors_by_file)}",
         ]
         if deps_text:
-            storage_lines.append(
-                f"{theme.packageIcon} {deps_prefix}**Dependencies:** {deps_text}"
-            )
-        embed.add_field(name="Storage", value="\n".join(storage_lines), inline=True)
+            check_lines.append(f"{theme.packageIcon} {deps_prefix}**Dependencies:** {deps_text}")
+        embed.add_field(name="Errors and Dependencies", value="\n".join(check_lines), inline=False)
 
         embed.add_field(
             name="Actions",
@@ -1964,7 +1959,7 @@ class HealthMenuView(discord.ui.View):
         overall = self.cog.get_overall_status(
             db_health, log_health, system_health, wos_api, gift_api, requirements
         )
-        embed = self.cog._build_health_embed(
+        embed = await self.cog._build_health_embed(
             overall, wos_api, gift_api, db_health, log_health, system_health, requirements
         )
         embed.add_field(
@@ -2023,7 +2018,7 @@ class HealthMenuView(discord.ui.View):
         overall = self.cog.get_overall_status(
             db_health, log_health, system_health, wos_api, gift_api, requirements
         )
-        embed = self.cog._build_health_embed(
+        embed = await self.cog._build_health_embed(
             overall, wos_api, gift_api, db_health, log_health, system_health, requirements
         )
         await interaction.response.edit_message(embed=embed, view=self)
@@ -2038,7 +2033,7 @@ class HealthMenuView(discord.ui.View):
         overall = self.cog.get_overall_status(
             db_health, log_health, system_health, wos_api, gift_api, requirements
         )
-        return self.cog._build_health_embed(
+        return await self.cog._build_health_embed(
             overall, wos_api, gift_api, db_health, log_health, system_health, requirements
         )
 
@@ -2079,35 +2074,35 @@ def describe_job(process: dict, alliance_names: dict) -> str:
 
 def _alliance_names() -> dict:
     try:
-        with closing(sqlite3.connect('db/alliance.sqlite', timeout=30.0)) as conn:
-            return dict(conn.execute("SELECT alliance_id, name FROM alliance_list").fetchall())
+        return dict(PermissionManager.list_alliances())
     except sqlite3.Error:
         return {}
 
 
-def _ocr_sessions_in_use() -> int:
-    from cogs import onnx_lifecycle
-    return sum(1 for m in onnx_lifecycle._REGISTRY.values() if m._refcount > 0)
+async def _global_admin_only(interaction: discord.Interaction) -> bool:
+    # Re-check per interaction: the menu-open gate doesn't cover button clicks.
+    is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
+    if not (is_admin and is_global):
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} Only global admins can use the Bot Health menu.", ephemeral=True)
+        return False
+    return True
 
 
-class RunningNowView(discord.ui.View):
+class RunningNowView(MenuView):
     """Bot Health -> Running Now: long-running work, with Stop and Clear Queue."""
 
     MAX_LISTED = 10
 
     def __init__(self, cog):
-        super().__init__(timeout=menu_timeout())
+        super().__init__()
         self.cog = cog
         self.last_result = None
         self.jobs = {}
+        self.names = {}
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        is_admin, is_global = PermissionManager.is_admin(interaction.user.id)
-        if not (is_admin and is_global):
-            await interaction.response.send_message(
-                f"{theme.deniedIcon} Only global admins can use the Bot Health menu.", ephemeral=True)
-            return False
-        return True
+        return await _global_admin_only(interaction)
 
     def _queue(self):
         return self.cog.bot.get_cog("ProcessQueue")
@@ -2119,7 +2114,7 @@ class RunningNowView(discord.ui.View):
 
     async def build_embed(self) -> discord.Embed:
         pq = self._queue()
-        names = await asyncio.to_thread(_alliance_names)
+        self.names = names = await asyncio.to_thread(_alliance_names)
         running = pq.running_info() if pq else None
         queued = pq.queued_processes() if pq else []
         self.jobs = {p['id']: p for p in ([running] if running else []) + queued}
@@ -2145,11 +2140,12 @@ class RunningNowView(discord.ui.View):
         lines += [f"└ {describe_job(p, names)}" for p in queued[:self.MAX_LISTED]]
         if len(queued) > self.MAX_LISTED:
             lines.append(f"└ ...and {len(queued) - self.MAX_LISTED} more")
-        ocr = await asyncio.to_thread(_ocr_sessions_in_use)
+        from . import gift_redemption, onnx_lifecycle
+        ocr = onnx_lifecycle.models_in_use()
         if ocr:
             lines.append(f"{theme.globeIcon} **Screenshot reading (OCR):** `{ocr}` in use. It can't be stopped from here.")
         gift_cog = self.cog.bot.get_cog("GiftOperations")
-        pause = max(0.0, getattr(gift_cog, "rate_limit_pause_until", 0.0) - time.time()) if gift_cog else 0
+        pause = gift_redemption.rate_limit_wait(gift_cog) if gift_cog else 0
         if pause:
             lines.append(f"{theme.timeIcon} **Gift code API limit:** paused for {int(pause)}s more.")
         lines.append(f"{theme.lowerDivider}")
@@ -2190,7 +2186,7 @@ class RunningNowView(discord.ui.View):
                     f"This can't be undone.")
             return discord.Embed(title=f"{theme.warnIcon} Clear Queue", description=text, color=theme.emColor4)
         job = self.jobs.get(pid)
-        what = describe_job(job, _alliance_names()) if job else "This job"
+        what = describe_job(job, self.names) if job else "This job"
         text = (f"**{what}**\n\n"
                 + ("It stops at its next safe point. Work it already finished is kept."
                    if job and job.get('started') else "It's removed from the queue and won't run."))
@@ -2242,13 +2238,12 @@ class RunningNowView(discord.ui.View):
 
 
 
-class _RunningNowConfirmView(discord.ui.View):
+class _RunningNowConfirmView(ConfirmView):
     """Ephemeral 'are you sure?' for Stop and Clear Queue; Confirm updates the Running Now message."""
 
     def __init__(self, parent: RunningNowView, parent_message: discord.Message, pid):
-        super().__init__(timeout=confirm_timeout())
+        super().__init__("stop confirmation")
         self.parent, self.parent_message, self.pid = parent, parent_message, pid
-        self.message = None
         for label, emoji, style, callback in (
                 ("Stop" if pid is not None else "Clear Queue", theme.warnIcon,
                  discord.ButtonStyle.danger, self._confirm),
@@ -2274,9 +2269,6 @@ class _RunningNowConfirmView(discord.ui.View):
         self.stop()
         await interaction.response.defer()
         await interaction.delete_original_response()
-
-    async def on_timeout(self):
-        await notify_view_expired(self, "stop confirmation")
 
 
 class CleanCogsConfirmView(discord.ui.View):
@@ -2371,7 +2363,7 @@ class CleanCogsConfirmView(discord.ui.View):
         system_health = self.cog.get_system_health()
 
         overall = self.cog.get_overall_status(db_health, log_health, system_health, wos_api, gift_api)
-        embed = self.cog._build_health_embed(overall, wos_api, gift_api, db_health, log_health, system_health)
+        embed = await self.cog._build_health_embed(overall, wos_api, gift_api, db_health, log_health, system_health)
 
         await interaction.followup.edit_message(message_id=interaction.message.id, embed=embed, view=self.parent_view)
 
@@ -2518,7 +2510,7 @@ class ReloadCogsView(discord.ui.View):
         system_health = self.cog.get_system_health()
 
         overall = self.cog.get_overall_status(db_health, log_health, system_health, wos_api, gift_api)
-        embed = self.cog._build_health_embed(overall, wos_api, gift_api, db_health, log_health, system_health)
+        embed = await self.cog._build_health_embed(overall, wos_api, gift_api, db_health, log_health, system_health)
 
         await interaction.followup.edit_message(
             message_id=interaction.message.id,

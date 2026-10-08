@@ -287,23 +287,20 @@ class ProcessQueue(commands.Cog):
 
     def queued_processes(self) -> list:
         """Every waiting job, in the order the processor will run them."""
-        self.cursor.execute("""
-            SELECT id, action, status, priority, alliance_id, details, created_at
-            FROM process_queue WHERE status = 'queued' ORDER BY priority ASC, id ASC
-        """)
-        return [self._row_to_dict(row) for row in self.cursor.fetchall()]
+        return self.get_queued_processes_by_action(None)
 
-    def get_queued_processes_by_action(self, action: str, statuses=('queued',)) -> list:
-        """Get processes for a given action type. Pass statuses=('queued','active') to
-        include the running one - its details carry live progress."""
+    def get_queued_processes_by_action(self, action: Optional[str], statuses=('queued',)) -> list:
+        """Get processes for a given action type (None = every action). Pass
+        statuses=('queued','active') to include the running one - its details carry live progress."""
         statuses = tuple(statuses)
         placeholders = ",".join("?" for _ in statuses)
+        action_filter = " AND action = ?" if action else ""
         self.cursor.execute(f"""
             SELECT id, action, status, priority, alliance_id, details, created_at
             FROM process_queue
-            WHERE status IN ({placeholders}) AND action = ?
+            WHERE status IN ({placeholders}){action_filter}
             ORDER BY priority ASC, id ASC
-        """, (*statuses, action))
+        """, (*statuses, *([action] if action else [])))
         return [self._row_to_dict(row) for row in self.cursor.fetchall()]
 
     def get_position(self, process_id: int) -> Optional[int]:

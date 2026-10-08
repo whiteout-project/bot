@@ -282,3 +282,44 @@ def test_component_text_within_discord_limits():
             if isinstance(options, ast.List) and len(options.elts) > 25:
                 bad.append(f"{f.name}:{call.lineno} {len(options.elts)} select options (max 25)")
     assert not bad, "component text over Discord's limits:\n  " + "\n  ".join(bad)
+
+
+# ── Button rows fit on one line (Discord wraps an over-wide row, leaving one button alone below) ──
+ROW_WIDTH_LIMIT = 100  # label characters plus BUTTON_CHROME per button; measured on desktop
+BUTTON_CHROME = 6  # emoji and padding, in label characters
+UNKNOWN_PART = 10  # a computed label part we can't read statically
+ICON_PART = 2  # a {theme.xIcon} inside the label renders as one emoji
+
+
+def _longest(expr: ast.expr) -> int:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return len(expr.value)
+    if isinstance(expr, ast.IfExp):
+        return max(_longest(expr.body), _longest(expr.orelse))
+    if isinstance(expr, ast.FormattedValue):
+        return ICON_PART if ast.unparse(expr.value).endswith("Icon") else _longest(expr.value)
+    if isinstance(expr, ast.JoinedStr):
+        return sum(_longest(v) for v in expr.values)
+    return UNKNOWN_PART
+
+
+def _button_rows(cls: ast.ClassDef) -> dict[int, list[int]]:
+    rows = {}
+    for call in (n for n in _walk_own(cls) if isinstance(n, ast.Call)):
+        if ast.unparse(call.func).split(".")[-1] not in ("Button", "button"):
+            continue
+        row, label = _kw(call, "row"), _kw(call, "label")
+        if isinstance(row, ast.Constant) and label is not None:
+            rows.setdefault(row.value, []).append(_longest(label))
+    return rows
+
+
+def test_button_rows_fit_on_one_line():
+    bad = []
+    for f, cls in VIEWS:
+        for row, labels in sorted(_button_rows(cls).items()):
+            width = sum(labels) + BUTTON_CHROME * len(labels)
+            if width > ROW_WIDTH_LIMIT:
+                bad.append(f"{f.name}:{cls.lineno} {cls.name} row {row}: {len(labels)} buttons, width {width}")
+    assert not bad, ("button rows too wide for one line; rebalance the rows (move buttons so counts stay "
+                     "even, e.g. 4/4 or 3/3/2) instead of adding to a full row:\n  " + "\n  ".join(bad))

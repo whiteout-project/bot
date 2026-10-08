@@ -103,3 +103,19 @@ async def test_menu_that_fails_to_open_says_so(sim, monkeypatch, hub):
     assert click.result.acknowledged
     message, ephemeral = click.screen
     assert ephemeral and "couldn't be opened" in message.content
+
+
+async def test_restart_button_relaunches_in_place_in_a_container(sim, monkeypatch):
+    import os
+    import sys
+    import cogs.bot_health as bot_health
+    relaunched = []
+    monkeypatch.setattr(os, "execl", lambda *args: relaunched.append(args))
+    monkeypatch.setattr(bot_health, "is_container", lambda: True)
+    monkeypatch.setattr(sys, "platform", "linux")  # hosting panels run Linux containers
+    health = await sim.walk("Maintenance", "Bot Health")
+    confirm = (await sim.click(health, "Restart Bot")).screen[0]
+    click = await sim.click(confirm, "Confirm Restart")
+    await sim.env.advance_time(5)
+    assert relaunched, "the bot exited instead of relaunching in place"
+    assert not click.raised

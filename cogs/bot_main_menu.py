@@ -11,7 +11,7 @@ import asyncio
 from .permission_handler import (
     PermissionManager, TIER_OWNER, TIER_GLOBAL, TIER_SERVER, TIER_ALLIANCE, TIER_NONE,
 )
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, has_live_handler, confirm_timeout, notify_view_expired
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, has_live_handler, ConfirmView, report_failed_click
 
 logger = logging.getLogger('bot')
 
@@ -92,21 +92,8 @@ def _build_alliance_select(all_alliances, staged_ids,
     )
 
 
+MENU_OPEN_FAILED = "This menu couldn't be opened. The error was written to the bot log."
 DEAD_CLICK_GRACE = 2.0  # seconds; Discord drops an unanswered click after 3
-
-
-async def _report_menu_error(interaction: discord.Interaction, where: str, error: Exception):
-    """Log a menu that failed to open and tell the clicker, so the click never goes unanswered."""
-    logger.error(f"Error in {where}: {error}")
-    print(f"Error in {where}: {error}")
-    text = f"{theme.deniedIcon} This menu couldn't be opened. The error was written to the bot log."
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(text, ephemeral=True)
-        else:
-            await interaction.response.send_message(text, ephemeral=True)
-    except discord.HTTPException:
-        pass
 
 
 class MainMenu(commands.Cog):
@@ -154,7 +141,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            await _report_menu_error(interaction, "show_main_menu", e)
+            await report_failed_click(interaction, "show_main_menu", e, MENU_OPEN_FAILED)
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
@@ -289,7 +276,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            await _report_menu_error(interaction, "show_alliance_management", e)
+            await report_failed_click(interaction, "show_alliance_management", e, MENU_OPEN_FAILED)
 
     async def show_alliance_hub(self, interaction: discord.Interaction, alliance_id: int):
         """Per-alliance hub — all per-alliance actions for one alliance."""
@@ -397,7 +384,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            await _report_menu_error(interaction, "show_alliance_hub", e)
+            await report_failed_click(interaction, "show_alliance_hub", e, MENU_OPEN_FAILED)
 
 
     def _fc_label(self, fl: int) -> str:
@@ -413,7 +400,7 @@ class MainMenu(commands.Cog):
             view = SelfRegistrationView(self)
             await view.show(interaction)
         except Exception as e:
-            await _report_menu_error(interaction, "show_self_registration", e)
+            await report_failed_click(interaction, "show_self_registration", e, MENU_OPEN_FAILED)
 
     async def show_permissions(self, interaction: discord.Interaction):
         """Display the Permissions sub-menu (admin management).
@@ -438,7 +425,7 @@ class MainMenu(commands.Cog):
             embed = view.build_embed()
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
         except Exception as e:
-            await _report_menu_error(interaction, "show_permissions", e)
+            await report_failed_click(interaction, "show_permissions", e, MENU_OPEN_FAILED)
 
     async def show_maintenance(self, interaction: discord.Interaction):
         """Display the Maintenance sub-menu."""
@@ -474,7 +461,7 @@ class MainMenu(commands.Cog):
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
-            await _report_menu_error(interaction, "show_maintenance", e)
+            await report_failed_click(interaction, "show_maintenance", e, MENU_OPEN_FAILED)
 
 
 # ============================================================================
@@ -1951,21 +1938,17 @@ class AdminContextView(discord.ui.View):
         await interaction.response.edit_message(embed=view.build_embed(), view=view)
 
 
-class _ConfirmActionView(discord.ui.View):
+class _ConfirmActionView(ConfirmView):
     """Generic Yes/No confirmation. Yes/No callbacks receive the interaction."""
     def __init__(self, viewer_id, *, on_confirm, on_cancel):
-        super().__init__(timeout=confirm_timeout())
+        super().__init__()
         self.viewer_id = viewer_id
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
-        self.message = None
 
     async def show(self, interaction, embed):
         await interaction.response.edit_message(embed=embed, view=self)
         self.message = interaction.message
-
-    async def on_timeout(self):
-        await notify_view_expired(self, "confirmation")
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, emoji=theme.verifiedIcon, row=0)
     async def confirm(self, interaction, _btn):

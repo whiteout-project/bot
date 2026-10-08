@@ -1834,9 +1834,23 @@ def _extract_embed_codes(message) -> list:
 
     codes = []
     for text in texts:
-        clean = str(text).replace('*', '').replace('`', '').replace('_', '')
-        codes.extend(m.group(1) for m in re.finditer(r'Code:\s*([a-zA-Z0-9]+)', clean, re.IGNORECASE))
+        codes.extend(m.group(1) for m in re.finditer(r'Code:\s*([a-zA-Z0-9]+)', _strip_markdown(text), re.IGNORECASE))
     return codes
+
+
+def _strip_markdown(text) -> str:
+    return str(text).replace('*', '').replace('`', '').replace('_', '')
+
+
+def _extract_content_codes(content: str) -> list:
+    """Code candidates in message text: a lone alphanumeric word, or a Code:-labeled one."""
+    clean = _strip_markdown(content).strip()
+    if not clean:
+        return []
+    if len(clean.split()) == 1:
+        return [clean] if re.match(r'^[a-zA-Z0-9]+$', clean) else []
+    code_match = re.search(r'Code:\s*([a-zA-Z0-9]+)(?!\S)', clean, re.IGNORECASE)
+    return [code_match.group(1)] if code_match else []
 
 
 async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_id: int) -> dict:
@@ -1886,20 +1900,7 @@ async def scan_historical_messages(cog, channel: discord.TextChannel, alliance_i
         message_code_map = {}
 
         for message in messages_to_process:
-            candidates = []
-            content = message.content.strip()
-
-            # Check for gift code patterns
-            if content:
-                if len(content.split()) == 1:
-                    if re.match(r'^[a-zA-Z0-9]+$', content):
-                        candidates.append(content)
-                else:
-                    code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
-                    if code_match:
-                        potential_code = code_match.group(1)
-                        if re.match(r'^[a-zA-Z0-9]+$', potential_code):
-                            candidates.append(potential_code)
+            candidates = _extract_content_codes(message.content)
 
             # Official codes usually arrive inside embeds
             candidates.extend(_extract_embed_codes(message))

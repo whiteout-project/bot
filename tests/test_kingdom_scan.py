@@ -89,15 +89,13 @@ def test_set_user_kid_clears_scan_columns_and_needs_scan(dbs):
     assert gsr.needs_scan(1) is False
 
 
-def test_scan_position_round_trip_done_and_reset(dbs):
+def test_scan_position_round_trip_and_done(dbs):
     _user(1)
     gsr.save_scan_position(1, 1234)
     assert gsr.get_scan_position(1) == 1234
     gsr.mark_scan_done(1)
     nxt, done = _scan_columns(1)
     assert nxt is None and done is not None
-    gsr.reset_scan(1)
-    assert _scan_columns(1) == (None, None)
 
 
 # --- Task 2: OCR busy signal ------------------------------------------------------------
@@ -572,3 +570,54 @@ def test_locked_db_at_member_start_keeps_the_member(monkeypatch, dbs):
     monkeypatch.setattr(gr.gift_state_resolver, "resolve_state", fake_resolve)
     assert _scan(1) is None                       # scanned (done-marked), not dropped by the lock
     assert _scan_columns(1)[1] is not None
+
+
+# --- Member States: counts and bulk writes without per-row queries ------------------------
+
+
+def test_member_fix_counts_match_members_to_fix(dbs):
+    _user(1, kid=5, mismatch="2026-10-01T00:00:00")
+    _user(2)
+    _user(3, kid=7)
+    _user(4, alliance="")
+    _user(5, mismatch="2026-10-02T00:00:00")
+    rows = gsr.members_to_fix()
+    expected = {"wrong": sum(r[3] == "wrong" for r in rows), "missing": sum(r[3] == "missing" for r in rows)}
+    assert gsr.member_fix_counts() == expected == {"wrong": 2, "missing": 1}
+
+
+def test_scan_counts_match_scan_targets(dbs):
+    now = datetime.now()
+    _user(1)
+    _user(2, done=(now - timedelta(days=1)).isoformat(timespec="seconds"))
+    _user(3, done=(now - timedelta(days=40)).isoformat(timespec="seconds"))
+    _user(4, kid=9)
+    waiting, needing = gsr.scan_counts()
+    assert (waiting, needing) == (len(gsr.scan_targets(auto=True)), len(gsr.scan_targets(auto=False)))
+    assert (waiting, needing) == (2, 3)
+
+
+def test_bulk_dismiss_and_set_state(dbs):
+    _user(1, kid=5, mismatch="x")
+    _user(2, kid=6, mismatch="x")
+    _user(3, mismatch="x", nxt=40, done="2026-01-01T00:00:00")
+    gsr.clear_state_mismatch_many([1, 2])
+    assert [row[0] for row in gsr.fids_with_state_mismatch()] == [3]
+    gsr.set_user_kid_many([1, 3], 911)
+    with sqlite3.connect("db/users.sqlite") as c:
+        rows = c.execute("SELECT fid, kid, state_mismatch_at, kingdom_scan_next, kingdom_scan_done_at "
+                         "FROM users ORDER BY fid").fetchall()
+    assert rows == [(1, 911, None, None, None), (2, 6, None, None, None), (3, 911, None, None, None)]
+
+
+def test_survey_matches_per_alliance_binding(dbs):
+    for fid, kid, alliance in [(1, 9, "5"), (2, 9, "5"), (3, 9, "5"), (4, 7, "6"), (5, 8, "6"), (6, 3, "7")]:
+        _user(fid, kid=kid, alliance=alliance)
+    with sqlite3.connect("db/alliance.sqlite") as c:
+        c.executemany("INSERT INTO alliance_list VALUES (?,?,?,?,?)",
+                      [(5, "A", None, 0, 0), (6, "B", None, 0, 0), (7, "C", None, 1, 0), (8, "D", None, 0, 0)])
+    survey = {r["alliance_id"]: r for r in gsr.survey_alliance_bindings()}
+    assert survey[5]["proposed_kid"] == gsr.compute_alliance_binding(5)[0] == 9
+    assert survey[6]["proposed_kid"] is gsr.compute_alliance_binding(6) is None
+    assert survey[7]["proposed_kid"] is None and survey[7]["multistate"]
+    assert survey[8]["known"] == 0

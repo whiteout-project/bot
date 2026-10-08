@@ -81,3 +81,27 @@ def test_human_message_still_detected(monkeypatch):
     msg = _msg(content="PLAYERCODE1", bot=False, crosspost=False)
     enqueued = _run(cog, msg, monkeypatch)
     assert enqueued == ["PLAYERCODE1"]
+
+
+def test_markdown_wrapped_content_code_is_stored_clean(monkeypatch):
+    cog = _mk_cog()
+    enqueued = _run(cog, _msg(content="New code! Code: `HAPPYCATDAY`"), monkeypatch)
+    assert enqueued == ["HAPPYCATDAY"]
+
+
+def test_bold_label_does_not_capture_markdown(monkeypatch):
+    cog = _mk_cog()
+    enqueued = _run(cog, _msg(content="**Code:** `MIDAUTUMN26` redeem now"), monkeypatch)
+    assert enqueued == ["MIDAUTUMN26"]
+
+
+def test_non_alphanumeric_candidate_is_dropped(monkeypatch):
+    cog = _mk_cog()
+    enqueued = _run(cog, _msg(content="Code: not-a-code! sorry"), monkeypatch)
+    assert enqueued == []
+
+
+def test_content_extraction_shared_with_history_scan():
+    assert gr._extract_content_codes("`VIP777`") == ["VIP777"]
+    assert gr._extract_content_codes("Code: `FB2500KT` today") == ["FB2500KT"]
+    assert gr._extract_content_codes("hello there") == []

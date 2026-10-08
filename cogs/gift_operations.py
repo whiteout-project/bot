@@ -8,7 +8,6 @@ from discord.ext import commands
 import sqlite3
 from discord.ext import tasks
 import asyncio
-import re
 import os
 import traceback
 import logging
@@ -294,16 +293,7 @@ class GiftOperations(commands.Cog):
             if not channel_info:
                 return
 
-            content = message.content.strip()
-            candidates = []
-            if content:
-                if len(content.split()) == 1:
-                    if re.match(r'^[a-zA-Z0-9]+$', content):
-                        candidates.append(content)
-                else:
-                    code_match = re.search(r'Code:\s*(\S+)', content, re.IGNORECASE)
-                    if code_match:
-                        candidates.append(code_match.group(1))
+            candidates = gift_redemption._extract_content_codes(message.content)
             candidates.extend(gift_redemption._extract_embed_codes(message))
 
             seen = set()
@@ -463,7 +453,7 @@ class GiftOperations(commands.Cog):
 
     def auto_kingdom_scan_tick(self):
         """Queue an auto-scan when it's switched on and the bot has nothing else to do."""
-        if not gift_state_resolver.get_scan_settings()['enabled']:
+        if not gift_state_resolver.scan_enabled():
             return False
         process_queue_cog = self.bot.get_cog('ProcessQueue')
         if not process_queue_cog:

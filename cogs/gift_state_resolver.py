@@ -24,7 +24,6 @@ MAX_PROBE_RETRIES = 4       # retries for a single (fid,kid) when throttled/tran
 PROGRESS_EVERY = 30         # log a scan-progress heartbeat every N probes (~once a minute at this pace)
 CHECKPOINT_EVERY = 10       # save a range scan's resume point every N probes
 TRANSFER_WINDOW = 200       # state transfers stay within ~200 IDs of the origin (same transfer group)
-SCAN_CONCURRENCY = 6        # fids scanned at once - the limit is per-FID, not per-IP
 
 
 class StateResolveInterrupted(Exception):
@@ -240,10 +239,22 @@ def _state_distribution(alliance_id):
             "GROUP BY kid ORDER BY COUNT(*) DESC", (str(alliance_id),)).fetchall()
 
 
-def compute_alliance_binding(alliance_id, *, threshold=BIND_THRESHOLD, min_known=BIND_MIN_KNOWN):
+def _state_distributions():
+    """{alliance: [(kid, count), ...] most-common first} for every alliance, in one query."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        rows = conn.execute("SELECT alliance, kid, COUNT(*) FROM users WHERE kid IS NOT NULL "
+                            "GROUP BY alliance, kid ORDER BY COUNT(*) DESC").fetchall()
+    by_alliance = {}
+    for alliance, kid, count in rows:
+        by_alliance.setdefault(alliance, []).append((kid, count))
+    return by_alliance
+
+
+def compute_alliance_binding(alliance_id, *, threshold=BIND_THRESHOLD, min_known=BIND_MIN_KNOWN,
+                             distribution=None):
     """Majority state among an alliance's members with a known kid.
     Returns (kid, share, known_count), or None when too few knowns / no clear winner."""
-    rows = _state_distribution(alliance_id)
+    rows = _state_distribution(alliance_id) if distribution is None else distribution
     if not rows:
         return None
     known = sum(c for _, c in rows)
@@ -314,10 +325,12 @@ def survey_alliance_bindings(*, threshold=BIND_THRESHOLD, min_known=BIND_MIN_KNO
         alliances = conn.execute(
             "SELECT alliance_id, name, kid, COALESCE(multistate, 0), COALESCE(state_locked, 0) "
             "FROM alliance_list").fetchall()
+    distributions = _state_distributions()
     report = []
     for alliance_id, name, current_kid, multistate, state_locked in alliances:
         binding = None if multistate else compute_alliance_binding(
-            alliance_id, threshold=threshold, min_known=min_known)
+            alliance_id, threshold=threshold, min_known=min_known,
+            distribution=distributions.get(str(alliance_id), []))
         report.append({
             "alliance_id": alliance_id, "name": name, "current_kid": current_kid,
             "multistate": bool(multistate), "state_locked": bool(state_locked),
@@ -416,6 +429,19 @@ def clear_state_mismatch(fid):
         conn.commit()
 
 
+def clear_state_mismatch_many(fids):
+    """clear_state_mismatch for every fid, in one transaction."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn, conn:
+        conn.executemany("UPDATE users SET state_mismatch_at = NULL WHERE fid = ?", [(fid,) for fid in fids])
+
+
+def set_user_kid_many(fids, kid):
+    """set_user_kid for every fid, in one transaction."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn, conn:
+        for fid in fids:
+            set_user_kid(fid, kid, conn=conn)
+
+
 def fids_with_state_mismatch():
     """[(fid, nickname, kid, alliance, flagged_at), ...] for members the game rejected."""
     with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
@@ -490,11 +516,16 @@ _NEEDS_SCAN = ("(kid IS NULL OR state_mismatch_at IS NOT NULL) "
                "AND alliance IS NOT NULL AND alliance != ''")
 
 
-def _setting(key):
+def _settings(*keys):
+    """{key: value} for the keys that are set, read on one connection."""
     with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
-        row = conn.execute("SELECT setting_value FROM bot_global_settings WHERE setting_key = ?",
-                           (key,)).fetchone()
-    return row[0] if row else None
+        return dict(conn.execute(
+            f"SELECT setting_key, setting_value FROM bot_global_settings "
+            f"WHERE setting_key IN ({','.join('?' * len(keys))})", keys).fetchall())
+
+
+def _setting(key):
+    return _settings(key).get(key)
 
 
 def _put_setting(key, value):
@@ -518,10 +549,11 @@ def scan_enabled():
 
 def get_scan_settings():
     """{'enabled', 'min', 'max', 'custom'}; without a saved range: 1 to the highest state on file."""
-    lo, hi = _setting('kingdom_scan_min'), _setting('kingdom_scan_max')
+    stored = _settings('kingdom_scan_enabled', 'kingdom_scan_min', 'kingdom_scan_max')
+    lo, hi = stored.get('kingdom_scan_min'), stored.get('kingdom_scan_max')
     custom = lo is not None and hi is not None
     return {
-        'enabled': scan_enabled(),
+        'enabled': stored.get('kingdom_scan_enabled') == '1',
         'min': int(lo) if custom else 1,
         'max': int(hi) if custom else _highest_kid_on_file(),
         'custom': custom,
@@ -544,7 +576,8 @@ def set_scan_enabled(on):
 def set_scan_range(lo, hi):
     if not (1 <= lo <= hi <= SCAN_MAX_KINGDOM):
         raise ValueError(f"range must satisfy 1 <= min <= max <= {SCAN_MAX_KINGDOM}")
-    if (_setting('kingdom_scan_min'), _setting('kingdom_scan_max')) == (str(lo), str(hi)):
+    stored = _settings('kingdom_scan_min', 'kingdom_scan_max')
+    if (stored.get('kingdom_scan_min'), stored.get('kingdom_scan_max')) == (str(lo), str(hi)):
         return
     _put_setting('kingdom_scan_min', lo)
     _put_setting('kingdom_scan_max', hi)
@@ -562,16 +595,41 @@ def members_to_fix():
     return wrong + missing
 
 
+def member_fix_counts():
+    """{'wrong', 'missing'}: the Members to Fix counts, without loading the rows."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        wrong, missing = conn.execute(
+            "SELECT COALESCE(SUM(state_mismatch_at IS NOT NULL), 0), "
+            "COALESCE(SUM(kid IS NULL AND alliance IS NOT NULL AND alliance != '' "
+            "AND state_mismatch_at IS NULL), 0) FROM users").fetchone()
+    return {'wrong': wrong, 'missing': missing}
+
+
+def _retry_cutoff(now=None):
+    return ((now or datetime.now()) - timedelta(days=SCAN_RETRY_DAYS)).isoformat(timespec='seconds')
+
+
+_AUTO_SCAN_DUE = "(kingdom_scan_done_at IS NULL OR kingdom_scan_done_at < ?)"
+
+
 def scan_targets(*, auto, now=None):
     """FIDs that need a scan. Auto-scan skips members a full scan missed in the last 30 days."""
     sql = f"SELECT fid FROM users WHERE {_NEEDS_SCAN}"
     params = ()
     if auto:
-        cutoff = ((now or datetime.now()) - timedelta(days=SCAN_RETRY_DAYS)).isoformat(timespec='seconds')
-        sql += " AND (kingdom_scan_done_at IS NULL OR kingdom_scan_done_at < ?)"
-        params = (cutoff,)
+        sql += f" AND {_AUTO_SCAN_DUE}"
+        params = (_retry_cutoff(now),)
     with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
         return [r[0] for r in conn.execute(sql + " ORDER BY fid", params).fetchall()]
+
+
+def scan_counts(now=None):
+    """(waiting for auto-scan, needing any scan): the sizes of scan_targets(auto=True/False)."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        waiting, needing = conn.execute(
+            f"SELECT COALESCE(SUM({_AUTO_SCAN_DUE}), 0), COUNT(*) FROM users WHERE {_NEEDS_SCAN}",
+            (_retry_cutoff(now),)).fetchone()
+    return waiting, needing
 
 
 def needs_scan(fid):
@@ -599,8 +657,3 @@ def get_scan_position(fid):
 def mark_scan_done(fid):
     _write_scan("UPDATE users SET kingdom_scan_next = NULL, kingdom_scan_done_at = ? WHERE fid = ?",
                 (datetime.now().isoformat(timespec='seconds'), fid))
-
-
-def reset_scan(fid):
-    _write_scan("UPDATE users SET kingdom_scan_next = NULL, kingdom_scan_done_at = NULL WHERE fid = ?",
-                (fid,))

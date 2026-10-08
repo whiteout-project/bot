@@ -1830,6 +1830,8 @@ def _review_editor_mode(channel_id: int) -> tuple:
 
 async def can_edit_session(session, interaction: discord.Interaction) -> bool:
     """Uploader, or whoever the alliance's Editors setting allows; denies with an ephemeral."""
+    if interaction.user.id == session.uploader_id:
+        return True
     alliance_id, mode = _review_editor_mode(session.channel.id)
     if can_edit_upload(interaction.user.id, session.uploader_id, mode, alliance_id, interaction.guild_id):
         return True
@@ -1841,8 +1843,6 @@ async def can_edit_session(session, interaction: discord.Interaction) -> bool:
 
 class _ProgressView(discord.ui.View):
     def __init__(self, session: OcrUploadSession):
-        # Long timeout so the Done Uploading button stays clickable while
-        # the admin reads through the parsed counts before deciding.
         super().__init__(timeout=menu_timeout())
         self.session = session
 

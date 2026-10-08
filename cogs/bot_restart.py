@@ -38,10 +38,11 @@ def is_container() -> bool:
 def restart_process(allow_update: bool = False):
     """Restart the current bot process in a platform-aware way.
 
-    - Container: clean exit; the orchestrator (Docker/k8s) relaunches it.
     - Windows host: print the run command and exit. Windows can't reliably
       relaunch itself (a spawned child races the parent shell for stdin).
-    - Linux/Mac: os.execl() for in-place replacement.
+    - Linux/Mac, containers included: os.execl() for in-place replacement. The
+      process never exits, so Docker, k8s and hosting panels (Pterodactyl) keep
+      the bot running whatever their restart or crash-detection settings.
 
     One-shot flags (--repair, --no-venv) are filtered from the relaunch args
     to avoid loops. --no-update is filtered only when allow_update is True, so
@@ -51,10 +52,6 @@ def restart_process(allow_update: bool = False):
     if allow_update:
         drop.add("--no-update")
     relaunch_args = [arg for arg in sys.argv if arg not in drop]
-
-    if is_container():
-        print("  Restarting bot...")
-        sys.exit(0)
 
     if sys.platform == "win32":
         venv_python = os.path.join("bot_venv", "Scripts", "python.exe")

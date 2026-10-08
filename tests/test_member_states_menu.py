@@ -63,7 +63,7 @@ def test_members_to_fix_buttons_follow_what_is_listed(monkeypatch):
 def test_kingdom_scan_view_shows_toggle_state_and_range(monkeypatch):
     monkeypatch.setattr(ams.gsr, "get_scan_settings",
                         lambda: {"enabled": True, "min": 100, "max": 2000, "custom": True})
-    monkeypatch.setattr(ams.gsr, "scan_targets", lambda auto: [1, 2] if auto else [1, 2, 3])
+    monkeypatch.setattr(ams.gsr, "scan_counts", lambda: (2, 3))
 
     async def build():
         view = ams.KingdomScanView(_cog(), 1)
@@ -196,3 +196,20 @@ def test_range_modal_is_blank_while_on_the_default_range():
 
     assert asyncio.run(build(False)) == (None, None)
     assert asyncio.run(build(True)) == ("100", "2000")
+
+
+def test_page_flip_reuses_loaded_rows():
+    loads = []
+
+    def load():
+        loads.append(1)
+        return list(range(60))
+
+    view = ams._PagedView.__new__(ams._PagedView)
+    view.rows, view._keep_rows = [], False
+    asyncio.run(view._rows(load))
+    view._keep_rows = True                      # what Prev/Next set
+    asyncio.run(view._rows(load))
+    assert len(loads) == 1
+    asyncio.run(view._rows(load))               # any other render reloads
+    assert len(loads) == 2

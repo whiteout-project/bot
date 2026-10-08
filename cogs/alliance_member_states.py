@@ -8,7 +8,7 @@ import discord
 from . import gift_state_resolver as gsr
 from .bot_level_mapping import parse_state
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout
+from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, MenuView
 
 logger = logging.getLogger('gift')
 
@@ -48,12 +48,10 @@ def _catchup_lines(cog):
 
 
 def _hub_counts():
-    rows = gsr.members_to_fix()
     survey = gsr.survey_alliance_bindings()
     unbound = [r for r in survey if r["current_kid"] is None and not r["multistate"]]
     return {
-        'wrong': sum(1 for r in rows if r[3] == 'wrong'),
-        'missing': sum(1 for r in rows if r[3] == 'missing'),
+        **gsr.member_fix_counts(),
         'unbound': len(unbound),
         'bindable': sum(1 for r in unbound if r["proposed_kid"] is not None),
     }
@@ -101,27 +99,21 @@ async def show_state_management(cog, interaction: discord.Interaction):
     await safe_edit_message(interaction, embed=await view.build_embed(), view=view, content=None)
 
 
-class _MenuView(discord.ui.View):
-    """Shared plumbing: owner check, dynamic buttons, refresh in place, Back to the hub."""
+class _MenuView(MenuView):
+    """Shared plumbing: dynamic buttons, refresh in place, Back to the hub."""
 
     def __init__(self, cog, user_id):
-        super().__init__(timeout=menu_timeout())
+        super().__init__(user_id)
         self.cog = cog
-        self.original_user_id = user_id
         self.last_result = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         # Re-checked per click: the menu lives for hours and admin rights can change meanwhile.
-        return await _is_global_admin(interaction)
+        return await _is_global_admin(interaction) and await super().interaction_check(interaction)
 
     def _add_button(self, label, emoji, style, row, callback, disabled=False):
         button = discord.ui.Button(label=label, emoji=f"{emoji}", style=style, row=row, disabled=disabled)
-
-        async def guarded(interaction: discord.Interaction):
-            if await check_interaction_user(interaction, self.original_user_id):
-                await callback(interaction)
-
-        button.callback = guarded
+        button.callback = callback
         self.add_item(button)
 
     async def refresh(self, interaction: discord.Interaction):
@@ -137,6 +129,14 @@ class _PagedView(_MenuView):
         super().__init__(cog, user_id)
         self.page = page
         self.rows = []
+        self._keep_rows = False
+
+    async def _rows(self, load):
+        """The loaded rows on a page flip, a fresh load on every other render."""
+        if not self._keep_rows:
+            self.rows = await asyncio.to_thread(load)
+        self._keep_rows = False
+        return self.rows
 
     def _page_rows(self):
         pages = max(1, (len(self.rows) + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -150,10 +150,12 @@ class _PagedView(_MenuView):
 
     async def _on_prev(self, interaction: discord.Interaction):
         self.page -= 1
+        self._keep_rows = True
         await self.refresh(interaction)
 
     async def _on_next(self, interaction: discord.Interaction):
         self.page += 1
+        self._keep_rows = True
         await self.refresh(interaction)
 
 
@@ -194,7 +196,7 @@ class StateManagementView(_MenuView):
             f"{theme.allianceIcon} **Alliance States**",
             "└ Give alliances their state and mark alliances that span several states.",
             f"{theme.searchIcon} **State Scan**",
-            "└ Let the bot look up missing states by itself while it has nothing else to do.",
+            "└ Let the bot find missing states by itself while it has nothing else to do.",
         ]
         return discord.Embed(title=f"{theme.stateIcon} Member States",
                              description="\n".join(lines), color=theme.emColor1)
@@ -221,7 +223,7 @@ class MembersToFixView(_PagedView):
         return f"ID {fid} - no state on file"[:100]
 
     async def build_embed(self):
-        self.rows = await asyncio.to_thread(gsr.members_to_fix)
+        await self._rows(gsr.members_to_fix)
         wrong = sum(1 for r in self.rows if r[3] == 'wrong')
         missing = len(self.rows) - wrong
         self.clear_items()
@@ -258,7 +260,7 @@ class MembersToFixView(_PagedView):
             f"{theme.allianceIcon} **Use Alliance State**",
             "└ Give members with no state their alliance's state. Instant.",
             f"{theme.searchIcon} **Scan These Now**",
-            "└ Ask the game for each member's state, in the background. Can take hours.",
+            "└ Try state numbers for each member in the background until one fits. Can take hours.",
             f"{theme.trashIcon} **Dismiss Warnings**",
             "└ Clear the wrong-state warnings. Members still wrong come back after the next redemption.",
         ]
@@ -273,8 +275,6 @@ class MembersToFixView(_PagedView):
                              description="\n".join(lines), color=theme.emColor1)
 
     async def _on_select(self, interaction: discord.Interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
         fid = int(interaction.data["values"][0])
         match = next((r for r in self.rows if r[0] == fid), None)
         await interaction.response.send_modal(
@@ -300,8 +300,7 @@ class MembersToFixView(_PagedView):
 
     async def _on_dismiss(self, interaction: discord.Interaction):
         wrong = [r[0] for r in self.rows if r[3] == 'wrong']
-        for fid in wrong:
-            await asyncio.to_thread(gsr.clear_state_mismatch, fid)
+        await asyncio.to_thread(gsr.clear_state_mismatch_many, wrong)
         self.cog.logger.info(f"GiftOps: admin dismissed {len(wrong)} wrong-state warning(s)")
         self.last_result = f"Dismissed {len(wrong)} warning(s)."
         await self.refresh(interaction)
@@ -311,7 +310,7 @@ class AllianceKingdomsView(_PagedView):
     """Each alliance's home state, auto-bind, and the multistate flag."""
 
     async def build_embed(self):
-        self.rows = await asyncio.to_thread(gsr.survey_alliance_bindings)
+        await self._rows(gsr.survey_alliance_bindings)
         self.rows.sort(key=lambda r: (not r["multistate"], str(r["name"]).lower()))
         self.clear_items()
 
@@ -357,8 +356,6 @@ class AllianceKingdomsView(_PagedView):
                              description="\n".join(lines), color=theme.emColor1)
 
     async def _on_select(self, interaction: discord.Interaction):
-        if not await check_interaction_user(interaction, self.original_user_id):
-            return
         alliance_id = int(interaction.data["values"][0])
         currently = await asyncio.to_thread(gsr.is_multistate, alliance_id)
         await asyncio.to_thread(gsr.set_multistate, alliance_id, not currently)
@@ -380,8 +377,7 @@ class KingdomScanView(_MenuView):
 
     async def build_embed(self):
         settings = await asyncio.to_thread(gsr.get_scan_settings)
-        waiting = len(await asyncio.to_thread(gsr.scan_targets, auto=True))
-        needing = len(await asyncio.to_thread(gsr.scan_targets, auto=False))
+        waiting, needing = await asyncio.to_thread(gsr.scan_counts)
         on = settings['enabled']
         self.clear_items()
         self._add_button(f"Auto-scan: {'On' if on else 'Off'}", theme.searchIcon,
@@ -392,8 +388,8 @@ class KingdomScanView(_MenuView):
 
         source = "set by you" if settings['custom'] else "1 to the highest state on file"
         lines = [
-            "The bot asks the game which state each member is in, one state at a time. It "
-            "tries the likely states first, then every state in the range below. It only "
+            "The bot finds each member's state by trying state numbers one at a time until the gift "
+            "code service accepts the member's ID. It tries the likely states first, then every state in the range below. It only "
             "runs while the bot is idle and pauses for gift codes, member syncs and screenshot "
             "reading (OCR).\n",
             f"{theme.upperDivider}",
@@ -419,7 +415,7 @@ class KingdomScanView(_MenuView):
                              description="\n".join(lines), color=theme.emColor1)
 
     async def _on_toggle(self, interaction: discord.Interaction):
-        on = not (await asyncio.to_thread(gsr.get_scan_settings))['enabled']
+        on = not await asyncio.to_thread(gsr.scan_enabled)
         await asyncio.to_thread(gsr.set_scan_enabled, on)
         logger.info(f"GiftOps: admin turned the state auto-scan {'on' if on else 'off'}")
         self.last_result = ("Auto-scan is on. It starts within 5 minutes once the bot is idle."
@@ -535,11 +531,8 @@ class BulkStateModal(discord.ui.Modal):
                 ephemeral=True)
             return
         cog = self.parent_view.cog
-        caught = 0
-        for fid in self.fids:
-            await asyncio.to_thread(gsr.set_user_kid, fid, kid)
-            if gift_redemption.enqueue_member_redemption(cog, fid):
-                caught += 1
+        await asyncio.to_thread(gsr.set_user_kid_many, self.fids, kid)
+        caught = sum(1 for fid in self.fids if gift_redemption.enqueue_member_redemption(cog, fid))
         cog.logger.info(f"GiftOps: admin set state {kid} for {len(self.fids)} listed member(s)")
         self.parent_view.last_result = (
             f"Set {len(self.fids)} member(s) to state {kid}."

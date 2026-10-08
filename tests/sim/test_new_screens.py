@@ -4,30 +4,9 @@ from contextlib import closing
 
 import pytest
 
-from sim_harness import ALLIANCE_ID, labels, title
+from sim_harness import ALLIANCE_ID, labels, modal_fields, title
 
 pytestmark = pytest.mark.asyncio
-
-
-async def _walk(sim, *steps, user="owner"):
-    """Click through menus from /settings; each step is a button label."""
-    message = await sim.open_settings(user)
-    for label in steps:
-        click = await sim.click(message, label, user=user)
-        assert not click.problems(), (label, click.problems())
-        message = click.screen[0]
-    return message
-
-
-def _modal_fields(click):
-    from simcord.actors import _modal_components
-    return {c["label"]: c["custom_id"] for c in _modal_components(click.result.modal)}
-
-
-async def _submit(sim, click, values_by_label, user="owner"):
-    fields = _modal_fields(click)
-    values = {fields[label]: value for label, value in values_by_label.items()}
-    return await sim._interact(sim.users[user].submit_modal(click.result, values))
 
 
 def _description(message):
@@ -38,7 +17,7 @@ def _description(message):
 
 
 async def test_member_states_hub_and_submenus(sim):
-    hub = await _walk(sim, "Alliances", "Member States")
+    hub = await sim.walk("Alliances", "Member States")
     assert labels(hub) == ["Members to Fix (0)", "Alliance States", "State Scan: Off", "Back"]
     for submenu in ("Members to Fix (0)", "Alliance States", "State Scan: Off"):
         click = await sim.click(sim.current(hub), submenu)
@@ -48,22 +27,22 @@ async def test_member_states_hub_and_submenus(sim):
 
 
 async def test_state_scan_toggle_and_range(sim):
-    scan = await _walk(sim, "Alliances", "Member States", "State Scan: Off")
+    scan = await sim.walk("Alliances", "Member States", "State Scan: Off")
     toggled = await sim.click(scan, "Auto-scan: Off")
     assert not toggled.problems()
     assert "Auto-scan: On" in labels(toggled.screen[0])
 
     shown = await sim.click(toggled.screen[0], "Set Range")
     assert shown.result.modal is not None
-    saved = await _submit(sim, shown, {"Lowest state": "100", "Highest state": "2000"})
+    saved = await sim.submit_modal(shown, {"Lowest state": "100", "Highest state": "2000"})
     assert not saved.problems()
     assert "states 100-2000" in _description(sim.current(scan))
 
 
 async def test_state_scan_range_rejects_bad_input(sim):
-    scan = await _walk(sim, "Alliances", "Member States", "State Scan: Off")
+    scan = await sim.walk("Alliances", "Member States", "State Scan: Off")
     shown = await sim.click(scan, "Set Range")
-    refused = await _submit(sim, shown, {"Lowest state": "20", "Highest state": "10"})
+    refused = await sim.submit_modal(shown, {"Lowest state": "20", "Highest state": "10"})
     message, ephemeral = refused.screen
     assert ephemeral and "can't be higher" in message.content
 
@@ -74,7 +53,7 @@ async def test_state_scan_range_rejects_bad_input(sim):
 async def test_running_now_lists_and_stops_a_waiting_job(sim):
     queue = sim.bot.get_cog("ProcessQueue")
     job = queue.enqueue("sim_waiting_job", 900, details={})   # no handler, so it stays queued
-    running = await _walk(sim, "Maintenance", "Bot Health", "Running Now")
+    running = await sim.walk("Maintenance", "Bot Health", "Running Now")
     assert "sim_waiting_job" in _description(running)
 
     picked = await sim.select(running, "Pick a job to stop", "sim_waiting_job")
@@ -90,7 +69,7 @@ async def test_running_now_lists_and_stops_a_waiting_job(sim):
 async def test_running_now_cancel_leaves_the_job(sim):
     queue = sim.bot.get_cog("ProcessQueue")
     job = queue.enqueue("sim_waiting_job", 900, details={})
-    running = await _walk(sim, "Maintenance", "Bot Health", "Running Now")
+    running = await sim.walk("Maintenance", "Bot Health", "Running Now")
     confirm = (await sim.select(running, "Pick a job to stop", "sim_waiting_job")).screen[0]
     cancelled = await sim.click(confirm, "Cancel")
     assert not cancelled.problems()
@@ -99,12 +78,12 @@ async def test_running_now_cancel_leaves_the_job(sim):
 
 async def test_health_settings_save_both_timeouts(sim):
     from cogs.pimp_my_bot import confirm_timeout, menu_timeout
-    health = await _walk(sim, "Maintenance", "Bot Health")
+    health = await sim.walk("Maintenance", "Bot Health")
     shown = await sim.click(health, "Settings")
-    fields = _modal_fields(shown)
+    fields = modal_fields(shown)
     assert "Menu timeout (minutes, 0 = never)" in fields
     assert "Confirm dialog timeout (seconds, 0 = never)" in fields
-    saved = await _submit(sim, shown, {
+    saved = await sim.submit_modal(shown, {
         "Daily Cleanup Time (HH:MM UTC)": "03:00",
         "Monthly Deep Cleanup Day (1-28, 0=off)": "0",
         "Menu timeout (minutes, 0 = never)": "45",
@@ -118,7 +97,7 @@ async def test_health_settings_save_both_timeouts(sim):
 
 
 async def test_bear_settings_cycle_edit_permission(sim):
-    settings = await _walk(sim, "Bear Tracking", "Settings")
+    settings = await sim.walk("Bear Tracking", "Settings")
     picked = await sim.select(settings, "Select an alliance", "Test Alliance")
     assert not picked.problems()
     cycled = await sim.click(picked.screen[0], "Toggle Edit Permission")
@@ -184,7 +163,7 @@ def _configure_upload_channel(sim):
 
 async def test_attendance_channel_cycles_editors(sim):
     _configure_upload_channel(sim)
-    channels = await _walk(sim, "Attendance", "Screenshot Upload")
+    channels = await sim.walk("Attendance", "Screenshot Upload")
     menu = next(item for row in channels.components for item in row.children
                 if getattr(item, "placeholder", None) == "Edit a configured channel…")
     edit = await sim.select(channels, "Edit a configured channel…", menu.options[0].label)

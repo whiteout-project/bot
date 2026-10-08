@@ -169,10 +169,16 @@ def test_candidate_ordering_alliance_kid_first(monkeypatch):
 
 # --- alliance binding + backfill --------------------------------------------------
 
+class _KeepOpen(sqlite3.Connection):
+    """A shared in-memory connection that survives the code under test closing it."""
+
+    def close(self):
+        pass
+
+
 def _two_dbs(monkeypatch, users_rows, alliance_rows):
-    """In-memory users.sqlite + alliance.sqlite. sqlite3's context manager commits but
-    does NOT close, so the same in-memory conn survives repeated `with connect(...)`."""
-    users = sqlite3.connect(":memory:")
+    """In-memory users.sqlite + alliance.sqlite, shared across every connect() call."""
+    users = sqlite3.connect(":memory:", factory=_KeepOpen)
     users.execute("CREATE TABLE users (fid INTEGER, alliance TEXT, kid INTEGER, state_mismatch_at TEXT, "
                   "kingdom_scan_next INTEGER, kingdom_scan_done_at TEXT)")
     users.executemany("INSERT INTO users (fid, alliance, kid) VALUES (?, ?, ?)", users_rows)
