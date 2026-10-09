@@ -7,7 +7,7 @@ import sqlite3
 import logging
 from datetime import datetime
 import json
-from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout, check_interaction_user
 
 logger = logging.getLogger('bot')
 
@@ -203,11 +203,15 @@ class ArchiveListView(discord.ui.View):
         await self.cog.show_archive_menu(interaction)
 
 class ClearAfterSaveView(discord.ui.View):
-    def __init__(self, bot, cog, archive_id):
+    def __init__(self, bot, cog, archive_id, original_user_id):
         super().__init__(timeout=menu_timeout())
         self.bot = bot
         self.cog = cog
         self.archive_id = archive_id
+        self.original_user_id = original_user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_interaction_user(interaction, self.original_user_id)
 
     @discord.ui.button(label="Yes, Clear All", style=discord.ButtonStyle.danger, emoji=f"{theme.trashIcon}")
     async def yes_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -585,7 +589,7 @@ class MinisterArchive(commands.Cog):
             )
             embed.set_footer(text=f"Created at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-            view = ClearAfterSaveView(self.bot, self, archive_id)
+            view = ClearAfterSaveView(self.bot, self, archive_id, interaction.user.id)
             await interaction.followup.send(embed=embed, view=view)
 
         except Exception as e:
@@ -669,6 +673,13 @@ class MinisterArchive(commands.Cog):
             print(f"Error clearing appointments: {e}")
             await interaction.followup.send(f"{theme.deniedIcon} Error clearing appointments: {e}", ephemeral=True)
 
+    async def show_in_place(self, interaction: discord.Interaction, embed, view):
+        # Slash commands have no message to edit, so they open a new ephemeral
+        if interaction.type == discord.InteractionType.application_command and not interaction.response.is_done():
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        else:
+            await safe_edit_message(interaction, embed=embed, view=view)
+
     async def show_archive_list(self, interaction: discord.Interaction):
         """Show list of all archives"""
         try:
@@ -702,10 +713,7 @@ class MinisterArchive(commands.Cog):
                 back_button.callback = back_callback
                 view.add_item(back_button)
 
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-                else:
-                    await interaction.response.edit_message(embed=embed, view=view)
+                await self.show_in_place(interaction, embed, view)
                 return
 
             embed = discord.Embed(
@@ -715,11 +723,7 @@ class MinisterArchive(commands.Cog):
             )
 
             view = ArchiveListView(self.bot, self, archives)
-
-            if not interaction.response.is_done():
-                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-            else:
-                await interaction.response.edit_message(embed=embed, view=view)
+            await self.show_in_place(interaction, embed, view)
 
         except Exception as e:
             logger.error(f"Error loading archives: {e}")
@@ -1199,11 +1203,7 @@ class MinisterArchive(commands.Cog):
             color=theme.emColor1
         )
         embed.set_footer(text=f"Page {page + 1}/{((len(history_records) - 1) // 25) + 1} • Total: {len(history_records)} changes")
-
-        if not interaction.response.is_done():
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        else:
-            await interaction.response.edit_message(embed=embed, view=view)
+        await self.show_in_place(interaction, embed, view)
 
 async def setup(bot):
     await bot.add_cog(MinisterArchive(bot))

@@ -10,7 +10,7 @@ import logging
 from .pimp_my_bot import menu_timeout
 from .pimp_my_bot import (
     theme, THEME_DB_PATH, DEFAULT_EMOJI, ICON_CATEGORIES, check_interaction_user, build_divider,
-    ThemeMenuView, ICON_NAMES, DEFAULT_ICON_VALUES
+    ThemeMenuView, ICON_NAMES, DEFAULT_ICON_VALUES, resolve_emoji_input
 )
 
 logger = logging.getLogger('bot')
@@ -63,7 +63,7 @@ def reload_theme_if_active(theme_name: str, guild_id: int = None) -> None:
 
         # Reload if either condition is true
         if is_global_active or is_server_theme:
-            theme.load_for_guild(guild_id)
+            theme.load()
 
 class ThemeWizardSession:
     """Stores wizard session data during theme editing."""
@@ -553,9 +553,11 @@ class IconCategoryView(discord.ui.View):
 
         # Icon select dropdown
         icons = ICON_CATEGORIES.get(self.category_name, [])
-        if icons:
+        # Discord selects hold 25 options, so larger categories get a second select
+        chunks = [icons[i:i + 25] for i in range(0, len(icons), 25)]
+        for row, chunk in enumerate(chunks):
             options = []
-            for icon_name in icons[:25]:  # Discord limit
+            for icon_name in chunk:
                 value = self.session.get_icon_value(icon_name)
                 short_name = icon_name.replace('Icon', '')
 
@@ -569,10 +571,10 @@ class IconCategoryView(discord.ui.View):
                 options.append(option)
 
             select = discord.ui.Select(
-                placeholder="Select an icon to edit...",
+                placeholder="Select an icon to edit..." if row == 0 else "More icons...",
                 options=options,
-                custom_id="icon_select",
-                row=0
+                custom_id="icon_select" if row == 0 else f"icon_select_{row + 1}",
+                row=row
             )
             select.callback = self.icon_selected
             self.add_item(select)
@@ -583,7 +585,7 @@ class IconCategoryView(discord.ui.View):
             emoji=theme.backIcon,
             style=discord.ButtonStyle.secondary,
             custom_id="back_to_hub",
-            row=1
+            row=max(len(chunks), 1)
         )
         back_btn.callback = self.back_to_hub
         self.add_item(back_btn)
@@ -735,8 +737,6 @@ class IconUrlModal(discord.ui.Modal):
         if not await check_interaction_user(interaction, self.session.user_id):
             return
 
-        new_value = self.url_input.value.strip()
-
         # Validate column name before SQL execution
         if not is_valid_column(self.icon_name):
             await interaction.response.send_message(
@@ -745,17 +745,23 @@ class IconUrlModal(discord.ui.Modal):
             )
             return
 
+        new_value = resolve_emoji_input(self.url_input.value)
+        if new_value is None:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Enter a direct image link (.png, .jpg, .gif, .webp) or paste a single emoji.",
+                ephemeral=True
+            )
+            return
+
         await interaction.response.defer()
 
-        # Update in database
         try:
-            with sqlite3.connect(THEME_DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"UPDATE pimpsettings SET {self.icon_name}=? WHERE themeName=?",
-                    (new_value, self.session.theme_name)
+            if not await self.cog._process_emoji_update(self.icon_name, new_value, self.session.theme_name):
+                await interaction.followup.send(
+                    f"{theme.deniedIcon} Failed to update icon. Check if the URL is accessible.",
+                    ephemeral=True
                 )
-                conn.commit()
+                return
 
             # Reload theme if active
             reload_theme_if_active(self.session.theme_name, self.session.guild_id)

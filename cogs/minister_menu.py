@@ -7,7 +7,7 @@ import sqlite3
 import logging
 from contextlib import closing
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout, check_interaction_user
 from .alliance_member_edit import apply_member_edit
 
 logger = logging.getLogger('bot')
@@ -288,14 +288,18 @@ class FilteredUserSelectView(discord.ui.View):
         await safe_edit_message(interaction, embed=embed, view=self)
 
 class ClearConfirmationView(discord.ui.View):
-    def __init__(self, bot, cog, activity_name, is_global_admin, alliance_ids):
+    def __init__(self, bot, cog, activity_name, is_global_admin, alliance_ids, original_user_id):
         super().__init__(timeout=confirm_timeout())
         self.bot = bot
         self.cog = cog
         self.activity_name = activity_name
         self.is_global_admin = is_global_admin
         self.alliance_ids = alliance_ids
-    
+        self.original_user_id = original_user_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await check_interaction_user(interaction, self.original_user_id)
+
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.danger, emoji=f"{theme.verifiedIcon}")
     async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
@@ -1137,7 +1141,7 @@ class MinisterMenu(commands.Cog):
                 color=theme.emColor2
             )
         
-        view = ClearConfirmationView(self.bot, self, activity_name, is_global_admin, alliance_ids)
+        view = ClearConfirmationView(self.bot, self, activity_name, is_global_admin, alliance_ids, interaction.user.id)
         
         await safe_edit_message(interaction, embed=embed, view=view)
 
@@ -1701,6 +1705,16 @@ class MinisterMenu(commands.Cog):
                 new_time = self.convert_time_slot(old_time, old_mode, new_mode)
                 migrations.append((fid, appointment_type, old_time, new_time, alliance))
 
+            collisions = self.find_slot_collisions(migrations)
+            if collisions:
+                await interaction.followup.send(
+                    f"{theme.deniedIcon} Mode not changed. These reservations would land on the same new time slot:\n"
+                    + "\n".join(collisions)
+                    + "\n\nMove or remove one of each pair, then switch modes again.",
+                    ephemeral=True
+                )
+                return
+
             # Update database atomically
             for fid, appointment_type, old_time, new_time, alliance in migrations:
                 self.svs_cursor.execute(
@@ -1763,6 +1777,16 @@ class MinisterMenu(commands.Cog):
 
         except Exception as e:
             await interaction.followup.send(f"{theme.deniedIcon} Error migrating time slots: {e}", ephemeral=True)
+
+    def find_slot_collisions(self, migrations) -> list[str]:
+        sources = {}
+        for _, appointment_type, old_time, new_time, _ in migrations:
+            sources.setdefault((appointment_type, new_time), []).append(old_time)
+        return [
+            f"{appointment_type}: {', '.join(f'`{t}`' for t in sorted(old_times))} → `{new_time}`"
+            for (appointment_type, new_time), old_times in sources.items()
+            if len(old_times) > 1
+        ]
 
     def convert_time_slot(self, time_str: str, old_mode: int, new_mode: int) -> str:
         """Convert a time slot from old mode to new mode"""

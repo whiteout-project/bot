@@ -14,6 +14,12 @@ from . import alliance_power_changes
 
 logger = logging.getLogger('alliance')
 
+MAX_HISTORY_FIELDS = 25  # Discord's per-embed field limit
+
+
+def _history_cap_note(total: int) -> str:
+    return f"Showing latest {MAX_HISTORY_FIELDS} of {total}\n" if total > MAX_HISTORY_FIELDS else ""
+
 
 def _fmt_power(n) -> str:
     if n is None:
@@ -264,12 +270,13 @@ class AllianceHistory(commands.Cog):
                     f"**Player:** `{nickname}`\n"
                     f"**ID:** `{fid}`\n"
                     f"**Current Level:** `{self.level_mapping.get(current_level, str(current_level))}`\n"
+                    f"{_history_cap_note(len(changes))}"
                     f"{theme.upperDivider}\n"
                 ),
                 color=theme.emColor1
             )
 
-            for old_level, new_level, change_date in changes:
+            for old_level, new_level, change_date in changes[:MAX_HISTORY_FIELDS]:
                 old_level_str = self.level_mapping.get(int(old_level), str(old_level))
                 new_level_str = self.level_mapping.get(int(new_level), str(new_level))
                 embed.add_field(
@@ -328,12 +335,13 @@ class AllianceHistory(commands.Cog):
                     f"**Player:** `{nickname}`\n"
                     f"**ID:** `{fid}`\n"
                     f"**Current Level:** `{self.level_mapping.get(current_level, str(current_level))}`\n"
+                    f"{_history_cap_note(len(changes))}"
                     f"{theme.upperDivider}\n"
                 ),
                 color=theme.emColor1
             )
 
-            for old_name, new_name, change_date in changes:
+            for old_name, new_name, change_date in changes[:MAX_HISTORY_FIELDS]:
                 embed.add_field(
                     name=f"Nickname Change at {change_date}",
                     value=f"{theme.avatarOldIcon} `{old_name}` ➜ {theme.avatarIcon} `{new_name}`",
@@ -524,11 +532,12 @@ class AllianceHistory(commands.Cog):
                     f"**Player:** `{nickname}`\n"
                     f"**ID:** `{fid}`\n"
                     f"**Current {label}:** `{_fmt_power(current)}`\n"
+                    f"{_history_cap_note(len(changes))}"
                     f"{theme.upperDivider}\n"
                 ),
                 color=theme.emColor1,
             )
-            for ch in changes:
+            for ch in changes[:MAX_HISTORY_FIELDS]:
                 badge = alliance_power_changes.format_delta(ch["pct"])
                 embed.add_field(
                     name=f"Change at {ch['change_date'][:10]}",

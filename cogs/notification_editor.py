@@ -543,6 +543,11 @@ class PlainEditorView(discord.ui.View):
                         await modal_interaction.followup.send(f"{theme.deniedIcon} An error occurred!", ephemeral=True)
 
             await interaction.response.send_modal(DescriptionModal(self))
+        else:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} Could not parse this notification's format.",
+                ephemeral=True
+            )
 
     @discord.ui.button(label="Channel", style=discord.ButtonStyle.primary)
     async def edit_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1045,9 +1050,9 @@ class NotificationEditor(commands.Cog):
             # Refresh the last-known channel name so quarantine DMs name the right channel.
             channel_name = getattr(self.bot.get_channel(view.channel_id), "name", None)
             cursor.execute(
-                "UPDATE bear_notifications SET channel_id = ?, channel_name = ?, hour = ?, minute = ?, description = ?, mention_type = ?, repeat_minutes = ?, next_notification = ?, notification_type = ? WHERE id = ?",
-                (view.channel_id, channel_name, view.hours, view.minutes, view.description, view.mention, view.repeat,
-                 view.next_notification, view.notification_type, view.notification_id)
+                "UPDATE bear_notifications SET channel_id = ?, channel_name = ?, hour = ?, minute = ?, description = ?, mention_type = ?, repeat_enabled = ?, repeat_minutes = ?, next_notification = ?, notification_type = ? WHERE id = ?",
+                (view.channel_id, channel_name, view.hours, view.minutes, view.description, view.mention,
+                 1 if view.repeat else 0, view.repeat, view.next_notification, view.notification_type, view.notification_id)
             )
             conn.commit()
 

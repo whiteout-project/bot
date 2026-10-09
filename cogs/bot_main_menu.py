@@ -92,6 +92,39 @@ def _build_alliance_select(all_alliances, staged_ids,
     )
 
 
+def _merge_alliance_pick(all_alliances, staged_ids, picked_values, max_options: int = 25) -> list:
+    # Staged alliances past the select's option cap aren't pickable, so keep them.
+    visible = {aid for aid, _ in all_alliances[:max_options]}
+    picked = [int(v) for v in picked_values]
+    return picked + [aid for aid in staged_ids if aid not in visible and aid not in picked]
+
+
+def _can_manage_alliance(user_id: int, guild_id: int, alliance_id: int) -> bool:
+    alliance_ids, is_global = PermissionManager.get_admin_alliance_ids(user_id, guild_id)
+    return is_global or str(alliance_id) in {str(aid) for aid in alliance_ids}
+
+
+async def _deny_alliance_access(interaction: discord.Interaction, alliance_id: int) -> bool:
+    if _can_manage_alliance(interaction.user.id, interaction.guild_id, alliance_id):
+        return False
+    send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+    await send(
+        f"{theme.deniedIcon} You do not have permission to manage this alliance.",
+        ephemeral=True,
+    )
+    return True
+
+
+async def _require_registration_admin(interaction: discord.Interaction) -> bool:
+    _, is_global = PermissionManager.is_admin(interaction.user.id)
+    if not is_global:
+        await interaction.response.send_message(
+            f"{theme.deniedIcon} Only global administrators can manage Self-Registration.",
+            ephemeral=True,
+        )
+    return is_global
+
+
 MENU_OPEN_FAILED = "This menu couldn't be opened. The error was written to the bot log."
 DEAD_CLICK_GRACE = 2.0  # seconds; Discord drops an unanswered click after 3
 
@@ -281,6 +314,8 @@ class MainMenu(commands.Cog):
     async def show_alliance_hub(self, interaction: discord.Interaction, alliance_id: int):
         """Per-alliance hub — all per-alliance actions for one alliance."""
         try:
+            if await _deny_alliance_access(interaction, alliance_id):
+                return
             with sqlite3.connect('db/alliance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute(
@@ -397,6 +432,8 @@ class MainMenu(commands.Cog):
     async def show_self_registration(self, interaction: discord.Interaction):
         """Unified Self-Registration menu — global toggle + ID channel scan settings."""
         try:
+            if not await _require_registration_admin(interaction):
+                return
             view = SelfRegistrationView(self)
             await view.show(interaction)
         except Exception as e:
@@ -672,6 +709,15 @@ class AllianceManagementEntryView(discord.ui.View):
         self._build_select()
         self._apply_permission_gates()
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        is_admin, _ = PermissionManager.is_admin(interaction.user.id)
+        if not is_admin:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} You don't have admin permissions.",
+                ephemeral=True,
+            )
+        return is_admin
+
     def _apply_permission_gates(self):
         is_server_or_above = self.tier in (TIER_OWNER, TIER_GLOBAL, TIER_SERVER)
         is_global_or_above = self.tier in (TIER_OWNER, TIER_GLOBAL)
@@ -853,6 +899,9 @@ class AllianceHubView(discord.ui.View):
         self._build_select()
         self._build_lock_toggle()
         self._build_auto_remove_toggle()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return not await _deny_alliance_access(interaction, self.alliance_id)
 
     def _build_lock_toggle(self):
         # State Lock reads/writes state_locked; label + color reflect the current state.
@@ -1049,6 +1098,9 @@ class SelfRegistrationView(discord.ui.View):
     def __init__(self, cog):
         super().__init__(timeout=menu_timeout())
         self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _require_registration_admin(interaction)
 
     def _get_settings(self, guild_id):
         id_cog = self.cog.bot.get_cog("AllianceIDChannel")
@@ -1487,8 +1539,9 @@ class AdminManagerView(discord.ui.View):
             )
             return
         PermissionManager.claim_owner(self.viewer_id)
+        await interaction.response.defer()
         await self.refresh_data(self.cog.bot)
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await interaction.edit_original_response(embed=self.build_embed(), view=self)
 
     async def _on_add_user_picked(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
@@ -1685,15 +1738,12 @@ async def _return_to_parent(interaction, parent_view, bot):
     """Refresh the parent admin-list view and show it on the interaction's
     original message. Shared by every "go back" / "save and exit" callback.
     """
+    if not interaction.response.is_done():
+        await interaction.response.defer()
     await parent_view.refresh_data(bot)
-    if interaction.response.is_done():
-        await interaction.edit_original_response(
-            embed=parent_view.build_embed(), view=parent_view,
-        )
-    else:
-        await interaction.response.edit_message(
-            embed=parent_view.build_embed(), view=parent_view,
-        )
+    await interaction.edit_original_response(
+        embed=parent_view.build_embed(), view=parent_view,
+    )
 
 
 class AdminContextView(discord.ui.View):
@@ -1836,7 +1886,10 @@ class AdminContextView(discord.ui.View):
     async def _on_alliances_change(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
-        self.staged_alliance_ids = [int(v) for v in (interaction.data.get('values') or [])]
+        self.staged_alliance_ids = _merge_alliance_pick(
+            self.all_alliances, self.staged_alliance_ids,
+            interaction.data.get('values') or [], self.MAX_ALLIANCE_OPTIONS,
+        )
         self._build()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
@@ -2050,7 +2103,10 @@ class AddAdminView(discord.ui.View):
     async def _on_alliances_change(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
-        self.staged_alliance_ids = [int(v) for v in (interaction.data.get('values') or [])]
+        self.staged_alliance_ids = _merge_alliance_pick(
+            self.all_alliances, self.staged_alliance_ids,
+            interaction.data.get('values') or [], self.MAX_ALLIANCE_OPTIONS,
+        )
         self._build()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
@@ -2471,7 +2527,10 @@ class AddRoleView(discord.ui.View):
     async def _on_alliances_change(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
-        self.staged_alliance_ids = [int(v) for v in (interaction.data.get('values') or [])]
+        self.staged_alliance_ids = _merge_alliance_pick(
+            self.all_alliances, self.staged_alliance_ids,
+            interaction.data.get('values') or [], self.MAX_ALLIANCE_OPTIONS,
+        )
         self._build()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
@@ -2617,7 +2676,10 @@ class RoleContextView(discord.ui.View):
     async def _on_alliances_change(self, interaction):
         if not await check_interaction_user(interaction, self.viewer_id):
             return
-        self.staged_alliance_ids = [int(v) for v in (interaction.data.get('values') or [])]
+        self.staged_alliance_ids = _merge_alliance_pick(
+            self.all_alliances, self.staged_alliance_ids,
+            interaction.data.get('values') or [], self.MAX_ALLIANCE_OPTIONS,
+        )
         self._build()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 

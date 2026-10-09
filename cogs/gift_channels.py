@@ -905,7 +905,7 @@ async def channel_history_scan(cog, interaction: discord.Interaction):
 
             # Count validation results
             new_valid = len([code for code, is_valid in scan_results.get('validation_results', {}).items() if is_valid])
-            new_invalid = len([code for code, is_valid in scan_results.get('validation_results', {}).items() if not is_valid])
+            new_invalid = len([code for code, is_valid in scan_results.get('validation_results', {}).items() if is_valid is False])
             existing_valid = len(scan_results.get('existing_valid', []))
             existing_invalid = len(scan_results.get('existing_invalid', []))
             existing_pending = len(scan_results.get('existing_pending', []))

@@ -211,67 +211,90 @@ class GiftOperations(commands.Cog):
 
     # ── Event listeners ─────────────────────────────────────────────────
 
+    def register_queue_handlers(self, process_queue_cog):
+        process_queue_cog.register_handler(
+            'gift_validate',
+            lambda process: gift_redemption.handle_gift_validate_process(self, process)
+        )
+        process_queue_cog.register_handler(
+            'gift_redeem',
+            lambda process: gift_redemption.handle_gift_redeem_process(self, process)
+        )
+        process_queue_cog.register_handler(
+            'gift_redeem_member',
+            lambda process: gift_redemption.handle_member_redeem_process(self, process)
+        )
+        process_queue_cog.register_handler(
+            'state_resolve',
+            lambda process: gift_redemption.handle_state_resolve_process(self, process)
+        )
+        self.logger.info(
+            "GiftOps: Registered gift_validate, gift_redeem, gift_redeem_member "
+            "and state_resolve handlers with ProcessQueue")
+
+    def _start_background_work(self):
+        if not self.periodic_validation_loop.is_running():
+            self.periodic_validation_loop.start()
+        if not self.auto_kingdom_scan_loop.is_running():
+            self.auto_kingdom_scan_loop.start()
+        process_queue_cog = self.bot.get_cog('ProcessQueue')
+        if process_queue_cog:
+            self.register_queue_handlers(process_queue_cog)
+        else:
+            self.logger.error("GiftOps: ProcessQueue cog not found, gift code operations will not work")
+
+    async def cog_load(self):
+        # A reload never re-fires on_ready, so restart loops and handlers here when already connected.
+        if self.bot.is_ready():
+            self._start_background_work()
+
+    async def _channel_is_gone(self, channel_id) -> bool:
+        # Only a NotFound proves deletion; an outage or lost access must not wipe the config.
+        try:
+            await self.bot.fetch_channel(channel_id)
+        except discord.NotFound:
+            return True
+        except discord.HTTPException as e:
+            self.logger.warning(f"Gift code channel {channel_id} not reachable ({e}); keeping its config.")
+        return False
+
+    async def _prune_deleted_gift_channels(self):
+        self.logger.info("Validating gift code channels...")
+        self.cursor.execute("SELECT channel_id, alliance_id FROM giftcode_channel")
+        channel_configs = self.cursor.fetchall()
+
+        invalid_channels = []
+        for channel_id, alliance_id in channel_configs:
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                if await self._channel_is_gone(channel_id):
+                    invalid_channels.append(channel_id)
+            elif not isinstance(channel, discord.TextChannel):
+                invalid_channels.append(channel_id)
+            elif not channel.permissions_for(channel.guild.me).send_messages:
+                self.logger.warning(f"Missing send message permissions in channel {channel_id}.")
+
+        if invalid_channels:
+            unique_invalid = list(set(invalid_channels))
+            placeholders = ','.join('?' * len(unique_invalid))
+            try:
+                self.cursor.execute(f"DELETE FROM giftcode_channel WHERE channel_id IN ({placeholders})", unique_invalid)
+                self.conn.commit()
+            except sqlite3.Error as db_err:
+                self.logger.exception(f"DATABASE ERROR removing invalid channels: {db_err}")
+
     @commands.Cog.listener()
     async def on_ready(self):
         self.logger.info("GiftOps Cog: on_ready triggered.")
         try:
-            self.logger.info("Validating gift code channels...")
-            self.cursor.execute("SELECT channel_id, alliance_id FROM giftcode_channel")
-            channel_configs = self.cursor.fetchall()
-
-            invalid_channels = []
-            for channel_id, alliance_id in channel_configs:
-                channel = self.bot.get_channel(channel_id)
-                if not channel:
-                    invalid_channels.append(channel_id)
-                elif not isinstance(channel, discord.TextChannel):
-                    invalid_channels.append(channel_id)
-                elif not channel.permissions_for(channel.guild.me).send_messages:
-                    self.logger.warning(f"Missing send message permissions in channel {channel_id}.")
-
-            if invalid_channels:
-                unique_invalid = list(set(invalid_channels))
-                placeholders = ','.join('?' * len(unique_invalid))
-                try:
-                    self.cursor.execute(f"DELETE FROM giftcode_channel WHERE channel_id IN ({placeholders})", unique_invalid)
-                    self.conn.commit()
-                except sqlite3.Error as db_err:
-                    self.logger.exception(f"DATABASE ERROR removing invalid channels: {db_err}")
-
-            if not self.periodic_validation_loop.is_running():
-                self.periodic_validation_loop.start()
-            if not self.auto_kingdom_scan_loop.is_running():
-                self.auto_kingdom_scan_loop.start()
+            self._start_background_work()
 
             # One-time nudge to global admins if member states need attention.
             if not self._state_nudge_sent:
                 self._state_nudge_sent = True
                 asyncio.create_task(self._notify_state_migration())
 
-            # Register handlers with the ProcessQueue cog
-            process_queue_cog = self.bot.get_cog('ProcessQueue')
-            if process_queue_cog:
-                process_queue_cog.register_handler(
-                    'gift_validate',
-                    lambda process: gift_redemption.handle_gift_validate_process(self, process)
-                )
-                process_queue_cog.register_handler(
-                    'gift_redeem',
-                    lambda process: gift_redemption.handle_gift_redeem_process(self, process)
-                )
-                process_queue_cog.register_handler(
-                    'gift_redeem_member',
-                    lambda process: gift_redemption.handle_member_redeem_process(self, process)
-                )
-                process_queue_cog.register_handler(
-                    'state_resolve',
-                    lambda process: gift_redemption.handle_state_resolve_process(self, process)
-                )
-                self.logger.info(
-                    "GiftOps: Registered gift_validate, gift_redeem, gift_redeem_member "
-                    "and state_resolve handlers with ProcessQueue")
-            else:
-                self.logger.error("GiftOps: ProcessQueue cog not found, gift code operations will not work")
+            await self._prune_deleted_gift_channels()
 
             self.logger.info("GiftOps Cog: on_ready setup finished successfully.")
 

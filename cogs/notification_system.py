@@ -13,9 +13,9 @@ import json
 import traceback
 import time
 import re
-from .notification_event_types import get_event_types, get_event_icon
+from .notification_event_types import get_event_types, get_event_icon, get_timezone, utc_offset_zone_name
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout, use_guild_theme
 
 logger = logging.getLogger('notification')
 
@@ -30,6 +30,18 @@ def _format_paused_line(event_type, hour, minute, timezone, description, channel
         short = "(Embed notification)"
     where = f" in {channel_label}" if channel_label else ""
     return f"- **{event_type or 'Custom'} {hour:02d}:{minute:02d} ({timezone})**{where} - {short}"
+
+
+def next_weekday_time(after, weekdays, hour, minute, tz):
+    # Localize each candidate date separately so the UTC offset follows DST.
+    local_date = after.astimezone(tz).date()
+    for offset in range(8):
+        day = local_date + timedelta(days=offset)
+        if day.weekday() in weekdays:
+            candidate = tz.localize(datetime(day.year, day.month, day.day, hour, minute))
+            if candidate > after:
+                return candidate
+    return None
 
 
 # Friendly wording for pause reasons shown to admins (console + quarantine DM).
@@ -643,7 +655,7 @@ class NotificationSystem(commands.Cog):
                     title = embed_data.get("title", "true")
                     notification_description = f"EMBED_MESSAGE:{title}"
 
-            tz = pytz.timezone(timezone)
+            tz = get_timezone(timezone)
             naive_dt = start_date.replace(
                 hour=hour,
                 minute=minute,
@@ -698,7 +710,7 @@ class NotificationSystem(commands.Cog):
             elif "EMBED_MESSAGE:" in description:
                 title = embed_data.get("title", "true") if embed_data else "true"
                 notification_description = f"EMBED_MESSAGE:{title}"
-            tz = pytz.timezone(timezone)
+            tz = get_timezone(timezone)
 
             # If start_date is provided, use it as the base date (for wizard updates)
             if start_date:
@@ -879,7 +891,8 @@ class NotificationSystem(commands.Cog):
                 now = datetime.now(pytz.UTC)
                 for notification in notifications:
                     try:
-                        await self.process_notification(notification)
+                        with use_guild_theme(notification[1]):
+                            await self.process_notification(notification)
                     except Exception as e:
                         logger.error(f"Error processing notification {notification[0]}: {e}")
                         print(f"Error processing notification {notification[0]}: {e}")
@@ -947,7 +960,7 @@ class NotificationSystem(commands.Cog):
                                           scheduled_delete_at: datetime | None):
         """Store a sent message ID for later deletion"""
         current_time_str = datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')
-        delete_at_str = scheduled_delete_at.isoformat() if scheduled_delete_at else None
+        delete_at_str = scheduled_delete_at.astimezone(pytz.UTC).isoformat() if scheduled_delete_at else None
 
         self.cursor.execute("""
             INSERT INTO notification_history
@@ -1021,6 +1034,13 @@ class NotificationSystem(commands.Cog):
             logger.error(f"Error deleting previous notifications: {e}")
             print(f"Error deleting previous notifications: {e}")
 
+    def _notification_weekdays(self, notification_id):
+        self.cursor.execute("SELECT weekday FROM notification_days WHERE notification_id = ?", (notification_id,))
+        weekdays = set()
+        for row in self.cursor.fetchall():
+            weekdays.update(int(p) for p in row[0].split('|') if p)
+        return weekdays
+
     async def process_notification(self, notification):
         id = None  # Initialize to avoid UnboundLocalError in exception handler
         try:
@@ -1032,7 +1052,7 @@ class NotificationSystem(commands.Cog):
             if not is_enabled:
                 return
 
-            tz = pytz.timezone(timezone)
+            tz = get_timezone(timezone)
             now = datetime.now(tz)
             next_time = datetime.fromisoformat(next_notification)
 
@@ -1045,22 +1065,8 @@ class NotificationSystem(commands.Cog):
                         next_time = next_time + timedelta(minutes=repeat_minutes * periods_passed)
 
                     elif repeat_minutes == -1:
-                        self.cursor.execute("""
-                                    SELECT weekday FROM notification_days
-                                    WHERE notification_id = ?
-                                """, (id,))
-                        rows = self.cursor.fetchall()
-                        notification_days = set()
-
-                        for row in rows:
-                            parts = row[0].split('|')
-                            notification_days.update(int(p) for p in parts if p)
-
-                        for next_day in range(1, 8):
-                            potential_day = now + timedelta(days=next_day)
-                            if potential_day.weekday() in notification_days:
-                                next_time = potential_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                break
+                        weekdays = self._notification_weekdays(id)
+                        next_time = next_weekday_time(now, weekdays, hour, minute, tz) or next_time
 
                 elif repeat_minutes == 0:
                     # Handle non-repeating notifications: Keep time, but set date to today
@@ -1156,7 +1162,12 @@ class NotificationSystem(commands.Cog):
                         mention_text = f"Role {role_id}"
                 elif mention_type.startswith("member_"):
                     member_id = int(mention_type.split("_")[1])
-                    member = await channel.guild.fetch_member(member_id)
+                    member = channel.guild.get_member(member_id)
+                    if member is None:
+                        try:
+                            member = await channel.guild.fetch_member(member_id)
+                        except (discord.NotFound, discord.HTTPException):
+                            member = None
                     if member:
                         mention_text = member.mention
                     else:
@@ -1435,22 +1446,8 @@ class NotificationSystem(commands.Cog):
                         next_time = current_next + timedelta(minutes=repeat_minutes)
 
                     elif repeat_minutes == -1:
-                        self.cursor.execute("""
-                                    SELECT weekday FROM notification_days
-                                    WHERE notification_id = ?
-                                """, (id,))
-                        rows = self.cursor.fetchall()
-                        notification_days = set()
-
-                        for row in rows:
-                            parts = row[0].split('|')
-                            notification_days.update(int(p) for p in parts if p)
-
-                        for next_day in range(1, 8):
-                            potential_day = now + timedelta(days=next_day)
-                            if potential_day.weekday() in notification_days:
-                                next_time = potential_day.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                                break
+                        weekdays = self._notification_weekdays(id)
+                        next_time = next_weekday_time(max(now, next_time), weekdays, hour, minute, tz) or next_time
 
                     self.cursor.execute("""
                         UPDATE bear_notifications
@@ -2673,8 +2670,11 @@ class TimeSelectModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         try:
             try:
-                timezone = pytz.timezone(self.timezone.value)
-            except pytz.exceptions.UnknownTimeZoneError:
+                tz_name = self.timezone.value.strip()
+                if tz_name.upper().startswith(("UTC+", "UTC-")):
+                    tz_name = utc_offset_zone_name(tz_name)
+                timezone = get_timezone(tz_name)
+            except (pytz.exceptions.UnknownTimeZoneError, ValueError):
                 await interaction.response.send_message(
                     f"{theme.deniedIcon} Invalid timezone! Please use a valid timezone (e.g., UTC, Europe/Istanbul).",
                     ephemeral=True
@@ -2710,7 +2710,7 @@ class TimeSelectModal(discord.ui.Modal):
                 start_date,
                 hour,
                 minute,
-                self.timezone.value
+                tz_name
             )
 
             embed = discord.Embed(
@@ -3368,7 +3368,7 @@ class BearTrapView(discord.ui.View):
                     if notif[15]:  # next_notification
                         try:
                             next_time = datetime.fromisoformat(notif[15])
-                            tz = pytz.timezone(notif[5])
+                            tz = get_timezone(notif[5])
                             next_time_local = next_time.astimezone(tz)
                             time_display = next_time_local.strftime("%m/%d %H:%M")
                         except Exception:

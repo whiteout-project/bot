@@ -27,12 +27,12 @@ class _FakeSession:
         self.added.append(images)
 
 
-def _msg(channel_id=1, user_id=2):
+def _msg(channel_id=1, user_id=2, content=""):
     return SimpleNamespace(
         author=SimpleNamespace(bot=False, id=user_id),
         guild=object(),
         channel=SimpleNamespace(id=channel_id),
-        content="",
+        content=content,
         attachments=[SimpleNamespace(filename="shot.png")],
     )
 
@@ -104,3 +104,52 @@ def test_different_uploaders_get_separate_sessions(monkeypatch):
     asyncio.run(run())
 
     assert len(built) == 2, "different uploaders must keep separate sessions"
+
+
+def _patch_keyword_channel(monkeypatch, built):
+    def fake_build_session(event_type, *, cog, channel, uploader, alliance_id):
+        s = _FakeSession()
+        built.append(s)
+        return s
+
+    async def slow_classify(self, channel_id, images):
+        await asyncio.sleep(0.05)
+        return ("foundry",), "ocr text"
+
+    async def _anoop(self, *a, **k):
+        return None
+
+    monkeypatch.setattr(ao, "get_channel_settings", lambda cid: {"alliance_id": 5})
+    monkeypatch.setattr(ao, "get_channel_keywords", lambda cid: {"foundry": ["foundry"]})
+    monkeypatch.setattr(ao, "get_ocr_upload_admin_only", lambda aid: False)
+    monkeypatch.setattr(ao, "build_session", fake_build_session)
+    monkeypatch.setattr(ao.AttendanceOCR, "_classify_images", slow_classify)
+    monkeypatch.setattr(ao.AttendanceOCR, "_send_reading_ack", _anoop)
+    monkeypatch.setattr(ao.AttendanceOCR, "_maybe_delete_source", _anoop)
+
+
+def test_split_upload_without_keyword_joins_starting_session(monkeypatch):
+    cog = ao.AttendanceOCR(SimpleNamespace())
+    built = []
+    _patch_keyword_channel(monkeypatch, built)
+
+    async def run():
+        await asyncio.gather(
+            cog.on_message(_msg(content="foundry")), cog.on_message(_msg())
+        )
+        await cog.on_message(_msg())
+
+    asyncio.run(run())
+
+    assert len(built) == 1
+    assert len(built[0].added) == 2, "keyword-less follow-ups must join the open session"
+
+
+def test_keyword_gate_still_blocks_without_session(monkeypatch):
+    cog = ao.AttendanceOCR(SimpleNamespace())
+    built = []
+    _patch_keyword_channel(monkeypatch, built)
+
+    asyncio.run(cog.on_message(_msg()))
+
+    assert built == []

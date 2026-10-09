@@ -7,6 +7,7 @@ from discord.ext import commands
 import sqlite3
 import asyncio
 import logging
+from contextlib import closing
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
 
@@ -999,6 +1000,12 @@ class Alliance(commands.Cog):
 
                         conn.commit()
 
+                    with closing(sqlite3.connect('db/id_channel.sqlite', timeout=30.0)) as conn, conn:
+                        id_channel_rows = conn.execute(
+                            "SELECT channel_id, info_message_id FROM id_channels WHERE alliance_id = ?",
+                            (alliance_id,)).fetchall()
+                        conn.execute("DELETE FROM id_channels WHERE alliance_id = ?", (alliance_id,))
+
                     with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
                         cursor = conn.cursor()
                         cursor.execute("DELETE FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
@@ -1041,6 +1048,14 @@ class Alliance(commands.Cog):
                     back_btn.callback = _back_to_alliances
                     cleanup_view.add_item(back_btn)
                     await button_interaction.response.edit_message(embed=cleanup_embed, view=cleanup_view)
+
+                    id_channel_cog = self.bot.get_cog("AllianceIDChannel")
+                    if id_channel_cog:
+                        for channel_id, info_message_id in id_channel_rows:
+                            try:
+                                await id_channel_cog.remove_info_message(channel_id, info_message_id)
+                            except Exception as e:
+                                logger.warning(f"Could not remove ID channel info message in {channel_id}: {e}")
 
                 except Exception as e:
                     error_embed = discord.Embed(

@@ -1122,6 +1122,19 @@ async def get_user_kid(cog, fid):
     return await asyncio.to_thread(_query)
 
 
+async def resolve_periodic_validation_fid(cog):
+    """Validation ID for the periodic loop; one with no state on file is swapped for a member that has one."""
+    fid, source = await cog.get_validation_fid()
+    if await get_user_kid(cog, fid) is not None:
+        return fid, source
+    alts = await get_alt_validation_fids(cog, exclude={fid}, limit=1)
+    if not alts:
+        cog.logger.warning(f"GiftOps: Validation ID {fid} has no state on file and no alliance member has one; skipping periodic validation.")
+        return None, source
+    cog.logger.warning(f"GiftOps: Validation ID {fid} has no state on file; validating with member ID {alts[0]} instead.")
+    return alts[0], "alliance_member"
+
+
 async def get_alt_validation_fids(cog, exclude, limit=3):
     """Random alliance-member FIDs to validate with when the primary FID is dead.
     Only members with a known state (kid) — redemption needs it now."""
@@ -2163,6 +2176,7 @@ async def periodic_validation_loop_body(cog):
             SELECT giftcode, validation_status
             FROM gift_codes
             WHERE validation_status IN ('pending', 'validated')
+            ORDER BY validation_status = 'pending' DESC, date DESC
         """)
         codes_to_check = cog.cursor.fetchall()
 
@@ -2173,7 +2187,9 @@ async def periodic_validation_loop_body(cog):
         cog.logger.info(f"GiftOps: Found {len(codes_to_check)} codes to validate periodically.")
 
         # Get test ID for validation
-        test_fid, fid_source = await cog.get_validation_fid()
+        test_fid, fid_source = await resolve_periodic_validation_fid(cog)
+        if test_fid is None:
+            return
         cog.logger.info(f"GiftOps: Using {fid_source} ID {test_fid} for periodic validation.")
 
         codes_checked = 0

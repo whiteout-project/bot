@@ -28,6 +28,7 @@ def _mk_pq(tmp_path):
     pq._shutting_down = False
     pq._current_process = None
     pq._runtime_contexts = {}
+    pq._unhandled_warned = set()
     pq.HANDLER_GRACE_SECONDS = 0  # skip the handler-registration wait in tests
     return pq
 
@@ -46,7 +47,7 @@ async def _stop(pq):
 
 def test_cog_load_starts_processor_when_bot_ready(tmp_path):
     pq = _mk_pq(tmp_path)
-    pq.bot = types.SimpleNamespace(is_ready=lambda: True)
+    pq.bot = types.SimpleNamespace(is_ready=lambda: True, cogs={})
 
     async def run():
         pq._wake_event = asyncio.Event()
@@ -63,7 +64,7 @@ def test_cog_load_starts_processor_when_bot_ready(tmp_path):
 
 def test_cog_load_noop_when_bot_not_ready(tmp_path):
     pq = _mk_pq(tmp_path)
-    pq.bot = types.SimpleNamespace(is_ready=lambda: False)
+    pq.bot = types.SimpleNamespace(is_ready=lambda: False, cogs={})
 
     async def run():
         pq._wake_event = asyncio.Event()

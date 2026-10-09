@@ -13,7 +13,7 @@ from typing import Optional
 
 import discord
 
-from .pimp_my_bot import theme, menu_timeout, confirm_timeout
+from .pimp_my_bot import theme, menu_timeout, confirm_timeout, safe_edit_message
 from .attendance_ocr_parsers import can_edit_session
 from .bear_track import _isolate_rtl, _ltr_line
 from .alliance_member_edit import new_member_name, new_member_name_input
@@ -1072,6 +1072,7 @@ class EventReviewView(discord.ui.View):
                 conn.execute(
                     "UPDATE attendance_sessions SET awaiting_result = 1 "
                     "WHERE session_id = ?", (session_id,))
+                self._update_session_date_legion(conn, session_id)
                 # Re-upload rebuilds the event; clear prior result rows so they
                 # don't accumulate.
                 conn.execute(
@@ -1160,14 +1161,26 @@ class EventReviewView(discord.ui.View):
         self._power_updated_count = count
         return None
 
-    def _persist_registration_only(self, update_fn, ts: str) -> str:
-        session_id = _find_or_create_session(
-            event_type=self.session.db_event_type,
-            event_date=self.session.detected_date,
-            event_subtype=self.session.detected_legion,
-            alliance_id=self.session.alliance_id,
-            date_confidence=self.session.date_confidence,
+    def _update_session_date_legion(self, conn, session_id: str) -> None:
+        event_date = self.session.detected_date
+        conn.execute(
+            "UPDATE attendance_sessions "
+            "SET event_date = COALESCE(?, event_date), event_subtype = ? WHERE session_id = ?",
+            (event_date.isoformat() if event_date else None,
+             self.session.detected_legion, session_id),
         )
+
+    def _persist_registration_only(self, update_fn, ts: str) -> str:
+        if self.existing_session_id is not None:
+            session_id = self.existing_session_id
+        else:
+            session_id = _find_or_create_session(
+                event_type=self.session.db_event_type,
+                event_date=self.session.detected_date,
+                event_subtype=self.session.detected_legion,
+                alliance_id=self.session.alliance_id,
+                date_confidence=self.session.date_confidence,
+            )
         self._write_registered_rows(session_id, update_fn, ts)
         with sqlite3.connect("db/attendance.sqlite", timeout=30.0) as conn:
             conn.execute(
@@ -1175,6 +1188,8 @@ class EventReviewView(discord.ui.View):
                 "SET alliance_rank = ?, event_time = ? WHERE session_id = ?",
                 (self.session.alliance_rank, self.session.detected_time, session_id),
             )
+            if self.existing_session_id is not None:
+                self._update_session_date_legion(conn, session_id)
             conn.commit()
         return session_id
 
@@ -1588,7 +1603,7 @@ class _StatsMvpEditView(discord.ui.View):
 
     async def rerender(self, interaction: discord.Interaction):
         self._build()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await safe_edit_message(interaction, embed=self.build_embed(), view=self)
 
 
 # ── modals ────────────────────────────────────────────────────────────────
@@ -1714,8 +1729,12 @@ class _StatEditModal(discord.ui.Modal):
                 parent._persist()
             except Exception as e:
                 logger.exception("Attendance stat/MVP autosave failed")
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Couldn't save: {e}", ephemeral=True)
+                if interaction.response.is_done():
+                    await interaction.followup.send(
+                        f"{theme.deniedIcon} Couldn't save: {e}", ephemeral=True)
+                else:
+                    await interaction.response.send_message(
+                        f"{theme.deniedIcon} Couldn't save: {e}", ephemeral=True)
                 return
 
         await self.sub_view.rerender(interaction)

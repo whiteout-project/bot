@@ -49,10 +49,13 @@ class AttendanceOCR(commands.Cog):
         from .attendance_ocr_parsers import build_session_from_snapshot
         for key, payload in ocr_resume.load_all('attendance'):
             try:
-                channel = self.bot.get_channel(payload.get('channel_id'))
+                channel, gone = await ocr_resume.resolve_channel(self.bot, payload.get('channel_id'))
                 uploader_id = payload.get('uploader_id')
-                if channel is None or uploader_id is None:
+                if gone or uploader_id is None:
                     ocr_resume.delete(key)
+                    continue
+                if channel is None:
+                    logger.warning(f"AttendanceOCR: channel {payload.get('channel_id')} unreachable; keeping its interrupted session")
                     continue
                 if payload.get('finalized') or payload.get('cancelled'):
                     # Stale leftover from a finished session - prune, don't resurrect.
@@ -195,10 +198,13 @@ class AttendanceOCR(commands.Cog):
         channel_keywords = [
             kw for kws in get_channel_keywords(message.channel.id).values() for kw in kws
         ]
-        if channel_keywords:
-            content_lower = message.content.lower()
-            if not any(kw.lower() in content_lower for kw in channel_keywords):
-                return
+        content_lower = message.content.lower()
+        has_keyword = not channel_keywords or any(
+            kw.lower() in content_lower for kw in channel_keywords
+        )
+        key = (message.channel.id, message.author.id)
+        if not has_keyword and not self._session_open_or_starting(key):
+            return
 
         # Per-alliance permission gate. When restricted, only bot admins
         # can post screenshots for processing; others get a self-deleting notice.
@@ -212,13 +218,14 @@ class AttendanceOCR(commands.Cog):
                 )
                 return
 
-        key = (message.channel.id, message.author.id)
         lock = self._session_locks.setdefault(key, asyncio.Lock())
         async with lock:
             session = self.active_sessions.get(key)
             if session is not None and not session.finalized and not session.cancelled:
                 await session.add_attachments(images)
                 await self._maybe_delete_source(message, settings)
+                return
+            if not has_keyword:
                 return
 
             # Acknowledge immediately so the uploader sees activity during the slow
@@ -272,6 +279,13 @@ class AttendanceOCR(commands.Cog):
             self.active_sessions[key] = new_session
             await new_session.start(images, status_message=status_message)
             await self._maybe_delete_source(message, settings)
+
+    def _session_open_or_starting(self, key: tuple[int, int]) -> bool:
+        session = self.active_sessions.get(key)
+        if session is not None and not session.finalized and not session.cancelled:
+            return True
+        lock = self._session_locks.get(key)
+        return lock is not None and lock.locked()
 
     async def _maybe_delete_source(self, message: discord.Message, settings: dict) -> None:
         """Delete the user's upload message after its attachments have been

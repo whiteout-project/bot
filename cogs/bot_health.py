@@ -1290,26 +1290,26 @@ class BotHealth(commands.Cog):
                 self.logger.info("Starting scheduled cleanup")
                 results = await self.run_cleanup()
 
-                # Check if monthly optimization is due
-                opt_day = config.get('monthly_optimization_day', 0)
-                if opt_day > 0 and now.day == opt_day:
-                    last_opt = config.get('last_optimization_date')
-                    if last_opt != now.date().isoformat():
-                        self.logger.info("Starting monthly optimization")
-                        opt_results = await self.run_optimization()
-
-                        # Notify admin
-                        notify_id = config.get('notify_user_id')
-                        if notify_id:
-                            await self._notify_user(
-                                notify_id,
-                                f"{theme.verifiedIcon} **Monthly Optimization Complete**\n\n"
-                                f"Recovered {opt_results['space_recovered_mb']:.1f} MB from "
-                                f"{opt_results['databases_optimized']} databases."
-                            )
-
                 # Cleanup old archives
                 await self.cleanup_old_archives(30)
+
+            # Check if monthly optimization is due
+            opt_day = config.get('monthly_optimization_day', 0)
+            if scheduled_passed and opt_day > 0 and now.day == opt_day:
+                last_opt = config.get('last_optimization_date')
+                if last_opt != now.date().isoformat():
+                    self.logger.info("Starting monthly optimization")
+                    opt_results = await self.run_optimization()
+
+                    # Notify admin
+                    notify_id = config.get('notify_user_id')
+                    if notify_id:
+                        await self._notify_user(
+                            notify_id,
+                            f"{theme.verifiedIcon} **Monthly Optimization Complete**\n\n"
+                            f"Recovered {opt_results['space_recovered_mb']:.1f} MB from "
+                            f"{opt_results['databases_optimized']} databases."
+                        )
 
         except Exception as e:
             self.logger.error(f"Error in maintenance loop: {e}")
@@ -1407,6 +1407,11 @@ class BotHealth(commands.Cog):
             if cog_name == "bot_health":
                 results['failed'].append(cog_name)
                 results['errors'][cog_name] = "Cannot reload bot_health while in use"
+                continue
+            # Importers keep the old module, so a reload would split the OCR model registry in two.
+            if cog_name == "onnx_lifecycle":
+                results['failed'].append(cog_name)
+                results['errors'][cog_name] = "Restart the bot to apply onnx_lifecycle changes"
                 continue
 
             try:
@@ -2002,6 +2007,7 @@ class HealthMenuView(discord.ui.View):
         )
 
     async def _on_confirm_restart(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         await self.cog.perform_restart(interaction)
 
     async def _on_cancel_restart(self, interaction: discord.Interaction):
@@ -2404,7 +2410,7 @@ class ReloadCogsView(discord.ui.View):
         options = []
         for cog_name in page_cogs:
             is_selected = cog_name in self.selected_cogs
-            if cog_name == "bot_health":
+            if cog_name in ("bot_health", "onnx_lifecycle"):
                 options.append(discord.SelectOption(
                     label=cog_name, value=cog_name,
                     description="Cannot reload (in use)",

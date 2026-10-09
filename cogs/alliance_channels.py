@@ -7,6 +7,7 @@ import sqlite3
 import logging
 from datetime import datetime
 from .pimp_my_bot import theme, safe_edit_message, menu_timeout
+from .permission_handler import PermissionManager
 
 logger = logging.getLogger('alliance')
 
@@ -51,6 +52,18 @@ class ChannelSetupView(discord.ui.View):
         self.alliance_name = alliance_name
         self.cog = cog
         self._build_components()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        alliance_ids, is_global = PermissionManager.get_admin_alliance_ids(
+            interaction.user.id, interaction.guild_id
+        )
+        allowed = is_global or str(self.alliance_id) in {str(aid) for aid in alliance_ids}
+        if not allowed:
+            await interaction.response.send_message(
+                f"{theme.deniedIcon} You do not have permission to manage this alliance.",
+                ephemeral=True,
+            )
+        return allowed
 
     # ── DB readers ─────────────────────────────────────────────────────
 
@@ -299,6 +312,9 @@ class _ChannelPickerView(discord.ui.View):
             1, (len(self.channels) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
         )
         self._build()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self.parent.interaction_check(interaction)
 
     def _build(self):
         self.clear_items()

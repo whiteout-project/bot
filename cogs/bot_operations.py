@@ -11,7 +11,7 @@ import asyncio
 import requests
 import logging
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, menu_timeout
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, use_guild_theme
 
 logger = logging.getLogger('bot')
 
@@ -151,8 +151,35 @@ class BotOperations(commands.Cog):
         # len(globals_) == 0: brand-new install. The first admin created via
         # the new Add Admin flow gets is_initial=1, is_owner=1 atomically.
 
+    async def cog_load(self):
+        # Gateway parser hooks run before views, commands and listeners, so their context is in place for every check.
+        parsers = self.bot._connection.parsers
+        self._original_parsers = {
+            "INTERACTION_CREATE": parsers["INTERACTION_CREATE"],
+            "MESSAGE_CREATE": parsers["MESSAGE_CREATE"],
+        }
+
+        def parse_interaction(data):
+            guild_id = int(data["guild_id"]) if data.get("guild_id") else None
+            member = data.get("member") or {}
+            role_ids = [int(r) for r in member.get("roles", [])]
+            user_id = (member.get("user") or {}).get("id")
+            if role_ids and user_id:
+                PermissionManager.cache_member_role_grant(int(user_id), role_ids, guild_id)
+            with use_guild_theme(guild_id):
+                self._original_parsers["INTERACTION_CREATE"](data)
+
+        def parse_message(data):
+            guild_id = int(data["guild_id"]) if data.get("guild_id") else None
+            with use_guild_theme(guild_id):
+                self._original_parsers["MESSAGE_CREATE"](data)
+
+        parsers["INTERACTION_CREATE"] = parse_interaction
+        parsers["MESSAGE_CREATE"] = parse_message
+
     async def cog_unload(self):
         """Close database connections when cog is unloaded."""
+        self.bot._connection.parsers.update(getattr(self, "_original_parsers", {}))
         try:
             self.settings_db.close()
             self.alliance_db.close()
@@ -238,12 +265,6 @@ class BotOperations(commands.Cog):
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction):
-        # Cache the member's role-derived admin grant before any permission check runs.
-        member = interaction.user
-        role_ids = [r.id for r in getattr(member, "roles", [])]
-        if role_ids:
-            PermissionManager.cache_member_role_grant(member.id, role_ids, interaction.guild_id)
-
         if not interaction.type == discord.InteractionType.component:
             return
 
@@ -322,10 +343,11 @@ class BotOperations(commands.Cog):
                     )
                     return
 
+                await interaction.response.defer(ephemeral=True)
                 current_version, new_version, update_notes, updates_needed = await self.check_for_updates()
 
                 if not current_version or not new_version:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         f"{theme.deniedIcon} Failed to check for updates. Please try again later.", 
                         ephemeral=True
                     )
@@ -394,8 +416,8 @@ class BotOperations(commands.Cog):
                     )
                     main_embed.description = "Your bot is running the latest version!"
 
-                view = _UpdateAndRestartView(self.bot) if updates_needed else None
-                await interaction.response.send_message(
+                view = _UpdateAndRestartView(self.bot) if updates_needed else discord.utils.MISSING
+                await interaction.followup.send(
                     embed=main_embed,
                     view=view,
                     ephemeral=True,
@@ -404,11 +426,11 @@ class BotOperations(commands.Cog):
             except Exception as e:
                 logger.error(f"Check updates error: {e}")
                 print(f"Check updates error: {e}")
+                error_text = f"{theme.deniedIcon} An error occurred while checking for updates."
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(
-                        f"{theme.deniedIcon} An error occurred while checking for updates.",
-                        ephemeral=True
-                    )
+                    await interaction.response.send_message(error_text, ephemeral=True)
+                else:
+                    await interaction.followup.send(error_text, ephemeral=True)
 
     @staticmethod
     def _is_stable_upgrade(current_version: str, latest_tag: str) -> bool:

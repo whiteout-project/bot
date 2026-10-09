@@ -1637,6 +1637,8 @@ class OcrUploadSession:
                 pass
 
     def restart_timer(self):
+        if self.cancelled:
+            return
         self.stop_timer()
         self._timer_task = asyncio.create_task(self._timer_run())
 
@@ -1656,7 +1658,7 @@ class OcrUploadSession:
             pass
 
     async def render_progress(self):
-        if self.progress_message is None:
+        if self.progress_message is None or self.cancelled:
             return
         try:
             await self.progress_message.edit(
@@ -1923,6 +1925,8 @@ class PowerRankingsSession(OcrUploadSession):
     async def _process_attachments(self, attachments: list[discord.Attachment]):
         roster = load_alliance_roster(self.alliance_id)
         for att in attachments:
+            if self.cancelled:
+                break
             self.current_image_idx = self.processed_images + 1
             await self.render_progress()
             try:
@@ -2035,6 +2039,8 @@ class _PointsSession(OcrUploadSession):
         from . import bear_track
         roster = load_alliance_roster(self.alliance_id)
         for att in attachments:
+            if self.cancelled:
+                break
             self.current_image_idx = self.processed_images + 1
             await self.render_progress()
             try:
@@ -2290,6 +2296,8 @@ class AllianceShowdownSession(OcrUploadSession):
     async def _process_attachments(self, attachments: list[discord.Attachment]):
         roster = load_alliance_roster(self.alliance_id)
         for att in attachments:
+            if self.cancelled:
+                break
             self.current_image_idx = self.processed_images + 1
             await self.render_progress()
             try:

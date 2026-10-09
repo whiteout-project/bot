@@ -393,6 +393,20 @@ class AllianceIDChannel(commands.Cog):
                 log_file.write(f"  {key}: {value}\n")
             log_file.write(f"{'='*50}\n")
 
+    async def _channel_confirmed_deleted(self, guild_id, channel_id) -> bool:
+        # An unavailable guild (outage) or a failed lookup must not wipe the config.
+        guild = self.bot.get_guild(guild_id)
+        if guild is None or guild.unavailable or guild.get_channel(channel_id) is not None:
+            logger.warning(f"ID channel {channel_id} in guild {guild_id} not reachable; keeping its config.")
+            return False
+        try:
+            await self.bot.fetch_channel(channel_id)
+        except discord.NotFound:
+            return True
+        except discord.HTTPException as e:
+            logger.warning(f"ID channel {channel_id} lookup failed ({e}); keeping its config.")
+        return False
+
     @commands.Cog.listener()
     async def on_ready(self):
         try:
@@ -405,7 +419,8 @@ class AllianceIDChannel(commands.Cog):
             for channel_id, alliance_id, guild_id in channels:
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
-                    invalid_channels.append(channel_id)
+                    if await self._channel_confirmed_deleted(guild_id, channel_id):
+                        invalid_channels.append(channel_id)
                     continue
 
                 settings = self.get_guild_settings(guild_id)

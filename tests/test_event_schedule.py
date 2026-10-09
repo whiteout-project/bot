@@ -139,11 +139,12 @@ def test_crazy_joe_tuesday_thursday_pairing():
     tue, thu = calculate_crazy_joe_dates(FROM)
     assert tue is not None and thu is not None
     assert tue > FROM
+    assert thu.date() >= FROM.date()
     assert tue.weekday() == 1        # Tuesday
     assert thu.weekday() == 3        # Thursday
-    assert (thu - tue).days == 2     # Thursday is two days after Tuesday
     ref = _reference(get_event_config("Crazy Joe"))
     assert (tue - ref).days % 28 == 0  # 4-week cycle
+    assert (thu - ref).days % 28 == 2  # Thursday is two days after its cycle's Tuesday
 
 
 # --- validate_time_slot ---

@@ -16,7 +16,7 @@ from notification_event_types import (
     get_event_icon, get_event_config, calculate_next_occurrence, validate_time_slot,
     get_instance_defaults, get_instance_display_name,
     calculate_crazy_joe_dates, get_reference_override, set_reference_override,
-    cycle_repeat_minutes
+    cycle_repeat_minutes, first_future_occurrence, get_timezone, utc_offset_zone_name
 )
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, menu_timeout
@@ -104,6 +104,23 @@ class NotificationWizard(commands.Cog):
         )
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+# Wizard entry for these is in the session timezone; every other event time is shown and stored as UTC.
+LOCAL_TIME_EVENTS = ("Bear Trap", "Crazy Joe")
+
+
+def entry_zone(session) -> tuple[str, str]:
+    """(label suffix, placeholder note) naming the timezone Bear Trap/Crazy Joe times are entered in."""
+    if session.timezone == "UTC":
+        return "UTC", "UTC"
+    return "local", session.timezone
+
+
+def _next_bear_trap_start(start: datetime, tz, repeat_days: int | None = None,
+                          weekdays: list | None = None) -> datetime:
+    now = datetime.now(tz).replace(tzinfo=None)
+    return tz.localize(first_future_occurrence(start.replace(tzinfo=None), now, repeat_days, weekdays))
+
 
 class WizardSession:
     """Stores wizard session data"""
@@ -210,7 +227,8 @@ class WizardSession:
 
         # Load global settings from first notification
         first_notif = notifications[0]
-        self.timezone = first_notif.get("timezone", "UTC")
+        local_notif = next((n for n in notifications if n.get("event_type") in LOCAL_TIME_EVENTS), first_notif)
+        self.timezone = local_notif.get("timezone") or "UTC"
         self.mention_type = first_notif.get("mention_type")
 
         # Only set notification_type if it's not the default (2)
@@ -419,7 +437,7 @@ class CommonSettingsHubView(discord.ui.View):
                 "- Specify who should be mentioned in the notifications.\n\n"
                 "**You might also want to adjust some optional settings:**\n"
                 "- When the bot will send notifications before an event. 10m and 5m before and at the event time by default.\n"
-                "- The timezone for the event times. UTC by default.\n\n"
+                "- The timezone you enter Bear Trap and Crazy Joe times in. UTC by default. Other events always use UTC.\n\n"
                 "**Required Settings:**\n"
                 f"{theme.pinIcon} **Channel:** {channel_status}{channel_name}\n"
                 f"{theme.announceIcon} **Mention:** {mention_status}{mention_desc}\n\n"
@@ -823,36 +841,11 @@ class WizardTimezoneModal(discord.ui.Modal, title="Set Timezone"):
         """Validate and save timezone"""
         try:
             tz_input = self.timezone_input.value.strip()
-
-            # Convert UTC+X or UTC-X to appropriate timezone format
-            if tz_input.upper() == "UTC":
-                tz_name = "UTC"
-            elif tz_input.upper().startswith("UTC+") or tz_input.upper().startswith("UTC-"):
-                # Extract offset
-                offset_str = tz_input[3:]  # Remove "UTC"
-
-                # Parse offset - support both formats
-                if ':' in offset_str:
-                    # HH:MM format
-                    parts = offset_str.split(':')
-                    hours = int(parts[0])
-                    minutes = int(parts[1])
-                    offset = hours + (minutes / 60.0 if hours >= 0 else -minutes / 60.0)
-                else:
-                    # Decimal format
-                    offset = float(offset_str)
-
-                # Convert to Etc/GMT timezone (note: Etc/GMT has inverted signs)
-                if offset >= 0:
-                    tz_name = f"Etc/GMT-{int(offset)}"
-                else:
-                    tz_name = f"Etc/GMT+{int(abs(offset))}"
+            if tz_input.upper().startswith("UTC"):
+                tz_name = utc_offset_zone_name(tz_input)
             else:
-                # Try as pytz timezone
                 tz_name = tz_input
-
-            # Validate timezone
-            pytz.timezone(tz_name)
+                pytz.timezone(tz_name)
             self.session.timezone = tz_name
 
             # Return to hub
@@ -1179,9 +1172,10 @@ class BearTrapModal(discord.ui.Modal):
         )
         self.add_item(self.bt1_date)
 
+        zone_label, zone_note = entry_zone(session)
         self.bt1_time = discord.ui.TextInput(
-            label="Bear Trap 1 Time (HH:MM)",
-            placeholder="e.g., 14:00",
+            label=f"Bear Trap 1 Time (HH:MM {zone_label})",
+            placeholder=f"e.g., 14:00 ({zone_note})",
             default=bt1_time_default,
             max_length=5
         )
@@ -1196,8 +1190,8 @@ class BearTrapModal(discord.ui.Modal):
         self.add_item(self.bt2_date)
 
         self.bt2_time = discord.ui.TextInput(
-            label="Bear Trap 2 Time (HH:MM)",
-            placeholder="e.g., 18:00",
+            label=f"Bear Trap 2 Time (HH:MM {zone_label})",
+            placeholder=f"e.g., 18:00 ({zone_note})",
             default=bt2_time_default,
             max_length=5
         )
@@ -1216,7 +1210,7 @@ class BearTrapModal(discord.ui.Modal):
         """Process Bear Trap configuration"""
         try:
             # Validate and parse dates/times
-            tz = pytz.timezone(self.session.timezone)
+            tz = get_timezone(self.session.timezone)
             now = datetime.now(tz)
             current_year = now.year
 
@@ -1224,10 +1218,7 @@ class BearTrapModal(discord.ui.Modal):
             bt1_day, bt1_month = map(int, self.bt1_date.value.split("/"))
             bt1_hour, bt1_minute = map(int, self.bt1_time.value.split(":"))
 
-            # Determine year - if date is in the past, use next year
             bt1_datetime = tz.localize(datetime(current_year, bt1_month, bt1_day, bt1_hour, bt1_minute))
-            if bt1_datetime < now:
-                bt1_datetime = tz.localize(datetime(current_year + 1, bt1_month, bt1_day, bt1_hour, bt1_minute))
 
             # Parse Bear 2 date (use Bear 1 date if not provided)
             if self.bt2_date.value.strip():
@@ -1238,10 +1229,7 @@ class BearTrapModal(discord.ui.Modal):
 
             bt2_hour, bt2_minute = map(int, self.bt2_time.value.split(":"))
 
-            # Determine year for Bear 2
             bt2_datetime = tz.localize(datetime(current_year, bt2_month, bt2_day, bt2_hour, bt2_minute))
-            if bt2_datetime < now:
-                bt2_datetime = tz.localize(datetime(current_year + 1, bt2_month, bt2_day, bt2_hour, bt2_minute))
 
             # Validate 5-minute slots
             if bt1_minute % 5 != 0 or bt2_minute % 5 != 0:
@@ -1267,6 +1255,10 @@ class BearTrapModal(discord.ui.Modal):
                     ephemeral=True
                 )
                 return
+
+            if repeat_answer == "yes":
+                bt1_datetime = _next_bear_trap_start(bt1_datetime, tz, repeat_days=2)
+                bt2_datetime = _next_bear_trap_start(bt2_datetime, tz, repeat_days=2)
 
             # Save data
             self.session.bear_trap_data = {
@@ -1357,7 +1349,11 @@ class BearTrapWeekdayView(discord.ui.View):
     async def continue_to_next(self, interaction: discord.Interaction):
         """Save selected days and continue"""
         # Update session data with selected weekdays
-        self.session.bear_trap_data["repeat_weekdays"] = sorted(self.selected_days)
+        data = self.session.bear_trap_data
+        data["repeat_weekdays"] = sorted(self.selected_days)
+        tz = get_timezone(self.session.timezone)
+        for key in ("bt1_datetime", "bt2_datetime"):
+            data[key] = _next_bear_trap_start(data[key], tz, weekdays=data["repeat_weekdays"])
         # Mark as configured and return to hub
         self.session.mark_event_configured("Bear Trap")
         await self.hub_view.show(interaction)
@@ -1392,9 +1388,10 @@ class CrazyJoeModal(discord.ui.Modal):
         if existing.get("thursday_hour") is not None:
             thursday_default = f"{existing['thursday_hour']:02d}:{existing['thursday_minute']:02d}"
 
+        zone_label, zone_note = entry_zone(session)
         self.tuesday_time = discord.ui.TextInput(
-            label="Tuesday Time (HH:MM)",
-            placeholder="e.g., 19:00",
+            label=f"Tuesday Time (HH:MM {zone_label})",
+            placeholder=f"e.g., 19:00 ({zone_note})",
             default=tuesday_default,
             max_length=5,
             required=True
@@ -1402,7 +1399,7 @@ class CrazyJoeModal(discord.ui.Modal):
         self.add_item(self.tuesday_time)
 
         self.thursday_time = discord.ui.TextInput(
-            label="Thursday Time (HH:MM, optional)",
+            label=f"Thursday Time (HH:MM {zone_label}, optional)",
             placeholder="Leave blank for same as Tuesday",
             default=thursday_default,
             max_length=5,
@@ -2439,6 +2436,7 @@ class WizardPreviewView(discord.ui.View):
         """
         # Look for existing notification with this event_type and instance_identifier
         existing = self.session.original_instance_states.get((event_name, instance_id))
+        timezone = self.session.timezone if event_name in LOCAL_TIME_EVENTS else "UTC"
 
         if existing:
             # UPDATE existing notification
@@ -2446,7 +2444,7 @@ class WizardPreviewView(discord.ui.View):
                 notification_id=existing["id"],
                 hour=hour,
                 minute=minute,
-                timezone=self.session.timezone,
+                timezone=timezone,
                 description=description,
                 notification_type=self.session.notification_type,
                 mention_type=self.session.mention_type,
@@ -2473,7 +2471,7 @@ class WizardPreviewView(discord.ui.View):
                 start_date=start_date,
                 hour=hour,
                 minute=minute,
-                timezone=self.session.timezone,
+                timezone=timezone,
                 description=description,
                 created_by=interaction.user.id,
                 notification_type=self.session.notification_type,
@@ -2526,7 +2524,7 @@ class WizardPreviewView(discord.ui.View):
             from datetime import datetime, timedelta
             import pytz
 
-            tz = pytz.timezone(self.session.timezone)
+            tz = get_timezone(self.session.timezone)
             now = datetime.now(tz)
 
             # Set default notification_type if not set (type 2 = 10, 5, 0 minutes before)

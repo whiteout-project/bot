@@ -4,6 +4,8 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+import discord
+
 os.makedirs("db", exist_ok=True)
 _DB = "db/ocr_resume.sqlite"
 
@@ -56,3 +58,16 @@ def delete(key):
             c.execute("DELETE FROM ocr_snapshots WHERE key = ?", (key,))
     except Exception:
         pass
+
+
+async def resolve_channel(bot, channel_id):
+    """(channel, gone) for a snapshot's channel. Only a NotFound means gone; an outage keeps the snapshot."""
+    channel = bot.get_channel(channel_id) if channel_id else None
+    if channel is not None or not channel_id:
+        return channel, channel_id is None
+    try:
+        return await bot.fetch_channel(channel_id), False
+    except discord.NotFound:
+        return None, True
+    except discord.HTTPException:
+        return None, False

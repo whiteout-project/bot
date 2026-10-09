@@ -3207,8 +3207,12 @@ class BearTrack(commands.Cog):
         for key, payload in ocr_resume.load_all('bear'):
             try:
                 aid = payload.get('alliance_id')
-                if self.bot.get_channel(payload.get('channel_id')) is None or aid is None:
+                channel, gone = await ocr_resume.resolve_channel(self.bot, payload.get('channel_id'))
+                if gone or aid is None:
                     ocr_resume.delete(key)
+                    continue
+                if channel is None:
+                    logger.warning(f"BearTrack: channel {payload.get('channel_id')} unreachable; keeping its interrupted session")
                     continue
                 _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 _hist = bool(self.get_bear_settings(aid).get("match_all_history"))
@@ -3245,7 +3249,8 @@ class BearTrack(commands.Cog):
         alliance_id, keywords_raw = row
 
         keywords = [kw.strip() for kw in keywords_raw.split(",") if kw.strip()] if keywords_raw else []
-        if keywords and not any(kw.lower() in message.content.lower() for kw in keywords):
+        has_session = (message.channel.id, message.author.id) in _active_sessions
+        if keywords and not has_session and not any(kw.lower() in message.content.lower() for kw in keywords):
             return
 
         await self.process_bear_hunt_data(message, alliance_id=int(alliance_id))

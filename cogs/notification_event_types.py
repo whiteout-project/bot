@@ -460,20 +460,67 @@ def calculate_crazy_joe_dates(from_date: Optional[datetime] = None,
 
     cycle_weeks = 4
 
-    # Calculate next Tuesday
     weeks_diff = (from_date - reference_tue).days // 7
     if weeks_diff < 0:
-        next_tuesday = reference_tue
+        cycle_tuesday = reference_tue
     else:
-        cycles_passed = weeks_diff // cycle_weeks
-        next_tuesday = reference_tue + timedelta(weeks=cycles_passed * cycle_weeks)
-        # Midnight-anchored: today's Tuesday still counts until the day is over.
-        if next_tuesday.date() < from_date.date():
-            next_tuesday += timedelta(weeks=cycle_weeks)
+        cycle_tuesday = reference_tue + timedelta(weeks=(weeks_diff // cycle_weeks) * cycle_weeks)
 
-    next_thursday = next_tuesday + timedelta(days=2)
+    # Midnight-anchored: today's event day still counts until the day is over.
+    next_tuesday, next_thursday = (
+        day + timedelta(weeks=cycle_weeks) if day.date() < from_date.date() else day
+        for day in (cycle_tuesday, cycle_tuesday + timedelta(days=2))
+    )
 
     return next_tuesday, next_thursday
+
+
+def first_future_occurrence(start: datetime, now: datetime, repeat_days: Optional[int] = None,
+                            weekdays: Optional[List[int]] = None) -> datetime:
+    if start >= now:
+        return start
+    if repeat_days:
+        periods = -(-(now - start) // timedelta(days=repeat_days))
+        return start + timedelta(days=repeat_days * periods)
+    if weekdays:
+        occurrence = start
+        while occurrence < now or occurrence.weekday() not in weekdays:
+            occurrence += timedelta(days=1)
+        return occurrence
+    return start.replace(year=start.year + 1)
+
+
+def utc_offset_zone_name(tz_input: str) -> str:
+    # 'UTC+3' -> 'Etc/GMT-3', 'UTC+5:30' / 'UTC+5.5' -> 'UTC+05:30'; raises ValueError.
+    text = tz_input.strip().upper()
+    if text == "UTC":
+        return "UTC"
+    if not text.startswith(("UTC+", "UTC-")):
+        raise ValueError(f"Not a UTC offset: {tz_input}")
+    sign = 1 if text[3] == "+" else -1
+    offset = text[4:]
+    if ":" in offset:
+        hours_str, minutes_str = offset.split(":")
+        hours, minutes = int(hours_str), int(minutes_str)
+    else:
+        value = float(offset)
+        hours = int(value)
+        minutes = round((value - hours) * 60)
+    total_minutes = sign * (hours * 60 + minutes)
+    if hours < 0 or not 0 <= minutes < 60 or not -12 * 60 <= total_minutes <= 14 * 60:
+        raise ValueError(f"Offset out of range: {tz_input}")
+    if minutes:
+        return f"UTC{text[3]}{hours:02d}:{minutes:02d}"
+    return f"Etc/GMT{-sign * hours:+d}" if hours else "UTC"
+
+
+def get_timezone(tz_name: str):
+    # Stored names are pytz zones or fixed offsets like 'UTC+05:30'.
+    if tz_name.startswith(("UTC+", "UTC-")):
+        hours_str, minutes_str = tz_name[4:].split(":")
+        sign = 1 if tz_name[3] == "+" else -1
+        return pytz.FixedOffset(sign * (int(hours_str) * 60 + int(minutes_str)))
+    return pytz.timezone(tz_name)
 
 def get_available_time_slots(event_type: str) -> Optional[List[str]]:
     """

@@ -272,6 +272,7 @@ async def setup_giftcode_auto(cog, interaction: discord.Interaction):
         description="Disable automatic redemption for all alliances",
         emoji=f"{theme.deniedIcon}"
     ))
+    view.current_select.options = view.current_select.options[:25]
 
     async def alliance_callback(select_interaction: discord.Interaction, alliance_id=None):
         try:
@@ -623,32 +624,18 @@ class RedemptionPriorityView(discord.ui.View):
 
     async def _swap_priorities(self, idx1, idx2):
         """Swap the priorities of two alliances in the list and database."""
-        alliance1_id, name1, priority1 = self.alliances[idx1]
-        alliance2_id, name2, priority2 = self.alliances[idx2]
+        self.alliances[idx1], self.alliances[idx2] = self.alliances[idx2], self.alliances[idx1]
 
-        # Assign new sequential priorities based on position
-        new_priority1 = idx2 + 1
-        new_priority2 = idx1 + 1
-
-        # Update database
-        self.cog.cursor.execute("""
-            INSERT INTO giftcodecontrol (alliance_id, status, priority)
-            VALUES (?, 0, ?)
-            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
-        """, (alliance1_id, new_priority1))
-
-        self.cog.cursor.execute("""
-            INSERT INTO giftcodecontrol (alliance_id, status, priority)
-            VALUES (?, 0, ?)
-            ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
-        """, (alliance2_id, new_priority2))
+        # Renumber every alliance so stored priorities always match the displayed order
+        for position, (alliance_id, name, _) in enumerate(self.alliances):
+            self.cog.cursor.execute("""
+                INSERT INTO giftcodecontrol (alliance_id, status, priority)
+                VALUES (?, 0, ?)
+                ON CONFLICT(alliance_id) DO UPDATE SET priority = excluded.priority
+            """, (alliance_id, position + 1))
+            self.alliances[position] = (alliance_id, name, position + 1)
 
         self.cog.conn.commit()
-
-        # Swap in local list
-        self.alliances[idx1] = (alliance1_id, name1, new_priority1)
-        self.alliances[idx2] = (alliance2_id, name2, new_priority2)
-        self.alliances[idx1], self.alliances[idx2] = self.alliances[idx2], self.alliances[idx1]
 
     async def _refresh_view(self, interaction: discord.Interaction):
         """Refresh the embed and view after a priority change."""

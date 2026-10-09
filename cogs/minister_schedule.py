@@ -977,6 +977,11 @@ class MinisterSchedule(commands.Cog):
 
         log_guild = await self.get_log_guild(interaction.guild)
 
+        if not log_guild:
+            await interaction.followup.send(
+                "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server")
+            return
+
         # Check minister log channels
         context = f"{appointment_type}"
         channel_context = f"{appointment_type} channel"

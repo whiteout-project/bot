@@ -971,13 +971,7 @@ class RenameSessionModal(discord.ui.Modal, title="Rename Session"):
             self.parent_view.session_name = new_name
             if hasattr(self.parent_view, 'parent_view'):
                 self.parent_view.parent_view.session_name = new_name
-                
-            await interaction.response.send_message(
-                f"{theme.verifiedIcon} Session renamed to: **{new_name}**",
-                ephemeral=True
-            )
-            
-            # Refresh the view
+
             await self.parent_view.parent_view.update_main_embed(interaction)
             
         except Exception as e:
@@ -2061,8 +2055,9 @@ class Attendance(commands.Cog):
             with sqlite3.connect('db/attendance.sqlite') as db:
                 cursor = db.cursor()
                 cursor.execute("""
-                    INSERT OR REPLACE INTO user_preferences (user_id, report_type)
+                    INSERT INTO user_preferences (user_id, report_type)
                     VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET report_type = excluded.report_type
                 """, (user_id, preference))
                 db.commit()
         except Exception as e:
