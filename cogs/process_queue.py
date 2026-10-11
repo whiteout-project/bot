@@ -1,6 +1,6 @@
 """
 Persistent process queue with priority and cooperative preemption. Coordinates
-all bulk API operations (gift code redemption, alliance sync, member adds) so
+all bulk API operations (gift code redemption, player sync, member adds) so
 high-priority work interrupts lower-priority work and queued operations
 survive bot restarts.
 """
@@ -19,16 +19,15 @@ logger = logging.getLogger('bot')
 GIFT_VALIDATE = 100
 GIFT_REDEEM = 200
 MEMBER_ADD = 300
-ALLIANCE_CONTROL = 400
-ALLIANCE_SYNC = 500
+PLAYER_SYNC = 500
 STATE_RESOLVE = 600         # slowest work in the bot; always yields to everything else
 
 # Backstop: a handler past this is wedged, not busy. state_resolve runs for hours by
 # design and yields cooperatively instead.
 HANDLER_TIMEOUT_SECONDS = 7200
-HANDLER_TIMEOUT_EXEMPT = ('state_resolve',)
+HANDLER_TIMEOUT_EXEMPT = ('state_resolve', 'api_sync')
 # Handlers that call should_preempt() between steps, so a stop request takes effect mid-run.
-STOPPABLE_ACTIONS = ('gift_redeem', 'member_add', 'state_resolve')
+STOPPABLE_ACTIONS = ('gift_redeem', 'member_add', 'state_resolve', 'api_sync')
 
 
 class PreemptedException(Exception):
@@ -46,7 +45,7 @@ class ProcessQueue(commands.Cog):
     Operations are stored as rows in `process_queue` (in db/settings.sqlite)
     with serializable params, so they survive crashes. The processor loop
     always picks the highest-priority queued process. Long-running operations
-    (gift redemption, alliance sync, member add) call `should_preempt()`
+    (gift redemption, player sync, member add) call `should_preempt()`
     between players to yield cooperatively to higher-priority work.
     """
 

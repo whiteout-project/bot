@@ -613,7 +613,7 @@ async def handle_state_resolve_process(cog, process):
         if interrupted and stopped_by_admin:
             await progress.update(
                 wave[0], f"{theme.infoIcon} Stopped by an admin. "
-                         f"`{len(remaining)}` member(s) left unchecked.")
+                         f"`{len(remaining)}` {'member' if len(remaining) == 1 else 'members'} still to check.")
             cog.logger.info(f"GiftOps: state scan stopped by an admin - {len(remaining)} member(s) left")
             return
         if interrupted and switched_off:
@@ -647,7 +647,7 @@ async def _notify_state_resolve_done(cog, details):
         return
     unresolved = details.get('unresolved', 0)
     tail = (
-        f"\n\n{theme.infoIcon} The {unresolved} still unknown either left the game or are in a "
+        f"\n\n{theme.infoIcon} Members still unknown have either left the game or are in a "
         f"state outside the scan range. Remove them, widen the range under **State Scan**, "
         f"or set a state by hand under **Members to Fix**."
         if unresolved else ""
@@ -655,7 +655,8 @@ async def _notify_state_resolve_done(cog, details):
     embed = discord.Embed(
         title=f"{theme.verifiedIcon} State Scan Finished",
         description=(
-            f"Checked {details['total']} members with a missing or wrong state.\n\n"
+            f"Checked {details['total']} {'member' if details['total'] == 1 else 'members'} "
+            f"with a missing or wrong state.\n\n"
             f"{theme.upperDivider}\n"
             f"{theme.verifiedIcon} **States found:** `{details.get('resolved', 0)}`\n"
             f"{theme.deniedIcon} **Still unknown:** `{unresolved}`\n"

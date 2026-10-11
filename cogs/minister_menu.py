@@ -1708,7 +1708,7 @@ class MinisterMenu(commands.Cog):
             collisions = self.find_slot_collisions(migrations)
             if collisions:
                 await interaction.followup.send(
-                    f"{theme.deniedIcon} Mode not changed. These reservations would land on the same new time slot:\n"
+                    f"{theme.deniedIcon} The mode stays as it is. These reservations would end up in the same new time slot:\n"
                     + "\n".join(collisions)
                     + "\n\nMove or remove one of each pair, then switch modes again.",
                     ephemeral=True

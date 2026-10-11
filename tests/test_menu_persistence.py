@@ -242,4 +242,4 @@ def test_health_settings_modal_saves_the_menu_timeout(settings_db, monkeypatch):
 
     asyncio.run(submit())
     assert pmb.menu_timeout() is None and pmb.confirm_timeout() == 120.0
-    assert "never" in edits[0]["embed"].description
+    assert "Never" in edits[0]["embed"].description

@@ -18,7 +18,7 @@ MAX_HISTORY_FIELDS = 25  # Discord's per-embed field limit
 
 
 def _history_cap_note(total: int) -> str:
-    return f"Showing latest {MAX_HISTORY_FIELDS} of {total}\n" if total > MAX_HISTORY_FIELDS else ""
+    return f"**Showing:** the latest {MAX_HISTORY_FIELDS} of {total} changes\n" if total > MAX_HISTORY_FIELDS else ""
 
 
 def _fmt_power(n) -> str:

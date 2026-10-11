@@ -6979,9 +6979,9 @@ class BearSettingsView(discord.ui.View):
                 f"└ Whether to match players by all their past names\n"
                 f"└ Their current & event-date names are always matched\n\n"
                 f"{theme.lockIcon} **Uploaders / Viewers**\n"
-                f"└ Who can add hunts and who can view saved data: everyone or admins only\n\n"
+                f"└ Whether everyone or only admins can add hunts and see saved data\n\n"
                 f"{theme.editListIcon} **Editors**\n"
-                f"└ Who can fix an uploaded hunt before it's saved: the uploader, also admins, or anyone\n\n"
+                f"└ Who can fix an uploaded hunt before it's saved: just the uploader, admins too, or anyone\n\n"
                 f"{theme.documentIcon} **Info Message / Pin Info**\n"
                 f"└ Pinned helper in the bear channel explaining which mail to upload\n"
                 f"{theme.lowerDivider}"
@@ -7136,7 +7136,7 @@ class BearSettingsView(discord.ui.View):
         self.cog.update_bear_setting(self.alliance_id, "bear_review_editors", new_mode)
         self._build_components()
         embed = self._build_embed()
-        embed.description += f"\n{theme.verifiedIcon} Editors now: {editor_mode_label(new_mode)}."
+        embed.description += f"\n{theme.verifiedIcon} Editors set to **{editor_mode_label(new_mode)}**."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
 
     async def _toggle_permission(self, interaction: discord.Interaction, mode: str):
@@ -7151,7 +7151,7 @@ class BearSettingsView(discord.ui.View):
         self._build_components()
         embed = self._build_embed()
         who = "Uploaders" if mode == "add" else "Viewers"
-        embed.description += f"\n{theme.verifiedIcon} {who} now: {'Admins only' if new_value else 'Everyone'}."
+        embed.description += f"\n{theme.verifiedIcon} {who} set to **{'Admins only' if new_value else 'Everyone'}**."
         await safe_edit_message(interaction, embed=embed, view=self, content=None)
 
     async def _back_callback(self, interaction: discord.Interaction):

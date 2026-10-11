@@ -66,7 +66,7 @@ def test_cancel_running_job_flags_it_and_processor_marks_it_cancelled(queue):
 
 
 def test_stoppable_actions_are_the_ones_that_check_in():
-    assert set(pqm.STOPPABLE_ACTIONS) == {'gift_redeem', 'member_add', 'state_resolve'}
+    assert set(pqm.STOPPABLE_ACTIONS) == {'gift_redeem', 'member_add', 'state_resolve', 'api_sync'}
 
 
 def test_queued_processes_lists_waiting_jobs_in_run_order(queue):

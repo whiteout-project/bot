@@ -545,7 +545,7 @@ class PlainEditorView(discord.ui.View):
             await interaction.response.send_modal(DescriptionModal(self))
         else:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} Could not parse this notification's format.",
+                f"{theme.deniedIcon} The editor can't read this notification's message, so it can't be changed here.",
                 ephemeral=True
             )
 
@@ -1028,7 +1028,7 @@ class NotificationEditor(commands.Cog):
         else:
             logger.warning(f"No known format matched, description is {description}")
             await interaction.response.send_message(
-                f"{theme.deniedIcon} Could not parse this notification's format.",
+                f"{theme.deniedIcon} The editor can't read this notification's message, so it can't be changed here.",
                 ephemeral=True
             )
             return

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -149,3 +151,24 @@ def run_ocr_pipeline(image_bytes: bytes, primary_lang: str = "ch",
         "date": date,
         "rows": list(rows.values()),
     }
+
+
+def make_player_sync_dbs(tmp_path):
+    """Empty settings/users/changes databases shaped like a live install, for Player Sync tests."""
+    (tmp_path / "db").mkdir(exist_ok=True)
+    with closing(sqlite3.connect(tmp_path / "db" / "settings.sqlite")) as conn:
+        conn.execute("CREATE TABLE bot_global_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
+        conn.execute("CREATE TABLE alliance_logs (alliance_id INTEGER PRIMARY KEY, channel_id INTEGER)")
+        conn.commit()
+    with closing(sqlite3.connect(tmp_path / "db" / "users.sqlite")) as conn:
+        conn.execute("""CREATE TABLE users (
+            fid INTEGER PRIMARY KEY, nickname TEXT, furnace_lv INTEGER DEFAULT 0, kid INTEGER,
+            stove_lv_content TEXT, alliance TEXT, power INTEGER, power_updated_at TEXT,
+            combat_power INTEGER, combat_power_updated_at TEXT, state_mismatch_at TEXT,
+            kingdom_scan_next INTEGER, kingdom_scan_done_at TEXT,
+            avatar_url TEXT, api_synced_at TEXT)""")
+        conn.commit()
+    with closing(sqlite3.connect(tmp_path / "db" / "changes.sqlite")) as conn:
+        conn.execute("CREATE TABLE nickname_changes (fid, old_nickname, new_nickname, change_date)")
+        conn.execute("CREATE TABLE furnace_changes (fid, old_furnace_lv, new_furnace_lv, change_date)")
+        conn.commit()

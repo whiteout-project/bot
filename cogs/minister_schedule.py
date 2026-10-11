@@ -657,7 +657,7 @@ class MinisterSchedule(commands.Cog):
 
             if not log_guild:
                 await interaction.followup.send(
-                    "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server")
+                    "Couldn't find the server set for minister logs. Make sure the bot is still in that server.\n\nIf this keeps happening, run `/settings` --> Other Features --> Minister Scheduling --> Delete Server ID, then try again in the server you want to use.")
                 return
 
             # Check minister and log channels
@@ -845,7 +845,7 @@ class MinisterSchedule(commands.Cog):
 
             if not log_guild:
                 await interaction.followup.send(
-                    "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server")
+                    "Couldn't find the server set for minister logs. Make sure the bot is still in that server.\n\nIf this keeps happening, run `/settings` --> Other Features --> Minister Scheduling --> Delete Server ID, then try again in the server you want to use.")
                 return
 
             # Check minister and log channels
@@ -979,7 +979,7 @@ class MinisterSchedule(commands.Cog):
 
         if not log_guild:
             await interaction.followup.send(
-                "Could not find the minister log guild. Make sure the bot is in that server.\n\nIf issue persists, run the `/settings` command --> Other Features --> Minister Scheduling --> Delete Server ID and try again in the desired server")
+                "Couldn't find the server set for minister logs. Make sure the bot is still in that server.\n\nIf this keeps happening, run `/settings` --> Other Features --> Minister Scheduling --> Delete Server ID, then try again in the server you want to use.")
             return
 
         # Check minister log channels

@@ -1,8 +1,9 @@
-"""Member States, Running Now, timeout settings, and who may edit an uploaded screenshot review."""
+"""Member States, Running Now, timeout settings, who may edit an uploaded screenshot review, and Player Sync."""
 import sqlite3
 from contextlib import closing
 
 import pytest
+import pytest_asyncio
 
 from sim_harness import ALLIANCE_ID, labels, modal_fields, title
 
@@ -100,9 +101,9 @@ async def test_bear_settings_cycle_edit_permission(sim):
     settings = await sim.walk("Bear Tracking", "Settings")
     picked = await sim.select(settings, "Select an alliance", "Test Alliance")
     assert not picked.problems()
-    cycled = await sim.click(picked.screen[0], "Toggle Edit Permission")
+    cycled = await sim.click(picked.screen[0], "Editors: Uploader only")
     assert not cycled.problems()
-    assert "Edit permission is now: Uploader + admins" in _description(cycled.screen[0])
+    assert "Editors set to **Uploader + admins**" in _description(cycled.screen[0])
     assert sim.bot.get_cog("BearTrack").get_bear_settings(ALLIANCE_ID)["review_editors"] == "admins"
 
 
@@ -200,3 +201,238 @@ async def test_attendance_upload_panel_follows_editors_setting(sim):
     set_ocr_review_editors(ALLIANCE_ID, "anyone")
     await sim.click(sim.current(panel), "Cancel", user="member")
     assert cancelled
+
+
+# --- Player Sync -------------------------------------------------------------------------------
+
+API_KEY = "Bearer test-key"
+SYNC_SETUP_BUTTONS = {"Auto Sync: Off", "Sync Now", "Sync Alliance", "Test"}
+
+
+@pytest_asyncio.fixture
+async def fake_api():
+    """A local player API: needs the test key, answers 404 for player IDs ending in 0."""
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+
+    async def player(request):
+        if request.headers.get("Authorization") != API_KEY:
+            return web.json_response({"ok": False}, status=401)
+        fid = request.match_info["fid"]
+        if fid.endswith("0"):
+            return web.json_response({"ok": False}, status=404)
+        return web.json_response({"player": {"nick_name": f"Synced{fid[-3:]}", "furnace_level": 30,
+                                             "power": 12345678}})
+
+    app = web.Application()
+    app.router.add_get("/v1/players/{fid}", player)
+    server = TestServer(app, host="127.0.0.1")
+    await server.start_server()
+    yield str(server.make_url("/")).rstrip("/")
+    await server.close()
+
+
+async def _player_sync(sim, user="owner"):
+    return await sim.walk("Alliances", "Player Sync", user=user)
+
+
+async def _submit(sim, hub, button, values):
+    shown = await sim.click(sim.current(hub), button)
+    assert shown.result.modal is not None, button
+    return await sim.submit_modal(shown, values)
+
+
+async def _saved(sim, hub, button, values):
+    saved = await _submit(sim, hub, button, values)
+    assert not saved.problems(), (button, saved.problems())
+    return sim.current(hub)
+
+
+async def _set_field(sim, hub, field, path):
+    fields = await sim.click(sim.current(hub), "Fields")
+    assert not fields.problems()
+    shown = await sim.select(fields.screen[0], "Choose a field to edit", field)
+    assert list(modal_fields(shown)) == [f"{field} path (leave empty to skip)"]
+    saved = await sim.submit_modal(shown, {f"{field} path (leave empty to skip)": path})
+    assert not saved.problems(), saved.problems()
+    return sim.current(hub)
+
+
+async def _set_up(sim, hub, base_url, key=API_KEY):
+    await _saved(sim, hub, "Connection", {"Base URL": base_url,
+                                          "Player path ({fid} = player ID)": "/v1/players/{fid}"})
+    await _saved(sim, hub, "API Key", {"Header name": "Authorization",
+                                       "Key (include Bearer if the API needs it)": key})
+    await _set_field(sim, hub, "Name", "player.nick_name")
+    return await _set_field(sim, hub, "Furnace level", "player.furnace_level")
+
+
+def _hold_sync_jobs(sim):
+    """Keeps queued syncs waiting, so the menu's queued state is stable while it is checked."""
+    sim.bot.get_cog("ProcessQueue")._handlers.pop("api_sync", None)
+
+
+async def test_player_sync_opens_from_alliances_not_set_up(sim):
+    alliances = await sim.walk("Alliances")
+    assert "Player Sync" in labels(alliances, enabled_only=True)
+    opened = await sim.click(alliances, "Player Sync")
+    assert not opened.problems(), opened.problems()
+    hub = opened.screen[0]
+    assert title(hub).endswith("Player Sync")
+    disabled = set(labels(hub)) - set(labels(hub, enabled_only=True))
+    assert disabled == SYNC_SETUP_BUTTONS
+
+
+async def test_player_sync_connection_saves_in_place(sim):
+    hub = await _player_sync(sim)
+    assert "base URL" in _description(hub)
+    hub = await _saved(sim, hub, "Connection", {"Base URL": "https://api.example.com",
+                                                "Player path ({fid} = player ID)": "/v1/players/{fid}"})
+    assert "Connection saved." in _description(hub)
+    assert "base URL" not in _description(hub)
+
+
+async def test_player_sync_connection_refuses_a_bad_url(sim):
+    hub = await _player_sync(sim)
+    refused = await _submit(sim, hub, "Connection", {"Base URL": "ftp://api.example.com"})
+    assert not refused.problems(), refused.problems()
+    message, ephemeral = refused.screen
+    assert ephemeral and "must start with http:// or https://" in message.content
+    assert "Back" in labels(sim.current(hub), enabled_only=True)
+
+
+async def test_player_sync_key_is_masked(sim):
+    hub = await _player_sync(sim)
+    hub = await _saved(sim, hub, "API Key", {"Key (include Bearer if the API needs it)": API_KEY})
+    assert "API key saved." in _description(hub)
+    assert "••••-key" in _description(hub)
+    assert API_KEY not in str(hub.embeds[0].to_dict())
+
+
+async def test_player_sync_fields_set_one_path(sim):
+    hub = await _player_sync(sim)
+    fields = await sim.click(hub, "Fields")
+    assert not fields.problems() and title(fields.screen[0]).endswith("Field Paths")
+    back = await sim.click(fields.screen[0], "Back")
+    assert not back.problems() and title(back.screen[0]).endswith("Player Sync")
+    hub = await _set_field(sim, hub, "Name", "player.nick_name")
+    assert title(hub).endswith("Player Sync")
+    assert "Name path saved." in _description(hub)
+
+
+async def test_player_sync_limits_and_interval(sim):
+    from cogs import alliance_api_sync as sync
+    hub = await _player_sync(sim)
+    hub = await _saved(sim, hub, "Limits", {"Requests per minute": "60", "Requests per day": "5000"})
+    assert "up to 60 requests a minute and 5000 a day." in _description(hub)
+    hub = await _saved(sim, hub, "Interval", {"Hours between syncs (at least 1)": "12"})
+    assert "every 12 hours" in _description(hub)
+    refused = await _submit(sim, hub, "Interval", {"Hours between syncs (at least 1)": "0"})
+    message, ephemeral = refused.screen
+    assert ephemeral and "Enter a whole number of hours" in message.content
+    assert sync.get_interval_hours() == 12
+
+
+async def test_player_sync_import_and_export(sim):
+    hub = await _player_sync(sim)
+    refused = await _submit(sim, hub, "Import", {"Paste the whole setup file": "not json"})
+    message, ephemeral = refused.screen
+    assert ephemeral and "look like a Player Sync setup file" in message.content
+
+    profile = ('{"base_url": "https://api.example.com", "player_path": "/v1/players/{fid}", '
+               '"fields": {"name": "player.nick_name"}}')
+    hub = await _saved(sim, hub, "Import", {"Paste the whole setup file": profile})
+    assert "Setup imported." in _description(hub)
+    assert "Setup:** Ready" in _description(hub)
+
+    await _saved(sim, hub, "API Key", {"Key (include Bearer if the API needs it)": API_KEY})
+    exported = await sim.click(sim.current(hub), "Export")
+    assert not exported.problems(), exported.problems()
+    message, ephemeral = exported.screen
+    assert ephemeral and [a.filename for a in message.attachments] == ["api-profile.json"]
+    data = sim.env.backend.cdn.get(message.attachments[0].url).decode("utf-8")
+    assert '"base_url": "https://api.example.com"' in data
+    assert "test-key" not in data
+
+
+async def test_player_sync_test_reads_each_field(sim, fake_api):
+    from cogs.pimp_my_bot import theme
+    hub = await _set_up(sim, await _player_sync(sim), fake_api)
+    assert not SYNC_SETUP_BUTTONS - set(labels(hub, enabled_only=True))
+    tested = await _submit(sim, hub, "Test", {"Player ID": "10001"})
+    assert not tested.problems(), tested.problems()
+    text = _description(sim.current(hub))
+    assert f"{theme.verifiedIcon} Test with player `10001`" in text
+    assert "• Name: `Synced001` → Synced001" in text
+    assert "• Power: skipped" in text
+
+
+async def test_player_sync_test_shows_key_rejected(sim, fake_api):
+    from cogs.alliance_api_menu import KEY_REJECTED
+    from cogs.pimp_my_bot import theme
+    hub = await _set_up(sim, await _player_sync(sim), fake_api, key="Bearer wrong-key")
+    tested = await _submit(sim, hub, "Test", {"Player ID": "10001"})
+    assert not tested.problems(), tested.problems()
+    text = _description(sim.current(hub))
+    assert f"{theme.deniedIcon} Test with player `10001`" in text
+    assert "error 401" in text and KEY_REJECTED in text
+
+
+async def test_player_sync_now_queues_once(sim, fake_api):
+    _hold_sync_jobs(sim)
+    hub = await _set_up(sim, await _player_sync(sim), fake_api)
+    queued = await sim.click(hub, "Sync Now")
+    assert not queued.problems(), queued.problems()
+    assert "The sync is queued" in _description(queued.screen[0])
+    assert "**Waiting to start**" in _description(queued.screen[0])
+    again = await sim.click(queued.screen[0], "Sync Now")
+    assert not again.problems()
+    assert "already running or waiting to start" in _description(again.screen[0])
+
+
+async def test_player_sync_one_alliance(sim, fake_api):
+    _hold_sync_jobs(sim)
+    hub = await _set_up(sim, await _player_sync(sim), fake_api)
+    picker = await sim.click(hub, "Sync Alliance")
+    assert not picker.problems(), picker.problems()
+    back = await sim.click(picker.screen[0], "Back")
+    assert not back.problems() and title(back.screen[0]).endswith("Player Sync")
+
+    picker = await sim.click(back.screen[0], "Sync Alliance")
+    picked = await sim.select(picker.screen[0], "Pick an alliance to sync now", "Test Alliance")
+    assert not picked.problems(), picked.problems()
+    assert "The sync is queued" in _description(picked.screen[0])
+    jobs = sim.bot.get_cog("ProcessQueue").get_queued_processes_by_action("api_sync")
+    assert [job["details"]["alliance_id"] for job in jobs] == [ALLIANCE_ID]
+
+
+async def test_player_sync_auto_sync_toggles(sim, fake_api):
+    _hold_sync_jobs(sim)
+    hub = await _set_up(sim, await _player_sync(sim), fake_api)
+    on = await sim.click(hub, "Auto Sync: Off")
+    assert not on.problems(), on.problems()
+    assert "Auto Sync: On" in labels(on.screen[0], enabled_only=True)
+    assert "Automatic sync is on." in _description(on.screen[0])
+    off = await sim.click(on.screen[0], "Auto Sync: On")
+    assert not off.problems(), off.problems()
+    assert "Auto Sync: Off" in labels(off.screen[0])
+    assert "Automatic sync is off." in _description(off.screen[0])
+
+
+async def test_player_sync_back_returns_to_alliances(sim):
+    hub = await _player_sync(sim)
+    back = await sim.click(hub, "Back")
+    assert not back.problems(), back.problems()
+    assert title(back.screen[0]).endswith("Alliances")
+
+
+async def test_player_sync_refuses_non_global_admins(sim):
+    alliances = await sim.walk("Alliances", user="server")
+    assert "Player Sync" in labels(alliances)
+    assert "Player Sync" not in labels(alliances, enabled_only=True)
+
+    hub = await _player_sync(sim)
+    refused = await sim.click(hub, "Connection", user="server")
+    assert refused.result.modal is None
+    message, ephemeral = refused.screen
+    assert ephemeral and "Only global administrators" in message.content

@@ -77,8 +77,8 @@ def _split_by_state_lock(alliance_id, fids):
 
 def _state_skip_line(target_name, locked_kid, skipped) -> str:
     return (
-        f"Skipped **{len(skipped)}** member(s) from another state "
-        f"(**{target_name}** only accepts State #{locked_kid}): {_join_names(skipped, 500)}"
+        f"Skipped **{len(skipped)}** {'member' if len(skipped) == 1 else 'members'} from another state, "
+        f"because **{target_name}** only accepts State #{locked_kid}: {_join_names(skipped, 500)}"
     )
 
 
@@ -2814,7 +2814,7 @@ class IDSearchModal(discord.ui.Modal):
                                 embed=discord.Embed(
                                     title=f"{theme.deniedIcon} Transfer Blocked",
                                     description=(STATE_CHECK_UNAVAILABLE if not lock_ok
-                                                 else f"**{nickname}** was not moved. "
+                                                 else f"**{nickname}** wasn't moved. "
                                                       f"{state_lock_reason(locked_kid, None)}"),
                                     color=theme.emColor2
                                 ),

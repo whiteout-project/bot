@@ -136,9 +136,9 @@ def error_count_status(count: int) -> str:
 
 def error_count_message(count: int, by_file: dict) -> str:
     if not count:
-        return f"None in the last {ERROR_COUNT_HOURS}h"
+        return f"0 in the last {ERROR_COUNT_HOURS} hours"
     busiest = max(by_file, key=by_file.get)
-    return f"{count} in the last {ERROR_COUNT_HOURS}h, mostly {busiest}"
+    return f"{count} in the last {ERROR_COUNT_HOURS} hours, mostly in {busiest}"
 
 
 def _active_work_summary(bot) -> str | None:
@@ -2067,7 +2067,8 @@ def describe_job(process: dict, alliance_names: dict) -> str:
         return f"Redeeming gift code `{details.get('giftcode', '?')}` for {alliance}"
     if action == 'gift_redeem_member':
         who = details.get('nickname') or details.get('fid', '?')
-        return f"Redeeming {len(details.get('codes') or [])} missed code(s) for {who}"
+        count = len(details.get('codes') or [])
+        return f"Redeeming {count} missed {'code' if count == 1 else 'codes'} for {who}"
     if action == 'member_add':
         return f"Adding members to {details.get('alliance_name') or alliance}"
     if action == 'state_resolve':
@@ -2075,6 +2076,8 @@ def describe_job(process: dict, alliance_names: dict) -> str:
         checked = total - len(details.get('remaining') or [])
         name = "State auto-scan" if details.get('mode') == 'auto' else "State scan"
         return f"{name} ({checked}/{total} members)"
+    if action == 'api_sync':
+        return f"Player sync for {alliance}" if details.get('alliance_id') else "Player sync, all alliances"
     return action
 
 
@@ -2127,8 +2130,8 @@ class RunningNowView(MenuView):
         self.clear_items()
 
         lines = [
-            "Long-running bot work: gift code redemptions, member adds and state scans. "
-            "Stop anything that's stuck or not needed.\n",
+            "Work that takes a while, like gift code redemptions, member adds and state scans. "
+            "You can stop anything that's stuck or no longer needed.\n",
             f"{theme.upperDivider}",
         ]
         if running:
@@ -2139,7 +2142,7 @@ class RunningNowView(MenuView):
             elif running['action'] in process_queue.STOPPABLE_ACTIONS:
                 lines.append(f"└ Running for {minutes} min.")
             else:
-                lines.append(f"└ Running for {minutes} min. Can't be stopped mid-run; it finishes on its own.")
+                lines.append(f"└ Running for {minutes} min. This one can't be stopped and finishes on its own.")
         else:
             lines.append(f"{theme.boltIcon} **Running:** nothing right now.")
         lines.append(f"{theme.hourglassIcon} **Waiting in the queue:** `{len(queued)}`")
@@ -2149,17 +2152,18 @@ class RunningNowView(MenuView):
         from . import gift_redemption, onnx_lifecycle
         ocr = onnx_lifecycle.models_in_use()
         if ocr:
-            lines.append(f"{theme.globeIcon} **Screenshot reading (OCR):** `{ocr}` in use. It can't be stopped from here.")
+            lines.append(f"{theme.globeIcon} **Screenshot reading (OCR):** {ocr} {'reader' if ocr == 1 else 'readers'} busy. "
+                         f"This finishes on its own.")
         gift_cog = self.cog.bot.get_cog("GiftOperations")
         pause = gift_redemption.rate_limit_wait(gift_cog) if gift_cog else 0
         if pause:
-            lines.append(f"{theme.timeIcon} **Gift code API limit:** paused for {int(pause)}s more.")
+            lines.append(f"{theme.timeIcon} **Gift code API limit:** redemptions are paused for another {int(pause)}s.")
         lines.append(f"{theme.lowerDivider}")
         lines += [
             f"{theme.deniedIcon} **Pick a job**",
-            "└ Stop it. A waiting job is removed; the running one stops at its next safe point.",
+            "└ Stop a job from the list. A running job stops at its next safe point.",
             f"{theme.refreshIcon} **Refresh**",
-            "└ Update this list.",
+            "└ Check progress again.",
             f"{theme.cleanIcon} **Clear Queue**",
             "└ Remove every waiting and failed job at once.",
         ]
@@ -2230,13 +2234,13 @@ class RunningNowView(MenuView):
         if is_auto_scan and outcome in ('removed', 'stopping'):
             await asyncio.to_thread(gift_state_resolver.set_scan_enabled, False)
             self.last_result += (" Auto-scan is switched off too, so it doesn't start again. "
-                                 "Turn it back on under Member States -> State Scan.")
+                                 "Turn it back on under Alliances -> Member States -> State Scan.")
 
     async def clear_queue(self):
         pq = self._queue()
         removed = pq.clear_processes(("queued", "failed")) if pq else 0
         self.cog.logger.info(f"Bot Health: admin cleared {removed} queued/failed process(es)")
-        self.last_result = f"Cleared {removed} waiting or failed job(s)."
+        self.last_result = f"Cleared {removed} waiting or failed {'job' if removed == 1 else 'jobs'}."
 
     async def _on_back(self, interaction: discord.Interaction):
         view = HealthMenuView(self.cog)
@@ -2761,8 +2765,10 @@ class HealthSettingsModal(discord.ui.Modal, title="Health Settings"):
 
             set_menu_timeout_minutes(menu_minutes)
             set_confirm_timeout_seconds(confirm_seconds)
-            menu_text = (f"{menu_minutes} minutes" if menu_minutes
-                         else "Menus never time out (they stay in memory until a restart)")
+            menu_text = (f"{menu_minutes} {'minute' if menu_minutes == 1 else 'minutes'}" if menu_minutes
+                         else "Never (menus stay usable until the bot restarts)")
+            confirm_text = (f"{confirm_seconds} {'second' if confirm_seconds == 1 else 'seconds'}"
+                            if confirm_seconds else "Never")
 
             embed = discord.Embed(
                 title=f"{theme.verifiedIcon} Settings Updated",
@@ -2770,9 +2776,8 @@ class HealthSettingsModal(discord.ui.Modal, title="Health Settings"):
                     f"**Daily Cleanup:** {hour:02d}:{minute:02d} UTC\n"
                     f"**Monthly Deep Cleanup:** {'Day ' + str(monthly_day) if monthly_day else 'Disabled'}\n"
                     f"**Notifications:** {f'<@{notify_id}>' if notify_id else 'Disabled'}\n"
-                    f"**Menu Timeout:** {menu_text} (applies to menus opened from now on)\n"
-                    f"**Confirm Dialog Timeout:** "
-                    f"{f'{confirm_seconds} seconds' if confirm_seconds else 'Never'}"
+                    f"**Menu Timeout:** {menu_text}. Menus you open from now on use this.\n"
+                    f"**Confirm Dialog Timeout:** {confirm_text}"
                 ),
                 color=theme.emColor3
             )

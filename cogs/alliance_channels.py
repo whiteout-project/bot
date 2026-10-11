@@ -60,7 +60,7 @@ class ChannelSetupView(discord.ui.View):
         allowed = is_global or str(self.alliance_id) in {str(aid) for aid in alliance_ids}
         if not allowed:
             await interaction.response.send_message(
-                f"{theme.deniedIcon} You do not have permission to manage this alliance.",
+                f"{theme.deniedIcon} You don't have permission to manage this alliance.",
                 ephemeral=True,
             )
         return allowed

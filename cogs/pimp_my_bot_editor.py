@@ -758,7 +758,7 @@ class IconUrlModal(discord.ui.Modal):
         try:
             if not await self.cog._process_emoji_update(self.icon_name, new_value, self.session.theme_name):
                 await interaction.followup.send(
-                    f"{theme.deniedIcon} Failed to update icon. Check if the URL is accessible.",
+                    f"{theme.deniedIcon} Couldn't update the icon. Check that the image link opens in your browser.",
                     ephemeral=True
                 )
                 return

@@ -19,7 +19,7 @@ def test_describe_job_wording():
     assert d(_job(1, 'gift_validate', {'giftcode': 'ABC'}), NAMES) == "Checking gift code `ABC`"
     assert d(_job(2, 'gift_redeem', {'giftcode': 'ABC'}, 5), NAMES) == "Redeeming gift code `ABC` for Wolves"
     assert d(_job(3, 'gift_redeem_member', {'fid': 9, 'nickname': 'Ann', 'codes': ['A', 'B']}),
-             NAMES) == "Redeeming 2 missed code(s) for Ann"
+             NAMES) == "Redeeming 2 missed codes for Ann"
     assert d(_job(4, 'member_add', {'alliance_name': 'Wolves'}), NAMES) == "Adding members to Wolves"
     assert d(_job(5, 'state_resolve', {'mode': 'auto', 'total': 40, 'remaining': list(range(37))}),
              NAMES) == "State auto-scan (3/40 members)"

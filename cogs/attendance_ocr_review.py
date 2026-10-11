@@ -80,7 +80,9 @@ def _repeated_text(numbers: list[int]) -> Optional[str]:
     repeated = sorted({n for n in numbers if numbers.count(n) > 1})
     if not repeated:
         return None
-    return f"{CARD_NUMBER_WORD} #{', #'.join(map(str, repeated))} is on more than one card."
+    if len(repeated) == 1:
+        return f"{CARD_NUMBER_WORD} #{repeated[0]} is on more than one card."
+    return f"{CARD_NUMBER_WORD}s #{', #'.join(map(str, repeated))} are each on more than one card."
 
 
 def _format_int(n: Optional[int]) -> str:

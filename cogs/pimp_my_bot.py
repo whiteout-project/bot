@@ -3319,7 +3319,7 @@ class Theme(commands.Cog):
 
             if is_new_theme:
                 first = pages[0][0]
-                first.description = f"{theme.verifiedIcon} **Theme '{themename}' created successfully!**\n\n{first.description or ''}"
+                first.description = f"{theme.verifiedIcon} **Theme '{themename}' created.**\n\n{first.description or ''}"
             await interaction.followup.send(embeds=pages[0], view=view)
 
         except Exception as e:

@@ -54,5 +54,5 @@ def test_status_turns_warning_only_at_the_threshold():
 
 
 def test_message_names_the_busiest_log():
-    assert bot_health.error_count_message(0, {}) == "None in the last 24h"
-    assert bot_health.error_count_message(84, {"gift.txt": 80, "bot.txt": 4}) == "84 in the last 24h, mostly gift.txt"
+    assert bot_health.error_count_message(0, {}) == "0 in the last 24 hours"
+    assert bot_health.error_count_message(84, {"gift.txt": 80, "bot.txt": 4}) == "84 in the last 24 hours, mostly in gift.txt"

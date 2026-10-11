@@ -684,8 +684,7 @@ class OCRChannelEditView(discord.ui.View):
         lines.append("")
         lines.append(f"{theme.editListIcon} **Editors:** "
                      f"{editor_mode_label(get_ocr_review_editors(self.alliance_id))}")
-        lines.append("└ Who can fix a review before it's submitted: the uploader, also admins, "
-                     "or anyone. Per-alliance, like Uploaders")
+        lines.append("└ Who can fix a review before it's submitted, for every channel of this alliance")
         lines.append("")
         lines.append(f"{theme.trashIcon} **Remove Channel**")
         lines.append("└ Stop processing screenshots here and remove the info message")

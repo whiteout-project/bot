@@ -109,7 +109,7 @@ async def _deny_alliance_access(interaction: discord.Interaction, alliance_id: i
         return False
     send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
     await send(
-        f"{theme.deniedIcon} You do not have permission to manage this alliance.",
+        f"{theme.deniedIcon} You don't have permission to manage this alliance.",
         ephemeral=True,
     )
     return True
@@ -283,14 +283,16 @@ class MainMenu(commands.Cog):
                 f"{theme.upperDivider}\n"
                 f"{theme.addIcon} **Add Alliance**\n"
                 f"└ Register a new alliance\n\n"
+                f"{theme.userIcon} **Self-Registration**\n"
+                f"└ Manage the global Self-Registration system\n\n"
                 f"{theme.transferIcon} **Transfer Members**\n"
                 f"└ Move members between alliances\n\n"
                 f"{theme.exportIcon} **Export Members**\n"
                 f"└ Export one alliance or all of them to CSV/TSV\n\n"
                 f"{theme.globeIcon} **Member States**\n"
                 f"└ Fix missing or wrong states so gift codes can redeem\n\n"
-                f"{theme.editListIcon} **Self-Registration**\n"
-                f"└ Manage the global Self-Registration system\n"
+                f"{theme.retryIcon} **Player Sync**\n"
+                f"└ Keep member names, levels, states and power up to date automatically\n"
                 f"{theme.lowerDivider}"
             )
             if not alliances_with_counts:
@@ -729,6 +731,7 @@ class AllianceManagementEntryView(discord.ui.View):
             "alliance_entry_export": is_server_or_above,
             "alliance_entry_registration": is_global_or_above,
             "alliance_entry_member_states": is_global_or_above,
+            "alliance_entry_player_sync": is_global_or_above,
         }
         for child in self.children:
             if isinstance(child, discord.ui.Button):
@@ -840,7 +843,7 @@ class AllianceManagementEntryView(discord.ui.View):
         emoji=theme.exportIcon,
         style=discord.ButtonStyle.primary,
         custom_id="alliance_entry_export",
-        row=3,
+        row=2,
     )
     async def export_members(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _route_to_cog(
@@ -861,6 +864,20 @@ class AllianceManagementEntryView(discord.ui.View):
             interaction, self.cog.bot, "GiftOperations",
             "show_state_management",
             missing_label="Gift Codes",
+        )
+
+    @discord.ui.button(
+        label="Player Sync",
+        emoji=theme.retryIcon,
+        style=discord.ButtonStyle.primary,
+        custom_id="alliance_entry_player_sync",
+        row=3,
+    )
+    async def player_sync(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(
+            interaction, self.cog.bot, "AllianceApiSync",
+            "show_player_sync",
+            missing_label="Player Sync",
         )
 
     @discord.ui.button(

@@ -1325,6 +1325,8 @@ if __name__ == "__main__":
                 ("state_mismatch_at",       "TEXT"),
                 ("kingdom_scan_next",       "INTEGER"),
                 ("kingdom_scan_done_at",    "TEXT"),
+                ("avatar_url",              "TEXT"),
+                ("api_synced_at",           "TEXT"),
             ]
             for _col, _typ in _users_columns_to_add:
                 try:
@@ -1500,7 +1502,7 @@ if __name__ == "__main__":
     startup.phase_ok("Database ready")
 
     async def load_cogs():
-        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance", "alliance_member_operations", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "attendance_ocr", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
+        cogs = ["pimp_my_bot", "process_queue", "onnx_lifecycle", "bot_main_menu", "alliance", "alliance_member_operations", "alliance_api_sync", "bot_operations", "alliance_logs", "bot_support", "bot_health", "gift_operations", "alliance_history", "alliance_w_command", "bot_startup", "notification_system", "notification_schedule", "alliance_id_channel", "alliance_channels", "bot_backup", "notification_editor", "notification_templates", "notification_wizard", "attendance", "attendance_report", "attendance_ocr", "minister_schedule", "minister_menu", "minister_archive", "alliance_registration", "bear_track"]
 
         failed_cogs = []
 
