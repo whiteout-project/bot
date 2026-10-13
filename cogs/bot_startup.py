@@ -441,7 +441,7 @@ class BotStartup(commands.Cog):
                                 alliance_cur.execute("SELECT channel_id FROM alliancesettings WHERE alliance_id = ?", (alliance_id,))
                                 settings = alliance_cur.fetchone()
                                 if settings and settings[0]:
-                                    info_parts.append(f"{theme.announceIcon} Channel: <#{settings[0]}>")
+                                    info_parts.append(f"{theme.retryIcon} Sync Log: <#{settings[0]}>")
 
                                 gift_cur.execute("SELECT status FROM giftcodecontrol WHERE alliance_id = ?", (alliance_id,))
                                 gift_status = gift_cur.fetchone()

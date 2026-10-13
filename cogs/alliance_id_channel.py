@@ -14,9 +14,11 @@ from discord.ext import tasks
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message, menu_timeout
 from .bot_level_mapping import LEVEL_MAPPING, format_furnace_level, parse_state
-from .alliance_member_edit import new_member_name, parse_edit_line
+from . import alliance_api_sync
+from .alliance_api_sync import LookupBatch, look_up_new_member, store_new_member
+from .alliance_member_edit import api_state_refusal, parse_edit_line
 from .alliance import check_alliance_state
-from .gift_state_resolver import verify_add_state, is_multistate
+from .gift_state_resolver import is_multistate
 
 logger = logging.getLogger('alliance')
 
@@ -44,6 +46,8 @@ def parse_id_post(content):
     return int(parts[0]), None, None, state
 
 
+HANDLED_MEMORY = 1000
+
 # Changing this orphans info messages already pinned by older versions.
 INFO_MSG_HEADING = "Post your in-game ID here"
 
@@ -55,9 +59,17 @@ def id_format_examples(multistate):
     return "`12345678`", "`12345678, Name, FC 10`"
 
 
+def asks_for_state(alliance_id, api_on=None):
+    """True when members must post their state: a multistate alliance without Player Sync to look it up."""
+    if api_on is None:
+        api_on = alliance_api_sync.api_available()
+    return is_multistate(alliance_id) and not api_on
+
+
 def render_info_message(alliance_id, alliance_name):
     """The standing message posted in an alliance's ID channel."""
-    multistate = is_multistate(alliance_id)
+    api_on = alliance_api_sync.api_available()
+    multistate = asks_for_state(alliance_id, api_on)
     plain, detailed = id_format_examples(multistate)
     lines = [
         f"{theme.fidIcon} **{INFO_MSG_HEADING}**",
@@ -71,7 +83,10 @@ def render_info_message(alliance_id, alliance_name):
         )
     else:
         lines.append(f"{theme.fidIcon} Just your ID on its own: {plain}")
-    lines.append(f"{theme.userIcon} To fill in your name and level too: {detailed}")
+    if api_on:
+        lines.append(f"{theme.userIcon} Your name and level are filled in for you. To set them yourself: {detailed}")
+    else:
+        lines.append(f"{theme.userIcon} To fill in your name and level too: {detailed}")
     return "\n".join(lines)
 
 
@@ -106,14 +121,6 @@ def channel_row_for_alliance(guild_id, alliance_id):
             "WHERE guild_id = ? AND alliance_id = ?", (guild_id, alliance_id)).fetchone()
 
 
-def channel_rows_for_guild(guild_id):
-    """[(channel_id, alliance_id, info_message_id), ...] for every ID channel in a guild."""
-    with closing(sqlite3.connect('db/id_channel.sqlite', timeout=30.0)) as conn, conn:
-        return conn.execute(
-            "SELECT channel_id, alliance_id, info_message_id FROM id_channels "
-            "WHERE guild_id = ?", (guild_id,)).fetchall()
-
-
 def all_channel_rows():
     """[(channel_id, alliance_id, info_message_id), ...] across every guild."""
     with closing(sqlite3.connect('db/id_channel.sqlite', timeout=30.0)) as conn, conn:
@@ -139,12 +146,16 @@ class AllianceIDChannel(commands.Cog):
             os.makedirs(self.log_directory)
 
         self.invalid_format_warnings = {}  # {channel_id: last_warning_timestamp}
+        self._seen = set()
+        self._backlog_task = None
 
         self.level_mapping = LEVEL_MAPPING
 
     def cog_unload(self):
         if self.check_channels_loop.is_running():
             self.check_channels_loop.cancel()
+        if self._backlog_task and not self._backlog_task.done():
+            self._backlog_task.cancel()
 
     def setup_database(self):
         if not os.path.exists('db'):
@@ -209,6 +220,16 @@ class AllianceIDChannel(commands.Cog):
             cursor = db.cursor()
             cursor.execute("INSERT OR IGNORE INTO id_channel_settings (guild_id) VALUES (?)", (guild_id,))
             db.commit()
+
+    async def _show_processing(self, message, on):
+        """Best-effort hourglass on a post while its player is looked up."""
+        try:
+            if on:
+                await message.add_reaction(theme.hourglassIcon)
+            else:
+                await message.remove_reaction(theme.hourglassIcon, self.bot.user)
+        except discord.HTTPException:
+            pass
 
     async def _safe_react_reply(self, message, emoji=None, content=None, *, delete_after=None, embed=None):
         """Best-effort reaction/reply that won't raise if the bot lacks channel perms."""
@@ -350,7 +371,7 @@ class AllianceIDChannel(commands.Cog):
 
         self.invalid_format_warnings[channel_id] = now
         multistate = (alliance_id is not None
-                      and await asyncio.to_thread(is_multistate, alliance_id))
+                      and await asyncio.to_thread(asks_for_state, alliance_id))
         plain, detailed = id_format_examples(multistate)
         if multistate:
             hint = f"Please post your ID and state like {plain}, or {detailed} to include details."
@@ -415,33 +436,13 @@ class AllianceIDChannel(commands.Cog):
                 cursor.execute("SELECT channel_id, alliance_id, guild_id FROM id_channels")
                 channels = cursor.fetchall()
 
-            invalid_channels = []
+            invalid_channels, live_channels = [], []
             for channel_id, alliance_id, guild_id in channels:
                 channel = self.bot.get_channel(channel_id)
-                if not channel:
-                    if await self._channel_confirmed_deleted(guild_id, channel_id):
-                        invalid_channels.append(channel_id)
-                    continue
-
-                settings = self.get_guild_settings(guild_id)
-                if not settings['scan_enabled']:
-                    continue
-
-                async for message in channel.history(limit=settings['scan_limit'], after=datetime.now(timezone.utc) - timedelta(days=1)):
-                    if message.author.bot:
-                        continue
-
-                    already_processed = any(reaction.me for reaction in message.reactions)
-                    if already_processed:
-                        continue
-
-                    parsed = parse_id_post(message.content)
-                    if parsed is None:
-                        continue
-
-                    fid, given_name, given_level, given_state = parsed
-                    await self.process_fid(message, fid, alliance_id, given_state,
-                                           given_name=given_name, given_level=given_level)
+                if channel:
+                    live_channels.append((channel, alliance_id, guild_id))
+                elif await self._channel_confirmed_deleted(guild_id, channel_id):
+                    invalid_channels.append(channel_id)
 
             await self.reconcile_info_messages()
 
@@ -457,10 +458,40 @@ class AllianceIDChannel(commands.Cog):
 
             if not self.check_channels_loop.is_running():
                 self.check_channels_loop.start()
+            if self._backlog_task is None or self._backlog_task.done():
+                self._backlog_task = asyncio.create_task(self.process_backlog(live_channels))
 
         except Exception as e:
             logger.error(f"Error in on_ready: {e}")
             print(f"Error in on_ready: {e}")
+
+    async def process_backlog(self, channels):
+        """Handles the last day's unhandled ID posts; stops asking Player Sync after its first failure."""
+        batch = LookupBatch("ID channel: Player Sync lookup failed, so the rest of the startup "
+                            "backlog uses the usual state check")
+        try:
+            await self._scan_history(channels, datetime.now(timezone.utc) - timedelta(days=1),
+                                     warn_invalid=False, batch=batch)
+        except Exception as e:
+            logger.error(f"ID channel: startup backlog failed: {e}")
+
+    async def _scan_history(self, channels, after, warn_invalid, batch=None):
+        """Handles the unreacted ID posts since `after` in each (channel, alliance_id, guild_id)."""
+        for channel, alliance_id, guild_id in channels:
+            settings = self.get_guild_settings(guild_id)
+            if not settings['scan_enabled']:
+                continue
+            async for message in channel.history(limit=settings['scan_limit'], after=after):
+                if message.author.bot or any(reaction.me for reaction in message.reactions):
+                    continue
+                parsed = parse_id_post(message.content)
+                if parsed is None:
+                    if warn_invalid:
+                        await self.warn_invalid_format(message, alliance_id)
+                    continue
+                fid, given_name, given_level, given_state = parsed
+                await self.process_fid(message, fid, alliance_id, given_state, given_name=given_name,
+                                       given_level=given_level, batch=batch)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -491,7 +522,16 @@ class AllianceIDChannel(commands.Cog):
             print(f"Error in on_message: {e}")
 
     async def process_fid(self, message, fid, alliance_id, given_state=None,
-                          given_name=None, given_level=None):
+                          given_name=None, given_level=None, batch=None):
+        """Handles each ID post once, though on_message, the backlog and the loop can all see it."""
+        if message.id in self._seen:
+            return
+        if len(self._seen) >= HANDLED_MEMORY:
+            self._seen.clear()
+        self._seen.add(message.id)
+        await self._process_fid(message, fid, alliance_id, given_state, given_name, given_level, batch)
+
+    async def _process_fid(self, message, fid, alliance_id, given_state, given_name, given_level, batch):
         settings = self.get_guild_settings(message.guild.id)
         delete_after = settings['delete_after']
 
@@ -532,35 +572,34 @@ class AllianceIDChannel(commands.Cog):
                         f"{existing_alliance[0]}; allowing registration into alliance {alliance_id}"
                     )
 
-            # Multistate alliance with no state given: once added they can't repost to fix
-            # it, so ask up front - post `<id> <state>` together in one message.
-            if given_state is None and is_multistate(alliance_id):
-                await message.add_reaction(theme.warnIcon)
-                await message.reply(
-                    f"{theme.infoIcon} This alliance has members in multiple states. "
-                    f"Post your ID **and** state together, e.g. `{fid} 245`.",
-                    delete_after=delete_after)
-                return
+            await self._show_processing(message, True)
+            try:
+                multistate = await asyncio.to_thread(is_multistate, alliance_id)
+                # No state from the API or the post: one probe confirms the alliance's home state.
+                member = await look_up_new_member(self.bot, fid, alliance_id, given_name, given_level,
+                                                   probe=given_state is None and not multistate, batch=batch)
+                kid = member.kid if member.kid is not None else given_state
 
-            # An explicit state (the poster knows theirs) is honored; otherwise confirm
-            # against the alliance's home state with one probe.
-            if given_state is not None:
-                kid, verified = given_state, False   # self-reported, not probed
-            else:
-                gift_cog = self.bot.get_cog("GiftOperations")
-                if gift_cog is not None:
-                    kid, verified = await verify_add_state(gift_cog, fid, alliance_id)
-                else:
-                    kid, verified = None, False
+                # Multistate alliance with no state known: once added they can't repost to fix
+                # it, so ask up front - post `<id> <state>` together in one message.
+                if kid is None and multistate:
+                    await message.add_reaction(theme.warnIcon)
+                    await message.reply(
+                        f"{theme.infoIcon} This alliance has members in multiple states. "
+                        f"Post your ID **and** state together, e.g. `{fid} 245`.",
+                        delete_after=delete_after)
+                    return
+            finally:
+                await self._show_processing(message, False)
 
-            state_error = check_alliance_state(alliance_id, kid)
+            state_error = api_state_refusal(check_alliance_state(alliance_id, kid), member.kid, given_state)
             if state_error:
                 await message.add_reaction(theme.deniedIcon)
                 await message.reply(f"{theme.deniedIcon} {state_error}", delete_after=delete_after)
                 return
 
-            nickname = new_member_name(given_name, fid)
-            furnace_lv = given_level or 0
+            nickname = member.nickname
+            furnace_lv = member.furnace_lv
             try:
                 with closing(sqlite3.connect('db/users.sqlite')) as users_db, users_db:
                     cursor = users_db.cursor()
@@ -579,6 +618,7 @@ class AllianceIDChannel(commands.Cog):
                 await message.add_reaction(theme.warnIcon)
                 await message.reply(f"This ID ({fid}) was added by another process!", delete_after=delete_after)
                 return
+            await store_new_member(member, fid)
 
             await message.add_reaction(theme.verifiedIcon)
             success_embed = discord.Embed(
@@ -619,33 +659,9 @@ class AllianceIDChannel(commands.Cog):
                 cursor.execute("SELECT channel_id, alliance_id, guild_id FROM id_channels")
                 channels = cursor.fetchall()
 
-            five_minutes_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-
-            for channel_id, alliance_id, guild_id in channels:
-                channel = self.bot.get_channel(channel_id)
-                if not channel:
-                    continue
-
-                settings = self.get_guild_settings(guild_id)
-                if not settings['scan_enabled']:
-                    continue
-
-                async for message in channel.history(limit=settings['scan_limit'], after=five_minutes_ago):
-                    if message.author.bot:
-                        continue
-
-                    already_processed = any(reaction.me for reaction in message.reactions)
-                    if already_processed:
-                        continue
-
-                    parsed = parse_id_post(message.content)
-                    if parsed is None:
-                        await self.warn_invalid_format(message, alliance_id)
-                        continue
-
-                    fid, given_name, given_level, given_state = parsed
-                    await self.process_fid(message, fid, alliance_id, given_state,
-                                           given_name=given_name, given_level=given_level)
+            live = [(channel, alliance_id, guild_id) for channel_id, alliance_id, guild_id in channels
+                    if (channel := self.bot.get_channel(channel_id))]
+            await self._scan_history(live, datetime.now(timezone.utc) - timedelta(minutes=5), warn_invalid=True)
 
         except Exception as e:
             if '503' in str(e) or '502' in str(e) or 'connect error' in str(e).lower():
@@ -697,7 +713,7 @@ class AllianceIDChannel(commands.Cog):
                 state_line = f"{theme.deniedIcon} No ID channel configured for this alliance."
 
             post_info, pin_info = await asyncio.to_thread(info_settings, alliance_id)
-            multistate = await asyncio.to_thread(is_multistate, alliance_id)
+            multistate = await asyncio.to_thread(asks_for_state, alliance_id)
             plain, detailed = id_format_examples(multistate)
             if multistate:
                 format_lines = (

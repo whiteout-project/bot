@@ -17,7 +17,6 @@ from cogs.notification_event_types import (
     calculate_crazy_joe_dates,
     calculate_next_occurrence,
     get_event_config,
-    round_to_5min_slot,
     validate_time_slot,
 )
 from cogs.minister_schedule import MinisterSchedule
@@ -163,14 +162,6 @@ def test_validate_time_slot_5min(value, ok):
 def test_validate_time_slot_any_allows_non_5min():
     assert validate_time_slot("14:03", "any") is True
     assert validate_time_slot("24:00", "any") is False  # range still enforced
-
-
-# --- round_to_5min_slot ---
-
-@pytest.mark.parametrize("minute, expected", [(0, 0), (4, 0), (5, 5), (7, 5), (12, 10), (59, 55)])
-def test_round_to_5min_slot(minute, expected):
-    out = round_to_5min_slot(datetime(2026, 1, 1, 10, minute, 33, 123))
-    assert out.minute == expected and out.second == 0 and out.microsecond == 0
 
 
 # --- minister time slots ---

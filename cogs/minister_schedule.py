@@ -9,6 +9,7 @@ import sqlite3
 import logging
 from datetime import datetime
 from .pimp_my_bot import theme, menu_timeout
+from .alliance_member_edit import log_avatar_url
 from .permission_handler import PermissionManager
 
 logger = logging.getLogger('bot')
@@ -790,8 +791,7 @@ class MinisterSchedule(commands.Cog):
                 alliance_name=alliance_name
             )
 
-            # Try to get the avatar image
-            avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+            avatar_image = await log_avatar_url(fid)
 
             # Send embed confirmation to log channel
             embed = discord.Embed(
@@ -930,8 +930,7 @@ class MinisterSchedule(commands.Cog):
                 alliance_name=alliance_name
             )
 
-            # Try to get the avatar image
-            avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+            avatar_image = await log_avatar_url(fid)
 
             # Send embed confirmation to log channel
             embed = discord.Embed(

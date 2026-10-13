@@ -24,17 +24,17 @@ def dbs(tmp_path, monkeypatch):
 
 def test_update_records_change_when_value_differs(dbs):
     parsers.update_users_power(1, 150, "2026-06-27T10:00:00")
-    d = pc.latest_delta(1, "power")
+    d = pc.latest_deltas([1], "power").get(1)
     assert d["old"] == 100 and d["new"] == 150
 
 
 def test_first_ever_power_sets_baseline_no_change_row(dbs):
     parsers.update_users_power(2, 500, "2026-06-27T10:00:00")
-    assert pc.latest_delta(2, "power") is None
+    assert pc.latest_deltas([2], "power").get(2) is None
     with sqlite3.connect(dbs[0]) as conn:
         assert conn.execute("SELECT power FROM users WHERE fid=2").fetchone()[0] == 500
 
 
 def test_reupload_same_value_no_change_row(dbs):
     parsers.update_users_power(1, 100, "2026-06-27T10:00:00")
-    assert pc.latest_delta(1, "power") is None
+    assert pc.latest_deltas([1], "power").get(1) is None

@@ -295,19 +295,6 @@ def validate_time_slot(time_str: str, slot_type: str = "5min") -> bool:
     except (ValueError, AttributeError):
         return False
 
-def round_to_5min_slot(dt: datetime) -> datetime:
-    """
-    Round a datetime to the nearest 5-minute slot
-
-    Args:
-        dt: Datetime object to round
-
-    Returns:
-        Rounded datetime object
-    """
-    minute = (dt.minute // 5) * 5
-    return dt.replace(minute=minute, second=0, microsecond=0)
-
 def cycle_repeat_minutes(event_type: str) -> Optional[int]:
     """Minutes between occurrences of a fixed-cycle event, or None if it has no cycle."""
     cycle_weeks = (get_event_config(event_type) or {}).get("cycle_weeks")
@@ -521,68 +508,3 @@ def get_timezone(tz_name: str):
         sign = 1 if tz_name[3] == "+" else -1
         return pytz.FixedOffset(sign * (int(hours_str) * 60 + int(minutes_str)))
     return pytz.timezone(tz_name)
-
-def get_available_time_slots(event_type: str) -> Optional[List[str]]:
-    """
-    Get list of available time slots for an event type
-
-    Args:
-        event_type: Name of the event type
-
-    Returns:
-        List of time strings (HH:MM format) or None if times are custom
-    """
-    config = get_event_config(event_type)
-    if not config:
-        return None
-
-    return config.get("available_times")
-
-def get_fixed_time(event_type: str) -> Optional[str]:
-    """
-    Get fixed time for events that don't have selectable times
-
-    Args:
-        event_type: Name of the event type
-
-    Returns:
-        Time string (HH:MM format) or None if not applicable
-    """
-    config = get_event_config(event_type)
-    if not config:
-        return None
-
-    return config.get("fixed_time")
-
-def format_event_schedule_description(event_type: str) -> str:
-    """
-    Generate a human-readable description of when an event occurs
-
-    Args:
-        event_type: Name of the event type
-
-    Returns:
-        Formatted description string
-    """
-    config = get_event_config(event_type)
-    if not config:
-        return "Unknown event schedule"
-
-    schedule_type = config.get("schedule_type")
-
-    if schedule_type == "custom":
-        return "Custom schedule set by your alliance"
-    elif schedule_type == "daily":
-        return "Daily at 00:00 UTC"
-    elif schedule_type == "global_weekly":
-        return f"Every {config.get('fixed_days', 'week')}"
-    elif schedule_type == "global_biweekly":
-        if event_type == "Crazy Joe":
-            return "Every 4 weeks on Tuesday and Thursday"
-        return f"Every 2 weeks on {config.get('fixed_days', 'schedule')}"
-    elif schedule_type in ["global_monthly", "global_4weekly", "global_4weekly_alt"]:
-        return config.get("fixed_days", "Monthly event")
-    elif schedule_type == "global_3weekly_multiday":
-        return config.get("fixed_days", "Every 3 weeks")
-
-    return "Event schedule varies"

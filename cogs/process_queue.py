@@ -343,19 +343,6 @@ class ProcessQueue(commands.Cog):
         ahead = self.cursor.fetchone()[0] or 0
         return ahead + 1
 
-    def has_queued_or_active(self, action: str, alliance_id: Optional[int] = None) -> bool:
-        if alliance_id is None:
-            self.cursor.execute(
-                "SELECT 1 FROM process_queue WHERE status IN ('queued','active') AND action = ? LIMIT 1",
-                (action,),
-            )
-        else:
-            self.cursor.execute(
-                "SELECT 1 FROM process_queue WHERE status IN ('queued','active') AND action = ? AND alliance_id = ? LIMIT 1",
-                (action, alliance_id),
-            )
-        return self.cursor.fetchone() is not None
-
     # ── Runtime context (non-serializable references) ────────────────
 
     def attach_runtime_context(self, process_id: int, context: Dict):

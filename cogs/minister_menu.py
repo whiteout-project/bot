@@ -1,6 +1,7 @@
 """
 Minister scheduling menu. UI for managing state minister appointments and rotations.
 """
+import asyncio
 import discord
 from discord.ext import commands
 import sqlite3
@@ -8,9 +9,21 @@ import logging
 from contextlib import closing
 from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout, check_interaction_user
-from .alliance_member_edit import apply_member_edit
+from .alliance_api_sync import syncs_names
+from .alliance_member_edit import apply_member_edit, log_avatar_url
 
 logger = logging.getLogger('bot')
+
+
+async def update_names_guide() -> str:
+    try:
+        auto = await asyncio.to_thread(syncs_names)
+    except Exception as e:
+        logger.warning(f"Minister menu: could not read the Player Sync settings: {e}")
+        auto = False
+    if auto:
+        return "Set booked ministers' names by hand. Player Sync fills them in on each sync"
+    return "Manually set booked ministers' names"
 
 
 class UserFilterModal(discord.ui.Modal, title="Filter Users"):
@@ -75,6 +88,7 @@ class UpdateNamesModal(discord.ui.Modal):
             result_msg += f" ({skipped} line(s) skipped)"
 
         _, is_global, _ = await self.cog.get_admin_permissions(interaction.user.id)
+        names_guide = await update_names_guide()
         embed = discord.Embed(
             title=f"{theme.settingsIcon} Minister Settings",
             description=(
@@ -83,7 +97,7 @@ class UpdateNamesModal(discord.ui.Modal):
                 f"Available Actions\n"
                 f"{theme.upperDivider}\n\n"
                 f"{theme.editListIcon} **Update Names**\n"
-                f"└ Manually set booked ministers' names\n\n"
+                f"└ {names_guide}\n\n"
                 f"{theme.listIcon} **Schedule List Type**\n"
                 f"└ Change the type of schedule list message when adding/removing people\n\n"
                 f"{theme.calendarIcon} **Delete All Reservations**\n"
@@ -359,6 +373,7 @@ class ClearConfirmationView(discord.ui.View):
             await self.cog.update_channel_message(self.activity_name)
         
         # Return to settings menu with success message
+        names_guide = await update_names_guide()
         embed = discord.Embed(
             title=f"{theme.settingsIcon} Minister Settings",
             description=(
@@ -367,7 +382,7 @@ class ClearConfirmationView(discord.ui.View):
                 f"Available Actions\n"
                 f"{theme.upperDivider}\n\n"
                 f"{theme.editListIcon} **Update Names**\n"
-                f"└ Manually set booked ministers' names\n\n"
+                f"└ {names_guide}\n\n"
                 f"{theme.listIcon} **Schedule List Type**\n"
                 f"└ Change the type of schedule list message when adding/removing people\n\n"
                 f"{theme.calendarIcon} **Delete All Reservations**\n"
@@ -929,7 +944,6 @@ class MinisterMenu(commands.Cog):
 
         status_lines = []
         configured_count = 0
-        invalid_count = 0
 
         for context, label in channels_config:
             channel_id = await minister_schedule_cog.get_channel_id(context)
@@ -947,7 +961,6 @@ class MinisterMenu(commands.Cog):
                     configured_count += 1
                 else:
                     status_lines.append(f"{label}: {theme.deniedIcon} Invalid Channel")
-                    invalid_count += 1
 
         # Determine embed color based on status
         total_channels = len(channels_config)
@@ -1245,8 +1258,7 @@ class MinisterMenu(commands.Cog):
             )
             self.svs_conn.commit()
 
-            # Get avatar
-            avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+            avatar_image = await log_avatar_url(fid)
 
             # Send log embed and log change
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
@@ -1375,8 +1387,7 @@ class MinisterMenu(commands.Cog):
                                   (fid, activity_name, current_time))
             self.svs_conn.commit()
             
-            # Get avatar for log
-            avatar_image = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+            avatar_image = await log_avatar_url(fid)
             
             # Send log embed and log change
             minister_schedule_cog = self.bot.get_cog("MinisterSchedule")
@@ -1468,6 +1479,7 @@ class MinisterMenu(commands.Cog):
                     success_message = "Successfully cleared the following configurations:\n" + "\n".join([f"• {ch}" for ch in cleared_channels])
                     
                     # Return to settings menu with success message
+                    names_guide = await update_names_guide()
                     embed = discord.Embed(
                         title="⚙️ Minister Settings",
                         description=(
@@ -1476,7 +1488,7 @@ class MinisterMenu(commands.Cog):
                             f"Available Actions\n"
                             f"{theme.upperDivider}\n\n"
                             f"{theme.editListIcon} **Update Names**\n"
-                            f"└ Manually set booked ministers' names\n\n"
+                            f"└ {names_guide}\n\n"
                             f"{theme.listIcon} **Schedule List Type**\n"
                             f"└ Change the type of schedule list message when adding/removing people\n\n"
                             f"{theme.calendarIcon} **Delete All Reservations**\n"
@@ -1545,6 +1557,7 @@ class MinisterMenu(commands.Cog):
     async def show_settings_menu(self, interaction: discord.Interaction):
         """Show the minister settings menu"""
         _, is_global, _ = await self.get_admin_permissions(interaction.user.id, interaction.guild.id if interaction.guild else None)
+        names_guide = await update_names_guide()
         embed = discord.Embed(
             title=f"{theme.settingsIcon} Minister Settings",
             description=(
@@ -1552,7 +1565,7 @@ class MinisterMenu(commands.Cog):
                 f"Available Actions\n"
                 f"{theme.upperDivider}\n\n"
                 f"{theme.editListIcon} **Update Names**\n"
-                f"└ Manually set booked ministers' names\n\n"
+                f"└ {names_guide}\n\n"
                 f"{theme.listIcon} **Schedule List Type**\n"
                 f"└ Change the type of schedule list message when adding/removing people\n\n"
                 f"{theme.timeIcon} **Time Slot Mode**\n"

@@ -6,8 +6,6 @@ from discord.ext import commands
 import sqlite3
 import logging
 import re
-from .alliance_member_operations import AllianceSelectView
-from .permission_handler import PermissionManager
 from .pimp_my_bot import theme, menu_timeout
 from .bot_level_mapping import LEVEL_MAPPING
 from . import alliance_power_changes

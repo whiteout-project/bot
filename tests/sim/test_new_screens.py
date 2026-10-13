@@ -211,7 +211,7 @@ SYNC_SETUP_BUTTONS = {"Auto Sync: Off", "Sync Now", "Sync Alliance", "Test"}
 
 @pytest_asyncio.fixture
 async def fake_api():
-    """A local player API: needs the test key, answers 404 for player IDs ending in 0."""
+    """A local player API: needs the test key, answers 404 for player IDs ending in 0 and puts IDs ending in 3 in State 456."""
     from aiohttp import web
     from aiohttp.test_utils import TestServer
 
@@ -222,7 +222,7 @@ async def fake_api():
         if fid.endswith("0"):
             return web.json_response({"ok": False}, status=404)
         return web.json_response({"player": {"nick_name": f"Synced{fid[-3:]}", "furnace_level": 30,
-                                             "power": 12345678}})
+                                             "power": 12345678, "kid": 456 if fid.endswith("3") else 1}})
 
     app = web.Application()
     app.router.add_get("/v1/players/{fid}", player)
@@ -248,23 +248,31 @@ async def _saved(sim, hub, button, values):
     return sim.current(hub)
 
 
-async def _set_field(sim, hub, field, path):
+async def _open_fields(sim, hub):
     fields = await sim.click(sim.current(hub), "Fields")
     assert not fields.problems()
-    shown = await sim.select(fields.screen[0], "Choose a field to edit", field)
+    return fields.screen[0]
+
+
+async def _set_field(sim, field_paths, field, path):
+    shown = await sim.select(sim.current(field_paths), "Choose a field to edit", field)
     assert list(modal_fields(shown)) == [f"{field} path (leave empty to skip)"]
     saved = await sim.submit_modal(shown, {f"{field} path (leave empty to skip)": path})
     assert not saved.problems(), saved.problems()
-    return sim.current(hub)
+    return sim.current(field_paths)
 
 
 async def _set_up(sim, hub, base_url, key=API_KEY):
     await _saved(sim, hub, "Connection", {"Base URL": base_url,
-                                          "Player path ({fid} = player ID)": "/v1/players/{fid}"})
+                                          "Player path ({id} = player ID)": "/v1/players/{id}"})
     await _saved(sim, hub, "API Key", {"Header name": "Authorization",
                                        "Key (include Bearer if the API needs it)": key})
-    await _set_field(sim, hub, "Name", "player.nick_name")
-    return await _set_field(sim, hub, "Furnace level", "player.furnace_level")
+    field_paths = await _open_fields(sim, hub)
+    await _set_field(sim, field_paths, "Name", "player.nick_name")
+    field_paths = await _set_field(sim, field_paths, "Furnace level", "player.furnace_level")
+    back = await sim.click(field_paths, "Back")
+    assert not back.problems()
+    return sim.current(hub)
 
 
 def _hold_sync_jobs(sim):
@@ -285,11 +293,11 @@ async def test_player_sync_opens_from_alliances_not_set_up(sim):
 
 async def test_player_sync_connection_saves_in_place(sim):
     hub = await _player_sync(sim)
-    assert "base URL" in _description(hub)
+    assert "Still needs the base URL" in _description(hub)
     hub = await _saved(sim, hub, "Connection", {"Base URL": "https://api.example.com",
-                                                "Player path ({fid} = player ID)": "/v1/players/{fid}"})
+                                                "Player path ({id} = player ID)": "/v1/players/{id}"})
     assert "Connection saved." in _description(hub)
-    assert "base URL" not in _description(hub)
+    assert "Still needs the base URL" not in _description(hub)
 
 
 async def test_player_sync_connection_refuses_a_bad_url(sim):
@@ -315,9 +323,23 @@ async def test_player_sync_fields_set_one_path(sim):
     assert not fields.problems() and title(fields.screen[0]).endswith("Field Paths")
     back = await sim.click(fields.screen[0], "Back")
     assert not back.problems() and title(back.screen[0]).endswith("Player Sync")
-    hub = await _set_field(sim, hub, "Name", "player.nick_name")
-    assert title(hub).endswith("Player Sync")
-    assert "Name path saved." in _description(hub)
+    field_paths = await _set_field(sim, await _open_fields(sim, hub), "Name", "player.nick_name")
+    assert title(field_paths).endswith("Field Paths")
+    assert "Name path saved." in _description(field_paths)
+
+
+async def test_player_sync_fields_stay_on_field_paths(sim):
+    field_paths = await _open_fields(sim, await _player_sync(sim))
+    field_paths = await _set_field(sim, field_paths, "Name", "player.nick_name")
+    assert title(field_paths).endswith("Field Paths")
+    assert "Name path saved." in _description(field_paths)
+    assert "`player.nick_name`" in _description(field_paths)
+    field_paths = await _set_field(sim, field_paths, "Power", "")
+    assert title(field_paths).endswith("Field Paths")
+    assert "Power will be skipped." in _description(field_paths)
+    assert "Name path saved." not in _description(field_paths)
+    back = await sim.click(field_paths, "Back")
+    assert not back.problems() and title(back.screen[0]).endswith("Player Sync")
 
 
 async def test_player_sync_limits_and_interval(sim):
@@ -330,7 +352,7 @@ async def test_player_sync_limits_and_interval(sim):
     refused = await _submit(sim, hub, "Interval", {"Hours between syncs (at least 1)": "0"})
     message, ephemeral = refused.screen
     assert ephemeral and "Enter a whole number of hours" in message.content
-    assert sync.get_interval_hours() == 12
+    assert sync.load_setting("interval") == 12
 
 
 async def test_player_sync_import_and_export(sim):
@@ -368,7 +390,7 @@ async def test_player_sync_test_reads_each_field(sim, fake_api):
 
 
 async def test_player_sync_test_shows_key_rejected(sim, fake_api):
-    from cogs.alliance_api_menu import KEY_REJECTED
+    from cogs.alliance_api_sync import KEY_REJECTED
     from cogs.pimp_my_bot import theme
     hub = await _set_up(sim, await _player_sync(sim), fake_api, key="Bearer wrong-key")
     tested = await _submit(sim, hub, "Test", {"Player ID": "10001"})
@@ -436,3 +458,167 @@ async def test_player_sync_refuses_non_global_admins(sim):
     assert refused.result.modal is None
     message, ephemeral = refused.screen
     assert ephemeral and "Only global administrators" in message.content
+
+
+# --- Player Sync: the Sync Log channel, shared with Channel Setup ------------------------------
+
+
+async def _sync_channels(sim):
+    channels = await sim.click(await _player_sync(sim), "Channels")
+    assert not channels.problems(), channels.problems()
+    assert title(channels.screen[0]).endswith("Sync Log Channels")
+    return channels.screen[0]
+
+
+async def _channel_setup(sim):
+    from cogs.pimp_my_bot import theme
+    alliances = await sim.walk("Alliances")
+    hub = await sim.select(alliances, f"{theme.allianceIcon} Pick an alliance to manage…", "Test Alliance")
+    assert not hub.problems(), hub.problems()
+    setup = await sim.click(hub.screen[0], "Channel Setup")
+    assert not setup.problems(), setup.problems()
+    return setup.screen[0]
+
+
+async def _pick_general(sim, screen, button):
+    picker = await sim.click(screen, button)
+    assert not picker.problems(), picker.problems()
+    picked = await sim.select(picker.screen[0], "Select channel (1/1)", "#general")
+    assert not picked.problems(), picked.problems()
+    return picked.screen[0]
+
+
+async def test_sync_log_set_in_player_sync_shows_in_channel_setup(sim):
+    channels = await _sync_channels(sim)
+    assert "**Test Alliance:** Not set" in _description(channels)
+    channels = await _pick_general(sim, channels, "Set Channel")
+    assert title(channels).endswith("Sync Log Channels")
+    assert f"**Test Alliance:** <#{sim.channel.id}>" in _description(channels)
+    assert f"now go to <#{sim.channel.id}>" in _description(channels)
+
+    setup = await _channel_setup(sim)
+    assert f"**Sync Log**\n└ <#{sim.channel.id}>" in _description(setup)
+    assert {"Set Sync Log", "Back"} <= set(labels(setup))
+
+
+async def test_sync_log_set_in_channel_setup_shows_in_player_sync(sim):
+    setup = await _pick_general(sim, await _channel_setup(sim), "Set Sync Log")
+    assert f"**Sync Log**\n└ <#{sim.channel.id}>" in _description(setup)
+
+    channels = await _sync_channels(sim)
+    assert f"**Test Alliance:** <#{sim.channel.id}>" in _description(channels)
+    cleared = await sim.click(channels, "Clear")
+    assert not cleared.problems(), cleared.problems()
+    assert "**Test Alliance:** Not set" in _description(cleared.screen[0])
+
+
+async def test_sync_log_auto_delete_and_keep_results(sim):
+    from cogs import alliance_api_sync as sync
+    channels = await _sync_channels(sim)
+    off = await sim.click(channels, "Auto-Delete: On")
+    assert not off.problems(), off.problems()
+    assert "Auto-Delete: Off" in labels(off.screen[0]) and sync.load_setting("autodelete") is False
+
+    shown = await sim.click(off.screen[0], "Keep Results")
+    saved = await sim.submit_modal(shown, {"Minutes to keep results (1 to 1440)": "30"})
+    assert not saved.problems(), saved.problems()
+    assert sync.load_setting("keep_minutes") == 30
+    assert "Results stay for 30 minutes" in _description(sim.current(channels))
+
+    shown = await sim.click(sim.current(channels), "Keep Results")
+    refused = await sim.submit_modal(shown, {"Minutes to keep results (1 to 1440)": "0"})
+    message, ephemeral = refused.screen
+    assert ephemeral and "from 1 to 1440" in message.content and sync.load_setting("keep_minutes") == 30
+
+    back = await sim.click(sim.current(channels), "Back")
+    assert not back.problems() and title(back.screen[0]).endswith("Player Sync")
+
+
+async def test_edit_alliance_asks_only_for_the_name(sim):
+    import discord
+    view = discord.ui.View(timeout=None)
+    view.add_item(discord.ui.Button(label="Edit Alliance", custom_id="edit_alliance"))
+    posted = await sim.bot.get_channel(sim.channel.id).send(content="old operations menu", view=view)
+    await sim.env.settle()
+    picker = await sim.click(sim.current(posted), "Edit Alliance")
+    message, ephemeral = picker.screen
+    assert ephemeral
+    shown = await sim.select(message, "Select alliance (1/1)", "Test Alliance (ID: 1)")
+    assert list(modal_fields(shown)) == ["Alliance Name"]
+    saved = await sim.submit_modal(shown, {"Alliance Name": "Renamed Alliance"})
+    assert not saved.problems(), saved.problems()
+    result, ephemeral = saved.screen
+    assert ephemeral and title(result).endswith("Alliance Successfully Updated") and not result.components
+    with closing(sqlite3.connect("db/alliance.sqlite")) as db:
+        assert db.execute("SELECT name FROM alliance_list WHERE alliance_id = ?",
+                          (ALLIANCE_ID,)).fetchone() == ("Renamed Alliance",)
+
+
+async def _wait_for_sync_results(sim, heading, seconds=30.0):
+    """The finished Sync Log message, once the queue has no sync left; None on timeout."""
+    import asyncio
+    queue = sim.bot.get_cog("ProcessQueue")
+    deadline = asyncio.get_running_loop().time() + seconds
+    while asyncio.get_running_loop().time() < deadline:
+        await sim.env.settle()
+        done = not queue.get_queued_processes_by_action("api_sync", statuses=("queued", "active"))
+        posts = [m for m in sim.channel.history() if m.embeds and title(m).endswith(heading)]
+        if done and len(posts) == 1 and _description(posts[0]).startswith("Checked"):
+            return posts[0]
+        await asyncio.sleep(0.2)
+    return None
+
+
+async def test_sync_run_posts_progress_then_results_in_the_sync_log(sim, fake_api):
+    from cogs import alliance_api_sync as sync
+    hub = await _set_up(sim, await _player_sync(sim), fake_api)
+    await _saved(sim, hub, "Limits", {"Requests per minute": "600", "Requests per day": "1000"})
+    field_paths = await _set_field(sim, await _open_fields(sim, hub), "State", "player.kid")
+    await sim.click(field_paths, "Back")
+    hub = sim.current(hub)
+    with closing(sqlite3.connect("db/alliance.sqlite")) as db, db:
+        db.execute("UPDATE alliance_list SET kid = 1 WHERE alliance_id = ?", (ALLIANCE_ID,))
+    sync.set_sync_channel(ALLIANCE_ID, sim.channel.id)
+    picker = await sim.click(sim.current(hub), "Sync Alliance")
+    queued = await sim.select(picker.screen[0], "Pick an alliance to sync now", "Test Alliance")
+    assert not queued.problems(), queued.problems()
+
+    post = await _wait_for_sync_results(sim, "Player Sync: Test Alliance")
+    assert post is not None, "the sync didn't finish within 30 seconds"
+    text = _description(post)
+    assert text.startswith("Checked `3` of 3 members.") and "Synced001" in text
+    assert "`10003` Blizzard moved to State 456" in text
+    assert post.embeds[0].footer.text == "This message removes itself after 5 minutes."
+
+
+async def _wait_for_members(fids, seconds=30.0):
+    """{fid: (nickname, furnace_lv, kid)} once every ID is in the alliance; None on timeout."""
+    import asyncio
+    deadline = asyncio.get_running_loop().time() + seconds
+    while asyncio.get_running_loop().time() < deadline:
+        with closing(sqlite3.connect("db/users.sqlite")) as db:
+            rows = db.execute(f"SELECT fid, nickname, furnace_lv, kid FROM users "
+                              f"WHERE fid IN ({','.join('?' * len(fids))})", fids).fetchall()
+        if len(rows) == len(fids):
+            return {fid: tuple(rest) for fid, *rest in rows}
+        await asyncio.sleep(0.2)
+    return None
+
+
+async def test_add_members_takes_names_from_player_sync(sim, fake_api):
+    from cogs.pimp_my_bot import theme
+    hub = await _set_up(sim, await _player_sync(sim), fake_api)
+    field_paths = await _set_field(sim, await _open_fields(sim, hub), "State", "player.kid")
+    await sim.click(field_paths, "Back")
+    alliances = await sim.walk("Alliances")
+    alliance_hub = await sim.select(alliances, f"{theme.allianceIcon} Pick an alliance to manage…", "Test Alliance")
+    members = await sim.click(alliance_hub.screen[0], "Manage Members")
+    assert not members.problems(), members.problems()
+    shown = await sim.click(members.screen[0], "Add Members")
+    added = await sim.submit_modal(shown, {"Enter IDs or paste CSV/TSV data": "20001\n20010"})
+    assert not added.problems(), added.problems()
+
+    stored = await _wait_for_members([20001, 20010])
+    assert stored is not None, "the members weren't added within 30 seconds"
+    assert stored[20001] == ("Synced001", 30, 1)
+    assert stored[20010] == ("Player 20010", 0, None), "an ID the API doesn't know keeps the placeholder"

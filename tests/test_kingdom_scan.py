@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import cogs.gift_state_resolver as gsr
+from harness import fake_player_api, kid_and_flag
 
 
 @pytest.fixture
@@ -621,3 +622,301 @@ def test_survey_matches_per_alliance_binding(dbs):
     assert survey[6]["proposed_kid"] is gsr.compute_alliance_binding(6) is None
     assert survey[7]["proposed_kid"] is None and survey[7]["multistate"]
     assert survey[8]["known"] == 0
+
+
+# --- API first: Player Sync's API places members before any probing -----------------------
+
+
+@pytest.fixture
+def api(monkeypatch):
+    """Player Sync set up; `api.kids` is what the API knows, `api.asked` who was looked up."""
+    state = fake_player_api(
+        monkeypatch, lambda fid: {"nickname": f"p{fid}", "kid": state.kids[fid]} if fid in state.kids else None)
+    state.kids = {}
+    return state
+
+
+def _scan_cog(stop=False, preempt=False, saved=None):
+    pq = types.SimpleNamespace(should_preempt=lambda: preempt, stop_requested=lambda: stop,
+                               update_details=lambda pid, d: (saved if saved is not None else []).append(dict(d)))
+    return types.SimpleNamespace(logger=logging.getLogger("test"),
+                                 bot=types.SimpleNamespace(get_cog=lambda name: pq))
+
+
+def _probed(monkeypatch):
+    probed = []
+
+    async def recording_scan(cog, fid, **kw):
+        probed.append(fid)
+        return None
+
+    monkeypatch.setattr(gr, "scan_one_member", recording_scan)
+    return probed
+
+
+def _run_scan(details, cog=None):
+    """Runs the scan job; returns its last saved details (the handler works on a copy)."""
+    saved = []
+    asyncio.run(gr.handle_state_resolve_process(cog or _scan_cog(saved=saved), {'id': 7, 'details': details}))
+    return saved[-1] if saved else None
+
+
+def test_api_state_is_saved_and_member_skips_the_probe(monkeypatch, dbs, api):
+    _user(1)
+    _user(2, kid=259, mismatch="2026-10-01T00:00:00")
+    _user(3)
+    api.kids = {1: 812, 2: 913}
+    probed = _probed(monkeypatch)
+    queued = []
+    monkeypatch.setattr(gr, "enqueue_member_redemption", lambda cog, fid: queued.append(fid) or 1)
+    details = _run_scan({'mode': 'now', 'remaining': [1, 2, 3], 'total': 3})
+    assert probed == [3]                                  # only the member the API doesn't know
+    assert kid_and_flag(1) == (812, None) and kid_and_flag(2) == (913, None)
+    assert queued == [1, 2]
+    assert details['resolved'] == 2 and details['api_found'] == 2 and details['unresolved'] == 1
+
+
+def test_without_the_api_every_member_is_probed(monkeypatch, dbs, api):
+    _user(1)
+    _user(2)
+    api.available = False
+    probed = _probed(monkeypatch)
+    _run_scan({'mode': 'now', 'remaining': [1, 2], 'total': 2})
+    assert probed == [1, 2] and api.asked == []
+
+
+def test_api_state_the_game_just_rejected_is_probed(monkeypatch, dbs, api):
+    _user(1, kid=259, mismatch="2026-10-01T00:00:00")
+    api.kids = {1: 259}                                   # the API repeats the rejected state
+    probed = _probed(monkeypatch)
+    _run_scan({'mode': 'now', 'remaining': [1], 'total': 1})
+    assert probed == [1] and kid_and_flag(1) == (259, "2026-10-01T00:00:00")
+
+
+def _real_api(monkeypatch, per_day, used, answers):
+    """Real Player Sync lookups against a fake API: `answers` maps fid -> (status, payload)."""
+    import cogs.alliance_api_sync as sync
+    profile = dict(sync.DEFAULT_PROFILE, base_url="https://api.example", player_path="/p/{id}",
+                   per_day=per_day, fields={**sync.DEFAULT_PROFILE["fields"], "kingdom": "kid"})
+    sync.save_setting("profile", profile)
+    sync.save_setting("budget", {"date": sync.utc_today(), "used": used})
+    asked = []
+
+    async def fake_fetch(session, profile, key, fid):
+        asked.append(fid)
+        status, payload = answers[fid]
+        return sync.FetchResult(status, payload)
+
+    monkeypatch.setattr(sync, "fetch_player", fake_fetch)
+    api_cog = sync.AllianceApiSync.__new__(sync.AllianceApiSync)
+    api_cog.session = lambda: None
+    saved = []
+    pq = types.SimpleNamespace(should_preempt=lambda: False, stop_requested=lambda: False,
+                               update_details=lambda pid, d: saved.append(dict(d)))
+    cog = types.SimpleNamespace(logger=logging.getLogger("test"),
+                                bot=types.SimpleNamespace(get_cog=lambda name: api_cog
+                                                          if name == "AllianceApiSync" else pq))
+    return cog, asked, saved
+
+
+def test_budget_used_up_leaves_members_for_tomorrow(monkeypatch, dbs):
+    _user(1)
+    _user(2)
+    cog, asked, saved = _real_api(monkeypatch, per_day=5, used=5, answers={})
+    probed = _probed(monkeypatch)
+    sent = []
+
+    async def dm(cog, embed):
+        sent.append(embed.description)
+
+    monkeypatch.setattr(gr, "_dm_global_admins", dm)
+    asyncio.run(gr.handle_state_resolve_process(cog, {'id': 7, 'details': {'mode': 'now', 'remaining': [1, 2],
+                                                                          'total': 2}}))
+    assert asked == [] and probed == []
+    assert saved[-1]['remaining'] == [1, 2] and saved[-1]['limit_reached'] is True
+    assert gsr.scan_targets(auto=True) == [1, 2]            # not marked done: tomorrow's scan asks again
+    assert "`2` members weren't looked up yet" in sent[0]
+
+
+def test_only_members_the_api_was_asked_about_are_probed(monkeypatch, dbs):
+    _user(1)
+    _user(2)
+    cog, asked, saved = _real_api(monkeypatch, per_day=1, used=0, answers={1: (404, None)})
+    probed = _probed(monkeypatch)
+    gsr.set_scan_enabled(True)
+    asyncio.run(gr.handle_state_resolve_process(cog, {'id': 7, 'details': {'mode': 'auto', 'remaining': [1, 2],
+                                                                          'total': 2}}))
+    assert asked == [1] and probed == [1]
+    assert saved[-1]['remaining'] == [2] and saved[-1]['limit_reached'] is True
+
+
+def test_auto_tick_waits_for_tomorrow_when_the_api_limit_is_used_up(monkeypatch, dbs, ocr_idle):
+    _user(1)
+    gsr.set_scan_enabled(True)
+    _real_api(monkeypatch, per_day=5, used=5, answers={})
+    cog, pq = _gift_cog()
+    assert cog.auto_kingdom_scan_tick() is False and pq.enqueued == []
+
+
+def test_db_error_after_the_lookup_leaves_the_member_to_be_asked_again(monkeypatch, dbs, api):
+    _user(1)
+    api.kids = {1: 812}
+    probed = _probed(monkeypatch)
+
+    def locked(fid):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(gr.gift_state_resolver, "scan_check", locked)
+    details = _run_scan({'mode': 'now', 'remaining': [1], 'total': 1})
+    assert probed == [] and details['api_checked'] == [] and details['remaining'] == [1]
+
+
+def test_auto_scan_resolves_its_targets_through_the_api(monkeypatch, dbs, api, ocr_idle):
+    _user(1)
+    _user(2)
+    gsr.set_scan_enabled(True)
+    api.kids = {1: 812, 2: 813}
+    gift_cog, pq = _gift_cog()
+    assert gift_cog.auto_kingdom_scan_tick() is True
+    details = pq.enqueued[0][2]
+    probed = _probed(monkeypatch)
+    monkeypatch.setattr(gr, "enqueue_member_redemption", lambda cog, fid: 0)
+    monkeypatch.setattr(gr, "_auto_should_wait", lambda cog: True)   # busy bot: lookups still run
+    details = _run_scan(details)
+    assert probed == [] and details['remaining'] == []
+    assert kid_and_flag(1)[0] == 812 and kid_and_flag(2)[0] == 813
+
+
+def test_api_pass_stops_for_an_admin(monkeypatch, dbs, api):
+    _user(1)
+    api.kids = {1: 812}
+    probed = _probed(monkeypatch)
+    saved = []
+    _run_scan({'mode': 'now', 'remaining': [1], 'total': 1}, _scan_cog(stop=True, preempt=True, saved=saved))
+    assert api.asked == [] and probed == [] and saved[-1]['remaining'] == [1]
+
+
+def test_api_pass_pauses_and_resumes_without_asking_twice(monkeypatch, dbs, api):
+    _user(1)
+    _user(2)
+    _user(3)
+    api.kids = {2: 812}
+    probed = _probed(monkeypatch)
+    calls = {"n": 0}
+
+    def preempt_on_third_check():
+        calls["n"] += 1
+        return calls["n"] == 3
+
+    saved = []
+    cog = _scan_cog(saved=saved)
+    cog.bot.get_cog("ProcessQueue").should_preempt = preempt_on_third_check
+    details = {'mode': 'auto', 'remaining': [1, 2, 3], 'total': 3}
+    gsr.set_scan_enabled(True)
+    with pytest.raises(gr.PreemptedException):
+        _run_scan(details, cog)
+    assert api.asked == [1, 2] and probed == []
+    assert saved[-1]['remaining'] == [1, 3] and saved[-1]['api_checked'] == [1]
+
+    _run_scan(dict(saved[-1]))                             # resumed run
+    assert api.asked == [1, 2, 3]                          # member 1 isn't looked up again
+    assert probed == [1, 3]
+
+
+def test_scan_done_dm_counts_api_finds(monkeypatch):
+    sent = []
+
+    async def dm(cog, embed):
+        sent.append(embed.description)
+
+    monkeypatch.setattr(gr, "_dm_global_admins", dm)
+    asyncio.run(gr._notify_state_resolve_done(_log_cog(), {'total': 3, 'resolved': 2, 'unresolved': 1,
+                                                           'api_found': 2, 'api_checked': [3]}))
+    asyncio.run(gr._notify_state_resolve_done(_log_cog(), {'total': 1, 'resolved': 0, 'unresolved': 1}))
+    assert "(2 through your API)" in sent[0] and "Your API and the scan" in sent[0]
+    assert "API" not in sent[1]
+
+
+@pytest.mark.parametrize("mode,expected", [("now", "Press Scan These Now again tomorrow"),
+                                           ("auto", "The scan continues tomorrow")])
+def test_limit_progress_text_fits_the_kind_of_run(monkeypatch, dbs, mode, expected):
+    _user(1)
+    gsr.set_scan_enabled(True)
+    cog, asked, saved = _real_api(monkeypatch, per_day=5, used=5, answers={})
+    _probed(monkeypatch)
+    bodies = []
+
+    async def record(self, fid, body):
+        bodies.append(body)
+        return str(fid)
+
+    async def dm(cog, embed):
+        pass
+
+    monkeypatch.setattr(gr._StateScanProgress, "update", record)
+    monkeypatch.setattr(gr, "_dm_global_admins", dm)
+    asyncio.run(gr.handle_state_resolve_process(cog, {'id': 7, 'details': {'mode': mode, 'remaining': [1],
+                                                                          'total': 1}}))
+    assert expected in bodies[-1]
+
+
+def _single_state_alliance(auto_remove):
+    with sqlite3.connect("db/alliance.sqlite") as c:
+        c.execute("INSERT INTO alliance_list VALUES (5, 'A', 100, 0, 0)")
+        c.execute("CREATE TABLE alliancesettings (alliance_id INTEGER, auto_remove_on_transfer INTEGER)")
+        c.execute("INSERT INTO alliancesettings VALUES (5, ?)", (auto_remove,))
+
+
+def test_api_pass_removes_a_member_outside_the_alliance_state_with_auto_remove_on(monkeypatch, dbs, api):
+    _single_state_alliance(auto_remove=1)
+    _user(1)
+    api.kids = {1: 250}
+    _probed(monkeypatch)
+    applied = []
+    real_apply = gr.apply_removals
+
+    async def recording_apply(cog, candidates):
+        applied.append(list(candidates))
+        return await real_apply(cog, candidates)
+
+    monkeypatch.setattr(gr, "apply_removals", recording_apply)
+    details = _run_scan({'mode': 'now', 'remaining': [1], 'total': 1})
+    assert applied == [[("5", 1, "p1")]] and kid_and_flag(1) is None
+    assert details.get('api_found', 0) == 0 and details['resolved'] == 0
+    assert 250 not in details.get('found_states', [])
+
+
+def test_a_failed_removal_never_hides_the_scan_interruption(monkeypatch, dbs, api):
+    _single_state_alliance(auto_remove=1)
+    _user(1)
+    _user(2)
+    api.kids = {1: 250}
+
+    async def broken_apply(cog, candidates):
+        raise RuntimeError("log channel gone")
+
+    async def check_yield():
+        if api.asked:
+            raise gsr.StateResolveInterrupted(None)
+
+    class Progress:
+        checked = 0
+
+        async def update(self, *args):
+            pass
+
+    monkeypatch.setattr(gr, "apply_removals", broken_apply)
+    details = {'resolved': 0}
+    with pytest.raises(gsr.StateResolveInterrupted):
+        asyncio.run(gr._resolve_through_api(_scan_cog(), details, [1, 2], [], check_yield, lambda: None,
+                                            Progress()))
+
+
+def test_api_pass_saves_a_member_outside_the_alliance_state_with_auto_remove_off(monkeypatch, dbs, api):
+    _single_state_alliance(auto_remove=0)
+    _user(1)
+    api.kids = {1: 250}
+    _probed(monkeypatch)
+    monkeypatch.setattr(gr, "enqueue_member_redemption", lambda cog, fid: 0)
+    _run_scan({'mode': 'now', 'remaining': [1], 'total': 1})
+    assert kid_and_flag(1) == (250, None)

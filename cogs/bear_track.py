@@ -22,8 +22,11 @@ from cogs.attendance import MATPLOTLIB_AVAILABLE
 from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, confirm_timeout
 from .permission_handler import PermissionManager, can_edit_upload, editor_mode_label, next_editor_mode
 from .alliance_member_edit import (
-    ALLIANCE_TAG_RE as _ALLIANCE_TAG_RE, is_placeholder_name, new_member_name, new_member_name_input,
+    ALLIANCE_TAG_RE as _ALLIANCE_TAG_RE, is_placeholder_name, new_member_name_input,
+    unknown_fid_refusal,
 )
+from .alliance_api_sync import look_up_new_member, store_new_member
+from .bot_level_mapping import format_furnace_level
 import numpy as np
 
 logger = logging.getLogger('bot')
@@ -3067,20 +3070,6 @@ class BearTrack(commands.Cog):
                     await keep.unpin(reason="Bear info message pin toggled off")
             except discord.Forbidden:
                 pass
-
-    async def get_keywords_for_channel(self, channel_id: int) -> list:
-        """Return keywords list for the alliance that has this bear channel."""
-        def _query():
-            cur = self.alliance_conn.cursor()
-            cur.execute(
-                "SELECT bear_keywords FROM alliancesettings WHERE bear_score_channel = ?",
-                (channel_id,)
-            )
-            return cur.fetchone()
-        result = await asyncio.to_thread(_query)
-        if result and result[0]:
-            return [kw.strip() for kw in result[0].split(",") if kw.strip()]
-        return []
 
     # -------------------------------------------------------------------
     # Permission check
@@ -6401,42 +6390,24 @@ async def _resolve_and_apply(interaction, view, *, row_id, text, damage, rank, r
 
 
 async def _offer_add_by_id(interaction, view, *, row_id, fid, damage, rank, raw_name, new_name=None):
-    """Confirm an unknown fid is in the alliance's state (one probe), then show the add confirm card."""
+    """Confirm an unknown fid is in the alliance's state (API state, else one probe), then show the add confirm card."""
     await interaction.response.defer()
-    from . import gift_state_resolver
-    gift_cog = view.cog.bot.get_cog("GiftOperations")
-    if gift_cog is None:
-        await interaction.followup.send(
-            f"{theme.deniedIcon} Gift Codes is unavailable, so I can't verify ID `{fid}` right now.",
-            ephemeral=True)
-        return
-    alliance_kid = await asyncio.to_thread(gift_state_resolver.get_alliance_kid, view.alliance_id)
-    if alliance_kid is None:
-        await interaction.followup.send(
-            f"{theme.warnIcon} This alliance has no state set, so I can't confirm ID `{fid}`. "
-            f"Set its state (Alliance Management → Set State), or add the member under Manage Members first.",
-            ephemeral=True)
-        return
-    kid, verified = await gift_state_resolver.verify_add_state(gift_cog, fid, view.alliance_id)
-    if not verified:
-        await interaction.followup.send(
-            f"{theme.deniedIcon} Couldn't confirm ID `{fid}` in state `{alliance_kid}`. "
-            f"They may be in a different state, or the ID is wrong. Add them under Alliance Management → "
-            f"Manage Members first, then match the row.",
-            ephemeral=True)
+    member = await look_up_new_member(view.cog.bot, fid, view.alliance_id, new_name)
+    refusal = await unknown_fid_refusal(view.cog.bot, view.alliance_id, fid, member)
+    if refusal:
+        await interaction.followup.send(refusal, ephemeral=True)
         return
     parent_message = await interaction.original_response()  # the review/editor message to refresh on confirm
     confirm = PlayerAddConfirmView(
-        view=view, parent_message=parent_message, row_id=row_id, fid=fid, kid=kid,
-        damage=damage, rank=rank, raw_name=raw_name, nickname=new_name)
+        view=view, parent_message=parent_message, row_id=row_id, fid=fid, kid=member.kid,
+        damage=damage, rank=rank, raw_name=raw_name, member=member)
     await interaction.followup.send(embed=confirm.build_embed(), view=confirm, ephemeral=True)
 
 
 class PlayerAddConfirmView(discord.ui.View):
     """Confirm adding a state-checked fid to the alliance under the typed name, and matching the row."""
 
-    def __init__(self, *, view, parent_message, row_id, fid, kid, damage, rank, raw_name,
-                 nickname=None):
+    def __init__(self, *, view, parent_message, row_id, fid, kid, damage, rank, raw_name, member):
         super().__init__(timeout=confirm_timeout())
         self.parent = view
         self.parent_message = parent_message
@@ -6447,7 +6418,8 @@ class PlayerAddConfirmView(discord.ui.View):
         self.damage = damage
         self.rank = rank
         self.raw_name = raw_name or ""
-        self.nickname = new_member_name(nickname, fid)
+        self.member = member
+        self.nickname = self.member.nickname
         confirm_btn = discord.ui.Button(label="Confirm & Add", emoji=theme.verifiedIcon,
                                         style=discord.ButtonStyle.success)
         confirm_btn.callback = self._on_confirm
@@ -6460,7 +6432,9 @@ class PlayerAddConfirmView(discord.ui.View):
     def build_embed(self) -> discord.Embed:
         name_line = f"`{_isolate_rtl(self.nickname)}`"
         if is_placeholder_name(self.nickname, self.fid):
-            name_line += " - no name given, rename them later from the member list"
+            name_line += "\nNo name yet. You can rename them from the member list."
+        level_line = (f"**{theme.levelIcon} Level:** `{format_furnace_level(self.member.furnace_lv)}`\n"
+                      if self.member.furnace_lv else "")
         return discord.Embed(
             title=f"{theme.userIcon} Add Player to Alliance?",
             description=(
@@ -6468,6 +6442,7 @@ class PlayerAddConfirmView(discord.ui.View):
                 f"**{theme.fidIcon} ID:** `{self.fid}`\n"
                 f"**{theme.globeIcon} State:** `{self.kid}` (confirmed)\n"
                 f"**{theme.userIcon} Name:** {name_line}\n"
+                f"{level_line}"
                 f"{theme.lowerDivider}\n"
                 f"This will add them to **this alliance** and match the bear row."),
             color=theme.emColor1)
@@ -6481,7 +6456,7 @@ class PlayerAddConfirmView(discord.ui.View):
             cog.users_conn.execute(
                 "INSERT OR REPLACE INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (self.fid, nick, 0, str(self.kid), '', str(self.parent.alliance_id)))
+                (self.fid, nick, self.member.furnace_lv, str(self.kid), '', str(self.parent.alliance_id)))
             cog.users_conn.commit()
         except Exception as e:
             cog.users_conn.rollback()
@@ -6490,6 +6465,7 @@ class PlayerAddConfirmView(discord.ui.View):
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Failed to add the player to the alliance.", ephemeral=True)
             return
+        await store_new_member(self.member, self.fid)
         # Refresh the roster cache so the new member resolves immediately.
         self.parent.roster = cog.get_alliance_roster(self.parent.alliance_id)
         if not _write_match_to_row(self.parent, row_id=self.row_id, fid=self.fid,

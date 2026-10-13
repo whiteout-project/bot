@@ -11,10 +11,10 @@ import asyncio
 import os
 import traceback
 import logging
-from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from .gift_operationsapi import GiftCodeAPI
 from .pimp_my_bot import theme, safe_edit_message
+from . import alliance_api_sync
 from . import gift_redemption
 from . import gift_state_resolver
 from . import onnx_lifecycle
@@ -122,8 +122,6 @@ class GiftOperations(commands.Cog):
         self._validation_lock = asyncio.Lock()
         self._last_validation_claim_by_fid = {}  # fid -> monotonic ts of its last validation probe
         self._priority_validation_pending = 0  # in-flight new-code validations; periodic loop yields while > 0
-        self.last_validation_attempt_time = 0
-        self.validation_cooldown = 5
         self._last_cleanup_date = None
         self._state_nudge_sent = False  # one-time boot nudge about member states
 
@@ -484,6 +482,8 @@ class GiftOperations(commands.Cog):
         counts = process_queue_cog.queue_counts()
         if counts['queued'] or counts['active'] or onnx_lifecycle.any_model_in_use():
             return False
+        if alliance_api_sync.budget_spent():
+            return False
         return bool(self.queue_kingdom_scan('auto'))
 
     def member_catchup_status(self):
@@ -576,9 +576,6 @@ class GiftOperations(commands.Cog):
         return await gift_channels.channel_history_scan(self, interaction)
 
     # ── Delegation to gift_settings ───────────────────────────────────
-
-    async def verify_test_fid(self, fid):
-        return await gift_settings.verify_test_fid(self, fid)
 
     async def update_test_fid(self, new_fid, kid=None):
         return await gift_settings.update_test_fid(self, new_fid, kid)

@@ -105,7 +105,7 @@ def _can_manage_alliance(user_id: int, guild_id: int, alliance_id: int) -> bool:
 
 
 async def _deny_alliance_access(interaction: discord.Interaction, alliance_id: int) -> bool:
-    if _can_manage_alliance(interaction.user.id, interaction.guild_id, alliance_id):
+    if await asyncio.to_thread(_can_manage_alliance, interaction.user.id, interaction.guild_id, alliance_id):
         return False
     send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
     await send(
@@ -393,13 +393,13 @@ class MainMenu(commands.Cog):
                     f"{theme.membersIcon} **Manage Members**\n"
                     f"└ View, add, transfer, export and remove members\n\n"
                     f"{theme.announceIcon} **Channel Setup**\n"
-                    f"└ Set this alliance's ID, Activity Log and Redemption Log channels\n\n"
+                    f"└ Set this alliance's ID, Activity Log, Redemption Log and Sync Log channels\n\n"
                     f"{theme.editListIcon} **Edit Name**\n"
                     f"└ Rename this alliance\n\n"
                     f"{theme.globeIcon} **Set State**\n"
                     f"└ Set the home state new members inherit\n\n"
                     f"{theme.listIcon} **History**\n"
-                    f"└ Furnace level and nickname changes per member\n\n"
+                    f"└ Furnace level, power and nickname changes per member\n\n"
                     f"{theme.chartIcon} **Power Rankings**\n"
                     f"└ Members ranked by power and attendance\n\n"
                     f"{theme.lockIcon} **State Lock**\n"

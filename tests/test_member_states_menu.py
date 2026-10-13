@@ -7,6 +7,7 @@ import types
 import pytest
 
 import cogs.alliance_member_states as ams
+from cogs.permission_handler import PermissionManager
 
 SETTINGS_OFF = {"enabled": False, "min": 1, "max": 900, "custom": False}
 
@@ -17,6 +18,14 @@ def _labels(view):
 
 def _cog(status=None):
     return types.SimpleNamespace(kingdom_scan_status=lambda: status, member_catchup_status=lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def api_limit(monkeypatch):
+    state = types.SimpleNamespace(spent=False)
+
+    monkeypatch.setattr(ams, "budget_spent", lambda: state.spent)
+    return state
 
 
 @pytest.mark.parametrize("lo,hi,expected", [("1", "2000", (1, 2000)), (" 50 ", "60", (50, 60))])
@@ -103,7 +112,7 @@ def test_every_click_rechecks_global_admin(monkeypatch):
                                   response=types.SimpleNamespace(send_message=send_message))
 
     async def check(is_global):
-        monkeypatch.setattr(ams.PermissionManager, "is_admin", staticmethod(lambda uid: (True, is_global)))
+        monkeypatch.setattr(PermissionManager, "is_admin", staticmethod(lambda uid: (True, is_global)))
         return await ams.KingdomScanView(_cog(), 5).interaction_check(inter)
 
     assert asyncio.run(check(False)) is False and sent[0]["ephemeral"] is True
@@ -151,7 +160,7 @@ def test_modals_recheck_global_admin(monkeypatch):
 
     inter = types.SimpleNamespace(user=types.SimpleNamespace(id=1),
                                   response=types.SimpleNamespace(send_message=send_message))
-    monkeypatch.setattr(ams.PermissionManager, "is_admin", staticmethod(lambda uid: (True, False)))
+    monkeypatch.setattr(PermissionManager, "is_admin", staticmethod(lambda uid: (True, False)))
 
     async def submit():
         parent = types.SimpleNamespace(original_user_id=1)
@@ -213,3 +222,100 @@ def test_page_flip_reuses_loaded_rows():
     assert len(loads) == 1
     asyncio.run(view._rows(load))               # any other render reloads
     assert len(loads) == 2
+
+
+# --- Player Sync's API: Members to Fix looks states up there first --------------------------
+
+
+def _fix_text(monkeypatch, api_on):
+    monkeypatch.setattr(ams.gsr, "members_to_fix", lambda: [(1, "Ann", 259, "wrong")])
+
+    async def api():
+        return api_on
+
+    monkeypatch.setattr(ams, "api_available_async", api)
+
+    async def build():
+        return (await ams.MembersToFixView(_cog(), 1).build_embed()).description
+    return asyncio.run(build())
+
+
+def test_members_to_fix_says_the_scan_is_quick_with_the_api(monkeypatch):
+    text = _fix_text(monkeypatch, True)
+    assert "through your API" in text and "take hours" in text      # unknown members still probe
+    assert "Try state numbers" not in text
+
+
+def test_members_to_fix_without_the_api_keeps_the_probe_text(monkeypatch):
+    text = _fix_text(monkeypatch, False)
+    assert "Try state numbers" in text and "API" not in text
+
+
+def test_hub_points_to_the_api_when_it_is_set_up(monkeypatch):
+    monkeypatch.setattr(ams, "_hub_counts",
+                        lambda: {"wrong": 0, "missing": 1, "unbound": 0, "bindable": 0})
+    monkeypatch.setattr(ams.gsr, "get_scan_settings", lambda: SETTINGS_OFF)
+
+    async def build(api_on):
+        async def api():
+            return api_on
+        monkeypatch.setattr(ams, "api_available_async", api)
+        return (await ams.StateManagementView(_cog(), 1).build_embed()).description
+
+    assert "your API" in asyncio.run(build(True))
+    assert "API" not in asyncio.run(build(False))
+
+
+def test_scan_these_now_with_the_api_queues_the_scan_and_says_so(monkeypatch):
+    monkeypatch.setattr(ams.gsr, "members_to_fix", lambda: [(1, "Ann", None, "missing")])
+    queued = []
+    cog = _cog()
+    cog.queue_kingdom_scan = lambda mode: queued.append(mode) or 1
+
+    async def api():
+        return True
+
+    async def edit(interaction, **kw):
+        pass
+
+    monkeypatch.setattr(ams, "api_available_async", api)
+    monkeypatch.setattr(ams, "safe_edit_message", edit)
+    view = ams.MembersToFixView(cog, 1)
+    asyncio.run(view._on_scan(types.SimpleNamespace()))
+    assert queued == ["now"]
+    assert "through your API" in view.last_result
+
+
+def test_scan_these_now_waits_for_tomorrow_when_the_api_limit_is_used_up(monkeypatch, api_limit):
+    monkeypatch.setattr(ams.gsr, "members_to_fix", lambda: [(1, "Ann", None, "missing")])
+    queued = []
+    cog = _cog()
+    cog.queue_kingdom_scan = lambda mode: queued.append(mode) or 1
+    api_limit.spent = True
+
+    async def edit(interaction, **kw):
+        pass
+
+    monkeypatch.setattr(ams, "safe_edit_message", edit)
+    view = ams.MembersToFixView(cog, 1)
+    asyncio.run(view._on_scan(types.SimpleNamespace()))
+    assert queued == [] and "daily request limit" in view.last_result
+
+
+def test_state_scan_screen_mentions_auto_sync_and_the_api_limit(monkeypatch, api_limit):
+    monkeypatch.setattr(ams.gsr, "get_scan_settings",
+                        lambda: {"enabled": True, "min": 1, "max": 900, "custom": False})
+    monkeypatch.setattr(ams.gsr, "scan_counts", lambda: (2, 3))
+
+    async def build(spent, api_on=True):
+        async def api():
+            return api_on
+        monkeypatch.setattr(ams, "api_available_async", api)
+        cog = _cog()
+        api_limit.spent = spent
+        return (await ams.KingdomScanView(cog, 1).build_embed()).description
+
+    assert "Auto Sync" in asyncio.run(build(False))
+    assert "Auto Sync" not in asyncio.run(build(False, api_on=False))
+    assert "daily request limit" in asyncio.run(build(True))
+    assert "daily request limit" not in asyncio.run(build(False))

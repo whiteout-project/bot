@@ -185,6 +185,14 @@ async def safe_edit_message(interaction: discord.Interaction, embed: discord.Emb
         await interaction.edit_original_response(embed=embed, view=view, content=content, **extra)
 
 
+def plural(count, word) -> str:
+    return word if count == 1 else f"{word}s"
+
+
+def count_text(count, word) -> str:
+    return f"{count} {plural(count, word)}"
+
+
 def expired_embed(what: str = "menu") -> discord.Embed:
     """Standard 'this menu timed out' notice. Keep wording consistent bot-wide."""
     return discord.Embed(
@@ -326,6 +334,31 @@ class MenuView(discord.ui.View):
         await report_failed_click(interaction, type(self).__name__, error)
 
 
+async def require_global_admin(interaction: discord.Interaction, denial_text: str) -> bool:
+    """True for a Global admin; anyone else gets `denial_text` privately."""
+    _, is_global = PermissionManager.is_admin(interaction.user.id)
+    if not is_global:
+        await interaction.response.send_message(f"{theme.deniedIcon} {denial_text}", ephemeral=True)
+    return is_global
+
+
+class GlobalAdminView(MenuView):
+    """Menu with code-built buttons; every click re-checks Global admin, since rights can change while it's open."""
+    denial_text = ""
+
+    def __init__(self, cog, owner_id: int):
+        super().__init__(owner_id)
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await require_global_admin(interaction, self.denial_text) and await super().interaction_check(interaction)
+
+    def _add_button(self, label, emoji, style, row, callback, disabled=False):
+        button = discord.ui.Button(label=label, emoji=f"{emoji}", style=style, row=row, disabled=disabled)
+        button.callback = callback
+        self.add_item(button)
+
+
 class ConfirmView(discord.ui.View):
     """Base for confirmation dialogs: the confirm timeout setting, then the expired notice.
     Set `self.message` when sending, and call `self.stop()` once it's answered."""
@@ -425,8 +458,6 @@ class ThemeValues:
         self.emColorString2 = "#FF0000"
         self.emColorString3 = "#00FF00"
         self.emColorString4 = "#FFFF00"
-        self.headerColor1 = "#1F77B4"
-        self.headerColor2 = "#28A745"
 
         # Divider defaults (20 chars to fit mobile with thumbnails)
         self.upperDivider = "━━━━━━━━━━━━━━━━━━━━"
@@ -471,8 +502,6 @@ class ThemeValues:
         self.emColorString2 = theme_dict.get('emColorString2') or "#FF0000"
         self.emColorString3 = theme_dict.get('emColorString3') or "#00FF00"
         self.emColorString4 = theme_dict.get('emColorString4') or "#FFFF00"
-        self.headerColor1 = theme_dict.get('headerColor1') or "#1F77B4"
-        self.headerColor2 = theme_dict.get('headerColor2') or "#28A745"
 
         # Convert color strings to integers (with fallback for malformed values)
         def parse_color(color_str: str, default: int) -> int:
@@ -1182,7 +1211,6 @@ class ThemeMenuView(discord.ui.View):
                 cursor.execute("UPDATE pimpsettings SET is_active=1 WHERE themeName=?", (self.selected_theme,))
                 conn.commit()
 
-            # Reload theme - use guild theme if server has override, otherwise global
             theme.load()
 
             # Rebuild components and embed to reflect new active state
@@ -1220,7 +1248,6 @@ class ThemeMenuView(discord.ui.View):
         try:
             self.cog.activate_theme_for_server(self.guild_id, self.selected_theme)
 
-            # Reload theme for this guild
             theme.load()
 
             # Rebuild components and embed
@@ -1251,7 +1278,6 @@ class ThemeMenuView(discord.ui.View):
         try:
             self.cog.clear_server_theme(self.guild_id)
 
-            # Reload theme for this guild (now falls back to global since override cleared)
             theme.load()
 
             # Rebuild components and embed
@@ -3100,8 +3126,6 @@ class Theme(commands.Cog):
                 cursor.execute("UPDATE pimpsettings SET is_active=1 WHERE themeName=?", (themename,))
                 conn.commit()
 
-            # Reload theme - use guild theme if server has override, otherwise global
-            guild_id = interaction.guild.id if interaction.guild else None
             theme.load()
 
             embed = discord.Embed(

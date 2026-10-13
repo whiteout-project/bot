@@ -1,13 +1,10 @@
-"""Editing member names, furnace levels, states and power by hand.
-
-The player API no longer returns names or levels, so admins maintain them here.
-"""
+"""Editing member names, furnace levels, states and power by hand."""
 
 import asyncio
 import logging
 import re
 import sqlite3
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 
 import discord
@@ -15,10 +12,11 @@ import discord
 from . import alliance_power_changes
 from .attendance_ocr_parsers import _parse_compact_int
 from .bot_level_mapping import format_furnace_level, parse_furnace_level, parse_state
+from . import gift_state_resolver
 from .gift_state_resolver import set_user_kid
 from .pimp_my_bot import theme, check_interaction_user
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('alliance')
 
 PLACEHOLDER_PREFIX = "Player "
 NEW_NAME_LABEL = "Name, if adding a new player (optional)"
@@ -26,6 +24,24 @@ NEW_NAME_LABEL = "Name, if adding a new player (optional)"
 ALLIANCE_TAG_RE = re.compile(r"\[[A-Za-z0-9]{3}\]")
 
 _POWER_METRICS = (("power", "power"), ("combat_power", "combat power"))
+
+
+DEFAULT_LOG_AVATAR = "https://gof-formal-avatar.akamaized.net/avatar-dev/2023/07/17/1001.png"
+
+
+def _stored_avatar_url(fid):
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        row = conn.execute("SELECT avatar_url FROM users WHERE fid = ?", (fid,)).fetchone()
+    return row[0] if row else None
+
+
+async def log_avatar_url(fid) -> str:
+    """The member's synced avatar for minister log embeds, else the default image."""
+    try:
+        return await asyncio.to_thread(_stored_avatar_url, fid) or DEFAULT_LOG_AVATAR
+    except sqlite3.Error as e:
+        logger.warning(f"Could not read the avatar of {fid}: {e}")
+        return DEFAULT_LOG_AVATAR
 
 
 def placeholder_name(fid) -> str:
@@ -40,6 +56,34 @@ def is_placeholder_name(nickname, fid) -> bool:
 def new_member_name(name, fid) -> str:
     """The name typed for a new member, or the placeholder when none was given."""
     return (name or "").strip() or placeholder_name(fid)
+
+
+ADD_MEMBERS_PATH = "Alliances → your alliance → Manage Members → Add Members"
+
+
+def api_state_refusal(error, api_kid, typed_kid):
+    """A state-lock refusal that names the state Player Sync found when the player typed a different one."""
+    if error and api_kid is not None and typed_kid is not None and int(api_kid) != int(typed_kid):
+        return f"Player Sync shows this player in State #{api_kid}. {error}"
+    return error
+
+
+async def unknown_fid_refusal(bot, alliance_id, fid, member):
+    """Why a review can't add this unknown ID (looked up with its probe), or None when member.kid is confirmed."""
+    alliance_kid = await asyncio.to_thread(gift_state_resolver.get_alliance_kid, alliance_id)
+    if member.kid is not None:
+        if alliance_kid is None or int(member.kid) == int(alliance_kid):
+            return None
+        return (f"{theme.deniedIcon} Player Sync shows ID `{fid}` in State #{member.kid}, and this alliance "
+                f"is in State #{alliance_kid}, so they weren't added. If they belong here, add them under "
+                f"{ADD_MEMBERS_PATH}.")
+    if bot.get_cog("GiftOperations") is None:
+        return f"{theme.deniedIcon} Gift Codes is unavailable, so I can't confirm ID `{fid}` right now."
+    if alliance_kid is None:
+        return (f"{theme.warnIcon} This alliance has no state set, so I can't confirm ID `{fid}`. "
+                f"Set it under Alliances → your alliance → Set State, or add them under {ADD_MEMBERS_PATH}.")
+    return (f"{theme.deniedIcon} Couldn't confirm ID `{fid}` in State #{alliance_kid}. They may be in "
+            f"another state, or the ID is wrong. Add them under {ADD_MEMBERS_PATH} first, then match the row.")
 
 
 def suggested_name(ocr_name) -> str:
@@ -82,12 +126,13 @@ def parse_power(text):
 
 
 def apply_member_edit(fid, *, nickname=None, furnace_lv=None, kid=None,
-                      power=None, combat_power=None, alliance_id=None):
-    """Write a member's name/level/state/power, limited to `alliance_id` when given; returns what changed."""
+                      power=None, combat_power=None, alliance_id=None, conn=None):
+    """Write a member's name/level/state/power (limited to `alliance_id`, on `conn` if given); returns what changed."""
     changed, power_changes = [], []
     where, params = ("fid = ?", (fid,)) if alliance_id is None \
         else ("fid = ? AND alliance = ?", (fid, str(alliance_id)))
-    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+    users = closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) if conn is None else nullcontext(conn)
+    with users as conn:
         row = conn.execute(
             f"SELECT nickname, furnace_lv, kid, power, combat_power FROM users WHERE {where}",
             params).fetchone()

@@ -68,6 +68,12 @@ def check_alliance_state(alliance_id: int, player_kid) -> "str | None":
     return state_lock_reason(alliance_kid, player_kid)
 
 
+def rename_alliance(alliance_id: int, name: str) -> None:
+    with closing(sqlite3.connect('db/alliance.sqlite', timeout=30.0)) as conn:
+        conn.execute("UPDATE alliance_list SET name = ? WHERE alliance_id = ?", (name, alliance_id))
+        conn.commit()
+
+
 class Alliance(commands.Cog):
     def __init__(self, bot, conn):
         self.bot = bot
@@ -353,7 +359,7 @@ class Alliance(commands.Cog):
             )
             return
         await interaction.response.send_modal(
-            EditNameModal(alliance_id, row[0], self.conn)
+            EditNameModal(alliance_id, row[0])
         )
 
     async def show_edit_state_for(self, interaction: discord.Interaction, alliance_id: int):
@@ -375,121 +381,6 @@ class Alliance(commands.Cog):
         await interaction.response.send_modal(
             EditStateModal(alliance_id, alliance_name, current_lock, self.conn, self.bot)
         )
-
-    async def show_edit_alliance_for(self, interaction: discord.Interaction, alliance_id: int):
-        """Hub-context entry: edit a known alliance (skip the picker)."""
-        try:
-            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT alliance_id, name FROM alliance_list WHERE alliance_id = ?",
-                    (alliance_id,),
-                )
-                alliance_data = cursor.fetchone()
-            if not alliance_data:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Alliance not found.", ephemeral=True
-                )
-                return
-
-            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT channel_id FROM alliancesettings WHERE alliance_id = ?",
-                    (alliance_id,),
-                )
-                settings_data = cursor.fetchone()
-
-            modal = AllianceModal(
-                title="Edit Alliance",
-                default_name=alliance_data[1],
-            )
-            await interaction.response.send_modal(modal)
-            await modal.wait()
-
-            try:
-                alliance_name = modal.name.value.strip()
-
-                channel_embed = discord.Embed(
-                    title=f"{theme.retryIcon} Channel Selection",
-                    description=(
-                        f"**Current Channel Information**\n"
-                        f"{theme.upperDivider}\n"
-                        f"{theme.announceIcon} Current channel: "
-                        f"{f'<#{settings_data[0]}>' if settings_data else 'Not set'}\n"
-                        f"**Total Channels:** {len(interaction.guild.text_channels)}\n"
-                        f"{theme.lowerDivider}"
-                    ),
-                    color=theme.emColor1,
-                )
-
-                async def channel_select_callback(channel_interaction: discord.Interaction):
-                    try:
-                        channel_id = int(channel_interaction.data["values"][0])
-                        with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
-                                (alliance_name, alliance_id),
-                            )
-                            if settings_data:
-                                cursor.execute(
-                                    "UPDATE alliancesettings SET channel_id = ? WHERE alliance_id = ?",
-                                    (channel_id, alliance_id),
-                                )
-                            else:
-                                cursor.execute(
-                                    "INSERT INTO alliancesettings (alliance_id, channel_id) "
-                                    "VALUES (?, ?)",
-                                    (alliance_id, channel_id),
-                                )
-                            conn.commit()
-
-                        result_embed = discord.Embed(
-                            title=f"{theme.verifiedIcon} Alliance Successfully Updated",
-                            description=(
-                                f"**🛡️ Name:** {alliance_name}\n"
-                                f"**🔢 ID:** {alliance_id}\n"
-                                f"**{theme.announceIcon} Channel:** <#{channel_id}>"
-                            ),
-                            color=theme.emColor3,
-                        )
-                        result_embed.timestamp = discord.utils.utcnow()
-                        await channel_interaction.response.edit_message(
-                            embed=result_embed, view=None
-                        )
-                    except Exception as e:
-                        logger.error(f"Error in show_edit_alliance_for channel callback: {e}")
-                        print(f"Error in show_edit_alliance_for channel callback: {e}")
-                        await channel_interaction.response.edit_message(
-                            embed=discord.Embed(
-                                title=f"{theme.deniedIcon} Error",
-                                description=f"An error occurred while updating: {e}",
-                                color=theme.emColor2,
-                            ),
-                            view=None,
-                        )
-
-                view = PaginatedChannelView(
-                    interaction.guild.text_channels, channel_select_callback
-                )
-                await modal.interaction.response.send_message(
-                    embed=channel_embed, view=view, ephemeral=True
-                )
-            except Exception as e:
-                logger.error(f"Error in show_edit_alliance_for submit: {e}")
-                print(f"Error in show_edit_alliance_for submit: {e}")
-                await modal.interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred: {e}", ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Error in show_edit_alliance_for: {e}")
-            print(f"Error in show_edit_alliance_for: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while loading the editor.",
-                    ephemeral=True,
-                )
 
     async def show_delete_alliance_for(self, interaction: discord.Interaction, alliance_id: int):
         """Hub-context entry: delete a known alliance (skip the picker)."""
@@ -588,11 +479,10 @@ class Alliance(commands.Cog):
         with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
             cursor = conn.cursor()
             cursor.execute(f"""
-                SELECT a.alliance_id, a.name, COALESCE(s.interval, 0) as interval, COALESCE(s.channel_id, 0) as channel_id
-                FROM alliance_list a
-                LEFT JOIN alliancesettings s ON a.alliance_id = s.alliance_id
-                WHERE a.alliance_id IN ({placeholders})
-                ORDER BY a.alliance_id ASC
+                SELECT alliance_id, name
+                FROM alliance_list
+                WHERE alliance_id IN ({placeholders})
+                ORDER BY alliance_id ASC
             """, alliance_ids)
             alliances = cursor.fetchall()
 
@@ -612,7 +502,7 @@ class Alliance(commands.Cog):
             discord.SelectOption(
                 label=f"{name} (ID: {alliance_id})",
                 value=f"{alliance_id}",
-            ) for alliance_id, name, interval, _ in alliances
+            ) for alliance_id, name in alliances
         ]
         
         items_per_page = 25
@@ -695,15 +585,6 @@ class Alliance(commands.Cog):
                 alliance_id = int(select_interaction.data["values"][0])
                 alliance_data = next(a for a in alliances if a[0] == alliance_id)
 
-                with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT channel_id
-                        FROM alliancesettings
-                        WHERE alliance_id = ?
-                    """, (alliance_id,))
-                    settings_data = cursor.fetchone()
-
                 modal = AllianceModal(
                     title="Edit Alliance",
                     default_name=alliance_data[1],
@@ -713,72 +594,21 @@ class Alliance(commands.Cog):
 
                 try:
                     alliance_name = modal.name.value.strip()
+                    await asyncio.to_thread(rename_alliance, alliance_id, alliance_name)
 
-                    embed = discord.Embed(
-                        title=f"{theme.retryIcon} Channel Selection",
-                        description=(
-                            f"**Current Channel Information**\n"
-                            f"{theme.upperDivider}\n"
-                            f"{theme.announceIcon} Current channel: {f'<#{settings_data[0]}>' if settings_data else 'Not set'}\n"
-                            f"**Page:** 1/1\n"
-                            f"**Total Channels:** {len(interaction.guild.text_channels)}\n"
-                            f"{theme.lowerDivider}"
-                        ),
-                        color=theme.emColor1
+                    result_embed = discord.Embed(
+                        title=f"{theme.verifiedIcon} Alliance Successfully Updated",
+                        description="The alliance details have been updated as follows:",
+                        color=theme.emColor3
                     )
-
-                    async def channel_select_callback(channel_interaction: discord.Interaction):
-                        try:
-                            channel_id = int(channel_interaction.data["values"][0])
-
-                            with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-                                cursor = conn.cursor()
-                                cursor.execute("UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
-                                              (alliance_name, alliance_id))
-
-                                if settings_data:
-                                    cursor.execute("""
-                                        UPDATE alliancesettings
-                                        SET channel_id = ?
-                                        WHERE alliance_id = ?
-                                    """, (channel_id, alliance_id))
-                                else:
-                                    cursor.execute("""
-                                        INSERT INTO alliancesettings (alliance_id, channel_id)
-                                        VALUES (?, ?)
-                                    """, (alliance_id, channel_id))
-
-                                conn.commit()
-
-                            result_embed = discord.Embed(
-                                title=f"{theme.verifiedIcon} Alliance Successfully Updated",
-                                description="The alliance details have been updated as follows:",
-                                color=theme.emColor3
-                            )
-
-                            info_section = (
-                                f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
-                                f"**🔢 Alliance ID**\n{alliance_id}\n\n"
-                                f"**{theme.announceIcon} Channel**\n<#{channel_id}>"
-                            )
-                            result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
-
-                            result_embed.set_footer(text="Alliance settings have been successfully saved")
-                            result_embed.timestamp = discord.utils.utcnow()
-
-                            await channel_interaction.response.edit_message(embed=result_embed, view=None)
-
-                        except Exception as e:
-                            error_embed = discord.Embed(
-                                title=f"{theme.deniedIcon}Error",
-                                description=f"An error occurred while updating the alliance: {str(e)}",
-                                color=theme.emColor2
-                            )
-                            await channel_interaction.response.edit_message(embed=error_embed, view=None)
-
-                    channels = modal.interaction.guild.text_channels
-                    view = PaginatedChannelView(channels, channel_select_callback)
-                    await modal.interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                    info_section = (
+                        f"**🛡️ Alliance Name**\n{alliance_name}\n\n"
+                        f"**🔢 Alliance ID**\n{alliance_id}"
+                    )
+                    result_embed.add_field(name="Alliance Details", value=info_section, inline=False)
+                    result_embed.set_footer(text="Alliance settings have been successfully saved")
+                    result_embed.timestamp = discord.utils.utcnow()
+                    await modal.interaction.response.edit_message(embed=result_embed, view=None)
 
                 except Exception as e:
                     error_embed = discord.Embed(
@@ -1158,7 +988,7 @@ class PostCreateChannelPromptView(discord.ui.View):
                 f"so gift code results get logged.\n\n"
                 f"**Controls**\n"
                 f"{theme.settingsIcon} **Set Up Channels**\n"
-                f"└ Configure the ID, Activity Log, and Redemption Log channels\n\n"
+                f"└ Configure the ID, Activity Log, Redemption Log, and Sync Log channels\n\n"
                 f"{theme.forwardIcon} **Skip for Now**\n"
                 f"└ Go to the alliance hub (Channel Setup stays available there)\n"
                 f"{theme.lowerDivider}"
@@ -1290,10 +1120,9 @@ class AddAllianceModal(discord.ui.Modal):
 class EditNameModal(discord.ui.Modal):
     """Single-field alliance name editor. Updates alliance_list.name on submit."""
 
-    def __init__(self, alliance_id: int, current_name: str, conn):
+    def __init__(self, alliance_id: int, current_name: str):
         super().__init__(title="Edit Alliance Name")
         self.alliance_id = alliance_id
-        self.conn = conn
         self.name_input = discord.ui.TextInput(
             label="Alliance Name",
             placeholder="Enter the new alliance name",
@@ -1311,12 +1140,7 @@ class EditNameModal(discord.ui.Modal):
             )
             return
         try:
-            cursor = self.conn.cursor()
-            cursor.execute(
-                "UPDATE alliance_list SET name = ? WHERE alliance_id = ?",
-                (new_name, self.alliance_id),
-            )
-            self.conn.commit()
+            await asyncio.to_thread(rename_alliance, self.alliance_id, new_name)
 
             embed = discord.Embed(
                 title=f"{theme.verifiedIcon} Alliance Renamed",

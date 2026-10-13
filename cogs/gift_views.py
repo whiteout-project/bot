@@ -626,15 +626,14 @@ class GiftView(discord.ui.View):
                 color=theme.emColor1
             )
 
-            view = AllianceSelectView(alliances_with_counts, self.cog, context="giftcode")
-
-            view.current_select.options.insert(0, discord.SelectOption(
-                label="ALL ALLIANCES",
-                value="all",
-                description=f"Apply to all {len(alliances_with_counts)} alliances",
-                emoji=theme.globeIcon
-            ))
-            view.current_select.options = view.current_select.options[:25]
+            view = AllianceSelectView(alliances_with_counts, self.cog, context="giftcode", extra_options=[
+                discord.SelectOption(
+                    label="ALL ALLIANCES",
+                    value="all",
+                    description=f"Apply to all {len(alliances_with_counts)} alliances",
+                    emoji=theme.globeIcon
+                ),
+            ])
 
             async def alliance_callback(select_interaction: discord.Interaction, alliance_id=None):
                 try:

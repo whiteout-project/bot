@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 import pytz
 import os
 from typing import Dict
-import uuid
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from notification_event_types import (
@@ -128,7 +127,6 @@ class WizardSession:
         self.cog = cog
         self.guild_id = guild_id
         self.user_id = user_id
-        self.wizard_run_id = str(uuid.uuid4())
         self.wizard_batch_id = None
         self.is_update = False
         self.existing_notifications = {}
@@ -1902,7 +1900,6 @@ class MercenaryBossesConfigView(discord.ui.View):
         window_text = "N/A"
         if next_date:
             day1 = next_date.strftime('%B %d')
-            day2 = (next_date + timedelta(days=1)).strftime('%B %d')
             day3 = (next_date + timedelta(days=2)).strftime('%B %d, %Y')
             window_text = f"{day1} - {day3}"
 
@@ -2517,9 +2514,7 @@ class WizardPreviewView(discord.ui.View):
                 )
                 return
 
-            created_count = 0
             updated_count = 0
-            disabled_count = 0
             event_changes = {}
             from datetime import datetime, timedelta
             import pytz
@@ -2547,7 +2542,6 @@ class WizardPreviewView(discord.ui.View):
                     for notif in existing_notifs:
                         if notif.get("is_enabled", 1):
                             await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
-                            disabled_count += 1
                             any_disabled = True
                     if any_disabled:
                         event_changes[event_type] = [(None, "disabled")]
@@ -2613,7 +2607,6 @@ class WizardPreviewView(discord.ui.View):
                             bt1_datetime, repeat_minutes, description, embed_data,
                             selected_weekdays=selected_weekdays
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":  # Only track non-update changes
                             display = self._get_instance_display_name("Bear Trap", "bt1")
@@ -2628,7 +2621,6 @@ class WizardPreviewView(discord.ui.View):
                             bt2_datetime, repeat_minutes, description, embed_data,
                             selected_weekdays=selected_weekdays
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name("Bear Trap", "bt2")
@@ -2647,7 +2639,6 @@ class WizardPreviewView(discord.ui.View):
                             tuesday_hour, tuesday_minute, next_tuesday,
                             repeat_minutes, description, embed_data
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name("Crazy Joe", "tuesday")
@@ -2661,7 +2652,6 @@ class WizardPreviewView(discord.ui.View):
                             thursday_hour, thursday_minute, next_thursday,
                             repeat_minutes, description, embed_data
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name("Crazy Joe", "thursday")
@@ -2680,7 +2670,6 @@ class WizardPreviewView(discord.ui.View):
                             repeat_minutes, description,
                             self._phase_embed(event_name, embed_data, "legion1")
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name(event_name, "legion1")
@@ -2688,7 +2677,6 @@ class WizardPreviewView(discord.ui.View):
                     else:
                         # Legion 1 disabled - disable if existed
                         d = await self._disable_instance(bear_trap_cog, event_name, "legion1")
-                        disabled_count += d
                         if d > 0:
                             display = self._get_instance_display_name(event_name, "legion1")
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
@@ -2702,7 +2690,6 @@ class WizardPreviewView(discord.ui.View):
                             repeat_minutes, description,
                             self._phase_embed(event_name, embed_data, "legion2")
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name(event_name, "legion2")
@@ -2710,7 +2697,6 @@ class WizardPreviewView(discord.ui.View):
                     else:
                         # Legion 2 disabled - disable if existed
                         d = await self._disable_instance(bear_trap_cog, event_name, "legion2")
-                        disabled_count += d
                         if d > 0:
                             display = self._get_instance_display_name(event_name, "legion2")
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
@@ -2728,14 +2714,12 @@ class WizardPreviewView(discord.ui.View):
                             repeat_minutes, description,
                             self._phase_embed(event_name, embed_data, "legion1")
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name(event_name, "legion1")
                             event_changes.setdefault(event_name, []).append((display, action))
                     else:
                         d = await self._disable_instance(bear_trap_cog, event_name, "legion1")
-                        disabled_count += d
                         if d > 0:
                             display = self._get_instance_display_name(event_name, "legion1")
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
@@ -2749,14 +2733,12 @@ class WizardPreviewView(discord.ui.View):
                             repeat_minutes, description,
                             self._phase_embed(event_name, embed_data, "legion2")
                         )
-                        created_count += c
                         updated_count += u
                         if action != "updated":
                             display = self._get_instance_display_name(event_name, "legion2")
                             event_changes.setdefault(event_name, []).append((display, action))
                     else:
                         d = await self._disable_instance(bear_trap_cog, event_name, "legion2")
-                        disabled_count += d
                         if d > 0:
                             display = self._get_instance_display_name(event_name, "legion2")
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
@@ -2784,7 +2766,6 @@ class WizardPreviewView(discord.ui.View):
                                 hour, minute, event_next_occurrence,
                                 repeat_minutes, phase_description, phase_embed
                             )
-                            created_count += c
                             updated_count += u
                             if action != "updated":
                                 # For Fortress Battle, use the time as display name
@@ -2797,7 +2778,6 @@ class WizardPreviewView(discord.ui.View):
                         old_phase = notif.get("instance_identifier") or "default"
                         if old_phase not in processed_phases and notif.get("is_enabled", 1):
                             await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
-                            disabled_count += 1
                             # Get the time from the old notification for display
                             display = self._get_instance_display_name(event_name, old_phase, notif.get("hour"), notif.get("minute"))
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
@@ -2825,7 +2805,6 @@ class WizardPreviewView(discord.ui.View):
                                 hour, minute, event_next_occurrence,
                                 repeat_minutes, phase_description, phase_embed
                             )
-                            created_count += c
                             updated_count += u
                             if action != "updated":
                                 # Frostfire uses times, Castle/SvS use phase names
@@ -2838,7 +2817,6 @@ class WizardPreviewView(discord.ui.View):
                         old_phase = notif.get("instance_identifier") or "default"
                         if old_phase not in processed_phases and notif.get("is_enabled", 1):
                             await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
-                            disabled_count += 1
                             display = self._get_instance_display_name(event_name, old_phase, notif.get("hour"), notif.get("minute"))
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
 
@@ -2862,7 +2840,6 @@ class WizardPreviewView(discord.ui.View):
                                 hour, minute, start_date,
                                 repeat_minutes, description, embed_data
                             )
-                            created_count += c
                             updated_count += u
                             if action != "updated":
                                 display = self._get_instance_display_name(event_name, instance_id)
@@ -2874,7 +2851,6 @@ class WizardPreviewView(discord.ui.View):
                         old_instance = notif.get("instance_identifier") or "default"
                         if old_instance not in processed_instances and notif.get("is_enabled", 1):
                             await bear_trap_cog.toggle_notification(notif["id"], enabled=False, skip_board_update=True)
-                            disabled_count += 1
                             display = self._get_instance_display_name(event_name, old_instance)
                             event_changes.setdefault(event_name, []).append((display, "disabled"))
 
@@ -2884,7 +2860,6 @@ class WizardPreviewView(discord.ui.View):
                         0, 0, event_next_occurrence,
                         24 * 60, description, embed_data
                     )
-                    created_count += c
                     updated_count += u
                     if action != "updated":
                         # Daily Reset uses None as display (single-instance event)

@@ -1578,30 +1578,6 @@ class NotificationSystem(commands.Cog):
             print(f"Error getting all wizard notifications: {e}")
             return []
 
-    def delete_wizard_notifications_for_channel(self, guild_id: int, channel_id: int, event_types_to_keep: list = None) -> int:
-        """Delete wizard notifications that are no longer needed"""
-        try:
-            wizard_batch_id = f"wizard_{guild_id}_{channel_id}"
-            if event_types_to_keep:
-                placeholders = ",".join(["?"] * len(event_types_to_keep))
-                self.cursor.execute(f"""
-                    DELETE FROM bear_notifications
-                    WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
-                    AND event_type NOT IN ({placeholders})
-                """, (guild_id, channel_id, wizard_batch_id, *event_types_to_keep))
-            else:
-                self.cursor.execute("""
-                    DELETE FROM bear_notifications
-                    WHERE guild_id = ? AND channel_id = ? AND wizard_batch_id = ?
-                """, (guild_id, channel_id, wizard_batch_id))
-            deleted_count = self.cursor.rowcount
-            self.conn.commit()
-            return deleted_count
-        except Exception as e:
-            logger.error(f"Error deleting wizard notifications: {e}")
-            print(f"Error deleting wizard notifications: {e}")
-            return 0
-
     async def toggle_notification(self, notification_id: int, enabled: bool, skip_board_update: bool = False) -> bool:
         try:
 

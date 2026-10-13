@@ -8,10 +8,16 @@ on the connection, silently erasing the appointment.
 import asyncio
 import importlib
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
+
+import pytest
+
+from harness import make_player_sync_dbs
 
 mm = importlib.import_module("cogs.minister_menu")
 ms = importlib.import_module("cogs.minister_schedule")
+member_edit = importlib.import_module("cogs.alliance_member_edit")
 
 
 def _dbs():
@@ -147,3 +153,48 @@ def test_unregistered_user_reports_cleanly():
     assert sent, "must inform the admin via followup (response is already deferred)"
     assert "not registered" in str(sent[0])
     assert svs.execute("SELECT COUNT(*) FROM appointments").fetchone()[0] == 0
+
+
+# --- Player Sync in the minister menus ------------------------------------------------------
+
+@pytest.fixture
+def sync_dbs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    make_player_sync_dbs(tmp_path)
+
+
+def _stored_user(fid, avatar_url=None):
+    with closing(sqlite3.connect("db/users.sqlite")) as conn:
+        conn.execute("INSERT INTO users (fid, nickname, avatar_url) VALUES (?, 'N', ?)", (fid, avatar_url))
+        conn.commit()
+
+
+def test_log_avatar_uses_the_synced_picture(sync_dbs):
+    _stored_user(5, "https://i.example.com/5.png")
+    assert asyncio.run(member_edit.log_avatar_url(5)) == "https://i.example.com/5.png"
+
+
+def test_log_avatar_falls_back_to_the_default(sync_dbs):
+    _stored_user(6)
+    assert asyncio.run(member_edit.log_avatar_url(6)) == member_edit.DEFAULT_LOG_AVATAR
+    assert asyncio.run(member_edit.log_avatar_url(404)) == member_edit.DEFAULT_LOG_AVATAR
+
+
+def test_log_avatar_falls_back_when_the_database_errors(sync_dbs, monkeypatch):
+    def broken(fid):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(member_edit, "_stored_avatar_url", broken)
+    assert asyncio.run(member_edit.log_avatar_url(5)) == member_edit.DEFAULT_LOG_AVATAR
+
+
+@pytest.mark.parametrize("enabled, name_field, expected", [
+    (True, "nickname", "Player Sync fills them in"),
+    (True, "", "Manually set"),
+    (False, "nickname", "Manually set"),
+])
+def test_names_guide_promises_names_only_when_auto_sync_fills_them(sync_dbs, enabled, name_field, expected):
+    from cogs import alliance_api_sync as sync
+    sync.save_setting("profile", {"base_url": "https://api.example", "player_path": "/p/{id}",
+                       "fields": {"name": name_field, "level": "lv"}})
+    sync.save_setting("enabled", enabled)
+    assert expected in asyncio.run(mm.update_names_guide())

@@ -20,7 +20,7 @@ from importlib.metadata import version as get_package_version, PackageNotFoundEr
 from packaging.version import parse as parse_version
 import re
 from .permission_handler import PermissionManager
-from .pimp_my_bot import (theme, safe_edit_message, menu_timeout, MenuView, ConfirmView,
+from .pimp_my_bot import (theme, menu_timeout, MenuView, ConfirmView,
                           get_menu_timeout_minutes, set_menu_timeout_minutes,
                           MENU_TIMEOUT_MAX_MINUTES, get_confirm_timeout_seconds,
                           set_confirm_timeout_seconds, CONFIRM_TIMEOUT_MAX_SECONDS, confirm_timeout)

@@ -8,9 +8,10 @@ from contextlib import closing
 from datetime import datetime, timezone
 from .pimp_my_bot import theme, menu_timeout
 from .alliance import check_alliance_state
-from .gift_state_resolver import verify_add_state, get_alliance_kid
+from .gift_state_resolver import get_alliance_kid
 from .bot_level_mapping import parse_furnace_level, parse_state
-from .alliance_member_edit import apply_member_edit, new_member_name
+from .alliance_member_edit import api_state_refusal, apply_member_edit
+from .alliance_api_sync import look_up_new_member, store_new_member
 
 logger = logging.getLogger('alliance')
 
@@ -168,8 +169,8 @@ class AllianceRegistration(commands.Cog):
         fid="Your In-Game ID",
         alliance="Your Alliance Name",
         state="Your state number. Only needed if your alliance spans several states",
-        name="Your in-game name",
-        level="Your furnace level, like 30 or FC 10",
+        name="Your in-game name (optional)",
+        level="Your furnace level, like 30 or FC 10 (optional)",
     )
     @discord.app_commands.rename(fid="id")
     @discord.app_commands.autocomplete(alliance=alliance_autocomplete)
@@ -247,33 +248,35 @@ class AllianceRegistration(commands.Cog):
             await self._send_register_success(interaction, fid, caller_id, action="linked")
             return
 
-        # Resolve state with one probe; defer first since it's slow.
+        # The API lookup and the state probe are slow, so defer first.
         await interaction.response.defer(ephemeral=True)
+        kid = typed_kid = None
         if state is not None:
-            kid = parse_state(state)
+            kid = typed_kid = parse_state(state)
             if kid is None:
                 await interaction.followup.send(
                     f"{theme.deniedIcon} `{state}` isn't a state number. "
                     f"Enter digits only, like `911`.", ephemeral=True)
                 return
-        else:
-            gift_cog = self.bot.get_cog("GiftOperations")
-            kid = (await verify_add_state(gift_cog, fid, alliance))[0] if gift_cog else None
+        member = await look_up_new_member(self.bot, fid, alliance, name, furnace_lv, probe=typed_kid is None)
+        if member.kid is not None:
+            kid = member.kid
+        elif kid is None and await asyncio.to_thread(get_alliance_kid, alliance) is None:
             # No home state to inherit or confirm against, so we can't work it out.
-            if kid is None and await asyncio.to_thread(get_alliance_kid, alliance) is None:
-                await interaction.followup.send(
-                    f"{theme.infoIcon} This alliance has members in several states, so "
-                    f"we can't tell which one you're in. Run `/register` again and fill in "
-                    f"the **state** option with your state number.", ephemeral=True)
-                return
+            await interaction.followup.send(
+                f"{theme.infoIcon} This alliance has members in several states, so "
+                f"we can't tell which one you're in. Run `/register` again and fill in "
+                f"the **state** option with your state number.", ephemeral=True)
+            return
 
-        state_error = check_alliance_state(alliance, kid)
+        state_error = api_state_refusal(check_alliance_state(alliance, kid), member.kid, typed_kid)
         if state_error:
             await interaction.followup.send(f"{theme.deniedIcon} {state_error}", ephemeral=True)
             return
 
-        user_data = {"nickname": new_member_name(name, fid), "stove_lv": furnace_lv or 0, "kid": kid}
+        user_data = {"nickname": member.nickname, "stove_lv": member.furnace_lv, "kid": kid}
         self._insert_new_user(fid, user_data, alliance, caller_id, current_server_id)
+        await store_new_member(member, fid)
         await self._send_register_success(interaction, fid, caller_id, action="registered")
 
     async def _send_register_success(self, interaction: discord.Interaction,

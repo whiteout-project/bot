@@ -8,6 +8,9 @@ import asyncio
 import logging
 import types
 
+import pytest
+
+import cogs.alliance_api_sync as sync
 import cogs.gift_redemption as gr
 
 
@@ -50,7 +53,7 @@ import sqlite3
 real_sleep = asyncio.sleep
 
 
-def _drive(monkeypatch, status, preseed=None):
+def _drive(monkeypatch, status, preseed=None, claim=None, queue=None, members=1, post=None):
     """Run a full one-member redemption with the REAL batch persistence."""
     ac = sqlite3.connect(":memory:")
     ac.execute("CREATE TABLE alliancesettings (alliance_id INTEGER, channel_id INTEGER, redemption_channel_id INTEGER)")
@@ -74,13 +77,13 @@ def _drive(monkeypatch, status, preseed=None):
         conn=mc,
         get_test_fid=lambda: 999,
         captcha_solver=object(),
-        bot=types.SimpleNamespace(get_channel=lambda cid: None, get_cog=lambda name: None),
+        bot=types.SimpleNamespace(get_channel=lambda cid: None, get_cog=lambda name: queue),
         logger=logging.getLogger("test"),
     )
 
     users_mem = sqlite3.connect(":memory:")
     users_mem.execute("CREATE TABLE users (fid INTEGER, nickname TEXT, alliance TEXT)")
-    users_mem.execute("INSERT INTO users VALUES (1, 'member', '5')")
+    users_mem.executemany("INSERT INTO users VALUES (?, ?, '5')", [(1, 'member'), (2, 'other')][:members])
     users_mem.commit()
     real_connect = sqlite3.connect
 
@@ -108,10 +111,14 @@ def _drive(monkeypatch, status, preseed=None):
     monkeypatch.setattr(gr.time, "time", lambda: clock["t"])
     monkeypatch.setattr(gr.asyncio, "sleep", fast_sleep)
     monkeypatch.setattr(gr.random, "uniform", lambda a, b: 0)
-    monkeypatch.setattr(gr, "claim_giftcode_rewards_wos", fake_claim)
-    monkeypatch.setattr(gr, "post_redemption_summary", _anoop)
+    monkeypatch.setattr(gr, "claim_giftcode_rewards_wos", claim or fake_claim)
+    monkeypatch.setattr(gr, "post_redemption_summary", post or _anoop)
 
-    assert asyncio.run(gr.use_giftcode_for_alliance(cog, 5, "CODE")) is True
+    if queue is None:
+        assert asyncio.run(gr.use_giftcode_for_alliance(cog, 5, "CODE")) is True
+    else:
+        with pytest.raises(gr.PreemptedException):
+            asyncio.run(gr.use_giftcode_for_alliance(cog, 5, "CODE"))
     row = mc.execute(
         "SELECT status FROM user_giftcodes WHERE fid = 1 AND giftcode = 'CODE'"
     ).fetchone()
@@ -165,3 +172,81 @@ def test_used_count_excludes_persisted_failures():
     embed = sent[0]
     assert "Used by: 2 users" in embed.fields[0].value, \
         f"failures must not inflate the count: {embed.fields[0].value}"
+
+
+def test_rejected_states_go_to_the_api_after_the_loop_and_before_removals(monkeypatch):
+    events = []
+
+    async def claim(cog_, fid, giftcode, *, removal_collector=None, api_checks=None, **kw):
+        events.append("claim")
+        api_checks.append((fid, 100))
+        removal_collector.append(("5", fid, "member"))
+        return "STATE_MISMATCH"
+
+    async def confirm(cog_, checks, collector):
+        events.append(("confirm", list(checks), list(collector)))
+
+    async def apply(cog_, candidates):
+        events.append("apply")
+        return []
+
+    async def api_off():
+        return False
+
+    async def post(*args):
+        events.append("summary")
+
+    monkeypatch.setattr(gr, "confirm_mismatches", confirm)
+    monkeypatch.setattr(gr, "apply_removals", apply)
+    monkeypatch.setattr(sync, "api_available_async", api_off)
+    _drive(monkeypatch, None, claim=claim, post=post)
+    assert events[-3:] == ["summary", ("confirm", [(1, 100)], [("5", 1, "member")]), "apply"]
+    assert all(event == "claim" for event in events[:-3])
+
+
+def test_preempt_flags_unconfirmed_members_instead_of_removing_them(monkeypatch):
+    claimed, applied, flagged = [], [], []
+
+    async def claim(cog_, fid, giftcode, *, removal_collector=None, api_checks=None, **kw):
+        claimed.append(fid)
+        api_checks.append((fid, 100))
+        removal_collector.append(("5", fid, "member"))
+        return "STATE_MISMATCH"
+
+    async def apply(cog_, candidates):
+        applied.append(list(candidates))
+        return []
+
+    async def api_off():
+        return False
+
+    queue = types.SimpleNamespace(stop_requested=lambda: False, should_preempt=lambda: bool(claimed),
+                                  update_details=lambda *a: None)
+    monkeypatch.setattr(gr, "apply_removals", apply)
+    monkeypatch.setattr(sync, "api_available_async", api_off)
+    monkeypatch.setattr(gr.gift_state_resolver, "flag_state_mismatch_many", lambda fids: flagged.extend(fids))
+    _drive(monkeypatch, None, claim=claim, queue=queue, members=2)
+    assert claimed == [1] and flagged == [1] and applied == []
+
+
+def test_preempt_without_the_api_keeps_the_immediate_removal(monkeypatch):
+    claimed, applied = [], []
+
+    async def claim(cog_, fid, giftcode, *, removal_collector=None, api_checks=None, **kw):
+        claimed.append(fid)
+        removal_collector.append(("5", fid, "member"))   # no API: nothing goes into api_checks
+        return "STATE_MISMATCH"
+
+    async def apply(cog_, candidates):
+        applied.append(list(candidates))
+        return []
+
+    async def api_off():
+        return False
+
+    queue = types.SimpleNamespace(stop_requested=lambda: False, should_preempt=lambda: bool(claimed),
+                                  update_details=lambda *a: None)
+    monkeypatch.setattr(gr, "apply_removals", apply)
+    monkeypatch.setattr(sync, "api_available_async", api_off)
+    _drive(monkeypatch, None, claim=claim, queue=queue, members=2)
+    assert applied == [[("5", 1, "member")]]

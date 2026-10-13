@@ -1,13 +1,15 @@
-"""Per-alliance channel setup. Consolidates ID Channel, Activity Log, and Sync
-Log into a single view so admins configure all three in one place."""
+"""Per-alliance channel setup: ID Channel, Activity Log, Redemption Log and Sync Log in one view."""
 
+import asyncio
 import discord
 from discord.ext import commands
 import sqlite3
 import logging
+from contextlib import closing
 from datetime import datetime
 from .pimp_my_bot import theme, safe_edit_message, menu_timeout
 from .permission_handler import PermissionManager
+from .alliance_api_sync import clear_sync_channel, set_sync_channel
 
 logger = logging.getLogger('alliance')
 
@@ -32,7 +34,7 @@ class AllianceChannels(commands.Cog):
 
         view = ChannelSetupView(alliance_id, row[0], self)
         await safe_edit_message(
-            interaction, embed=view.build_embed(interaction.guild),
+            interaction, embed=await view.build_embed(interaction.guild),
             view=view, content=None,
         )
 
@@ -44,6 +46,7 @@ class ChannelSetupView(discord.ui.View):
         "id":     ("ID Channel",     "fidIcon",      "_set_id_channel",  "_clear_id_channel"),
         "log":    ("Activity Log",   "documentIcon", "_set_activity_log", "_clear_activity_log"),
         "redeem": ("Redemption Log", "giftIcon",     "_set_redemption_channel", "_clear_redemption_channel"),
+        "sync":   ("Sync Log",       "retryIcon",    "_set_sync_log", "_clear_sync_log"),
     }
 
     def __init__(self, alliance_id: int, alliance_name: str, cog):
@@ -54,8 +57,8 @@ class ChannelSetupView(discord.ui.View):
         self._build_components()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        alliance_ids, is_global = PermissionManager.get_admin_alliance_ids(
-            interaction.user.id, interaction.guild_id
+        alliance_ids, is_global = await asyncio.to_thread(
+            PermissionManager.get_admin_alliance_ids, interaction.user.id, interaction.guild_id
         )
         allowed = is_global or str(self.alliance_id) in {str(aid) for aid in alliance_ids}
         if not allowed:
@@ -153,16 +156,6 @@ class ChannelSetupView(discord.ui.View):
             )
             db.commit()
 
-    def _get_redemption_channel(self):
-        with sqlite3.connect('db/alliance.sqlite') as db:
-            cur = db.cursor()
-            cur.execute(
-                "SELECT redemption_channel_id FROM alliancesettings WHERE alliance_id = ?",
-                (self.alliance_id,),
-            )
-            row = cur.fetchone()
-        return row[0] if row else None
-
     def _set_redemption_channel(self, channel_id: int, **_):
         with sqlite3.connect('db/alliance.sqlite') as db:
             cur = db.cursor()
@@ -182,11 +175,34 @@ class ChannelSetupView(discord.ui.View):
             )
             db.commit()
 
+    def _set_sync_log(self, channel_id: int, **_):
+        set_sync_channel(self.alliance_id, channel_id)
+
+    def _clear_sync_log(self, **_):
+        clear_sync_channel(self.alliance_id)
+
+    def _alliance_setting_channels(self):
+        """(redemption, sync log) channel ids, read on one connection."""
+        with closing(sqlite3.connect('db/alliance.sqlite', timeout=30.0)) as db:
+            row = db.execute(
+                "SELECT redemption_channel_id, channel_id FROM alliancesettings WHERE alliance_id = ?",
+                (self.alliance_id,),
+            ).fetchone()
+        redeem, sync_log = row if row else (None, None)
+        return redeem, int(sync_log) if sync_log else None
+
+    def _channel_ids(self) -> dict:
+        redeem, sync_log = self._alliance_setting_channels()
+        return {"id": self._get_id_channel(), "log": self._get_activity_log_channel(),
+                "redeem": redeem, "sync": sync_log}
+
     # ── Embed / build ─────────────────────────────────────────────────
 
-    def build_embed(self, guild) -> discord.Embed:
-        def fmt(channel_id):
-            return f"<#{channel_id}>" if channel_id else "_(none)_"
+    async def build_embed(self, guild) -> discord.Embed:
+        channels = await asyncio.to_thread(self._channel_ids)
+
+        def fmt(kind):
+            return f"<#{channels[kind]}>" if channels[kind] else "_(none)_"
 
         return discord.Embed(
             title=f"{theme.allianceIcon} {self.alliance_name} — Channel Setup",
@@ -195,14 +211,17 @@ class ChannelSetupView(discord.ui.View):
                 f"**Channels**\n"
                 f"{theme.upperDivider}\n"
                 f"{theme.fidIcon} **ID Channel**\n"
-                f"└ {fmt(self._get_id_channel())}\n"
+                f"└ {fmt('id')}\n"
                 f"└ Self-registration channel where players post their in-game ID\n\n"
                 f"{theme.documentIcon} **Activity Log**\n"
-                f"└ {fmt(self._get_activity_log_channel())}\n"
+                f"└ {fmt('log')}\n"
                 f"└ Posts member additions, removals, and history events\n\n"
                 f"{theme.giftIcon} **Redemption Log**\n"
-                f"└ {fmt(self._get_redemption_channel())}\n"
-                f"└ Posts gift code redemption progress and summaries\n"
+                f"└ {fmt('redeem')}\n"
+                f"└ Posts gift code redemption progress and summaries\n\n"
+                f"{theme.retryIcon} **Sync Log**\n"
+                f"└ {fmt('sync')}\n"
+                f"└ Posts the changes Player Sync finds\n"
                 f"{theme.lowerDivider}"
             ),
             color=theme.emColor1,
@@ -214,6 +233,7 @@ class ChannelSetupView(discord.ui.View):
             ("id",     theme.fidIcon,      0),
             ("log",    theme.documentIcon, 1),
             ("redeem", theme.giftIcon,     2),
+            ("sync",   theme.retryIcon,    3),
         ]
         for kind, icon, row in rows:
             label = self.KINDS[kind][0]
@@ -248,14 +268,14 @@ class ChannelSetupView(discord.ui.View):
                     f"{theme.deniedIcon} No text channels available.", ephemeral=True
                 )
                 return
-            picker = _ChannelPickerView(channels, kind, self)
+            picker = ChannelPickerView(channels, kind, self)
             await interaction.response.edit_message(
                 embed=discord.Embed(
                     title=f"{theme.announceIcon} Pick a channel — "
                           f"{self.KINDS[kind][0]}",
                     description=(
                         f"Select the channel for **{self.alliance_name}**, "
-                        f"or click **Cancel** to keep the current setting."
+                        f"or click **Back** to keep the current setting."
                     ),
                     color=theme.emColor1,
                 ),
@@ -265,17 +285,15 @@ class ChannelSetupView(discord.ui.View):
 
     def _make_clear_callback(self, kind: str):
         async def cb(interaction: discord.Interaction):
-            if kind == "id":
-                self._clear_id_channel(interaction.guild_id)
-            elif kind == "log":
-                self._clear_activity_log()
-            else:  # redeem
-                self._clear_redemption_channel()
-            self._build_components()
-            await interaction.response.edit_message(
-                embed=self.build_embed(interaction.guild), view=self,
-            )
+            await asyncio.to_thread(getattr(self, self.KINDS[kind][3]), guild_id=interaction.guild_id)
+            await self.show(interaction)
         return cb
+
+    async def show(self, interaction: discord.Interaction):
+        self._build_components()
+        await interaction.response.edit_message(
+            embed=await self.build_embed(interaction.guild), view=self,
+        )
 
     async def _on_back(self, interaction: discord.Interaction):
         main_menu = self.cog.bot.get_cog("MainMenu")
@@ -286,23 +304,20 @@ class ChannelSetupView(discord.ui.View):
                 f"{theme.deniedIcon} Main Menu module not found.", ephemeral=True
             )
 
-    def apply_pick(self, interaction: discord.Interaction, kind: str, channel_id: int):
-        """Called by _ChannelPickerView when the user picks a channel."""
-        if kind == "id":
-            self._set_id_channel(interaction.guild_id, channel_id, interaction.user.id)
-        elif kind == "log":
-            self._set_activity_log(channel_id)
-        else:  # redeem
-            self._set_redemption_channel(channel_id)
+    async def apply_pick(self, interaction: discord.Interaction, kind: str, channel_id: int):
+        await asyncio.to_thread(
+            getattr(self, self.KINDS[kind][2]),
+            guild_id=interaction.guild_id, channel_id=channel_id, user_id=interaction.user.id,
+        )
 
 
-class _ChannelPickerView(discord.ui.View):
-    """In-place paginated channel picker for ChannelSetupView. Re-renders the
-    parent view on selection or cancellation."""
+class ChannelPickerView(discord.ui.View):
+    """In-place paginated channel picker. The parent provides interaction_check,
+    apply_pick(interaction, kind, channel_id) and show(interaction)."""
 
     PAGE_SIZE = 25
 
-    def __init__(self, channels, kind: str, parent: ChannelSetupView):
+    def __init__(self, channels, kind: str, parent):
         super().__init__(timeout=menu_timeout())
         self.channels = list(channels)
         self.kind = kind
@@ -351,30 +366,25 @@ class _ChannelPickerView(discord.ui.View):
             next_btn.callback = self._on_next
             self.add_item(next_btn)
 
-        cancel_btn = discord.ui.Button(
-            label="Cancel", emoji=theme.backIcon,
+        back_btn = discord.ui.Button(
+            label="Back", emoji=theme.backIcon,
             style=discord.ButtonStyle.secondary, row=1,
         )
-        cancel_btn.callback = self._on_cancel
-        self.add_item(cancel_btn)
+        back_btn.callback = self._on_back
+        self.add_item(back_btn)
 
     async def _on_pick(self, interaction: discord.Interaction):
         select = next(c for c in self.children if isinstance(c, discord.ui.Select))
         channel_id = int(select.values[0])
         try:
-            self.parent.apply_pick(interaction, self.kind, channel_id)
+            await self.parent.apply_pick(interaction, self.kind, channel_id)
         except Exception as e:
             logger.error(f"Channel pick error ({self.kind}): {e}")
-            print(f"Channel pick error ({self.kind}): {e}")
             await interaction.response.send_message(
                 f"{theme.deniedIcon} Failed to save channel: {e}", ephemeral=True
             )
             return
-        self.parent._build_components()
-        await interaction.response.edit_message(
-            embed=self.parent.build_embed(interaction.guild),
-            view=self.parent,
-        )
+        await self.parent.show(interaction)
 
     async def _on_prev(self, interaction: discord.Interaction):
         self.page = max(0, self.page - 1)
@@ -386,11 +396,8 @@ class _ChannelPickerView(discord.ui.View):
         self._build()
         await interaction.response.edit_message(view=self)
 
-    async def _on_cancel(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
-            embed=self.parent.build_embed(interaction.guild),
-            view=self.parent,
-        )
+    async def _on_back(self, interaction: discord.Interaction):
+        await self.parent.show(interaction)
 
 
 async def setup(bot):

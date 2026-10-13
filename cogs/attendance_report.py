@@ -127,19 +127,6 @@ class AttendanceReport(commands.Cog):
             except Exception:
                 return text
         return text
-    
-    def _format_date_for_table(self, date_str: str) -> str:
-        """Format date string for table display"""
-        try:
-            if 'T' in date_str:
-                # Parse ISO format and convert to desired format
-                date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                return date_obj.strftime("%Y-%m-%d %H:%M UTC")
-            else: # Already formatted or partial date
-                return date_str
-        except Exception:
-            # Fallback to original if parsing fails
-            return date_str.split()[0] if date_str else "N/A"
 
     def _create_error_embed(self, title, description, color=theme.emColor2):
         """Helper to create error embeds"""

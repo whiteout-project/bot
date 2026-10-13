@@ -310,22 +310,6 @@ class ThemeEditorHub(discord.ui.View):
         embed = view.build_category_embed()
         await interaction.response.edit_message(embed=embed, view=view)
 
-    def _make_category_callback(self, category_name: str):
-        """Create a callback for a category button."""
-        async def callback(interaction: discord.Interaction):
-            if interaction.user.id != self.session.user_id:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} Only the theme creator can edit.",
-                    ephemeral=True
-                )
-                return
-
-            view = IconCategoryView(self.cog, self.session, category_name, self)
-            embed = view.build_category_embed()
-            await interaction.response.edit_message(embed=embed, view=view)
-
-        return callback
-
     def build_hub_embed(self, confirmation: str = None) -> discord.Embed:
         """Build the main hub embed showing all icons by category (emoji only)."""
         self.session.load_theme_data()

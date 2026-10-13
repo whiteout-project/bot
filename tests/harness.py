@@ -154,11 +154,16 @@ def run_ocr_pipeline(image_bytes: bytes, primary_lang: str = "ch",
 
 
 def make_player_sync_dbs(tmp_path):
-    """Empty settings/users/changes databases shaped like a live install, for Player Sync tests."""
+    """Empty settings/alliance/users/changes databases shaped like a live install, for Player Sync tests."""
     (tmp_path / "db").mkdir(exist_ok=True)
     with closing(sqlite3.connect(tmp_path / "db" / "settings.sqlite")) as conn:
         conn.execute("CREATE TABLE bot_global_settings (setting_key TEXT PRIMARY KEY, setting_value TEXT)")
-        conn.execute("CREATE TABLE alliance_logs (alliance_id INTEGER PRIMARY KEY, channel_id INTEGER)")
+        conn.commit()
+    with closing(sqlite3.connect(tmp_path / "db" / "alliance.sqlite")) as conn:
+        conn.execute("CREATE TABLE alliancesettings (alliance_id INTEGER PRIMARY KEY, channel_id INTEGER, "
+                     "interval INTEGER, redemption_channel_id INTEGER, auto_remove_on_transfer INTEGER DEFAULT 0)")
+        conn.execute("CREATE TABLE alliance_list (alliance_id INTEGER PRIMARY KEY, name TEXT, kid INTEGER, "
+                     "multistate INTEGER DEFAULT 0, state_locked INTEGER DEFAULT 0)")
         conn.commit()
     with closing(sqlite3.connect(tmp_path / "db" / "users.sqlite")) as conn:
         conn.execute("""CREATE TABLE users (
@@ -172,3 +177,31 @@ def make_player_sync_dbs(tmp_path):
         conn.execute("CREATE TABLE nickname_changes (fid, old_nickname, new_nickname, change_date)")
         conn.execute("CREATE TABLE furnace_changes (fid, old_furnace_lv, new_furnace_lv, change_date)")
         conn.commit()
+
+
+def fake_player_api(monkeypatch, values, available=True):
+    """Stands in for Player Sync at its lookup boundary. `values` is one answer for every ID or a
+    function of the ID; the returned state's `values`/`available` can change mid-test, `asked` lists lookups."""
+    from types import SimpleNamespace
+    from cogs import alliance_api_sync
+    state = SimpleNamespace(values=values, available=available, asked=[])
+
+    async def available_async():
+        return state.available
+
+    async def lookup(bot, fid):
+        if not state.available:
+            return alliance_api_sync.Lookup(reason=alliance_api_sync.NOT_SET_UP)
+        state.asked.append(fid)
+        found = state.values(fid) if callable(state.values) else state.values
+        return alliance_api_sync.Lookup(dict(found) if found is not None else None)
+    monkeypatch.setattr(alliance_api_sync, "api_available", lambda profile=None: state.available)
+    monkeypatch.setattr(alliance_api_sync, "api_available_async", available_async)
+    monkeypatch.setattr(alliance_api_sync, "lookup_via_bot", lookup)
+    return state
+
+
+def kid_and_flag(fid):
+    """(kid, state_mismatch_at) for a member in db/users.sqlite, or None when they're gone."""
+    with closing(sqlite3.connect("db/users.sqlite")) as conn:
+        return conn.execute("SELECT kid, state_mismatch_at FROM users WHERE fid = ?", (fid,)).fetchone()

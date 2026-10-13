@@ -6,17 +6,15 @@ import logging
 import discord
 
 from . import gift_state_resolver as gsr
+from .alliance_api_sync import api_available_async, budget_spent
+from .gift_redemption import API_LIMIT_PROGRESS, API_LIMIT_SCAN_NOW
 from .bot_level_mapping import parse_state
-from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, MenuView
+from .pimp_my_bot import (theme, safe_edit_message, check_interaction_user, count_text, GlobalAdminView,
+                          require_global_admin)
 
 logger = logging.getLogger('gift')
 
 PAGE_SIZE = 25
-
-
-def _count(n, word):
-    return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
 def _scan_lines(cog):
@@ -76,49 +74,36 @@ def parse_scan_range(lo_text, hi_text):
     return lo, hi
 
 
-def _queue_result_text(queued):
+def _queue_result_text(queued, api_on=False):
     if queued is None:
         return "A state scan is already running."
     if queued == 0:
         return "Nobody needs a scan right now."
-    return (f"Scanning {_count(queued, 'member')} now. It steps aside whenever a gift code needs "
+    if api_on:
+        return (f"Looking up {count_text(queued, 'member')} through your API now. Anyone it doesn't know "
+                f"is scanned in the background, which can take a while.")
+    return (f"Scanning {count_text(queued, 'member')} now. It steps aside whenever a gift code needs "
             f"redeeming, so it can take a while.")
 
 
-async def _is_global_admin(interaction: discord.Interaction) -> bool:
-    """Every action here spans all alliances, so it's Global-only; denies with an ephemeral."""
-    _, is_global = PermissionManager.is_admin(interaction.user.id)
-    if not is_global:
-        await interaction.response.send_message(
-            f"{theme.deniedIcon} Only global administrators can manage member states.",
-            ephemeral=True,
-        )
-    return is_global
+# Every action here spans all alliances, so it's Global-only.
+DENIAL = "Only global administrators can manage member states."
 
 
 async def show_state_management(cog, interaction: discord.Interaction):
-    if not await _is_global_admin(interaction):
+    if not await require_global_admin(interaction, DENIAL):
         return
     view = StateManagementView(cog, interaction.user.id)
     await safe_edit_message(interaction, embed=await view.build_embed(), view=view, content=None)
 
 
-class _MenuView(MenuView):
-    """Shared plumbing: dynamic buttons, refresh in place, Back to the hub."""
+class _MenuView(GlobalAdminView):
+    """Shared plumbing: refresh in place, Back to the hub."""
+    denial_text = DENIAL
 
     def __init__(self, cog, user_id):
-        super().__init__(user_id)
-        self.cog = cog
+        super().__init__(cog, user_id)
         self.last_result = None
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Re-checked per click: the menu lives for hours and admin rights can change meanwhile.
-        return await _is_global_admin(interaction) and await super().interaction_check(interaction)
-
-    def _add_button(self, label, emoji, style, row, callback, disabled=False):
-        button = discord.ui.Button(label=label, emoji=f"{emoji}", style=style, row=row, disabled=disabled)
-        button.callback = callback
-        self.add_item(button)
 
     async def refresh(self, interaction: discord.Interaction):
         await safe_edit_message(interaction, embed=await self.build_embed(), view=self, content=None)
@@ -169,6 +154,7 @@ class StateManagementView(_MenuView):
     async def build_embed(self):
         counts = await asyncio.to_thread(_hub_counts)
         settings = await asyncio.to_thread(gsr.get_scan_settings)
+        api_on = await api_available_async()
         to_fix = counts['wrong'] + counts['missing']
 
         self.clear_items()
@@ -196,7 +182,8 @@ class StateManagementView(_MenuView):
         lines += [
             f"{theme.lowerDivider}",
             f"{theme.membersIcon} **Members to Fix**",
-            "└ Set states by hand, copy the alliance's state, or scan for them.",
+            ("└ Look states up through your API, set them by hand, or copy the alliance's state."
+             if api_on else "└ Set states by hand, copy the alliance's state, or scan for them."),
             f"{theme.allianceIcon} **Alliance States**",
             "└ Give alliances their state and mark alliances that span several states.",
             f"{theme.searchIcon} **State Scan**",
@@ -228,6 +215,7 @@ class MembersToFixView(_PagedView):
 
     async def build_embed(self):
         await self._rows(gsr.members_to_fix)
+        api_on = await api_available_async()
         wrong = sum(1 for r in self.rows if r[3] == 'wrong')
         missing = len(self.rows) - wrong
         self.clear_items()
@@ -258,13 +246,17 @@ class MembersToFixView(_PagedView):
             f"{theme.stateIcon} **Wrong state:** `{wrong}`",
             f"{theme.membersIcon} **No state:** `{missing}`\n",
             f"{theme.userIcon} **Pick a member**",
-            "└ Type their state. They get the codes they missed right away.",
+            ("└ Type their state if your API doesn't know it. They get the codes they missed right away."
+             if api_on else "└ Type their state. They get the codes they missed right away."),
             f"{theme.membersIcon} **Set All to State**",
             "└ Put every member with a wrong state in one state, for a group that transferred together.",
             f"{theme.allianceIcon} **Use Alliance State**",
             "└ Give members with no state their alliance's state right away.",
             f"{theme.searchIcon} **Scan These Now**",
-            "└ Try state numbers for each member in the background until one fits. This can take hours.",
+            ("└ Look each member up through your API. Anyone it doesn't know is "
+             "scanned in the background, which can take hours."
+             if api_on else
+             "└ Try state numbers for each member in the background until one fits. This can take hours."),
             f"{theme.trashIcon} **Dismiss Warnings**",
             "└ Clear the wrong-state warnings. Members who are still wrong show up again after the next redemption.",
         ]
@@ -292,21 +284,24 @@ class MembersToFixView(_PagedView):
     async def _on_use_alliance(self, interaction: discord.Interaction):
         n, caught = await asyncio.to_thread(self.cog.assign_alliance_state_to_missing)
         self.last_result = (
-            f"Gave {_count(n, 'member')} their alliance's state."
+            f"Gave {count_text(n, 'member')} their alliance's state."
             + (f" Redeeming the codes {caught} of them missed." if caught else "")
             if n else "Their alliances don't have a state yet either. Give the alliances a state first."
         )
         await self.refresh(interaction)
 
     async def _on_scan(self, interaction: discord.Interaction):
-        self.last_result = _queue_result_text(self.cog.queue_kingdom_scan('now'))
+        if await asyncio.to_thread(budget_spent):
+            self.last_result = API_LIMIT_SCAN_NOW
+        else:
+            self.last_result = _queue_result_text(self.cog.queue_kingdom_scan('now'), await api_available_async())
         await self.refresh(interaction)
 
     async def _on_dismiss(self, interaction: discord.Interaction):
         wrong = [r[0] for r in self.rows if r[3] == 'wrong']
         await asyncio.to_thread(gsr.clear_state_mismatch_many, wrong)
         self.cog.logger.info(f"GiftOps: admin dismissed {len(wrong)} wrong-state warning(s)")
-        self.last_result = f"Dismissed {_count(len(wrong), 'warning')}."
+        self.last_result = f"Dismissed {count_text(len(wrong), 'warning')}."
         await self.refresh(interaction)
 
 
@@ -370,7 +365,7 @@ class AllianceKingdomsView(_PagedView):
         result = await asyncio.to_thread(self.cog.bind_alliance_states)
         b, m = len(result["bound"]), len(result["multistate"])
         self.last_result = (
-            f"Gave {_count(b, 'alliance')} a state and marked {m} as multistate."
+            f"Gave {count_text(b, 'alliance')} a state and marked {m} as multistate."
             if (b or m) else "No alliance had a clear majority to bind."
         )
         await self.refresh(interaction)
@@ -404,13 +399,20 @@ class KingdomScanView(_MenuView):
             f"`{needing - waiting}`",
         ]
         lines.extend(_scan_lines(self.cog))
+        if on and await asyncio.to_thread(budget_spent):
+            lines.append(f"\n{theme.infoIcon} {API_LIMIT_PROGRESS}")
         lines += [
             f"{theme.lowerDivider}",
             f"{theme.searchIcon} **Auto-scan**",
             "└ When it's on, the bot scans members who need a state whenever it's idle.",
             f"{theme.stateIcon} **Set Range**",
             "└ Limit the scan to the state numbers your members could be in.",
-            f"\n{theme.infoIcon} A full scan can take several hours per member. Members it finds "
+            "",
+        ]
+        if await api_available_async():
+            lines.append(f"{theme.infoIcon} Player Sync's Auto Sync also fills in missing states while it's on.")
+        lines += [
+            f"{theme.infoIcon} A full scan can take several hours per member. Members it finds "
             f"get the codes they missed.",
         ]
         if self.last_result:
@@ -447,7 +449,7 @@ class ScanRangeModal(discord.ui.Modal):
         self.add_item(self.hi)
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not await _is_global_admin(interaction):
+        if not await require_global_admin(interaction, DENIAL):
             return
         if not await check_interaction_user(interaction, self.parent_view.original_user_id):
             return
@@ -484,7 +486,7 @@ class MemberStateModal(discord.ui.Modal):
         self.add_item(self.state)
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not await _is_global_admin(interaction):
+        if not await require_global_admin(interaction, DENIAL):
             return
         if not await check_interaction_user(interaction, self.parent_view.original_user_id):
             return
@@ -522,7 +524,7 @@ class BulkStateModal(discord.ui.Modal):
         self.add_item(self.state)
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not await _is_global_admin(interaction):
+        if not await require_global_admin(interaction, DENIAL):
             return
         if not await check_interaction_user(interaction, self.parent_view.original_user_id):
             return

@@ -31,8 +31,8 @@ from harness_attendance import parsers, load_roster
     # Wrong fingerprint for event type
     ("foundry_battle", "Personal Point Ranking (canyon)", False),
 ])
-def test_fingerprint_match(event_type, text, expected):
-    assert parsers.fingerprint_match(event_type, text) == expected
+def test_detect_kind_matches_fingerprint(event_type, text, expected):
+    assert (parsers.detect_kind(event_type, text) is not None) == expected
 
 
 @pytest.mark.parametrize("event_type,text,kind,expected", [
@@ -45,12 +45,12 @@ def test_fingerprint_match(event_type, text, expected):
     ("canyon_clash", "Total Fuel Used: 31.1M", "result", True),
     ("canyon_clash", "selected as a combatant for Canyon Clash", "registration", True),
 ])
-def test_fingerprint_match_by_kind(event_type, text, kind, expected):
-    assert parsers.fingerprint_match(event_type, text, kind=kind) == expected
+def test_detect_kind_by_kind(event_type, text, kind, expected):
+    assert (parsers.detect_kind(event_type, text) == kind) == expected
 
 
 def test_classifier_unknown_event_type():
-    assert parsers.fingerprint_match("doesnt_exist", "any text") is False
+    assert parsers.detect_kind("doesnt_exist", "any text") is None
 
 
 @pytest.mark.parametrize("event_type,text,expected_kind", [
@@ -173,8 +173,8 @@ def test_canyon_clash_result_fingerprint_doesnt_match_registration_mail():
     """Result-kind regex must NOT match a registration mail even when the
     event_type is canyon_clash. detect_kind should pick 'registration'."""
     assert parsers.detect_kind("canyon_clash", _TEXT_CANYON_REG_INVITATION) == "registration"
-    assert parsers.fingerprint_match("canyon_clash", _TEXT_CANYON_REG_INVITATION,
-                                     kind="result") is False
+    result_rx = parsers.EVENT_TYPES["canyon_clash"].fingerprint_re_by_kind["result"]
+    assert result_rx.search(_TEXT_CANYON_REG_INVITATION) is None
 
 
 def test_canyon_clash_fingerprint_still_matches_real_result_mails():
@@ -431,16 +431,6 @@ def test_parse_power_rows_keeps_four_word_name():
     """Same truncation regression on the power parser."""
     rows = parsers._parse_power_rows("5 Bow to thy Lord 259,726,677\n")
     assert rows and rows[0]["name"] == "Bow to thy Lord"
-
-
-def test_cleaner_name_dedup_preference():
-    """Power Rankings dedup keeps the cleaner name on a power collision (the
-    pinned self-row / scroll-overlap duplicate)."""
-    # Fewer digit-noise tokens wins (decorated self-row read as '008$Trolol8e').
-    assert parsers._cleaner_name("Trololololol", "008$Trolol8e") is True
-    # Same noise → longer (more complete) name wins.
-    assert parsers._cleaner_name("Trololololol", "Trolo") is True
-    assert parsers._cleaner_name("Trolo", "Trololololol") is False
 
 
 def test_parse_power_rows_drops_sub_million_values():

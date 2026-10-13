@@ -141,10 +141,8 @@ if sys.prefix == sys.base_prefix and not should_skip_venv():
     # Determine the python executable path in the venv
     if sys.platform == "win32":
         venv_python_name = os.path.join(venv_path, "Scripts", "python.exe")
-        activate_script = os.path.join(venv_path, "Scripts", "activate.bat")
     else:
         venv_python_name = os.path.join(venv_path, "bin", "python")
-        activate_script = os.path.join(venv_path, "bin", "activate")
 
     if not os.path.exists(venv_path):
         try:
@@ -611,15 +609,11 @@ beta_mode = "--beta" in sys.argv
 setup_dependencies(beta_mode=beta_mode)  # Warnings shown internally on failure
 
 try:
-    from colorama import Fore, Style, init
+    from colorama import init
     import discord
 except ImportError as e:
     startup.error_box("Import Failed", f"Import failed after dependency setup: {e}", "Restart the script or run: pip install -r requirements.txt")
     sys.exit(1)
-
-# Colorama shortcuts
-F = Fore
-R = Style.RESET_ALL
 
 import warnings
 import aiohttp

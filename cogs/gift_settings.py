@@ -1,14 +1,8 @@
 """Gift code settings — OCR configuration, test FID management, redemption priority, and auto-redemption setup."""
 
 import discord
-import asyncio
 import sqlite3
-import time
-import base64
 import logging
-import requests
-import json
-import traceback
 
 from .pimp_my_bot import theme, safe_edit_message, check_interaction_user, menu_timeout, confirm_timeout
 from .alliance_member_operations import AllianceSelectView
@@ -257,22 +251,20 @@ async def setup_giftcode_auto(cog, interaction: discord.Interaction):
         color=theme.emColor1
     )
 
-    view = AllianceSelectView(alliances_with_counts, cog, context="giftcode")
-
-    view.current_select.options.insert(0, discord.SelectOption(
-        label="ENABLE ALL ALLIANCES",
-        value="enable_all",
-        description="Enable automatic redemption for all alliances",
-        emoji=f"{theme.verifiedIcon}"
-    ))
-
-    view.current_select.options.insert(1, discord.SelectOption(
-        label="DISABLE ALL ALLIANCES",
-        value="disable_all",
-        description="Disable automatic redemption for all alliances",
-        emoji=f"{theme.deniedIcon}"
-    ))
-    view.current_select.options = view.current_select.options[:25]
+    view = AllianceSelectView(alliances_with_counts, cog, context="giftcode", extra_options=[
+        discord.SelectOption(
+            label="ENABLE ALL ALLIANCES",
+            value="enable_all",
+            description="Enable automatic redemption for all alliances",
+            emoji=f"{theme.verifiedIcon}"
+        ),
+        discord.SelectOption(
+            label="DISABLE ALL ALLIANCES",
+            value="disable_all",
+            description="Disable automatic redemption for all alliances",
+            emoji=f"{theme.deniedIcon}"
+        ),
+    ])
 
     async def alliance_callback(select_interaction: discord.Interaction, alliance_id=None):
         try:

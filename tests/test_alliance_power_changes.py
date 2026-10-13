@@ -10,29 +10,29 @@ def db(tmp_path, monkeypatch):
     return str(path)
 
 
-def test_record_then_latest_delta(db):
+def test_record_then_latest_deltas(db):
     pc.record_change(1, "power", 100, 150, "2026-06-27T10:00:00")
-    d = pc.latest_delta(1, "power")
+    d = pc.latest_deltas([1], "power").get(1)
     assert d["old"] == 100 and d["new"] == 150
     assert round(d["pct"], 1) == 50.0
     assert d["change_date"] == "2026-06-27T10:00:00"
 
 
 def test_no_baseline_returns_none(db):
-    assert pc.latest_delta(99, "power") is None
+    assert pc.latest_deltas([99], "power").get(99) is None
 
 
 def test_record_skips_when_old_none_or_equal_or_zero(db):
     pc.record_change(2, "power", None, 100, "t")     # first-ever: no baseline
     pc.record_change(2, "power", 100, 100, "t")      # unchanged
     pc.record_change(2, "power", 100, 0, "t")        # overwrite-to-zero ignored
-    assert pc.latest_delta(2, "power") is None
+    assert pc.latest_deltas([2], "power").get(2) is None
 
 
-def test_latest_delta_picks_most_recent(db):
+def test_latest_deltas_picks_most_recent(db):
     pc.record_change(3, "power", 100, 200, "2026-01-01T00:00:00")
     pc.record_change(3, "power", 200, 180, "2026-02-01T00:00:00")
-    d = pc.latest_delta(3, "power")
+    d = pc.latest_deltas([3], "power").get(3)
     assert d["old"] == 200 and d["new"] == 180
     assert d["pct"] < 0
 
@@ -70,7 +70,6 @@ def test_format_delta():
 def test_reads_safe_on_cold_db(tmp_path, monkeypatch):
     monkeypatch.setattr(pc, "_CHANGES_DB", str(tmp_path / "cold.sqlite"))
     # No ensure_tables() call here - reads must not raise on a missing table.
-    assert pc.latest_delta(1, "power") is None
     assert pc.latest_deltas([1, 2], "power") == {}
     assert pc.deltas_at([1], "power", "t") == {}
     assert pc.history(1, "power") == []

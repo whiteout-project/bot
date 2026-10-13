@@ -34,7 +34,6 @@ class EventTypeConfig:
     default_keywords: tuple[str, ...]
     fingerprint_re_by_kind: dict[str, re.Pattern]
     event_weekday: Optional[int] = None
-    legion_required: bool = False
 
 
 # Shared anchors for foundry/canyon registration mails — anchored on event name later.
@@ -62,7 +61,6 @@ EVENT_TYPES: dict[str, EventTypeConfig] = {
             ),
         },
         event_weekday=6,
-        legion_required=True,
     ),
     "canyon_clash": EventTypeConfig(
         key="canyon_clash",
@@ -82,7 +80,6 @@ EVENT_TYPES: dict[str, EventTypeConfig] = {
             ),
         },
         event_weekday=5,
-        legion_required=True,
     ),
     "power_rankings": EventTypeConfig(
         key="power_rankings",
@@ -101,17 +98,6 @@ EVENT_TYPES: dict[str, EventTypeConfig] = {
         },
     ),
 }
-
-
-def fingerprint_match(event_type: str, ocr_text: str, kind: Optional[str] = None) -> bool:
-    """True if the event's fingerprint regex matches; `kind` narrows to one kind."""
-    cfg = EVENT_TYPES.get(event_type)
-    if cfg is None:
-        return False
-    if kind is not None:
-        regex = cfg.fingerprint_re_by_kind.get(kind)
-        return regex is not None and regex.search(ocr_text) is not None
-    return any(rx.search(ocr_text) for rx in cfg.fingerprint_re_by_kind.values())
 
 
 def detect_kind(event_type: str, ocr_text: str) -> Optional[str]:
@@ -762,15 +748,6 @@ def _parse_tail_rows(tail: str) -> list[dict]:
 def _name_noise(name: str) -> int:
     """Count digit-bearing tokens — a proxy for OCR junk like '48Z' or 'lII3'."""
     return sum(1 for t in (name or "").split() if any(c.isdigit() for c in t))
-
-
-def _cleaner_name(new: str, old: str) -> bool:
-    """True if `new` is a better OCR capture than `old`: fewer digit-noise
-    tokens first, then the longer (more complete) name."""
-    nn, on = _name_noise(new), _name_noise(old)
-    if nn != on:
-        return nn < on
-    return len(new or "") > len(old or "")
 
 
 # Name-like: a letter then word chars only ("BB_300", "lord235342323"). A

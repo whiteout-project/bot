@@ -3,7 +3,6 @@ Alliance member operations. Handles member imports, removals, and transfers.
 """
 import discord
 from discord.ext import commands
-from discord import app_commands
 import sqlite3
 import asyncio
 import time
@@ -15,14 +14,14 @@ import csv
 import io
 from contextlib import closing
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout
+from .pimp_my_bot import theme, safe_edit_message, menu_timeout, confirm_timeout, plural
 from .process_queue import MEMBER_ADD, PreemptedException
 from .bot_level_mapping import LEVEL_MAPPING, parse_furnace_level
 from .alliance import resolve_alliance_kid, state_lock_reason, STATE_CHECK_UNAVAILABLE
-from .gift_state_resolver import verify_add_state
+from .alliance_api_sync import api_available_async, look_up_new_member, store_new_member
 from .alliance_member_edit import (
     BulkMemberEditModal, MemberEditModal, apply_edit_lines, build_prefill,
-    edit_result_embed, enqueue_catchups, is_placeholder_name, new_member_name, parse_power,
+    edit_result_embed, enqueue_catchups, is_placeholder_name, parse_power,
 )
 from . import alliance_power_changes
 
@@ -33,6 +32,7 @@ _NAME_HEADERS = {"name", "nickname", "player name", "player_name"}
 _LEVEL_HEADERS = {"fc_level", "fc level", "furnace", "furnace_lv", "furnace level", "level"}
 _STATE_HEADERS = {"state", "kid", "kingdom", "home state"}
 _POWER_HEADERS = {"power"}
+_NO_PROFILE = ("", "", "", "", "")
 _COMBAT_POWER_HEADERS = {"combat power", "combat_power", "cp"}
 
 
@@ -77,8 +77,17 @@ def _split_by_state_lock(alliance_id, fids):
 
 def _state_skip_line(target_name, locked_kid, skipped) -> str:
     return (
-        f"Skipped **{len(skipped)}** {'member' if len(skipped) == 1 else 'members'} from another state, "
+        f"Skipped **{len(skipped)}** {plural(len(skipped), 'member')} from another state, "
         f"because **{target_name}** only accepts State #{locked_kid}: {_join_names(skipped, 500)}"
+    )
+
+
+def _no_members_moved_embed(lock_ok, target_name, locked_kid, skipped) -> discord.Embed:
+    return discord.Embed(
+        title=f"{theme.deniedIcon} No Members Moved",
+        description=(STATE_CHECK_UNAVAILABLE if not lock_ok
+                     else _state_skip_line(target_name, locked_kid, skipped)),
+        color=theme.emColor2,
     )
 
 
@@ -285,6 +294,7 @@ class MemberFilterModal(discord.ui.Modal):
 class MemberListView(discord.ui.View):
     # Subclasses that offer Edit/Bulk Edit flip this so the embed can point at them.
     CAN_EDIT = False
+    sync_ready = False  # set by the opener from api_available_async(); adds Player Sync to the hints
     PAGE_SIZE = 20
     SORTS = [
         ("FC \u2193",      lambda m: (-m['furnace_lv'], m['nickname'].casefold()), False),
@@ -437,11 +447,15 @@ class MemberListView(discord.ui.View):
         ]
         if any(m.get('power') is not None or m.get('combat_power') is not None
                for m in self.all_members):
-            header.append(f"{theme.infoIcon} **PWR / CPWR:** Power and Combat Power, "
-                          "from screenshot uploads or Edit")
+            sources = ("from screenshot uploads, Edit or Player Sync" if self.sync_ready
+                       else "from screenshot uploads or Edit")
+            header.append(f"{theme.infoIcon} **PWR / CPWR:** Power and Combat Power, {sources}")
         unnamed_count = len(self._unnamed())
         if unnamed_count:
-            hint = "  ·  select one and press Edit, or use Bulk Edit" if self.CAN_EDIT else ""
+            hint = ""
+            if self.CAN_EDIT:
+                hint = ("  ·  select one and press Edit, use Bulk Edit, or let Player Sync fill them in"
+                        if self.sync_ready else "  ·  select one and press Edit, or use Bulk Edit")
             header.append(f"{theme.warnIcon} **Still unnamed:** `{unnamed_count}`{hint}")
         if self._has_filter():
             parts = []
@@ -1008,18 +1022,11 @@ class ManageMembersView(MemberListView):
                         (target_alliance_id,),
                     )
                     target_name = cur.fetchone()[0]
-                lock_ok, locked_kid, fids, skipped = _split_by_state_lock(target_alliance_id, fids)
+                lock_ok, locked_kid, fids, skipped = await asyncio.to_thread(
+                    _split_by_state_lock, target_alliance_id, fids)
                 if not lock_ok or not fids:
-                    reason = (STATE_CHECK_UNAVAILABLE if not lock_ok
-                              else _state_skip_line(target_name, locked_kid, skipped))
                     await target_interaction.response.edit_message(
-                        embed=discord.Embed(
-                            title=f"{theme.deniedIcon} No Members Moved",
-                            description=reason,
-                            color=theme.emColor2,
-                        ),
-                        view=None,
-                    )
+                        embed=_no_members_moved_embed(lock_ok, target_name, locked_kid, skipped), view=None)
                     return
                 with sqlite3.connect('db/users.sqlite') as users_db:
                     cur = users_db.cursor()
@@ -1331,6 +1338,7 @@ class AllianceMemberOperations(commands.Cog):
             members, alliance_id, alliance_name, self,
             interaction.user.id, alliances=alliances_with_counts,
         )
+        view.sync_ready = await api_available_async()
         await safe_edit_message(
             interaction, embed=view.build_embed(), view=view, content=None,
         )
@@ -1593,18 +1601,13 @@ class AllianceMemberOperations(commands.Cog):
                                     cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
                                     target_alliance_name = cursor.fetchone()[0]
 
-                                lock_ok, locked_kid, moved_fids, skipped = _split_by_state_lock(
-                                    target_alliance_id, selected_fids
+                                lock_ok, locked_kid, moved_fids, skipped = await asyncio.to_thread(
+                                    _split_by_state_lock, target_alliance_id, selected_fids
                                 )
                                 if not lock_ok or not moved_fids:
-                                    reason = (STATE_CHECK_UNAVAILABLE if not lock_ok
-                                              else _state_skip_line(target_alliance_name, locked_kid, skipped))
                                     await target_interaction.response.edit_message(
-                                        embed=discord.Embed(
-                                            title=f"{theme.deniedIcon} No Members Moved",
-                                            description=reason,
-                                            color=theme.emColor2
-                                        ),
+                                        embed=_no_members_moved_embed(
+                                            lock_ok, target_alliance_name, locked_kid, skipped),
                                         view=None
                                     )
                                     return
@@ -1843,6 +1846,16 @@ class AllianceMemberOperations(commands.Cog):
             self.conn_users.rollback()
             raise
 
+    async def _resolve_new_member(self, fid, alliance_id, kid_ok, locked_kid, profile):
+        """(NewMember, denial reason or None): the API's state when it has one, else one probe."""
+        csv_name, csv_level, *_ = profile or _NO_PROFILE
+        member = await look_up_new_member(self.bot, fid, alliance_id, csv_name, parse_furnace_level(csv_level))
+        if not kid_ok:
+            return member, STATE_CHECK_UNAVAILABLE
+        if locked_kid is not None and not member.verified:
+            return member, state_lock_reason(locked_kid, member.kid)
+        return member, None
+
     async def _process_add_user(self, message: Optional[discord.Message], alliance_id: str, alliance_name: str,
                                 ids: str, invoker_id: Optional[int], invoker_name: str,
                                 process_id: Optional[int] = None,
@@ -1988,19 +2001,9 @@ class AllianceMemberOperations(commands.Cog):
                     embed.description = f"Processing {total_users} members...\n{rate_text}{queue_info}\n\n**Progress:** `{current_progress}/{total_users}`"
                     await progress.edit(embed)
                     
-                    # Determine the member's state
-                    gift_cog = self.bot.get_cog("GiftOperations")
-                    if gift_cog is not None:
-                        kid, verified = await verify_add_state(gift_cog, fid, alliance_id)
-                    else:
-                        kid, verified = None, False
-
-                    if not kid_ok:
-                        state_error = STATE_CHECK_UNAVAILABLE
-                    elif locked_kid is not None and not verified:
-                        state_error = state_lock_reason(locked_kid, kid)
-                    else:
-                        state_error = None
+                    profile = (profiles or {}).get(str(fid))
+                    member, state_error = await self._resolve_new_member(
+                        fid, alliance_id, kid_ok, locked_kid, profile)
 
                     if state_error:
                         with open(log_file_path, 'a', encoding='utf-8') as log_file:
@@ -2019,14 +2022,13 @@ class AllianceMemberOperations(commands.Cog):
 
                     # State comes from the add-path check above so locks still apply;
                     # CSV state only updates existing members.
-                    csv_name, csv_level, _csv_state, csv_power, csv_combat_power = \
-                        (profiles or {}).get(str(fid), ("", "", "", "", ""))
-                    nickname = new_member_name(csv_name, fid)
-                    furnace_lv = parse_furnace_level(csv_level) or 0
-                    power = parse_power(csv_power)
+                    *_, csv_power, csv_combat_power = profile or _NO_PROFILE
+                    nickname, kid = member.nickname, member.kid
+                    power = member.power or parse_power(csv_power)
                     combat_power = parse_power(csv_combat_power)
                     try:  # Pre-filtered, so this ID should not already exist.
-                        self._insert_member(fid, nickname, furnace_lv, kid, alliance_id, power, combat_power)
+                        self._insert_member(fid, nickname, member.furnace_lv, kid, alliance_id, power, combat_power)
+                        await store_new_member(member, fid)
 
                         with open(self.log_file, 'a', encoding='utf-8') as f:
                             f.write(f"[{timestamp}] Successfully added member - ID: {fid}, State: {kid}\n")
@@ -2443,30 +2445,6 @@ class AllianceMemberOperations(commands.Cog):
             else:
                 await interaction.response.send_message(embed=error_embed, ephemeral=True)
 
-    async def back_to_alliance_management(self, interaction: discord.Interaction):
-        """Navigate back to the Alliances menu."""
-        try:
-            main_menu_cog = self.bot.get_cog("MainMenu")
-            if main_menu_cog:
-                await main_menu_cog.show_alliance_management(interaction)
-            else:
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while returning to menu.",
-                    ephemeral=True
-                )
-        except Exception as e:
-            logger.error(f"Menu navigation error in member operations: {e}")
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"{theme.deniedIcon} An error occurred while returning to menu.",
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    f"{theme.deniedIcon} An error occurred while returning to menu.",
-                    ephemeral=True
-                )
-
 class AddMemberModal(discord.ui.Modal):
     def __init__(self, alliance_id):
         super().__init__(title="Add Member")
@@ -2494,15 +2472,17 @@ class AddMemberModal(discord.ui.Modal):
             )
 
 class AllianceSelectView(discord.ui.View):
-    def __init__(self, alliances_with_counts, cog=None, page=0, context="transfer"):
+    def __init__(self, alliances_with_counts, cog=None, page=0, context="transfer", extra_options=None):
         super().__init__(timeout=menu_timeout())
         self.alliances = alliances_with_counts
         self.cog = cog
         self.page = page
-        self.max_page = (len(alliances_with_counts) - 1) // 25 if alliances_with_counts else 0
+        # Options like "All alliances" repeat on every page, so alliances get the remaining slots.
+        self.extra_options = extra_options or []
+        self.page_size = 25 - len(self.extra_options)
+        self.max_page = (len(alliances_with_counts) - 1) // self.page_size if alliances_with_counts else 0
         self.current_select = None
         self.callback = None
-        self.member_dict = {}
         self.selected_alliance_id = None
         self.context = context  # "transfer", "furnace_history", or "nickname_history"
         self.update_select_menu()
@@ -2512,11 +2492,10 @@ class AllianceSelectView(discord.ui.View):
             if isinstance(item, discord.ui.Select):
                 self.remove_item(item)
 
-        start_idx = self.page * 25
-        end_idx = min(start_idx + 25, len(self.alliances))
-        current_alliances = self.alliances[start_idx:end_idx]
+        start_idx = self.page * self.page_size
+        current_alliances = self.alliances[start_idx:start_idx + self.page_size]
 
-        options = []
+        options = list(self.extra_options)
         for alliance_data in current_alliances:
             # Handle both 3-tuple and 4-tuple formats
             if len(alliance_data) == 4:
@@ -2808,7 +2787,8 @@ class IDSearchModal(discord.ui.Modal):
                             cursor.execute("SELECT name FROM alliance_list WHERE alliance_id = ?", (target_alliance_id,))
                             target_alliance_name = cursor.fetchone()[0]
 
-                        lock_ok, locked_kid, allowed, _ = _split_by_state_lock(target_alliance_id, [fid])
+                        lock_ok, locked_kid, allowed, _ = await asyncio.to_thread(
+                            _split_by_state_lock, target_alliance_id, [fid])
                         if not lock_ok or not allowed:
                             await select_interaction.response.edit_message(
                                 embed=discord.Embed(
@@ -3362,7 +3342,6 @@ class MemberSelectView(discord.ui.View):
         self.max_page = (len(members) - 1) // 25
         self.current_select = None
         self.callback = None
-        self.member_dict = {str(fid): nickname for fid, nickname, _ in members}
         self.selected_alliance_id = alliance_id
         self.alliances = alliances
         self.is_remove_operation = is_remove_operation

@@ -275,18 +275,33 @@ def apply_alliance_binding(alliance_id, kid):
 
 def get_alliance_kid(alliance_id):
     """The alliance's currently-bound state, or None."""
-    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+    with closing(sqlite3.connect('db/alliance.sqlite', timeout=30.0)) as conn:
         row = conn.execute(
             "SELECT kid FROM alliance_list WHERE alliance_id = ?", (alliance_id,)).fetchone()
     return row[0] if row and row[0] is not None else None
 
 
+def get_member_alliance(fid):
+    """The member's alliance, or None."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        row = conn.execute("SELECT alliance FROM users WHERE fid = ?", (fid,)).fetchone()
+    return row[0] if row else None
+
+
 def is_multistate(alliance_id):
     """True if the alliance is flagged multistate (members span many states - never bound)."""
-    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
+    with closing(sqlite3.connect('db/alliance.sqlite', timeout=30.0)) as conn:
         row = conn.execute(
             "SELECT multistate FROM alliance_list WHERE alliance_id = ?", (alliance_id,)).fetchone()
     return bool(row and row[0])
+
+
+def left_alliance_state(alliance_id, kid):
+    """True when `kid` isn't the state of the single-state alliance `alliance_id`."""
+    if alliance_id is None or is_multistate(alliance_id):
+        return False
+    home = get_alliance_kid(alliance_id)
+    return home is not None and int(home) != int(kid)
 
 
 def set_multistate(alliance_id, on):
@@ -298,23 +313,6 @@ def set_multistate(alliance_id, on):
                 (alliance_id,))
         else:
             conn.execute("UPDATE alliance_list SET multistate = 0 WHERE alliance_id = ?", (alliance_id,))
-        conn.commit()
-
-
-def is_state_locked(alliance_id):
-    """True if the alliance is explicitly state-locked (rejects out-of-state adds)."""
-    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-        row = conn.execute(
-            "SELECT COALESCE(state_locked, 0) FROM alliance_list WHERE alliance_id = ?",
-            (alliance_id,)).fetchone()
-    return bool(row and row[0])
-
-
-def set_state_locked(alliance_id, on):
-    """Turn the deliberate state-lock on/off. Locking requires a home state already set."""
-    with sqlite3.connect('db/alliance.sqlite', timeout=30.0) as conn:
-        conn.execute("UPDATE alliance_list SET state_locked = ? WHERE alliance_id = ?",
-                     (1 if on else 0, alliance_id))
         conn.commit()
 
 
@@ -422,15 +420,17 @@ def flag_state_mismatch_many(fids):
         conn.commit()
 
 
-def clear_state_mismatch(fid):
-    """Drop the wrong-state flag without touching the stored state."""
-    with sqlite3.connect('db/users.sqlite', timeout=30.0) as conn:
-        conn.execute("UPDATE users SET state_mismatch_at = NULL WHERE fid = ?", (fid,))
-        conn.commit()
+def scan_check(fid):
+    """(needs a scan, the state the game rejected or None, alliance) for `fid`, in one read."""
+    with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn:
+        row = conn.execute(
+            f"SELECT {_NEEDS_SCAN}, CASE WHEN state_mismatch_at IS NOT NULL THEN kid END, alliance "
+            f"FROM users WHERE fid = ?", (fid,)).fetchone()
+    return (bool(row[0]), row[1], row[2]) if row else (False, None, None)
 
 
 def clear_state_mismatch_many(fids):
-    """clear_state_mismatch for every fid, in one transaction."""
+    """Drop the wrong-state flag for every fid without touching the stored state, in one transaction."""
     with closing(sqlite3.connect('db/users.sqlite', timeout=30.0)) as conn, conn:
         conn.executemany("UPDATE users SET state_mismatch_at = NULL WHERE fid = ?", [(fid,) for fid in fids])
 

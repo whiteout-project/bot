@@ -66,6 +66,15 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
+def dbs(tmp_path, monkeypatch):
+    """Empty Player Sync-shaped databases, with tmp_path as the working directory."""
+    from harness import make_player_sync_dbs
+    monkeypatch.chdir(tmp_path)
+    make_player_sync_dbs(tmp_path)
+    return tmp_path
+
+
+@pytest.fixture
 def make_templates_cog():
     """Builds a NotificationTemplates cog on a fresh in-memory database."""
     import importlib

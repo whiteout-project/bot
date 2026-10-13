@@ -5,7 +5,7 @@ lookup by ID so former/transferred members still appear.
 """
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 
 import discord
 

@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from harness import fake_player_api, make_player_sync_dbs
+
 edit = importlib.import_module("cogs.alliance_member_edit")
 bt = importlib.import_module("cogs.bear_track")
 review = importlib.import_module("cogs.attendance_ocr_review")
@@ -57,6 +59,16 @@ def test_name_field_fits_discord_limits():
     assert len(edit.NEW_NAME_LABEL) <= LABEL_LIMIT
     assert field.default == "XTz"
     assert field.required is False
+
+
+API_PLAYER = {"nickname": "Delta", "furnace_lv": 45, "kid": 245, "power": 5000,
+              "avatar_url": "https://i.example.com/9.png"}
+
+
+def _stored_member(fid):
+    with closing(sqlite3.connect("db/users.sqlite")) as conn:
+        return conn.execute("SELECT nickname, furnace_lv, kid, power, avatar_url FROM users WHERE fid = ?",
+                            (fid,)).fetchone()
 
 
 # --- Bear Tracking forms ---
@@ -151,6 +163,12 @@ class _Response:
         self.messages.append((args, kwargs))
 
 
+def _typed_member(nickname):
+    from cogs.alliance_api_sync import NewMember
+    from cogs.alliance_member_edit import new_member_name
+    return NewMember(new_member_name(nickname, 123456789), 0, 245)
+
+
 def _confirm_setup(monkeypatch, nickname):
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE users (fid INTEGER PRIMARY KEY, nickname TEXT, furnace_lv INTEGER, "
@@ -165,7 +183,7 @@ def _confirm_setup(monkeypatch, nickname):
     monkeypatch.setattr(bt, "_write_match_to_row", lambda view, **kw: matched.append(kw) or True)
     view = _run(lambda: bt.PlayerAddConfirmView(
         view=parent, parent_message=None, row_id=0, fid=123456789, kid=245,
-        damage=1000, rank=3, raw_name="XT2", nickname=nickname))
+        damage=1000, rank=3, raw_name="XT2", member=_typed_member(nickname)))
     return view, conn, matched
 
 
@@ -190,23 +208,114 @@ def test_bear_confirm_card_falls_back_to_the_placeholder_without_a_name(monkeypa
     assert conn.execute("SELECT nickname FROM users WHERE fid = 123456789").fetchone() == ("Player 123456789",)
 
 
+def _offer(monkeypatch, gift_cog=None, alliance_kid=245):
+    from cogs import gift_state_resolver
+    monkeypatch.setattr(gift_state_resolver, "get_alliance_kid", lambda alliance_id: alliance_kid)
+    probed = []
+
+    async def verified(cog, fid, alliance_id):
+        probed.append(fid)
+        return alliance_kid, True
+    monkeypatch.setattr(gift_state_resolver, "verify_add_state", verified)
+    sent = []
+
+    async def defer():
+        pass
+
+    async def send(*args, **kwargs):
+        sent.append((args, kwargs))
+
+    async def original_response():
+        return None
+    interaction = SimpleNamespace(response=SimpleNamespace(defer=defer), followup=SimpleNamespace(send=send),
+                                  original_response=original_response)
+    bot = SimpleNamespace(get_cog=lambda name: gift_cog)
+    view = SimpleNamespace(cog=SimpleNamespace(bot=bot), alliance_id=1, original_user_id=1)
+    _run(lambda: bt._offer_add_by_id(interaction, view, row_id=0, fid=557, damage=1000, rank=3,
+                                     raw_name="XT2"))
+    return sent, probed
+
+
+def test_bear_unknown_id_is_confirmed_by_the_api(monkeypatch):
+    fake_player_api(monkeypatch, API_PLAYER)
+    sent, probed = _offer(monkeypatch)
+    card = sent[0][1]["view"]
+    assert probed == [] and (card.kid, card.nickname, card.member.furnace_lv) == (245, "Delta", 45)
+    assert "Delta" in sent[0][1]["embed"].description
+
+
+def test_bear_unknown_id_in_another_state_is_refused(monkeypatch):
+    fake_player_api(monkeypatch, {**API_PLAYER, "kid": 300})
+    sent, _ = _offer(monkeypatch)
+    assert "view" not in sent[0][1] and "300" in sent[0][0][0]
+
+
+def test_bear_unknown_id_without_an_alliance_state_uses_the_api_state(monkeypatch):
+    fake_player_api(monkeypatch, {**API_PLAYER, "kid": 300})
+    sent, _ = _offer(monkeypatch, alliance_kid=None)
+    assert sent[0][1]["view"].kid == 300
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_bear_unknown_id_without_api_values_probes(monkeypatch, available):
+    fake_player_api(monkeypatch, None, available=available)
+    sent, probed = _offer(monkeypatch, gift_cog=object())
+    card = sent[0][1]["view"]
+    assert probed == [557] and (card.kid, card.nickname) == (245, "Player 557")
+
+
+def test_bear_unknown_id_without_api_values_or_gift_codes_is_refused(monkeypatch):
+    fake_player_api(monkeypatch, None)
+    sent, _ = _offer(monkeypatch)
+    assert "view" not in sent[0][1] and "Gift Codes is unavailable" in sent[0][0][0]
+
+
+def test_bear_confirm_card_stores_the_api_values(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    make_player_sync_dbs(tmp_path)
+    fake_player_api(monkeypatch, API_PLAYER)
+    from cogs import alliance_api_sync
+    member = _run(lambda: alliance_api_sync.look_up_new_member(None, 557, 1))
+    conn = sqlite3.connect("db/users.sqlite")
+    cog = SimpleNamespace(users_conn=conn, get_alliance_roster=lambda alliance_id: [])
+
+    async def reapply(message):
+        return None
+    parent = SimpleNamespace(cog=cog, alliance_id=1, original_user_id=1, roster=[], reapply_to_message=reapply)
+    monkeypatch.setattr(bt, "_write_match_to_row", lambda view, **kw: True)
+    view = _run(lambda: bt.PlayerAddConfirmView(
+        view=parent, parent_message=None, row_id=0, fid=557, kid=member.kid,
+        damage=1000, rank=3, raw_name="XT2", member=member))
+    assert "45" in view.build_embed().description
+
+    _run(lambda: view._on_confirm(SimpleNamespace(user=SimpleNamespace(id=1), response=_Response())))
+    conn.close()
+
+    assert _stored_member(557) == ("Delta", 45, 245, 5000, "https://i.example.com/9.png")
+
+
+def test_bear_confirm_card_placeholder_says_how_to_rename(monkeypatch):
+    view, _, _ = _confirm_setup(monkeypatch, None)
+    text = view.build_embed().description
+    assert "No name yet. You can rename them from the member list." in text and " - " not in text
+
+
 # --- Attendance OCR ---
 
 @pytest.fixture
 def users_db(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "db").mkdir()
-    with closing(sqlite3.connect("db/users.sqlite")) as conn:
-        conn.execute("CREATE TABLE users (fid INTEGER PRIMARY KEY, nickname TEXT, furnace_lv INTEGER, "
-                     "kid TEXT, stove_lv_content TEXT, alliance TEXT)")
-        conn.commit()
+    make_player_sync_dbs(tmp_path)
+    fake_player_api(monkeypatch, None, available=False)
     from cogs import gift_state_resolver
     monkeypatch.setattr(gift_state_resolver, "get_alliance_kid", lambda alliance_id: 245)
+    probed = []
 
     async def verified(gift_cog, fid, alliance_id):
+        probed.append(fid)
         return 245, True
     monkeypatch.setattr(gift_state_resolver, "verify_add_state", verified)
-    return tmp_path
+    return probed
 
 
 def _attendance_interaction():
@@ -236,6 +345,61 @@ def test_attendance_add_unknown_id_without_a_name_uses_the_placeholder(users_db)
 
     assert nick == "Player 556"
     assert _stored_nickname(556) == ("Player 556",)
+
+
+def _no_gift_cog_interaction():
+    return SimpleNamespace(client=SimpleNamespace(get_cog=lambda name: None))
+
+
+def test_attendance_add_unknown_id_is_confirmed_by_the_api(users_db, monkeypatch):
+    fake_player_api(monkeypatch, API_PLAYER)
+    view = SimpleNamespace(session=SimpleNamespace(alliance_id=1))
+
+    added, nick, _ = _run(lambda: review._add_unknown_fid(_no_gift_cog_interaction(), view, 557))
+
+    assert (added, nick) == (True, "Delta") and users_db == []
+    assert _stored_member(557) == ("Delta", 45, 245, 5000, "https://i.example.com/9.png")
+
+
+def test_attendance_add_unknown_id_keeps_the_typed_name(users_db, monkeypatch):
+    fake_player_api(monkeypatch, API_PLAYER)
+    view = SimpleNamespace(session=SimpleNamespace(alliance_id=1))
+
+    _, nick, _ = _run(lambda: review._add_unknown_fid(_attendance_interaction(), view, 557, new_name="VAL"))
+
+    assert nick == "VAL" and _stored_member(557)[0] == "VAL"
+
+
+def test_attendance_add_unknown_id_in_another_state_is_refused(users_db, monkeypatch):
+    fake_player_api(monkeypatch, {**API_PLAYER, "kid": 300})
+    view = SimpleNamespace(session=SimpleNamespace(alliance_id=1))
+
+    added, _, note = _run(lambda: review._add_unknown_fid(_attendance_interaction(), view, 557))
+
+    assert added is False and users_db == [] and "State #300" in note
+    assert "Manage Members → Add Members" in note
+    assert _stored_member(557) is None
+
+
+def test_attendance_add_unknown_id_without_an_alliance_state_uses_the_api_state(users_db, monkeypatch):
+    from cogs import gift_state_resolver
+    monkeypatch.setattr(gift_state_resolver, "get_alliance_kid", lambda alliance_id: None)
+    fake_player_api(monkeypatch, {**API_PLAYER, "kid": 300})
+    view = SimpleNamespace(session=SimpleNamespace(alliance_id=1))
+
+    added, _, _ = _run(lambda: review._add_unknown_fid(_attendance_interaction(), view, 557))
+
+    assert added is True and _stored_member(557)[2] == 300
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_attendance_add_unknown_id_without_api_values_probes(users_db, monkeypatch, available):
+    fake_player_api(monkeypatch, None, available=available)
+    view = SimpleNamespace(session=SimpleNamespace(alliance_id=1))
+
+    added, nick, _ = _run(lambda: review._add_unknown_fid(_attendance_interaction(), view, 558))
+
+    assert (added, nick) == (True, "Player 558") and users_db == [558]
 
 
 def test_attendance_resolver_hands_the_name_to_the_add_step(monkeypatch):

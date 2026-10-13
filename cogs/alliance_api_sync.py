@@ -3,8 +3,10 @@ import asyncio
 import json
 import logging
 import sqlite3
+import threading
 import time
-from contextlib import closing
+from collections import Counter
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -12,12 +14,13 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
-from .alliance_member_edit import apply_member_edit, enqueue_catchups, parse_power
+from .alliance_member_edit import apply_member_edit, enqueue_catchups, new_member_name, parse_power
 from .bot_level_mapping import format_furnace_level, parse_furnace_level, parse_state
-from .gift_redemption import rate_limit_delay
-from .gift_state_resolver import _put_setting, _settings
+from .gift_redemption import apply_removals, auto_remove_on, maybe_remove_transferred_member, rate_limit_delay
+from . import gift_state_resolver
+from .gift_state_resolver import _put_setting, _settings, left_alliance_state
 from .permission_handler import PermissionManager
-from .pimp_my_bot import theme
+from .pimp_my_bot import count_text, theme
 from .process_queue import PLAYER_SYNC, PreemptedException
 
 logger = logging.getLogger('alliance')
@@ -34,6 +37,7 @@ FIELDS = {
 }
 PER_MINUTE_MAX = 600
 PER_DAY_MAX = 1_000_000
+PLAYER_ID_PLACEHOLDERS = ("{id}", "{fid}")
 LIMIT_LABELS = {"per_minute": "Requests per minute", "per_day": "Requests per day"}
 NOT_A_PROFILE = "That doesn't look like a Player Sync setup file. Paste the whole file, from the first { to the last }."
 
@@ -61,8 +65,8 @@ def problems(profile: dict) -> list[str]:
     if not isinstance(base_url, str) or (base_url and not base_url.startswith(("http://", "https://"))):
         found.append("The base URL must start with http:// or https://.")
     player_path = profile.get("player_path")
-    if not isinstance(player_path, str) or (player_path and "{fid}" not in player_path):
-        found.append("Put {fid} in the player path where the player ID goes.")
+    if not isinstance(player_path, str) or (player_path and not any(p in player_path for p in PLAYER_ID_PLACEHOLDERS)):
+        found.append("Put {id} in the player path where the player ID goes.")
     for key, maximum in (("per_minute", PER_MINUTE_MAX), ("per_day", PER_DAY_MAX)):
         value = profile.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
@@ -149,7 +153,8 @@ def import_profile(text: str):
     return profile, None
 
 
-REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20)
+# Some APIs hold a request up to 90 seconds while they refresh stale player data.
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=100)
 
 
 @dataclass
@@ -160,7 +165,9 @@ class FetchResult:
 
 
 def player_url(profile: dict, fid) -> str:
-    path = profile["player_path"].lstrip("/").replace("{fid}", str(int(fid)))
+    path = profile["player_path"].lstrip("/")
+    for placeholder in PLAYER_ID_PLACEHOLDERS:
+        path = path.replace(placeholder, str(int(fid)))
     return f"{profile['base_url'].rstrip('/')}/{path}"
 
 
@@ -185,9 +192,13 @@ async def fetch_player(session: aiohttp.ClientSession, profile: dict, key: str, 
 # --- Storage: settings, the daily request count and when members last synced ----------
 
 USERS_DB = 'db/users.sqlite'
+SETTINGS_DB = 'db/settings.sqlite'
 INTERVAL_DEFAULT_HOURS = 24
 INTERVAL_MIN_HOURS = 1
 INTERVAL_MAX_HOURS = 720
+KEEP_MINUTES_DEFAULT = 5
+KEEP_MINUTES_MIN = 1
+KEEP_MINUTES_MAX = 1440
 
 
 def _json_dict(value) -> dict:
@@ -198,13 +209,6 @@ def _json_dict(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
-def _interval_hours(value) -> int:
-    try:
-        return int(value or INTERVAL_DEFAULT_HOURS)
-    except ValueError:
-        return INTERVAL_DEFAULT_HOURS
-
-
 def _datetime(value):
     try:
         return datetime.fromisoformat(value) if value else None
@@ -212,14 +216,41 @@ def _datetime(value):
         return None
 
 
+def _int_or(default):
+    def parse(value) -> int:
+        try:
+            return int(value or default)
+        except ValueError:
+            return default
+    return parse
+
+
+def _int_within(low, high, unit):
+    def check(value: int) -> int:
+        if not low <= value <= high:
+            raise ValueError(f"must be {low}-{high} {unit}")
+        return value
+    return check
+
+
+def _flag(on: bool) -> str:
+    return '1' if on else '0'
+
+
+# name: (settings key, read the stored text, value to store)
 SETTINGS = {
-    "profile": ('api_sync_profile', lambda value: normalise(_json_dict(value))),
-    "key": ('api_sync_key', lambda value: value or ""),
-    "enabled": ('api_sync_enabled', lambda value: value == '1'),
-    "interval": ('api_sync_interval_hours', _interval_hours),
-    "last_run": ('api_sync_last_run', _json_dict),
-    "last_queued": ('api_sync_last_queued', _datetime),
-    "budget": ('api_sync_budget', _json_dict),
+    "profile": ('api_sync_profile', lambda value: normalise(_json_dict(value)),
+                lambda profile: json.dumps(normalise(profile))),
+    "key": ('api_sync_key', lambda value: value or "", str.strip),
+    "enabled": ('api_sync_enabled', lambda value: value == '1', _flag),
+    "interval": ('api_sync_interval_hours', _int_or(INTERVAL_DEFAULT_HOURS),
+                 _int_within(INTERVAL_MIN_HOURS, INTERVAL_MAX_HOURS, "hours")),
+    "last_run": ('api_sync_last_run', _json_dict, json.dumps),
+    "last_queued": ('api_sync_last_queued', _datetime, datetime.isoformat),
+    "budget": ('api_sync_budget', _json_dict, json.dumps),
+    "autodelete": ('api_sync_autodelete', lambda value: value != '0', _flag),
+    "keep_minutes": ('api_sync_keep_minutes', _int_or(KEEP_MINUTES_DEFAULT),
+                     _int_within(KEEP_MINUTES_MIN, KEEP_MINUTES_MAX, "minutes")),
 }
 
 
@@ -228,29 +259,18 @@ def load_settings(*names) -> dict:
     return {name: SETTINGS[name][1](stored.get(SETTINGS[name][0])) for name in names}
 
 
-def _load(name):
+def load_setting(name):
     return load_settings(name)[name]
+
+
+def save_setting(name, value) -> None:
+    key, _, to_text = SETTINGS[name]
+    _put_setting(key, to_text(value))
 
 
 def load_connection():
     settings = load_settings("profile", "key")
     return settings["profile"], settings["key"]
-
-
-def get_profile() -> dict:
-    return _load("profile")
-
-
-def save_profile(profile: dict) -> None:
-    _put_setting('api_sync_profile', json.dumps(normalise(profile)))
-
-
-def get_key() -> str:
-    return _load("key")
-
-
-def save_key(value: str) -> None:
-    _put_setting('api_sync_key', value.strip())
 
 
 def mask_key(key: str) -> str:
@@ -259,50 +279,43 @@ def mask_key(key: str) -> str:
     return f"••••{key[-4:]}" if len(key) > 8 else "set"
 
 
-def is_enabled() -> bool:
-    return _load("enabled")
-
-
-def set_enabled(on: bool) -> None:
-    _put_setting('api_sync_enabled', '1' if on else '0')
-
-
-def get_interval_hours() -> int:
-    return _load("interval")
-
-
-def set_interval_hours(hours: int) -> None:
-    if not INTERVAL_MIN_HOURS <= hours <= INTERVAL_MAX_HOURS:
-        raise ValueError(f"must be {INTERVAL_MIN_HOURS}-{INTERVAL_MAX_HOURS} hours")
-    _put_setting('api_sync_interval_hours', hours)
-
-
-def save_last_run(last_run: dict) -> None:
-    _put_setting('api_sync_last_run', json.dumps(last_run))
-
-
-def get_last_queued():
-    return _load("last_queued")
-
-
-def set_last_queued(when: datetime) -> None:
-    _put_setting('api_sync_last_queued', when.isoformat())
+def syncs_names() -> bool:
+    """True when Auto Sync is on and keeps names up to date."""
+    settings = load_settings("enabled", "profile")
+    profile = settings["profile"]
+    return settings["enabled"] and not missing_for_sync(profile) and bool(profile["fields"]["name"])
 
 
 def used_today(budget: dict, today: str) -> int:
     return int(budget.get('used', 0)) if budget.get('date') == today else 0
 
 
-def requests_today(today: str) -> int:
-    return used_today(_load("budget"), today)
+_BUDGET_LOCK = threading.Lock()
 
 
-def save_request_count(today: str, used: int) -> None:
-    _put_setting('api_sync_budget', json.dumps({'date': today, 'used': used}))
+def take_request(today: str, per_day=None) -> bool:
+    """Counts one request on one settings connection; False, uncounted, once `per_day` are used today."""
+    key = SETTINGS["budget"][0]
+    with _BUDGET_LOCK, closing(sqlite3.connect(SETTINGS_DB, timeout=30.0)) as conn:
+        row = conn.execute("SELECT setting_value FROM bot_global_settings WHERE setting_key = ?", (key,)).fetchone()
+        used = used_today(_json_dict(row[0] if row else None), today)
+        if per_day is not None and used >= per_day:
+            return False
+        conn.execute("INSERT OR REPLACE INTO bot_global_settings (setting_key, setting_value) VALUES (?, ?)",
+                     (key, json.dumps({'date': today, 'used': used + 1})))
+        conn.commit()
+        return True
 
 
-def count_request(today: str) -> None:
-    save_request_count(today, requests_today(today) + 1)
+def budget_spent() -> bool:
+    """True when the API is set up and today's request limit is used up; a failed read counts as not."""
+    try:
+        settings = load_settings("profile", "budget")
+        profile = settings["profile"]
+        return api_available(profile) and used_today(settings["budget"], utc_today()) >= profile["per_day"]
+    except Exception as e:
+        logger.warning(f"Player Sync: could not read the API request count: {e}")
+        return False
 
 
 def members_to_sync(alliance_id=None, before=None) -> list:
@@ -317,30 +330,58 @@ def members_to_sync(alliance_id=None, before=None) -> list:
             f"ORDER BY api_synced_at IS NOT NULL, api_synced_at, fid", params).fetchall()
 
 
-def mark_synced(fid, when: str) -> None:
-    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
-        conn.execute("UPDATE users SET api_synced_at = ? WHERE fid = ?", (when, fid))
+@contextmanager
+def _users(conn=None):
+    """`conn`, or a users.sqlite connection of its own that commits and closes."""
+    if conn is not None:
+        yield conn
+        return
+    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as own:
+        yield own
+        own.commit()
+
+
+def mark_synced(fid, when: str, conn=None) -> None:
+    with _users(conn) as users:
+        users.execute("UPDATE users SET api_synced_at = ? WHERE fid = ?", (when, fid))
+
+
+_SNAPSHOT = ("nickname", "furnace_lv", "kid", "power", "avatar_url")
+
+
+def member_snapshot(fid, conn=None):
+    with _users(conn) as users:
+        row = users.execute(f"SELECT {', '.join(_SNAPSHOT)} FROM users WHERE fid = ?", (fid,)).fetchone()
+    return dict(zip(_SNAPSHOT, row)) if row else None
+
+
+def save_avatar(fid, url: str, conn=None) -> None:
+    with _users(conn) as users:
+        users.execute("UPDATE users SET avatar_url = ? WHERE fid = ?", (url, fid))
+
+
+ALLIANCE_DB = 'db/alliance.sqlite'
+
+
+def sync_channels() -> dict:
+    with closing(sqlite3.connect(ALLIANCE_DB, timeout=30.0)) as conn:
+        rows = conn.execute("SELECT alliance_id, channel_id FROM alliancesettings "
+                            "WHERE channel_id IS NOT NULL AND channel_id != 0").fetchall()
+    return {str(alliance_id): int(channel_id) for alliance_id, channel_id in rows}
+
+
+def set_sync_channel(alliance_id, channel_id: int) -> None:
+    with closing(sqlite3.connect(ALLIANCE_DB, timeout=30.0)) as conn:
+        conn.execute("INSERT INTO alliancesettings (alliance_id, channel_id) VALUES (?, ?) "
+                     "ON CONFLICT(alliance_id) DO UPDATE SET channel_id = excluded.channel_id",
+                     (int(alliance_id), int(channel_id)))
         conn.commit()
 
 
-def member_snapshot(fid):
-    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
-        row = conn.execute("SELECT nickname, furnace_lv, kid, power, avatar_url FROM users WHERE fid = ?",
-                           (fid,)).fetchone()
-    return dict(zip(("nickname", "furnace_lv", "kid", "power", "avatar_url"), row)) if row else None
-
-
-def save_avatar(fid, url: str) -> None:
-    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
-        conn.execute("UPDATE users SET avatar_url = ? WHERE fid = ?", (url, fid))
+def clear_sync_channel(alliance_id) -> None:
+    with closing(sqlite3.connect(ALLIANCE_DB, timeout=30.0)) as conn:
+        conn.execute("UPDATE alliancesettings SET channel_id = NULL WHERE alliance_id = ?", (int(alliance_id),))
         conn.commit()
-
-
-def log_channel_id(alliance_id):
-    with closing(sqlite3.connect('db/settings.sqlite', timeout=30.0)) as conn:
-        row = conn.execute("SELECT channel_id FROM alliance_logs WHERE alliance_id = ?",
-                           (int(alliance_id),)).fetchone()
-    return int(row[0]) if row and row[0] else None
 
 
 # --- One run: fetch each member, write what changed, collect change lines -------------
@@ -364,11 +405,22 @@ _CHANGE_LABELS = {"name": ("Name", "nickname"), "level": ("Furnace", "furnace_lv
 
 
 @dataclass
+class Transfer:
+    alliance: str
+    fid: int
+    name: str
+    kid: int
+    removed: bool = False
+    pending: bool = False   # new state not written yet: Auto-remove decides first
+
+
+@dataclass
 class RunResult:
     checked: int = 0
     requests: int = 0
     changes: dict = field(default_factory=dict)
     kingdom_changed: list = field(default_factory=list)
+    transfers: list = field(default_factory=list)
     error: str | None = None
     stopped: str | None = None
     preempted: bool = False
@@ -382,28 +434,34 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-class _Pacer:
-    def __init__(self, profile, sleep, clock, today):
-        self.gap = 60.0 / profile["per_minute"]
-        self.per_day = profile["per_day"]
-        self.sleep, self.clock, self.today = sleep, clock, today
+class _LookupGate:
+    """Spaces API requests by the profile's per-minute limit, across syncs and every lookup."""
+    def __init__(self, sleep=asyncio.sleep, clock=time.monotonic):
+        self.sleep, self.clock = sleep, clock
         self.last = None
-        self.day, self.used = None, 0
+        self._lock, self._loop = None, None
 
-    async def take(self) -> bool:
-        day = self.today()
-        if day != self.day:
-            self.day, self.used = day, await asyncio.to_thread(requests_today, day)
-        if self.used >= self.per_day:
-            return False
-        if self.last is not None:
-            wait = self.gap - (self.clock() - self.last)
-            if wait > 0:
-                await self.sleep(wait)
-        self.last = self.clock()
-        self.used += 1
-        await asyncio.to_thread(save_request_count, day, self.used)
-        return True
+    async def wait(self, per_minute):
+        loop = asyncio.get_running_loop()
+        if self._loop is not loop:
+            self._lock, self._loop = asyncio.Lock(), loop
+        async with self._lock:
+            if self.last is not None:
+                wait = 60.0 / per_minute - (self.clock() - self.last)
+                if wait > 0:
+                    await self.sleep(wait)
+            self.last = self.clock()
+
+
+_LOOKUP_GATE = _LookupGate()
+
+
+async def _take_slot(profile, today=utc_today) -> bool:
+    """Counts one request and waits its turn; False when today's limit is used up."""
+    if not await asyncio.to_thread(take_request, today(), profile["per_day"]):
+        return False
+    await _LOOKUP_GATE.wait(profile["per_minute"])
+    return True
 
 
 def _should_stop(queue, result) -> bool:
@@ -414,11 +472,11 @@ def _should_stop(queue, result) -> bool:
     return bool(result.stopped or result.preempted)
 
 
-async def _fetch(fetch, fid, pacer, sleep, result, queue):
+async def _fetch(fetch, fid, take_slot, sleep, result, queue):
     """The member's answer after retries, or None when the run has to end."""
     server_failures = rate_limited = 0
     while True:
-        if not await pacer.take():
+        if not await take_slot():
             result.stopped = BUDGET_USED
             return None
         result.requests += 1
@@ -452,91 +510,385 @@ def _show(column, value):
     return str(value)[:NAME_LENGTH]
 
 
-def _apply(fid, alliance, values, result):
-    before = member_snapshot(fid)
-    if before is None:
-        return
+def _change_line(fid, name, title, column, old, new):
+    if old is None:
+        return f"`{fid}` {name}: {title} set to {_show(column, new)}"
+    return f"`{fid}` {name}: {title} {_show(column, old)} → {_show(column, new)}"
+
+
+def _transfer_to(alliance, before, values):
+    kid = values.get("kid")
+    if kid is None or kid == before["kid"] or not left_alliance_state(alliance, kid):
+        return None
+    return kid
+
+
+def _write_member(conn, fid, alliance, before, values, result):
     avatar = values.pop("avatar_url", None)
     if avatar and avatar != before["avatar_url"]:
-        save_avatar(fid, avatar)
+        save_avatar(fid, avatar, conn)
+    transfer_kid = _transfer_to(alliance, before, values)
+    pending = transfer_kid is not None and auto_remove_on(alliance)
     changed = apply_member_edit(fid, nickname=values.get("nickname"), furnace_lv=values.get("furnace_lv"),
-                                kid=values.get("kid"), power=values.get("power"))
+                                kid=None if pending else values.get("kid"), power=values.get("power"), conn=conn)
+    name = str(before["nickname"] or fid)[:NAME_LENGTH]
+    if transfer_kid is not None:
+        result.transfers.append(Transfer(str(alliance), fid, name, transfer_kid, pending=pending))
     if "state" in changed:
         result.kingdom_changed.append(fid)
-    name = str(before["nickname"] or fid)[:NAME_LENGTH]
+        if transfer_kid is not None:
+            changed.remove("state")
     for label in changed:
         title, column = _CHANGE_LABELS[label]
         result.changes.setdefault(alliance, []).append(
-            f"`{fid}` {name}: {title} {_show(column, before[column])} → {_show(column, values[column])}")
+            _change_line(fid, name, title, column, before[column], values[column]))
 
 
-def _apply_and_mark(fid, alliance, values, result):
-    _apply(fid, alliance, values, result)
-    mark_synced(fid, utc_now())
+def _apply(fid, alliance, values, result):
+    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
+        before = member_snapshot(fid, conn)
+        if before is not None:
+            _write_member(conn, fid, alliance, before, values, result)
+        mark_synced(fid, utc_now(), conn)
+        conn.commit()
 
 
-async def run_sync(fetch, profile, *, alliance_id=None, queue=None, started_at=None,
-                   sleep=asyncio.sleep, clock=time.monotonic, today=utc_today) -> RunResult:
+async def _sync_member(fetch, profile, fid, alliance, take_slot, sleep, result, queue) -> bool:
+    """False when the run has to end."""
+    answer = await _fetch(fetch, fid, take_slot, sleep, result, queue)
+    if answer is None:
+        return False
+    if answer.status in KEY_ERRORS:
+        result.error = KEY_ERRORS[answer.status]
+        logger.error(f"Player Sync: API answered HTTP {answer.status}, run stopped")
+        return False
+    if answer.status == 200 and answer.payload is None:
+        result.error = NOT_JSON
+        logger.error("Player Sync: API answered without JSON, run stopped")
+        return False
+    if answer.status == 0 or answer.status >= 429:
+        logger.warning(f"Player Sync: no usable answer for {fid} (HTTP {answer.status}), skipped")
+        return True
+    if answer.status == 200:
+        await asyncio.to_thread(_apply, fid, alliance, read_player(answer.payload, profile), result)
+    else:
+        logger.info(f"Player Sync: API has no data for {fid} (HTTP {answer.status})")
+        await asyncio.to_thread(mark_synced, fid, utc_now())
+    result.checked += 1
+    return True
+
+
+async def run_sync(fetch, profile, *, alliance_id=None, queue=None, started_at=None, reporter=None,
+                   sleep=asyncio.sleep, today=utc_today) -> RunResult:
     result = RunResult()
     missing = missing_for_sync(profile)
     if missing:
         result.error = f"Player Sync still needs the {', '.join(missing)} before it can run."
         return result
-    pacer = _Pacer(profile, sleep, clock, today)
-    for fid, alliance in await asyncio.to_thread(members_to_sync, alliance_id, started_at):
+    members = await asyncio.to_thread(members_to_sync, alliance_id, started_at)
+    if reporter:
+        await reporter.start(Counter(str(alliance) for _, alliance in members))
+    for fid, alliance in members:
         if _should_stop(queue, result):
             break
         try:
-            answer = await _fetch(fetch, fid, pacer, sleep, result, queue)
-            if answer is None:
+            if not await _sync_member(fetch, profile, fid, alliance, lambda: _take_slot(profile, today),
+                                      sleep, result, queue):
                 break
-            if answer.status in KEY_ERRORS:
-                result.error = KEY_ERRORS[answer.status]
-                logger.error(f"Player Sync: API answered HTTP {answer.status}, run stopped")
-                break
-            if answer.status == 200 and answer.payload is None:
-                result.error = NOT_JSON
-                logger.error("Player Sync: API answered without JSON, run stopped")
-                break
-            if answer.status == 0 or answer.status >= 429:
-                logger.warning(f"Player Sync: no usable answer for {fid} (HTTP {answer.status}), skipped")
-                continue
-            if answer.status == 200:
-                await asyncio.to_thread(_apply_and_mark, fid, alliance, read_player(answer.payload, profile), result)
-            else:
-                logger.info(f"Player Sync: API has no data for {fid} (HTTP {answer.status})")
-                await asyncio.to_thread(mark_synced, fid, utc_now())
-            result.checked += 1
         except Exception as e:
             logger.warning(f"Player Sync: {fid} failed, skipped: {e}")
+        if reporter:
+            await reporter.advance(str(alliance))
     return result
+
+
+def _write_state(fid, kid) -> bool:
+    return "state" in apply_member_edit(fid, kid=kid)
+
+
+async def remove_transfers(cog, result: RunResult) -> set:
+    """Hands transfers to gift redemption's Auto-remove Transfers path; returns the IDs removed.
+    A held-back removal keeps the old state, flagged; a pending transfer that isn't a candidate
+    after all gets its new state now."""
+    candidates = []
+    for transfer in result.transfers:
+        if not await maybe_remove_transferred_member(cog, transfer.fid, candidates) and transfer.pending:
+            if await asyncio.to_thread(_write_state, transfer.fid, transfer.kid):
+                result.kingdom_changed.append(transfer.fid)
+    if not candidates:
+        return set()
+    removed = {fid for _, fid, _ in await apply_removals(cog, candidates)}
+    for transfer in result.transfers:
+        transfer.removed = transfer.fid in removed
+    return removed
+
+
+# --- One-off lookups for other cogs: one player, counted against the daily budget -----
+
+def api_available(profile=None) -> bool:
+    return not missing_for_sync(profile if profile is not None else load_setting("profile"))
+
+
+async def api_available_async() -> bool:
+    """Whether the API is set up; a failed check counts as not."""
+    try:
+        return await asyncio.to_thread(api_available)
+    except Exception as e:
+        logger.warning(f"Player Sync: could not check whether the API is set up: {e}")
+        return False
+
+
+NOT_SET_UP = "not_set_up"
+BUDGET_SPENT = "budget_spent"
+FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class Lookup:
+    """`values` when the API knew the player, else `reason`: None for unknown (404), or why it wasn't asked or failed."""
+    values: dict | None = None
+    reason: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.reason == FAILED
+
+    @property
+    def kid(self):
+        return (self.values or {}).get("kid")
+
+
+async def lookup_player(session, fid) -> Lookup:
+    try:
+        profile, key = await asyncio.to_thread(load_connection)
+        if not api_available(profile):
+            return Lookup(reason=NOT_SET_UP)
+        if not await _take_slot(profile):
+            return Lookup(reason=BUDGET_SPENT)
+        answer = await fetch_player(session, profile, key, fid)
+        if answer.status == 200 and answer.payload is not None:
+            return Lookup(read_player(answer.payload, profile))
+        if answer.status == 404:
+            return Lookup()
+        logger.warning(f"Player Sync: lookup of {fid} gave no usable answer (HTTP {answer.status})")
+    except Exception as e:
+        logger.warning(f"Player Sync: lookup of {fid} failed: {e}")
+    return Lookup(reason=FAILED)
+
+
+async def lookup_via_bot(bot, fid) -> Lookup:
+    """One player's lookup, NOT_SET_UP when Player Sync isn't loaded. Never raises."""
+    cog = bot.get_cog("AllianceApiSync")
+    return await cog.lookup(fid) if cog is not None else Lookup(reason=NOT_SET_UP)
+
+
+class LookupBatch:
+    """Lookups for a batch of adds: after the first failure the rest skip the API and `note` is logged."""
+    def __init__(self, note):
+        self.note, self.failed = note, False
+
+    def record(self, lookup: Lookup):
+        if lookup.failed and not self.failed:
+            self.failed = True
+            logger.warning(self.note)
+
+
+@dataclass
+class NewMember:
+    nickname: str
+    furnace_lv: int
+    kid: int | None
+    power: int | None = None
+    avatar_url: str | None = None
+    from_api: bool = False
+    verified: bool = False
+
+
+async def probe_state(bot, fid, alliance_id):
+    """(kid, verified) from one probe in the alliance's state; (None, False) without Gift Codes."""
+    gift_cog = bot.get_cog("GiftOperations")
+    if gift_cog is None:
+        return None, False
+    return await gift_state_resolver.verify_add_state(gift_cog, fid, alliance_id)
+
+
+async def look_up_new_member(bot, fid, alliance_id, name=None, level=None, *, probe=True, batch=None) -> NewMember:
+    """A new member's name, level and state from the API, else the typed values (a typed name wins);
+    without an API state, `probe` asks the game once whether they're in the alliance's state."""
+    skip_api = batch is not None and batch.failed
+    lookup = Lookup(reason=FAILED) if skip_api else await lookup_via_bot(bot, fid)
+    if batch is not None:
+        batch.record(lookup)
+    api = lookup.values or {}
+    member = NewMember(new_member_name((name or "").strip() or api.get("nickname"), fid),
+                       api.get("furnace_lv") or level or 0, api.get("kid"),
+                       api.get("power"), api.get("avatar_url"), lookup.values is not None)
+    if member.kid is None and probe:
+        member.kid, member.verified = await probe_state(bot, fid, alliance_id)
+    return member
+
+
+def _store_api_values(member: NewMember, fid):
+    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
+        if member.avatar_url:
+            save_avatar(fid, member.avatar_url, conn)
+        apply_member_edit(fid, power=member.power, conn=conn)
+        mark_synced(fid, utc_now(), conn)
+        conn.commit()
+
+
+async def store_new_member(member: NewMember, fid) -> None:
+    """Writes the API's power and picture for a member just inserted, and marks them synced."""
+    if not member.from_api:
+        return
+    try:
+        await asyncio.to_thread(_store_api_values, member, fid)
+    except Exception as e:
+        logger.warning(f"Player Sync: could not store the API values for new member {fid}: {e}")
 
 
 def summary(result: RunResult, scope: str) -> dict:
     return {"finished_at": utc_now(), "scope": scope, "checked": result.checked,
-            "changes": sum(len(lines) for lines in result.changes.values()),
+            "changes": sum(len(lines) for lines in result.changes.values()) + len(result.transfers),
             "requests": result.requests, "error": result.error, "stopped": result.stopped}
 
 
-# --- Cog: schedule, queue handler and change-log posts --------------------------------
+# --- Sync Log: one message per alliance, progress while the run goes, then the results --
 
 CHANGE_LINES_PER_POST = 20
+PROGRESS_EDIT_SECONDS = 15.0
+NO_CHANGES = "Everyone checked is already up to date."
 
+
+def _sync_log_embed(name, description, color) -> discord.Embed:
+    return discord.Embed(title=f"{theme.retryIcon} Player Sync: {name}", description=description, color=color)
+
+
+def progress_embed(name, done, total) -> discord.Embed:
+    return _sync_log_embed(name, f"Syncing {name}…\n`{done}` of {count_text(total, 'member')} checked so far.",
+                           theme.emColor1)
+
+
+def transfer_note(transfer: Transfer) -> str:
+    note = f"`{transfer.fid}` {transfer.name} moved to State {transfer.kid}"
+    return f"{note} and was removed from the alliance" if transfer.removed else note
+
+
+def alliance_lines(result: RunResult, alliance) -> list:
+    notes = [transfer_note(t) for t in result.transfers if t.alliance == alliance]
+    return notes + result.changes.get(alliance, [])
+
+
+def change_lines(lines) -> list:
+    shown = lines[:CHANGE_LINES_PER_POST]
+    if len(lines) > len(shown):
+        shown = shown + [f"and {len(lines) - len(shown)} more"]
+    return shown
+
+
+def paused_embed(name, done, total, lines) -> discord.Embed:
+    text = [f"Paused after `{done}` of {count_text(total, 'member')} so the bot can finish other work first. "
+            f"The sync continues on its own and posts a new message."]
+    if lines:
+        text += [""] + change_lines(lines)
+    return _sync_log_embed(name, "\n".join(text), theme.emColor1)
+
+
+def results_embed(name, done, total, lines, result: RunResult) -> discord.Embed:
+    text = [f"Checked `{done}` of {count_text(total, 'member')}."]
+    if lines:
+        text += [""] + change_lines(lines)
+    elif done and not result.error:
+        text += ["", NO_CHANGES]
+    reason = result.error or result.stopped
+    if reason:
+        text.append(f"\n{theme.warnIcon} {reason}")
+    return _sync_log_embed(name, "\n".join(text), theme.emColor2 if result.error else theme.emColor3)
+
+
+def removal_note(keep_minutes) -> str:
+    return f"This message removes itself after {count_text(keep_minutes, 'minute')}."
+
+
+@dataclass
+class _Post:
+    message: object
+    name: str
+    total: int
+    edited_at: float
+    done: int = 0
+
+
+class SyncLogReporter:
+    """Keeps one message per alliance with a Sync Log channel up to date during a run."""
+
+    def __init__(self, get_channel, channels: dict, names: dict, keep_minutes=None, clock=time.monotonic):
+        self.get_channel, self.channels, self.names = get_channel, channels, names
+        self.keep_minutes, self.clock = keep_minutes, clock
+        self.posts = {}
+
+    async def start(self, totals: dict):
+        for alliance, total in totals.items():
+            channel_id = self.channels.get(alliance)
+            if channel_id:
+                await self._post(alliance, channel_id, total)
+
+    async def _post(self, alliance, channel_id, total):
+        name = self.names.get(int(alliance), f"Alliance {alliance}")
+        try:
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                logger.warning(f"Player Sync: Sync Log channel {channel_id} for {name} wasn't found, "
+                               f"no message posted")
+                return
+            message = await channel.send(embed=progress_embed(name, 0, total))
+        except Exception as e:
+            logger.warning(f"Player Sync: couldn't post in the Sync Log channel for {name}: {e}")
+            return
+        self.posts[alliance] = _Post(message, name, total, self.clock())
+
+    async def advance(self, alliance):
+        post = self.posts.get(alliance)
+        if post is None:
+            return
+        post.done += 1
+        if self.clock() - post.edited_at >= PROGRESS_EDIT_SECONDS:
+            post.edited_at = self.clock()
+            await self._edit(alliance, progress_embed(post.name, post.done, post.total))
+
+    async def finish(self, result: RunResult):
+        for alliance, post in list(self.posts.items()):
+            lines = alliance_lines(result, alliance)
+            if result.preempted:
+                embed = paused_embed(post.name, post.done, post.total, lines)
+            else:
+                embed = results_embed(post.name, post.done, post.total, lines, result)
+            if self.keep_minutes:
+                embed.set_footer(text=removal_note(self.keep_minutes))
+            if await self._edit(alliance, embed) and self.keep_minutes:
+                await self._delete_later(post)
+
+    async def _delete_later(self, post):
+        try:
+            await post.message.delete(delay=self.keep_minutes * 60)
+        except Exception as e:
+            logger.warning(f"Player Sync: couldn't schedule removal of the Sync Log message for {post.name}: {e}")
+
+    async def _edit(self, alliance, embed) -> bool:
+        post = self.posts[alliance]
+        try:
+            await post.message.edit(embed=embed)
+            return True
+        except Exception as e:
+            logger.warning(f"Player Sync: couldn't update the Sync Log message for {post.name}: {e}")
+            del self.posts[alliance]
+            return False
+
+
+# --- Cog: schedule and queue handler ---------------------------------------------------
 
 def is_due(now, last_queued, interval_hours) -> bool:
     return last_queued is None or now - last_queued >= timedelta(hours=interval_hours)
-
-
-def change_embeds(changes: dict, names: dict) -> list:
-    embeds = []
-    for alliance, lines in changes.items():
-        shown = lines[:CHANGE_LINES_PER_POST]
-        if len(lines) > len(shown):
-            shown = shown + [f"and {len(lines) - len(shown)} more"]
-        name = names.get(int(alliance), f"Alliance {alliance}")
-        embeds.append((alliance, discord.Embed(title=f"{theme.retryIcon} Player Sync: {name}",
-                                               description="\n".join(shown), color=theme.emColor1)))
-    return embeds
 
 
 def _started_at(process, queue) -> str:
@@ -552,12 +904,16 @@ def _started_at(process, queue) -> str:
 class AllianceApiSync(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.logger = logger
         self._session = None
 
     def session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
+
+    async def lookup(self, fid) -> Lookup:
+        return await lookup_player(self.session(), fid)
 
     async def show_player_sync(self, interaction: discord.Interaction):
         from . import alliance_api_menu
@@ -603,7 +959,7 @@ class AllianceApiSync(commands.Cog):
         if self.sync_job():
             return 'busy'
         queue.enqueue('api_sync', PLAYER_SYNC, alliance_id=alliance_id, details={'alliance_id': alliance_id})
-        set_last_queued(datetime.now(timezone.utc))
+        save_setting("last_queued", datetime.now(timezone.utc))
         return 'queued'
 
     @tasks.loop(minutes=5)
@@ -622,32 +978,40 @@ class AllianceApiSync(commands.Cog):
         queue = self.bot.get_cog('ProcessQueue')
         started_at = _started_at(process, queue)
         profile, key = await asyncio.to_thread(load_connection)
+        names = dict(await asyncio.to_thread(PermissionManager.list_alliances))
+        reporter = await asyncio.to_thread(self._sync_log_reporter, names)
         session = self.session()
         result = await run_sync(lambda fid: fetch_player(session, profile, key, fid), profile,
-                                alliance_id=alliance_id, queue=queue, started_at=started_at)
-        names = {}
-        if alliance_id or result.changes:
-            names = dict(await asyncio.to_thread(PermissionManager.list_alliances))
+                                alliance_id=alliance_id, queue=queue, started_at=started_at, reporter=reporter)
         scope = names.get(alliance_id, f"Alliance {alliance_id}") if alliance_id else "All alliances"
-        await asyncio.to_thread(save_last_run, summary(result, scope))
-        if result.kingdom_changed:
-            enqueue_catchups(self.bot, result.kingdom_changed)
-        await self.post_changes(result.changes, names)
+        await asyncio.to_thread(save_setting, "last_run", summary(result, scope))
+        removed = await self._remove_transfers(result)
+        catchups = [fid for fid in result.kingdom_changed if fid not in removed]
+        if catchups:
+            enqueue_catchups(self.bot, catchups)
+        try:
+            await reporter.finish(result)
+        except Exception as e:
+            logger.warning(f"Player Sync: couldn't finish the Sync Log messages: {e}")
         logger.info(f"Player Sync: {scope}, {result.checked} checked, {result.requests} requests, "
                     f"stopped={result.stopped}, error={result.error}")
         if result.preempted:
             raise PreemptedException()
 
-    async def post_changes(self, changes: dict, names: dict):
-        for alliance, embed in change_embeds(changes, names):
-            channel_id = await asyncio.to_thread(log_channel_id, alliance)
-            channel = self.bot.get_channel(channel_id) if channel_id else None
-            if channel is None:
-                continue
-            try:
-                await channel.send(embed=embed)
-            except discord.HTTPException as e:
-                logger.warning(f"Player Sync: couldn't post changes for alliance {alliance}: {e}")
+    async def _remove_transfers(self, result) -> set:
+        try:
+            return await remove_transfers(self, result)
+        except Exception as e:
+            logger.error(f"Player Sync: couldn't auto-remove transferred members: {e}")
+            return set()
+
+    def _sync_log_reporter(self, names) -> SyncLogReporter:
+        settings = load_settings("autodelete", "keep_minutes")
+        keep = settings["keep_minutes"] if settings["autodelete"] else None
+        return SyncLogReporter(self._channel, sync_channels(), names, keep)
+
+    def _channel(self, channel_id):
+        return self.bot.get_channel(channel_id)
 
 
 async def setup(bot):

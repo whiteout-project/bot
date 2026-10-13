@@ -8,6 +8,7 @@ import asyncio
 import logging
 import re
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -16,7 +17,8 @@ import discord
 from .pimp_my_bot import theme, menu_timeout, confirm_timeout, safe_edit_message
 from .attendance_ocr_parsers import can_edit_session
 from .bear_track import _isolate_rtl, _ltr_line
-from .alliance_member_edit import new_member_name, new_member_name_input
+from .alliance_member_edit import new_member_name_input, unknown_fid_refusal
+from .alliance_api_sync import look_up_new_member, store_new_member
 from . import alliance_power_changes
 from .attendance_ocr_parsers import (
     EVENT_TYPES,
@@ -34,7 +36,6 @@ from .attendance_ocr_parsers import (
     _close_session,
     delete_session,
     _find_or_create_session,
-    _record_session,
     _unmatched_id_floor,
     _normalize_for_match,
     learn_name_alias,
@@ -1297,15 +1298,6 @@ class EventReviewView(discord.ui.View):
 
     # ── scoreboard embed ──────────────────────────────────────────────────
 
-    def _total_absent_for_session(self, session_id: str) -> int:
-        with sqlite3.connect("db/attendance.sqlite", timeout=30.0) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM attendance_records "
-                "WHERE session_id = ? AND status = 'absent'",
-                (session_id,),
-            ).fetchone()
-        return int(row[0]) if row else 0
-
     def _previous_event_total(self, session_id: str) -> Optional[int]:
         with sqlite3.connect("db/attendance.sqlite", timeout=30.0) as conn:
             prior = conn.execute(
@@ -1638,7 +1630,6 @@ async def _resolve_player_field(interaction: discord.Interaction,
 
 async def _add_unknown_fid(interaction, view, fid, new_name=None):
     """Add a state-checked unknown fid under `new_name` -> (added, nickname, note); never moves other alliances' players."""
-    from . import gift_state_resolver
     alliance_id = view.session.alliance_id
     with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
         row = conn.execute("SELECT alliance FROM users WHERE fid = ?", (fid,)).fetchone()
@@ -1646,25 +1637,23 @@ async def _add_unknown_fid(interaction, view, fid, new_name=None):
         if str(row[0]) == str(alliance_id):
             return False, None, f"{theme.warnIcon} ID `{fid}` is already in this alliance."
         return False, None, f"{theme.warnIcon} ID `{fid}` is in another alliance. Not moved."
-    gift_cog = interaction.client.get_cog("GiftOperations")
-    if gift_cog is None:
-        return False, None, f"{theme.deniedIcon} Gift Codes is unavailable, so I can't verify ID `{fid}`."
-    alliance_kid = await asyncio.to_thread(gift_state_resolver.get_alliance_kid, alliance_id)
-    if alliance_kid is None:
-        return False, None, (f"{theme.warnIcon} This alliance has no state set, so I can't confirm ID `{fid}`. "
-                             f"Add them under Alliance Management first.")
-    kid, verified = await gift_state_resolver.verify_add_state(gift_cog, fid, alliance_id)
-    if not verified:
-        return False, None, (f"{theme.deniedIcon} Couldn't confirm ID `{fid}` in state `{alliance_kid}`. "
-                             f"They may be in another state, or the ID is wrong. Add them under Alliance Management first.")
-    nick = new_member_name(new_name, fid)
-    with sqlite3.connect("db/users.sqlite", timeout=30.0) as conn:
+    member = await look_up_new_member(interaction.client, fid, alliance_id, new_name)
+    refusal = await unknown_fid_refusal(interaction.client, alliance_id, fid, member)
+    if refusal:
+        return False, None, refusal
+    await asyncio.to_thread(_insert_member, fid, member, alliance_id)
+    await store_new_member(member, fid)
+    nick = member.nickname
+    return True, nick, f"{theme.verifiedIcon} Added **{_isolate_rtl(nick)}** (ID `{fid}`) to the alliance and matched the row."
+
+
+def _insert_member(fid, member, alliance_id):
+    with closing(sqlite3.connect("db/users.sqlite", timeout=30.0)) as conn:
         conn.execute(
             "INSERT INTO users (fid, nickname, furnace_lv, kid, stove_lv_content, alliance) "
-            "VALUES (?, ?, 0, ?, '', ?)",
-            (fid, nick, str(kid), str(alliance_id)))
+            "VALUES (?, ?, ?, ?, '', ?)",
+            (fid, member.nickname, member.furnace_lv, str(member.kid), str(alliance_id)))
         conn.commit()
-    return True, nick, f"{theme.verifiedIcon} Added **{_isolate_rtl(nick)}** (ID `{fid}`) to the alliance and matched the row."
 
 
 class _StatEditModal(discord.ui.Modal):

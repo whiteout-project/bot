@@ -263,9 +263,6 @@ class GiftCodeAPI:
                                     self.logger.info(f"Added {len(new_codes)} new codes from API - validating...")
                                     
                                     # Validate new codes immediately
-                                    valid_codes_count = 0
-                                    invalid_codes_count = 0
-                                    
                                     for code, formatted_date, was_invalid in new_codes:
                                         try:
                                             # Get GiftOperations cog to validate
@@ -280,7 +277,6 @@ class GiftCodeAPI:
                                                     self.logger.info(f"API code '{code}' not conclusively validated yet ({validation_msg}); scheduling spaced re-validation.")
 
                                                 if is_valid:
-                                                    valid_codes_count += 1
                                                     self.logger.info(f"API code '{code}' validated successfully")
 
                                                     # A code we held invalid that our OWN re-validation now confirms valid
@@ -315,7 +311,6 @@ class GiftCodeAPI:
                                                         print(f"ERROR: {error_msg}")
                                                         auto_alliances = []
                                                 elif is_valid is False:
-                                                    invalid_codes_count += 1
                                                     self.logger.warning(f"API code '{code}' is invalid: {validation_msg}")
                                                     validation_status = f"{theme.deniedIcon} Invalid: {validation_msg}"
                                                     auto_alliances = []

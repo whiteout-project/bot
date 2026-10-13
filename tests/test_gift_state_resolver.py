@@ -183,7 +183,7 @@ def _two_dbs(monkeypatch, users_rows, alliance_rows):
                   "kingdom_scan_next INTEGER, kingdom_scan_done_at TEXT)")
     users.executemany("INSERT INTO users (fid, alliance, kid) VALUES (?, ?, ?)", users_rows)
     users.commit()
-    alliance = sqlite3.connect(":memory:")
+    alliance = sqlite3.connect(":memory:", factory=_KeepOpen)
     alliance.execute("CREATE TABLE alliance_list (alliance_id INTEGER, name TEXT, kid INTEGER, multistate INTEGER DEFAULT 0, state_locked INTEGER DEFAULT 0)")
     alliance.executemany("INSERT INTO alliance_list (alliance_id, name, kid) VALUES (?, ?, ?)", alliance_rows)
     alliance.commit()
@@ -253,23 +253,13 @@ def test_fids_missing_state(monkeypatch):
 
 # --- multistate flag (public/mixed alliances that must never bind to one state) ----
 
-def test_state_lock_is_separate_from_home_state(monkeypatch):
-    _, alliance = _two_dbs(monkeypatch, [], [(5, 'A', 700)])
-    assert res.is_state_locked(5) is False          # kid set, but not locked
-    res.set_state_locked(5, True)
-    assert res.is_state_locked(5) is True
-    assert alliance.execute("SELECT kid FROM alliance_list WHERE alliance_id=5").fetchone()[0] == 700  # home state kept
-    res.set_state_locked(5, False)
-    assert res.is_state_locked(5) is False
-
-
 def test_auto_bind_does_not_lock(monkeypatch):
-    _two_dbs(monkeypatch,
-             [(1, '5', 245), (2, '5', 245), (3, '5', 245)],
-             [(5, 'A', None)])
+    _, alliance = _two_dbs(monkeypatch,
+                           [(1, '5', 245), (2, '5', 245), (3, '5', 245)],
+                           [(5, 'A', None)])
     res.bind_all_alliances()
     assert res.get_alliance_kid(5) == 245           # home state set
-    assert res.is_state_locked(5) is False          # but NOT locked
+    assert alliance.execute("SELECT state_locked FROM alliance_list WHERE alliance_id=5").fetchone()[0] == 0  # but NOT locked
 
 
 def test_set_and_read_multistate(monkeypatch):

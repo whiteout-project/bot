@@ -79,20 +79,6 @@ def _row_to_delta(old, new, change_date):
     return {"old": old, "new": new, "pct": _pct(old, new), "change_date": change_date}
 
 
-def latest_delta(fid, metric):
-    if metric not in METRICS:
-        return None
-    ensure_tables()
-    m = METRICS[metric]
-    with sqlite3.connect(_CHANGES_DB, timeout=30.0) as conn:
-        row = conn.execute(
-            f"SELECT {m['old_col']}, {m['new_col']}, change_date FROM {m['table']} "
-            f"WHERE fid = ? ORDER BY change_date DESC, id DESC LIMIT 1",
-            (fid,),
-        ).fetchone()
-    return _row_to_delta(*row) if row else None
-
-
 def latest_deltas(fids, metric):
     if metric not in METRICS or not fids:
         return {}
