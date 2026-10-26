@@ -1,4 +1,4 @@
-"""Member States, Running Now, timeout settings, who may edit an uploaded screenshot review, and Player Sync."""
+"""Member States, Running Now, Leave a Server, timeout settings, who may edit an uploaded screenshot review, and Player Sync."""
 import sqlite3
 from contextlib import closing
 
@@ -48,7 +48,7 @@ async def test_state_scan_range_rejects_bad_input(sim):
     assert ephemeral and "can't be higher" in message.content
 
 
-# --- Bot Health: Running Now and the timeout settings ---------------------------------------
+# --- Bot Health Running Now, timeout settings, and Maintenance Leave a Server ----------------
 
 
 async def test_running_now_lists_and_stops_a_waiting_job(sim):
@@ -75,6 +75,35 @@ async def test_running_now_cancel_leaves_the_job(sim):
     cancelled = await sim.click(confirm, "Cancel")
     assert not cancelled.problems()
     assert any(p["id"] == job for p in queue.queued_processes())
+
+
+async def test_leave_server_leaves_another_server(sim):
+    sim.env.create_guild("Old Server")
+    await sim.env.settle()
+    servers = await sim.walk("Maintenance", "Leave a Server")
+    assert "**WOS Test** (this server)" in _description(servers) and "Old Server" in _description(servers)
+
+    picked = await sim.select(servers, "Pick a server to leave", "Old Server")
+    assert not picked.problems()
+    confirm, ephemeral = picked.screen
+    assert ephemeral and title(confirm).endswith("Leave This Server?")
+    left = await sim.click(confirm, "Leave Server")
+    assert not left.problems()
+    assert "The bot left **Old Server**" in _description(sim.current(servers))
+    assert [g.name for g in sim.bot.guilds] == ["WOS Test"]
+
+    back = await sim.click(sim.current(servers), "Back")
+    assert not back.problems() and title(back.screen[0]).endswith("Maintenance")
+
+
+async def test_leave_server_is_bot_owner_only(sim):
+    own_menu = await sim.walk("Maintenance", user="global")
+    assert "Leave a Server" in labels(own_menu) and "Leave a Server" not in labels(own_menu, enabled_only=True)
+
+    owners_menu = await sim.walk("Maintenance")
+    refused = await sim.click(owners_menu, "Leave a Server", user="global")
+    message, ephemeral = refused.screen
+    assert ephemeral and "Only the bot owner" in message.content
 
 
 async def test_health_settings_save_both_timeouts(sim):

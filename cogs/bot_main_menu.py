@@ -485,18 +485,20 @@ class MainMenu(commands.Cog):
                     f"└ API status, DB health, system info, restart, cleanup tools (Global Admin only)\n\n"
                     f"{theme.robotIcon} **Bot Presence**\n"
                     f"└ Set the bot's Discord activity status (Global Admin only)\n\n"
-                    f"{theme.globeIcon} **External OCR Service**\n"
-                    f"└ Set the OCR service URL, or blank for local OCR (Global Admin only)\n\n"
                     f"{theme.supportIcon} **Request Support**\n"
                     f"└ Open a support DM with logs attached\n\n"
                     f"{theme.infoIcon} **About Project**\n"
-                    f"└ View project info, links, and credits\n"
+                    f"└ View project info, links, and credits\n\n"
+                    f"{theme.globeIcon} **External OCR Service**\n"
+                    f"└ Set the OCR service URL, or blank for local OCR (Global Admin only)\n\n"
+                    f"{theme.shutdownDoorIcon} **Leave a Server**\n"
+                    f"└ See every server the bot is in and make it leave one (Bot Owner only)\n"
                     f"{theme.lowerDivider}"
                 ),
                 color=theme.emColor1
             )
 
-            view = MaintenanceView(self, is_global)
+            view = MaintenanceView(self, is_global, PermissionManager.is_owner(interaction.user.id))
             await safe_edit_message(interaction, embed=embed, view=view, content=None)
 
         except Exception as e:
@@ -2816,7 +2818,7 @@ class ExternalOcrModal(discord.ui.Modal):
 class MaintenanceView(discord.ui.View):
     """Maintenance sub-menu."""
 
-    def __init__(self, cog, is_global: bool = False):
+    def __init__(self, cog, is_global: bool = False, is_owner: bool = False):
         super().__init__(timeout=menu_timeout())
         self.cog = cog
         self.is_global = is_global
@@ -2827,6 +2829,8 @@ class MaintenanceView(discord.ui.View):
         for child in self.children:
             if isinstance(child, discord.ui.Button) and child.custom_id in global_only:
                 child.disabled = not is_global
+            if isinstance(child, discord.ui.Button) and child.custom_id == "leave_server":
+                child.disabled = not is_owner
 
         # Reflect current External OCR state on its toggle (dynamic label/style).
         try:
@@ -2972,6 +2976,16 @@ class MaintenanceView(discord.ui.View):
                 f"{theme.deniedIcon} Global Admin only.", ephemeral=True)
             return
         await interaction.response.send_modal(ExternalOcrModal(self.cog, clicker_is_global))
+
+    @discord.ui.button(
+        label="Leave a Server",
+        emoji=theme.shutdownDoorIcon,
+        style=discord.ButtonStyle.secondary,
+        custom_id="leave_server",
+        row=2
+    )
+    async def leave_server_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _route_to_cog(interaction, self.cog.bot, "BotHealth", "show_servers", missing_label="Bot Health")
 
     @discord.ui.button(
         label="Main Menu",

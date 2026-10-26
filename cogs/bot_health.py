@@ -1613,6 +1613,12 @@ class BotHealth(commands.Cog):
             except Exception:
                 pass
 
+    async def show_servers(self, interaction: discord.Interaction):
+        if not await _bot_owner_only(interaction):
+            return
+        view = ServersView(self, interaction.guild_id)
+        await interaction.response.edit_message(embed=await view.build_embed(), view=view, content=None)
+
     async def _build_health_embed(self, overall: str, wos_api: dict, gift_api: dict,
                             db_health: dict, log_health: dict, system_health: dict,
                             requirements: dict | None = None) -> discord.Embed:
@@ -2206,9 +2212,10 @@ class RunningNowView(MenuView):
         await interaction.response.edit_message(embed=await self.build_embed(), view=self, content=None)
 
     async def _ask(self, interaction: discord.Interaction, pid):
-        confirm = _RunningNowConfirmView(self, interaction.message, pid)
-        await interaction.response.send_message(embed=self.confirm_embed(pid), view=confirm, ephemeral=True)
-        confirm.message = await interaction.original_response()
+        if pid is None:
+            await _ask_confirm(interaction, self, "Clear Queue", self.clear_queue, self.confirm_embed(pid))
+        else:
+            await _ask_confirm(interaction, self, "Stop", lambda: self.stop_job(pid), self.confirm_embed(pid))
 
     async def _on_pick(self, interaction: discord.Interaction):
         await self._ask(interaction, int(interaction.data["values"][0]))
@@ -2248,17 +2255,22 @@ class RunningNowView(MenuView):
 
 
 
-class _RunningNowConfirmView(ConfirmView):
-    """Ephemeral 'are you sure?' for Stop and Clear Queue; Confirm updates the Running Now message."""
+async def _ask_confirm(interaction: discord.Interaction, parent, label: str, action, embed: discord.Embed):
+    confirm = _HealthConfirmView(parent, interaction.message, label, action)
+    await interaction.response.send_message(embed=embed, view=confirm, ephemeral=True)
+    confirm.message = await interaction.original_response()
 
-    def __init__(self, parent: RunningNowView, parent_message: discord.Message, pid):
-        super().__init__("stop confirmation")
-        self.parent, self.parent_message, self.pid = parent, parent_message, pid
-        for label, emoji, style, callback in (
-                ("Stop" if pid is not None else "Clear Queue", theme.warnIcon,
-                 discord.ButtonStyle.danger, self._confirm),
+
+class _HealthConfirmView(ConfirmView):
+    """Ephemeral 'are you sure?'; Confirm runs `action` and refreshes the parent menu message."""
+
+    def __init__(self, parent, parent_message: discord.Message, label: str, action):
+        super().__init__(f"{label.lower()} confirmation")
+        self.parent, self.parent_message, self.action = parent, parent_message, action
+        for text, emoji, style, callback in (
+                (label, theme.warnIcon, discord.ButtonStyle.danger, self._confirm),
                 ("Cancel", theme.deniedIcon, discord.ButtonStyle.secondary, self._cancel)):
-            button = discord.ui.Button(label=label, emoji=emoji, style=style)
+            button = discord.ui.Button(label=text, emoji=emoji, style=style)
             button.callback = callback
             self.add_item(button)
 
@@ -2268,10 +2280,7 @@ class _RunningNowConfirmView(ConfirmView):
     async def _confirm(self, interaction: discord.Interaction):
         self.stop()
         await interaction.response.defer()
-        if self.pid is None:
-            await self.parent.clear_queue()
-        else:
-            await self.parent.stop_job(self.pid)
+        await self.action()
         await self.parent_message.edit(embed=await self.parent.build_embed(), view=self.parent, content=None)
         await interaction.delete_original_response()
 
@@ -2279,6 +2288,114 @@ class _RunningNowConfirmView(ConfirmView):
         self.stop()
         await interaction.response.defer()
         await interaction.delete_original_response()
+
+
+async def _bot_owner_only(interaction: discord.Interaction) -> bool:
+    if PermissionManager.is_owner(interaction.user.id):
+        return True
+    await interaction.response.send_message(
+        f"{theme.deniedIcon} Only the bot owner can manage the servers the bot is in.", ephemeral=True)
+    return False
+
+
+def _alliances_per_server() -> dict:
+    try:
+        with closing(sqlite3.connect(PermissionManager.ALLIANCE_DB)) as db:
+            return dict(db.execute(
+                "SELECT discord_server_id, COUNT(*) FROM alliance_list GROUP BY discord_server_id").fetchall())
+    except sqlite3.Error:
+        return {}
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+class ServersView(MenuView):
+    """Maintenance -> Leave a Server: every server the bot is in; the bot owner can make it leave one."""
+
+    MAX_LISTED = 25
+
+    def __init__(self, cog, current_guild_id: int | None):
+        super().__init__()
+        self.cog = cog
+        self.current_guild_id = current_guild_id
+        self.last_result = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await _bot_owner_only(interaction)
+
+    def _describe(self, guild: discord.Guild, alliances: dict) -> str:
+        return (f"{_plural(guild.member_count or 0, 'member')}, "
+                f"{_plural(alliances.get(guild.id, 0), 'alliance')}")
+
+    async def build_embed(self) -> discord.Embed:
+        alliances = await asyncio.to_thread(_alliances_per_server)
+        guilds = sorted(self.cog.bot.guilds, key=lambda g: g.name.lower())
+        others = [g for g in guilds if g.id != self.current_guild_id]
+        self.clear_items()
+
+        lines = [
+            "Every Discord server this bot is in. You can make the bot leave a server here, "
+            "even one you're no longer a member of.\n",
+            f"{theme.upperDivider}",
+        ]
+        for guild in guilds[:self.MAX_LISTED]:
+            here = " (this server)" if guild.id == self.current_guild_id else ""
+            lines.append(f"{theme.globeIcon} **{discord.utils.escape_markdown(guild.name)}**{here}")
+            lines.append(f"└ {self._describe(guild, alliances)}")
+        if len(guilds) > self.MAX_LISTED:
+            lines.append(f"└ ...and {len(guilds) - self.MAX_LISTED} more")
+        lines += [
+            f"{theme.lowerDivider}",
+            f"{theme.deniedIcon} **Pick a server**",
+            "└ Make the bot leave it. You're asked to confirm first.",
+            "To remove the bot from this server, kick it from the member list here.",
+        ]
+        if self.last_result:
+            lines.append(f"\n{theme.verifiedIcon} {self.last_result}")
+
+        if others:
+            options = [discord.SelectOption(label=g.name[:100], value=str(g.id),
+                                            description=self._describe(g, alliances)[:100])
+                       for g in others[:25]]
+            select = discord.ui.Select(placeholder="Pick a server to leave", options=options, row=0)
+            select.callback = self._on_pick
+            self.add_item(select)
+        back = discord.ui.Button(label="Back", emoji=theme.backIcon, style=discord.ButtonStyle.secondary, row=1)
+        back.callback = self._on_back
+        self.add_item(back)
+        return discord.Embed(title=f"{theme.shutdownDoorIcon} Leave a Server", description="\n".join(lines),
+                             color=theme.emColor1)
+
+    def confirm_embed(self, guild: discord.Guild) -> discord.Embed:
+        text = (f"The bot leaves **{discord.utils.escape_markdown(guild.name)}** right away.\n\n"
+                f"Its alliances and member data stay in the bot's database. Scheduled notifications "
+                f"for that server are paused. To bring the bot back, someone with Manage Server "
+                f"permission there has to invite it again.")
+        return discord.Embed(title=f"{theme.warnIcon} Leave This Server?", description=text, color=theme.emColor4)
+
+    async def leave(self, guild_id: int):
+        guild = self.cog.bot.get_guild(guild_id)
+        if guild is None:
+            self.last_result = "The bot had already left that server."
+            return
+        await guild.leave()
+        self.cog.logger.info(f"Bot Health: owner made the bot leave server {guild.name} ({guild.id})")
+        self.last_result = f"The bot left **{discord.utils.escape_markdown(guild.name)}**."
+
+    async def _on_pick(self, interaction: discord.Interaction):
+        guild_id = int(interaction.data["values"][0])
+        guild = self.cog.bot.get_guild(guild_id)
+        if guild is None:
+            self.last_result = "The bot had already left that server."
+            await interaction.response.edit_message(embed=await self.build_embed(), view=self, content=None)
+            return
+        await _ask_confirm(interaction, self, "Leave Server", lambda: self.leave(guild_id),
+                           self.confirm_embed(guild))
+
+    async def _on_back(self, interaction: discord.Interaction):
+        await self.cog.bot.get_cog("MainMenu").show_maintenance(interaction)
 
 
 class CleanCogsConfirmView(discord.ui.View):
