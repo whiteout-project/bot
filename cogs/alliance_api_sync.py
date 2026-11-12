@@ -237,6 +237,15 @@ def _flag(on: bool) -> str:
     return '1' if on else '0'
 
 
+KEEP_ALL, KEEP_CHANGES, KEEP_NONE = "all", "changes", "none"
+# '0' and '1' keep their Auto-Delete Off/On meaning
+KEEP_STORED = {KEEP_ALL: '0', KEEP_CHANGES: '1', KEEP_NONE: '2'}
+
+
+def _keep_mode(value) -> str:
+    return next((mode for mode, text in KEEP_STORED.items() if text == value), KEEP_CHANGES)
+
+
 # name: (settings key, read the stored text, value to store)
 SETTINGS = {
     "profile": ('api_sync_profile', lambda value: normalise(_json_dict(value)),
@@ -248,7 +257,7 @@ SETTINGS = {
     "last_run": ('api_sync_last_run', _json_dict, json.dumps),
     "last_queued": ('api_sync_last_queued', _datetime, datetime.isoformat),
     "budget": ('api_sync_budget', _json_dict, json.dumps),
-    "autodelete": ('api_sync_autodelete', lambda value: value != '0', _flag),
+    "keep": ('api_sync_autodelete', _keep_mode, KEEP_STORED.__getitem__),
     "keep_minutes": ('api_sync_keep_minutes', _int_or(KEEP_MINUTES_DEFAULT),
                      _int_within(KEEP_MINUTES_MIN, KEEP_MINUTES_MAX, "minutes")),
 }
@@ -400,8 +409,7 @@ NOT_JSON = "The API answered, but not with player data. Check the base URL and p
 BUDGET_USED = "Today's request limit was reached. The next sync picks up where this one left off."
 RATE_LIMITED = "The API asked the bot to wait too long. The next sync picks up where this one left off."
 NAME_LENGTH = 40
-_CHANGE_LABELS = {"name": ("Name", "nickname"), "level": ("Furnace", "furnace_lv"),
-                  "state": ("State", "kid"), "power": ("Power", "power")}
+_CHANGE_COLUMNS = {"name": "nickname", "level": "furnace_lv", "state": "kid", "power": "power"}
 
 
 @dataclass
@@ -412,6 +420,16 @@ class Transfer:
     kid: int
     removed: bool = False
     pending: bool = False   # new state not written yet: Auto-remove decides first
+    old_kid: int | None = None
+
+
+@dataclass
+class Change:
+    label: str
+    fid: int
+    name: str
+    old: object
+    new: object
 
 
 @dataclass
@@ -510,12 +528,6 @@ def _show(column, value):
     return str(value)[:NAME_LENGTH]
 
 
-def _change_line(fid, name, title, column, old, new):
-    if old is None:
-        return f"`{fid}` {name}: {title} set to {_show(column, new)}"
-    return f"`{fid}` {name}: {title} {_show(column, old)} → {_show(column, new)}"
-
-
 def _transfer_to(alliance, before, values):
     kid = values.get("kid")
     if kid is None or kid == before["kid"] or not left_alliance_state(alliance, kid):
@@ -533,15 +545,15 @@ def _write_member(conn, fid, alliance, before, values, result):
                                 kid=None if pending else values.get("kid"), power=values.get("power"), conn=conn)
     name = str(before["nickname"] or fid)[:NAME_LENGTH]
     if transfer_kid is not None:
-        result.transfers.append(Transfer(str(alliance), fid, name, transfer_kid, pending=pending))
+        result.transfers.append(Transfer(str(alliance), fid, name, transfer_kid, pending=pending,
+                                         old_kid=before["kid"]))
     if "state" in changed:
         result.kingdom_changed.append(fid)
         if transfer_kid is not None:
             changed.remove("state")
     for label in changed:
-        title, column = _CHANGE_LABELS[label]
-        result.changes.setdefault(alliance, []).append(
-            _change_line(fid, name, title, column, before[column], values[column]))
+        column = _CHANGE_COLUMNS[label]
+        result.changes.setdefault(alliance, []).append(Change(label, fid, name, before[column], values[column]))
 
 
 def _apply(fid, alliance, values, result):
@@ -755,9 +767,12 @@ def summary(result: RunResult, scope: str) -> dict:
 
 # --- Sync Log: one message per alliance, progress while the run goes, then the results --
 
-CHANGE_LINES_PER_POST = 20
+PAGE_LENGTH = 4000
 PROGRESS_EDIT_SECONDS = 15.0
 NO_CHANGES = "Everyone checked is already up to date."
+REMOVED_NOTE = ", removed from the alliance"
+HISTORY_SECTIONS = (("level", "Furnace", "stoveIcon"), ("name", "Names", "editListIcon"),
+                    ("state", "State", "stateIcon"))
 
 
 def _sync_log_embed(name, description, color) -> discord.Embed:
@@ -769,50 +784,96 @@ def progress_embed(name, done, total) -> discord.Embed:
                            theme.emColor1)
 
 
-def transfer_note(transfer: Transfer) -> str:
-    note = f"`{transfer.fid}` {transfer.name} moved to State {transfer.kid}"
-    return f"{note} and was removed from the alliance" if transfer.removed else note
+def _member(fid, name) -> str:
+    return f"**{name}** `{fid}`"
 
 
-def alliance_lines(result: RunResult, alliance) -> list:
-    notes = [transfer_note(t) for t in result.transfers if t.alliance == alliance]
-    return notes + result.changes.get(alliance, [])
+def change_entry(change: Change) -> str:
+    column = _CHANGE_COLUMNS[change.label]
+    new = _show(column, change.new)
+    if change.old is None:
+        return f"{_member(change.fid, change.name)}  set to {new}"
+    return f"{_member(change.fid, change.name)}  {_show(column, change.old)} {theme.forwardIcon} {new}"
 
 
-def change_lines(lines) -> list:
-    shown = lines[:CHANGE_LINES_PER_POST]
-    if len(lines) > len(shown):
-        shown = shown + [f"and {len(lines) - len(shown)} more"]
-    return shown
+def transfer_entry(transfer: Transfer) -> str:
+    if transfer.old_kid is None:
+        return f"{_member(transfer.fid, transfer.name)}  moved to State {transfer.kid}"
+    return f"{_member(transfer.fid, transfer.name)}  State {transfer.old_kid} {theme.forwardIcon} {transfer.kid}"
 
 
-def paused_embed(name, done, total, lines) -> discord.Embed:
-    text = [f"Paused after `{done}` of {count_text(total, 'member')} so the bot can finish other work first. "
-            f"The sync continues on its own and posts a new message."]
-    if lines:
-        text += [""] + change_lines(lines)
-    return _sync_log_embed(name, "\n".join(text), theme.emColor1)
+def _section(icon, title, entries, note="") -> list:
+    return [f"{icon} **{title} ({len(entries)})**{note}"] + entries
 
 
-def results_embed(name, done, total, lines, result: RunResult) -> discord.Embed:
-    text = [f"Checked `{done}` of {count_text(total, 'member')}."]
-    if lines:
-        text += [""] + change_lines(lines)
-    elif done and not result.error:
-        text += ["", NO_CHANGES]
+def history_sections(result: RunResult, alliance) -> list:
+    """The changes kept in the Sync Log, one section per kind; power is only counted."""
+    sections = []
+    transfers = [t for t in result.transfers if t.alliance == alliance]
+    if transfers:
+        note = REMOVED_NOTE if all(t.removed for t in transfers) else ""
+        sections.append(_section(theme.transferIcon, "Transfers", [transfer_entry(t) for t in transfers], note))
+    changes = result.changes.get(alliance, [])
+    for label, title, icon in HISTORY_SECTIONS:
+        entries = [change_entry(c) for c in changes if c.label == label]
+        if entries:
+            sections.append(_section(getattr(theme, icon), title, entries))
+    return sections
+
+
+def power_line(result: RunResult, alliance) -> str | None:
+    count = sum(1 for c in result.changes.get(alliance, []) if c.label == "power")
+    return f"{theme.upIcon} Power updated for {count_text(count, 'member')}." if count else None
+
+
+def _body(sections, power) -> list:
+    lines = []
+    for section in sections:
+        lines += [""] + section
+    if power:
+        lines += ["", power]
+    return lines
+
+
+def pages(lines, limit=PAGE_LENGTH) -> list:
+    """Splits the lines into message-sized pages, never mid-line."""
+    split, current = [], ""
+    for line in lines:
+        if current and len(current) + len(line) + 1 > limit:
+            split.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    return split + [current]
+
+
+def paused_lines(done, total, sections, power) -> list:
+    return [f"Paused after `{done}` of {count_text(total, 'member')} so the bot can finish other work first. "
+            f"The sync continues on its own and posts a new message."] + _body(sections, power)
+
+
+def results_lines(done, total, sections, power, result: RunResult) -> list:
+    lines = [f"Checked `{done}` of {count_text(total, 'member')}."] + _body(sections, power)
+    if not sections and not power and done and not result.error:
+        lines += ["", NO_CHANGES]
     reason = result.error or result.stopped
     if reason:
-        text.append(f"\n{theme.warnIcon} {reason}")
-    return _sync_log_embed(name, "\n".join(text), theme.emColor2 if result.error else theme.emColor3)
+        lines += ["", f"{theme.warnIcon} {reason}"]
+    return lines
 
 
 def removal_note(keep_minutes) -> str:
     return f"This message removes itself after {count_text(keep_minutes, 'minute')}."
 
 
+def _titled(name, page, count) -> str:
+    return f"{name} ({page}/{count})" if count > 1 else name
+
+
 @dataclass
 class _Post:
     message: object
+    channel: object
     name: str
     total: int
     edited_at: float
@@ -820,11 +881,13 @@ class _Post:
 
 
 class SyncLogReporter:
-    """Keeps one message per alliance with a Sync Log channel up to date during a run."""
+    """Keeps one message per alliance with a Sync Log channel up to date during a run.
+    Results are deleted after keep_minutes, except ones that list history when keep_history is set."""
 
-    def __init__(self, get_channel, channels: dict, names: dict, keep_minutes=None, clock=time.monotonic):
+    def __init__(self, get_channel, channels: dict, names: dict, keep_minutes=None, keep_history=True,
+                 clock=time.monotonic):
         self.get_channel, self.channels, self.names = get_channel, channels, names
-        self.keep_minutes, self.clock = keep_minutes, clock
+        self.keep_minutes, self.keep_history, self.clock = keep_minutes, keep_history, clock
         self.posts = {}
 
     async def start(self, totals: dict):
@@ -845,7 +908,7 @@ class SyncLogReporter:
         except Exception as e:
             logger.warning(f"Player Sync: couldn't post in the Sync Log channel for {name}: {e}")
             return
-        self.posts[alliance] = _Post(message, name, total, self.clock())
+        self.posts[alliance] = _Post(message, channel, name, total, self.clock())
 
     async def advance(self, alliance):
         post = self.posts.get(alliance)
@@ -858,21 +921,39 @@ class SyncLogReporter:
 
     async def finish(self, result: RunResult):
         for alliance, post in list(self.posts.items()):
-            lines = alliance_lines(result, alliance)
+            sections = history_sections(result, alliance)
+            power = power_line(result, alliance)
             if result.preempted:
-                embed = paused_embed(post.name, post.done, post.total, lines)
+                lines, color = paused_lines(post.done, post.total, sections, power), theme.emColor1
             else:
-                embed = results_embed(post.name, post.done, post.total, lines, result)
-            if self.keep_minutes:
-                embed.set_footer(text=removal_note(self.keep_minutes))
-            if await self._edit(alliance, embed) and self.keep_minutes:
-                await self._delete_later(post)
+                lines = results_lines(post.done, post.total, sections, power, result)
+                color = theme.emColor2 if result.error else theme.emColor3
+            keep_minutes = None if sections and self.keep_history else self.keep_minutes
+            await self._publish(alliance, post, pages(lines), color, keep_minutes)
 
-    async def _delete_later(self, post):
+    async def _publish(self, alliance, post, texts, color, keep_minutes):
+        embeds = [_sync_log_embed(_titled(post.name, i, len(texts)), text, color)
+                  for i, text in enumerate(texts, 1)]
+        if keep_minutes:
+            embeds[-1].set_footer(text=removal_note(keep_minutes))
+        if not await self._edit(alliance, embeds[0]):
+            return
+        messages = [post.message]
+        for embed in embeds[1:]:
+            try:
+                messages.append(await post.channel.send(embed=embed))
+            except Exception as e:
+                logger.warning(f"Player Sync: couldn't post the rest of the results for {post.name}: {e}")
+                break
+        if keep_minutes:
+            for message in messages:
+                await self._delete_later(message, post.name, keep_minutes)
+
+    async def _delete_later(self, message, name, keep_minutes):
         try:
-            await post.message.delete(delay=self.keep_minutes * 60)
+            await message.delete(delay=keep_minutes * 60)
         except Exception as e:
-            logger.warning(f"Player Sync: couldn't schedule removal of the Sync Log message for {post.name}: {e}")
+            logger.warning(f"Player Sync: couldn't schedule removal of the Sync Log message for {name}: {e}")
 
     async def _edit(self, alliance, embed) -> bool:
         post = self.posts[alliance]
@@ -1006,9 +1087,9 @@ class AllianceApiSync(commands.Cog):
             return set()
 
     def _sync_log_reporter(self, names) -> SyncLogReporter:
-        settings = load_settings("autodelete", "keep_minutes")
-        keep = settings["keep_minutes"] if settings["autodelete"] else None
-        return SyncLogReporter(self._channel, sync_channels(), names, keep)
+        settings = load_settings("keep", "keep_minutes")
+        minutes = None if settings["keep"] == KEEP_ALL else settings["keep_minutes"]
+        return SyncLogReporter(self._channel, sync_channels(), names, minutes, settings["keep"] == KEEP_CHANGES)
 
     def _channel(self, channel_id):
         return self.bot.get_channel(channel_id)

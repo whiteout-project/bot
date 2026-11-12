@@ -357,11 +357,11 @@ def _channel_rows(view):
 def test_channels_layout_before_an_alliance_is_picked(alliances):
     view, embed = _channels()
     assert _channel_rows(view) == [["Pick an alliance to set its Sync Log"], ["Set Channel", "Clear"],
-                                   ["Auto-Delete: On", "Keep Results", "Back"]]
+                                   ["Keep: Changes", "Delete After", "Back"]]
     disabled = {item.label for item in view.children if getattr(item, "disabled", False)}
     assert disabled == {"Set Channel", "Clear"}
     assert "**Wolves:** Not set" in embed.description and "**Bears:** Not set" in embed.description
-    assert "On, results stay for 5 minutes" in embed.description
+    assert "**Keep:** Changes, other results are deleted after 5 minutes" in embed.description
 
 
 def test_channels_shows_the_picked_alliance(alliances):
@@ -398,23 +398,28 @@ def test_channels_pick_and_clear(alliances, monkeypatch):
     assert sync.sync_channels().get("20") is None and "Sync Log cleared for Bears." in embed.description
 
 
-def test_channels_auto_delete_toggle(alliances, monkeypatch):
+def test_channels_keep_cycles_through_the_modes(alliances, monkeypatch):
     async def no_edit(interaction, **kwargs):
         pass
     monkeypatch.setattr(menu, "safe_edit_message", no_edit)
 
-    async def toggle(view):
-        await view._on_autodelete(None)
-    view, embed = _channels(run=toggle)
-    assert sync.load_setting("autodelete") is False
-    toggle_button = next(item for item in view.children if getattr(item, "label", "").startswith("Auto-Delete"))
-    assert toggle_button.label == "Auto-Delete: Off" and toggle_button.style.name == "secondary"
-    assert "Off, results stay in the channel" in embed.description
+    async def cycle(view):
+        await view._on_keep(None)
+    seen = []
+    for mode, label, style in (("none", "Keep: None", "success"), ("all", "Keep: All", "secondary"),
+                               ("changes", "Keep: Changes", "success")):
+        view, embed = _channels(run=cycle)
+        buttons = {getattr(item, "label", None): item for item in view.children}
+        assert sync.load_setting("keep") == mode and buttons[label].style.name == style
+        seen.append((buttons["Delete After"].disabled, embed.description))
+    assert [disabled for disabled, _ in seen] == [False, True, False]
+    assert "Keep is set to None, every result is deleted after 5 minutes." in seen[0][1]
+    assert "Keep is set to All, results stay in the channel." in seen[1][1]
 
 
 @pytest.mark.parametrize("value, saved", [("30", 30), ("0", 5), ("1441", 5), ("abc", 5)])
-def test_keep_results_modal(alliances, value, saved):
-    error, done = _apply(lambda: menu.KeepResultsModal(_cog(), 1, 5, 10), number=value)
+def test_delete_after_modal(alliances, value, saved):
+    error, done = _apply(lambda: menu.DeleteAfterModal(_cog(), 1, 5, 10), number=value)
     assert sync.load_setting("keep_minutes") == saved
     if saved == 30:
         assert error is None and "30 minutes" in done[1]
@@ -422,7 +427,7 @@ def test_keep_results_modal(alliances, value, saved):
         assert "from 1 to 1440" in error
 
 
-def test_keep_results_modal_returns_to_channels_with_the_alliance(alliances, monkeypatch):
+def test_delete_after_modal_returns_to_channels_with_the_alliance(alliances, monkeypatch):
     shown = []
 
     async def edit(interaction, **kwargs):
@@ -430,7 +435,7 @@ def test_keep_results_modal_returns_to_channels_with_the_alliance(alliances, mon
     monkeypatch.setattr(menu, "safe_edit_message", edit)
 
     async def run():
-        await menu.KeepResultsModal(_cog(), 1, 5, 10).show_saved(None, (theme.verifiedIcon, "Saved."))
+        await menu.DeleteAfterModal(_cog(), 1, 5, 10).show_saved(None, (theme.verifiedIcon, "Saved."))
     asyncio.run(run())
     assert "**Picked:** Wolves" in shown[0] and shown[0].endswith("Saved.")
 

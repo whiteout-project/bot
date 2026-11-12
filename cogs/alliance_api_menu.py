@@ -331,12 +331,28 @@ class AlliancePickView(_SyncView):
 
 
 def _channels_state():
-    state = sync.load_settings("autodelete", "keep_minutes")
+    state = sync.load_settings("keep", "keep_minutes")
     return {**state, "alliances": PermissionManager.list_alliances()[:25], "channels": sync.sync_channels()}
 
 
 def _channel_text(channel_id) -> str:
     return f"<#{channel_id}>" if channel_id else "Not set"
+
+
+KEEP_LABELS = {sync.KEEP_ALL: "All", sync.KEEP_CHANGES: "Changes", sync.KEEP_NONE: "None"}
+
+
+def _keep_text(mode, minutes) -> str:
+    if mode == sync.KEEP_ALL:
+        return "All, results stay in the channel"
+    if mode == sync.KEEP_CHANGES:
+        return f"Changes, other results are deleted after {count_text(minutes, 'minute')}"
+    return f"None, every result is deleted after {count_text(minutes, 'minute')}"
+
+
+def _next_keep(mode) -> str:
+    modes = list(sync.KEEP_STORED)
+    return modes[(modes.index(mode) + 1) % len(modes)]
 
 
 class ChannelsView(_SyncView):
@@ -355,7 +371,7 @@ class ChannelsView(_SyncView):
             self.alliance_id = next(iter(self.names))
         picked = self.alliance_id in self.names
         picked_channel = state["channels"].get(str(self.alliance_id)) if picked else None
-        on, keep = state["autodelete"], state["keep_minutes"]
+        mode, minutes = state["keep"], state["keep_minutes"]
 
         self.clear_items()
         if self.names:
@@ -368,25 +384,26 @@ class ChannelsView(_SyncView):
                          not picked)
         self._add_button("Clear", theme.deniedIcon, discord.ButtonStyle.secondary, 1, self._on_clear,
                          not picked_channel)
-        self._add_button(f"Auto-Delete: {'On' if on else 'Off'}", theme.trashIcon,
-                         discord.ButtonStyle.success if on else discord.ButtonStyle.secondary, 2, self._on_autodelete)
-        self._add_button("Keep Results", theme.timeIcon, discord.ButtonStyle.primary, 2, self._on_keep)
+        keep_all = mode == sync.KEEP_ALL
+        self._add_button(f"Keep: {KEEP_LABELS[mode]}", theme.trashIcon,
+                         discord.ButtonStyle.secondary if keep_all else discord.ButtonStyle.success, 2, self._on_keep)
+        self._add_button("Delete After", theme.timeIcon, discord.ButtonStyle.primary, 2, self._on_delete_after,
+                         keep_all)
         self._add_button("Back", theme.backIcon, discord.ButtonStyle.secondary, 2, self._to_hub)
 
         lines = ["Set a Sync Log channel per alliance. During a sync, the bot posts a progress message "
                  "there and updates it with the results.\n", f"{theme.upperDivider}"]
         lines += [f"{theme.allianceIcon} **{name}:** {_channel_text(state['channels'].get(str(aid)))}"
                   for aid, name in state["alliances"]] or ["Add an alliance first, then you can pick its channel here."]
-        auto = f"On, results stay for {count_text(keep, 'minute')}" if on else "Off, results stay in the channel"
-        lines += [f"{theme.trashIcon} **Auto-Delete:** {auto}", f"{theme.lowerDivider}"]
+        lines += [f"{theme.trashIcon} **Keep:** {_keep_text(mode, minutes)}", f"{theme.lowerDivider}"]
         if picked and len(self.names) > 1:
             lines.append(f"**Picked:** {self._picked_name()}, Sync Log {_channel_text(picked_channel)}\n")
         lines += [
             f"{theme.announceIcon} **Set Channel** / {theme.deniedIcon} **Clear**",
             "└ Set or clear the Sync Log for the selected alliance.",
-            f"{theme.trashIcon} **Auto-Delete**",
-            "└ Delete results messages after the Keep Results time.",
-            f"{theme.timeIcon} **Keep Results**",
+            f"{theme.trashIcon} **Keep**",
+            "└ Choose what stays: All, Changes (results with name, furnace or state changes) or None.",
+            f"{theme.timeIcon} **Delete After**",
             "└ Set how long results stay before they're deleted.",
         ]
         self._result_line(lines)
@@ -422,16 +439,17 @@ class ChannelsView(_SyncView):
         self.last_result = _done(f"Sync Log cleared for {self._picked_name()}.")
         await self.show(interaction)
 
-    async def _on_autodelete(self, interaction):
-        on = not await asyncio.to_thread(sync.load_setting, "autodelete")
-        await asyncio.to_thread(sync.save_setting, "autodelete", on)
-        self.last_result = _done("Auto-Delete is on." if on else "Auto-Delete is off. Results stay in the channel.")
+    async def _on_keep(self, interaction):
+        state = await asyncio.to_thread(sync.load_settings, "keep", "keep_minutes")
+        mode = _next_keep(state["keep"])
+        await asyncio.to_thread(sync.save_setting, "keep", mode)
+        self.last_result = _done(f"Keep is set to {_keep_text(mode, state['keep_minutes'])}.")
         await self.show(interaction)
 
-    async def _on_keep(self, interaction):
+    async def _on_delete_after(self, interaction):
         minutes = await asyncio.to_thread(sync.load_setting, "keep_minutes")
         await interaction.response.send_modal(
-            KeepResultsModal(self.cog, self.original_user_id, minutes, self.alliance_id))
+            DeleteAfterModal(self.cog, self.original_user_id, minutes, self.alliance_id))
 
 
 class FieldPickView(_SyncView):
@@ -578,18 +596,18 @@ class IntervalModal(_NumberModal):
         return f"Automatic syncs now run {_every(hours)}."
 
 
-class KeepResultsModal(_NumberModal):
+class DeleteAfterModal(_NumberModal):
     setting, unit = "keep_minutes", "minutes"
     lowest, highest = sync.KEEP_MINUTES_MIN, sync.KEEP_MINUTES_MAX
 
     def __init__(self, cog, user_id, minutes, alliance_id=None):
-        super().__init__(cog, user_id, "Keep Results", f"Minutes to keep results ({sync.KEEP_MINUTES_MIN} to "
+        super().__init__(cog, user_id, "Delete After", f"Minutes before deleting ({sync.KEEP_MINUTES_MIN} to "
                          f"{sync.KEEP_MINUTES_MAX})", minutes, "5", 4)
         self.alliance_id = alliance_id
 
     @staticmethod
     def saved_text(minutes):
-        return f"Saved. Results stay for {count_text(minutes, 'minute')} while Auto-Delete is on."
+        return f"Saved. Results are deleted after {count_text(minutes, 'minute')} unless Keep is set to All."
 
     async def show_saved(self, interaction, done):
         await ChannelsView(self.cog, self.user_id, self.alliance_id, done).show(interaction)

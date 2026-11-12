@@ -544,18 +544,18 @@ async def test_sync_log_set_in_channel_setup_shows_in_player_sync(sim):
 async def test_sync_log_auto_delete_and_keep_results(sim):
     from cogs import alliance_api_sync as sync
     channels = await _sync_channels(sim)
-    off = await sim.click(channels, "Auto-Delete: On")
-    assert not off.problems(), off.problems()
-    assert "Auto-Delete: Off" in labels(off.screen[0]) and sync.load_setting("autodelete") is False
+    none = await sim.click(channels, "Keep: Changes")
+    assert not none.problems(), none.problems()
+    assert "Keep: None" in labels(none.screen[0]) and sync.load_setting("keep") == "none"
 
-    shown = await sim.click(off.screen[0], "Keep Results")
-    saved = await sim.submit_modal(shown, {"Minutes to keep results (1 to 1440)": "30"})
+    shown = await sim.click(none.screen[0], "Delete After")
+    saved = await sim.submit_modal(shown, {"Minutes before deleting (1 to 1440)": "30"})
     assert not saved.problems(), saved.problems()
     assert sync.load_setting("keep_minutes") == 30
-    assert "Results stay for 30 minutes" in _description(sim.current(channels))
+    assert "every result is deleted after 30 minutes" in _description(sim.current(channels))
 
-    shown = await sim.click(sim.current(channels), "Keep Results")
-    refused = await sim.submit_modal(shown, {"Minutes to keep results (1 to 1440)": "0"})
+    shown = await sim.click(sim.current(channels), "Delete After")
+    refused = await sim.submit_modal(shown, {"Minutes before deleting (1 to 1440)": "0"})
     message, ephemeral = refused.screen
     assert ephemeral and "from 1 to 1440" in message.content and sync.load_setting("keep_minutes") == 30
 
@@ -616,8 +616,8 @@ async def test_sync_run_posts_progress_then_results_in_the_sync_log(sim, fake_ap
     assert post is not None, "the sync didn't finish within 30 seconds"
     text = _description(post)
     assert text.startswith("Checked `3` of 3 members.") and "Synced001" in text
-    assert "`10003` Blizzard moved to State 456" in text
-    assert post.embeds[0].footer.text == "This message removes itself after 5 minutes."
+    assert f"**Blizzard** `10003`  State 1 {sync.theme.forwardIcon} 456" in text
+    assert not post.embeds[0].footer.text
 
 
 async def _wait_for_members(fids, seconds=30.0):

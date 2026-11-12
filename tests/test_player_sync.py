@@ -382,11 +382,17 @@ def test_old_zero_channel_counts_as_not_set(store_dbs):
     assert sync.sync_channels().get("10") is None
 
 
-def test_auto_delete_defaults_on_for_five_minutes(store_dbs):
-    assert sync.load_setting("autodelete") is True and sync.load_setting("keep_minutes") == 5
-    sync.save_setting("autodelete", False)
+def test_keep_defaults_to_changes_for_five_minutes(store_dbs):
+    assert sync.load_setting("keep") == sync.KEEP_CHANGES and sync.load_setting("keep_minutes") == 5
+    sync.save_setting("keep", sync.KEEP_NONE)
     sync.save_setting("keep_minutes", 1440)
-    assert sync.load_setting("autodelete") is False and sync.load_setting("keep_minutes") == 1440
+    assert sync.load_setting("keep") == sync.KEEP_NONE and sync.load_setting("keep_minutes") == 1440
+
+
+@pytest.mark.parametrize("stored, mode", [("0", "all"), ("1", "changes"), ("2", "none"), ("x", "changes")])
+def test_keep_reads_the_stored_auto_delete_values(store_dbs, stored, mode):
+    sync._put_setting("api_sync_autodelete", stored)
+    assert sync.load_setting("keep") == mode
 
 
 @pytest.mark.parametrize("minutes", [0, 1441, -1])
@@ -477,7 +483,7 @@ def test_writes_changes_and_history(run_dbs):
     assert len(_history("nickname_changes")) == 1 and len(_history("furnace_changes")) == 1
     assert result.checked == 3 and result.kingdom_changed == [1]
     assert len(result.changes["10"]) == 4 and "20" not in result.changes
-    assert any("Alpha" in line and "FC 3" in line for line in result.changes["10"])
+    assert sync.Change("level", 1, "Alpha", 40, 45) in result.changes["10"]
 
 
 def test_unmapped_and_missing_fields_are_left_alone(run_dbs):
@@ -693,11 +699,13 @@ def test_change_lines_clip_long_names(run_dbs):
         conn.commit()
     fetch, _ = _fetcher({1: _ok(name="M" * 60), 2: _ok(), 3: _ok()})
     result = _run(fetch)
-    line, = result.changes["10"]
-    assert f"`1` {'N' * 40}: Name {'N' * 40} → {'M' * 40}" == line
+    change, = result.changes["10"]
+    assert sync.change_entry(change) == f"**{'N' * 40}** `1`  {'N' * 40} {FWD} {'M' * 40}"
 
 
 # --- Sync Log: the progress message and the results it turns into ----------------------
+
+FWD = sync.theme.forwardIcon
 
 class FakeMessage:
     def __init__(self, embed):
@@ -726,10 +734,10 @@ class FakeChannel:
         return self.sent[-1]
 
 
-def _reporter(channels, clock=None, keep_minutes=None, names=None):
+def _reporter(channels, clock=None, keep_minutes=None, names=None, keep_history=True):
     found = {555: FakeChannel(), 666: FakeChannel(fail=True)}
     reporter = sync.SyncLogReporter(found.get, channels, names or {10: "Wolves", 20: "Bears"},
-                                    keep_minutes, clock or Clock())
+                                    keep_minutes, keep_history, clock or Clock())
     return reporter, found
 
 
@@ -763,7 +771,8 @@ def test_results_replace_the_progress_message(run_dbs):
     asyncio.run(reporter.finish(result))
     message = found[555].sent[0]
     assert len(found[555].sent) == 1
-    assert message.text.startswith("Checked `2` of 2 members.\n\n`1` Alpha: Name Alpha → Alpha2")
+    assert message.text.startswith(f"Checked `2` of 2 members.\n\n{sync.theme.editListIcon} **Names (1)**\n"
+                                   f"**Alpha** `1`  Alpha {FWD} Alpha2")
     assert message.deleted_after is None and not message.embeds[-1].footer.text
 
 
@@ -775,10 +784,42 @@ def test_results_without_changes_say_so(run_dbs):
     assert found[555].sent[0].text == f"Checked `1` of 1 member.\n\n{sync.NO_CHANGES}"
 
 
-def test_results_cap_change_lines():
-    lines = [f"line {i}" for i in range(25)]
-    shown = sync.change_lines(lines)
-    assert shown[-2] == "line 19" and shown[-1] == "and 5 more" and len(shown) == 21
+def test_pages_split_between_lines():
+    lines = [f"{i:03} " + "x" * 46 for i in range(200)]
+    split = sync.pages(lines)
+    assert len(split) == 3 and all(len(page) <= sync.PAGE_LENGTH for page in split)
+    assert "\n".join(split).split("\n") == lines
+
+
+def test_power_is_counted_not_listed_and_quiet_results_auto_delete():
+    reporter, found = _reporter({"10": 555}, keep_minutes=5)
+    asyncio.run(reporter.start({"10": 2}))
+    changes = [sync.Change("power", fid, "P", 1, 2) for fid in (1, 2)]
+    asyncio.run(reporter.finish(sync.RunResult(checked=2, changes={"10": changes})))
+    message = found[555].sent[0]
+    assert message.text == f"Checked `0` of 2 members.\n\n{sync.theme.upIcon} Power updated for 2 members."
+    assert message.deleted_after == 300
+
+
+def test_results_with_history_stay_when_auto_delete_is_on():
+    reporter, found = _reporter({"10": 555}, keep_minutes=5)
+    asyncio.run(reporter.start({"10": 1}))
+    changes = [sync.Change("name", 1, "Alpha", "Alpha", "Alpha2"), sync.Change("power", 1, "Alpha", 1, 2)]
+    asyncio.run(reporter.finish(sync.RunResult(checked=1, changes={"10": changes})))
+    message = found[555].sent[0]
+    assert message.deleted_after is None and not message.embeds[-1].footer.text
+    assert message.text.endswith(f"Alpha {FWD} Alpha2\n\n{sync.theme.upIcon} Power updated for 1 member.")
+
+
+def test_long_results_continue_in_more_messages():
+    reporter, found = _reporter({"10": 555})
+    asyncio.run(reporter.start({"10": 100}))
+    changes = [sync.Change("name", fid, "N" * 40, "A" * 40, "B" * 40) for fid in range(100)]
+    asyncio.run(reporter.finish(sync.RunResult(checked=100, changes={"10": changes})))
+    sent = found[555].sent
+    titles = [message.embeds[-1].title for message in sent]
+    assert len(sent) > 1 and all(t.endswith(f"Wolves ({i}/{len(sent)})") for i, t in enumerate(titles, 1))
+    assert sum(message.text.count("**" + "N" * 40) for message in sent) == 100
 
 
 @pytest.mark.parametrize("result", [sync.RunResult(stopped=sync.BUDGET_USED),
@@ -805,6 +846,15 @@ def test_preempt_says_paused_and_resume_posts_a_fresh_message(run_dbs):
     resumed.get_channel = found.get
     _run(fetch, started_at=started_at, reporter=resumed)
     assert len(found[555].sent) == 2 and "`0` of 1 member checked" in found[555].sent[1].text
+
+
+def test_keep_none_deletes_results_with_history_too():
+    reporter, found = _reporter({"10": 555}, keep_minutes=5, keep_history=False)
+    asyncio.run(reporter.start({"10": 1}))
+    changes = [sync.Change("name", 1, "Alpha", "Alpha", "Alpha2")]
+    asyncio.run(reporter.finish(sync.RunResult(checked=1, changes={"10": changes})))
+    message = found[555].sent[0]
+    assert message.deleted_after == 300 and "Alpha2" in message.text
 
 
 def test_auto_delete_removes_the_results_after_keep_minutes():
@@ -875,14 +925,7 @@ def test_paused_message_keeps_the_changes_found_so_far(run_dbs):
     result = _run(fetch, queue=_PreemptAfter(1), reporter=reporter)
     asyncio.run(reporter.finish(result))
     text = found[555].sent[0].text
-    assert text.startswith("Paused after `1` of 2 members") and text.endswith("Name Alpha → Alpha2")
-
-
-def test_paused_message_caps_change_lines():
-    reporter, found = _reporter({"10": 555})
-    asyncio.run(reporter.start({"10": 30}))
-    asyncio.run(reporter.finish(sync.RunResult(preempted=True, changes={"10": [f"line {i}" for i in range(25)]})))
-    assert found[555].sent[0].text.endswith("line 19\nand 5 more")
+    assert text.startswith("Paused after `1` of 2 members") and text.endswith(f"**Alpha** `1`  Alpha {FWD} Alpha2")
 
 
 @pytest.mark.parametrize("done, result", [(0, sync.RunResult(stopped=sync.STOPPED)),
@@ -1001,14 +1044,15 @@ def test_handler_gives_the_run_a_reporter_for_the_sync_log_channels(dbs, monkeyp
     sync.save_setting("keep_minutes", 7)
     asyncio.run(_cog(FakeQueue()).handle_api_sync({"id": 7, "details": {"alliance_id": None}}))
     reporter = seen["reporter"]
-    assert reporter.channels == {"10": 555} and reporter.keep_minutes == 7
+    assert reporter.channels == {"10": 555} and reporter.keep_minutes == 7 and reporter.keep_history
 
 
-def test_handler_reporter_keeps_results_when_auto_delete_is_off(dbs, monkeypatch):
+@pytest.mark.parametrize("mode, minutes, history", [("all", None, False), ("none", 5, False)])
+def test_handler_reporter_follows_the_keep_setting(dbs, monkeypatch, mode, minutes, history):
     seen = _capture_run(monkeypatch)
-    sync.save_setting("autodelete", False)
+    sync.save_setting("keep", mode)
     asyncio.run(_cog(FakeQueue()).handle_api_sync({"id": 7, "details": {"alliance_id": None}}))
-    assert seen["reporter"].keep_minutes is None
+    assert seen["reporter"].keep_minutes == minutes and seen["reporter"].keep_history is history
 
 
 def test_running_now_line():
@@ -1292,16 +1336,17 @@ def test_moving_into_the_alliance_state_is_no_transfer(run_dbs):
     fetch, _ = _fetcher({1: _ok(kid=173), 2: _ok(), 3: _ok()})
     result = _run(fetch)
     assert result.transfers == []
-    assert result.changes["10"] == ["`1` Alpha: State 172 → 173"]
+    assert result.changes["10"] == [sync.Change("state", 1, "Alpha", 172, 173)]
 
 
 def test_moving_to_another_state_is_a_transfer(run_dbs):
     _alliance(10)
     fetch, _ = _fetcher({1: _ok(kid=456), 2: _ok(), 3: _ok()})
     result = _run(fetch)
-    assert result.transfers == [sync.Transfer("10", 1, "Alpha", 456)]
+    assert result.transfers == [sync.Transfer("10", 1, "Alpha", 456, old_kid=172)]
     assert "10" not in result.changes and result.kingdom_changed == [1]
-    assert sync.alliance_lines(result, "10") == ["`1` Alpha moved to State 456"]
+    assert sync.history_sections(result, "10") == [[f"{sync.theme.transferIcon} **Transfers (1)**",
+                                                     f"**Alpha** `1`  State 172 {FWD} 456"]]
     assert sync.summary(result, "All")["changes"] == 1
 
 
@@ -1311,7 +1356,7 @@ def test_multistate_or_stateless_alliance_has_no_transfers(run_dbs, kid, multist
     fetch, _ = _fetcher({1: _ok(kid=456), 2: _ok(), 3: _ok()})
     result = _run(fetch)
     assert result.transfers == []
-    assert result.changes["10"] == ["`1` Alpha: State 172 → 456"]
+    assert result.changes["10"] == [sync.Change("state", 1, "Alpha", 172, 456)]
 
 
 def test_transfer_notes_come_first_in_the_sync_log(run_dbs):
@@ -1321,9 +1366,17 @@ def test_transfer_notes_come_first_in_the_sync_log(run_dbs):
     result = _run(fetch, reporter=reporter)
     result.transfers[0].removed = True
     asyncio.run(reporter.finish(result))
-    assert found[555].sent[0].text == ("Checked `2` of 2 members.\n\n"
-                                       "`1` Alpha moved to State 456 and was removed from the alliance\n"
-                                       "`2` Bravo: Name Bravo → Bravo2")
+    assert found[555].sent[0].text == (f"Checked `2` of 2 members.\n\n"
+                                       f"{sync.theme.transferIcon} **Transfers (1)**, removed from the alliance\n"
+                                       f"**Alpha** `1`  State 172 {FWD} 456\n\n"
+                                       f"{sync.theme.editListIcon} **Names (1)**\n"
+                                       f"**Bravo** `2`  Bravo {FWD} Bravo2")
+
+
+def test_transfers_heading_has_no_note_when_nobody_was_removed():
+    result = sync.RunResult(transfers=[sync.Transfer("10", 1, "Alpha", 456)])
+    assert sync.history_sections(result, "10") == [[f"{sync.theme.transferIcon} **Transfers (1)**",
+                                                     "**Alpha** `1`  moved to State 456"]]
 
 
 def _removals(monkeypatch, removed=None):
@@ -1407,7 +1460,7 @@ def test_auto_remove_transfer_keeps_the_old_state_until_removal_decides(run_dbs)
     _alliance(10, auto_remove=1)
     fetch, _ = _fetcher({1: _ok(kid=456), 2: _ok(), 3: _ok()})
     result = _run(fetch)
-    assert result.transfers == [sync.Transfer("10", 1, "Alpha", 456, pending=True)]
+    assert result.transfers == [sync.Transfer("10", 1, "Alpha", 456, pending=True, old_kid=172)]
     assert _user(1)["kid"] == 172 and result.kingdom_changed == []
     assert asyncio.run(sync.remove_transfers(_real_removal_cog(), result)) == {1}
     assert _user(1) is None and result.transfers[0].removed
@@ -1438,6 +1491,7 @@ def test_pending_transfer_gets_its_state_when_auto_remove_was_switched_off(run_d
 
 
 def test_first_value_reads_set_to_and_changed_value_keeps_arrow():
-    assert sync._change_line(10001, "Frosty", "Power", "power", None, 12345678) == "`10001` Frosty: Power set to 12,345,678"
-    assert sync._change_line(10001, "Frosty", "State", "kid", None, 172) == "`10001` Frosty: State set to 172"
-    assert sync._change_line(10001, "Frosty", "Power", "power", 5, 12345678) == "`10001` Frosty: Power 5 → 12,345,678"
+    entry = lambda label, old, new: sync.change_entry(sync.Change(label, 10001, "Frosty", old, new))
+    assert entry("power", None, 12345678) == "**Frosty** `10001`  set to 12,345,678"
+    assert entry("state", None, 172) == "**Frosty** `10001`  set to 172"
+    assert entry("power", 5, 12345678) == f"**Frosty** `10001`  5 {sync.theme.forwardIcon} 12,345,678"
