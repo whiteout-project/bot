@@ -77,6 +77,9 @@ def test_report(answer, profile) -> str:
             shown = format_furnace_level(value)
         elif field == "power":
             shown = f"{value:,}"
+        elif field == "avatar":
+            lines.append(f"• {label}: {value}")
+            continue
         else:
             shown = _clip(value)
         lines.append(f"• {label}: `{_clip(raw)}` → {shown}")
@@ -159,10 +162,6 @@ def _every(hours) -> str:
     return "every hour" if hours == 1 else f"every {hours} hours"
 
 
-def _and_list(items) -> str:
-    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
-
-
 def _last_run_line(last_run) -> str:
     if not last_run:
         return "Hasn't run yet"
@@ -179,6 +178,11 @@ def _turned_on_text(last_queued, interval_hours) -> str:
         return "Automatic sync is on. The first sync starts within 5 minutes."
     due = last_queued + timedelta(hours=interval_hours)
     return f"Automatic sync is on. The next sync runs <t:{int(due.timestamp())}:R>."
+
+
+def _fields_text(profile) -> str:
+    chosen = [label for field, label in FIELD_LABELS.items() if profile["fields"][field]]
+    return sync.and_list(chosen) if chosen else "None yet, so a sync has nothing to read. Press **Fields** to add one."
 
 
 class PlayerSyncView(_SyncView):
@@ -207,7 +211,7 @@ class PlayerSyncView(_SyncView):
         self._add_button("Back", theme.backIcon, secondary, 2, self._on_back)
 
         profile = state["profile"]
-        setup = "Ready" if ready else f"Still needs the {_and_list(state['missing'])}"
+        setup = "Ready" if ready else f"Still needs {sync.and_list(state['missing'])}"
         auto = f"On, {_every(state['interval'])}" if on else "Off"
         key = state['key'] if state['key'] != "not set" else "Not added yet"
         lines = [
@@ -215,6 +219,7 @@ class PlayerSyncView(_SyncView):
             "Set the connection, API key and fields, then turn on Auto Sync.\n",
             f"{theme.upperDivider}",
             f"{theme.settingsIcon} **Setup:** {setup}",
+            f"{theme.editListIcon} **Fields:** {_fields_text(profile)}",
             f"{theme.retryIcon} **Automatic sync:** {auto}",
             f"{theme.shieldIcon} **API key:** {key}",
             f"{theme.chartIcon} **Requests today:** `{state['used']}` of `{profile['per_day']}`",

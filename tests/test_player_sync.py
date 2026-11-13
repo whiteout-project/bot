@@ -84,7 +84,7 @@ def test_field_path_must_be_text():
 def test_missing_for_sync():
     assert sync.missing_for_sync(_profile()) == []
     empty = sync.normalise({})
-    assert sync.missing_for_sync(empty) == ["base URL", "player path", "at least one field"]
+    assert sync.missing_for_sync(empty) == ["the base URL", "the player path", "at least one field"]
 
 
 def test_export_import_round_trip():
@@ -508,9 +508,19 @@ def test_one_alliance_only(run_dbs):
 def test_404_marks_member_checked_without_changes(run_dbs):
     fetch, _ = _fetcher({1: FetchResult(404), 2: _ok(), 3: _ok()})
     result = _run(fetch)
-    assert result.checked == 3 and _user(1)["nickname"] == "Alpha"
+    assert result.checked == 3 and _user(1)["nickname"] == "Alpha" and result.no_data == {"10": [(1, "Alpha")]}
     with closing(sqlite3.connect("db/users.sqlite")) as conn:
         assert conn.execute("SELECT COUNT(*) FROM users WHERE api_synced_at IS NULL").fetchone()[0] == 0
+
+
+def test_results_list_members_the_api_had_no_data_for_and_still_auto_delete():
+    reporter, found = _reporter({"10": 555}, keep_minutes=5)
+    asyncio.run(reporter.start({"10": 2}))
+    asyncio.run(reporter.finish(sync.RunResult(checked=2, no_data={"10": [(1, "Alpha"), (2, "Bravo")]})))
+    message = found[555].sent[0]
+    assert message.text == (f"Checked `0` of 2 members.\n\n{sync.theme.warnIcon} **No Data from the API (2)**\n"
+                            f"**Alpha** `1`\n**Bravo** `2`")
+    assert message.deleted_after == 300
 
 
 @pytest.mark.parametrize("status", [401, 402, 403])

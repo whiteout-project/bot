@@ -46,7 +46,14 @@ def test_actions_disabled_until_set_up(dbs):
     view, embed = _build()
     disabled = {item.label for item in view.children if item.disabled}
     assert disabled == {"Auto Sync: Off", "Sync Now", "Sync Alliance", "Test"}
-    assert "base URL" in embed.description
+    assert "Still needs the base URL, the player path and at least one field" in embed.description
+    assert "**Fields:** None yet, so a sync has nothing to read. Press **Fields** to add one." in embed.description
+
+
+def test_hub_lists_the_fields_that_are_set(dbs):
+    sync.save_setting("profile", PROFILE)
+    _, embed = _build()
+    assert f"**Fields:** Name, {menu.FIELD_LABELS['level']} and Power" in embed.description
 
 
 def test_actions_enabled_once_set_up(dbs):
@@ -77,6 +84,13 @@ def test_test_report_reads_each_field():
     assert "Furnace level: `45` → FC 3" in text
     assert "Power: `nope` → nothing found at this path" in text
     assert "State: skipped" in text
+
+
+def test_test_report_shows_the_whole_avatar_url():
+    url = "https://cdn.example.com/avatars/" + "a" * 120 + ".png"
+    profile = {**PROFILE, "fields": {**PROFILE["fields"], "avatar": "player.avatar"}}
+    answer = FetchResult(200, {"player": {"name": "Alpha", "avatar": url}})
+    assert f"Avatar picture: {url}" in menu.test_report(answer, profile)
 
 
 def test_test_report_groups_power_digits():
@@ -322,7 +336,7 @@ def test_export_reply_has_a_title_and_no_key(dbs):
 
 def test_hub_guide_lines_follow_the_button_order(dbs):
     _, embed = _build()
-    text = embed.description
+    text = embed.description[embed.description.rindex(theme.lowerDivider):]
     order = ["**Interval**", "**Connection**", "**API Key**", "**Fields**", "**Limits**", "**Channels**", "**Test**"]
     assert [text.index(name) for name in order] == sorted(text.index(name) for name in order)
 

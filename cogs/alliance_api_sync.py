@@ -83,12 +83,16 @@ def problems(profile: dict) -> list[str]:
 def missing_for_sync(profile: dict) -> list[str]:
     missing = []
     if not profile["base_url"]:
-        missing.append("base URL")
+        missing.append("the base URL")
     if not profile["player_path"]:
-        missing.append("player path")
+        missing.append("the player path")
     if not any(profile["fields"].values()):
         missing.append("at least one field")
     return missing
+
+
+def and_list(items) -> str:
+    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def extract(payload, path: str):
@@ -439,6 +443,7 @@ class RunResult:
     changes: dict = field(default_factory=dict)
     kingdom_changed: list = field(default_factory=list)
     transfers: list = field(default_factory=list)
+    no_data: dict = field(default_factory=dict)
     error: str | None = None
     stopped: str | None = None
     preempted: bool = False
@@ -556,6 +561,15 @@ def _write_member(conn, fid, alliance, before, values, result):
         result.changes.setdefault(alliance, []).append(Change(label, fid, name, before[column], values[column]))
 
 
+def _no_data(fid, alliance, result):
+    with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
+        before = member_snapshot(fid, conn)
+        mark_synced(fid, utc_now(), conn)
+        conn.commit()
+    name = str((before and before["nickname"]) or fid)[:NAME_LENGTH]
+    result.no_data.setdefault(alliance, []).append((fid, name))
+
+
 def _apply(fid, alliance, values, result):
     with closing(sqlite3.connect(USERS_DB, timeout=30.0)) as conn:
         before = member_snapshot(fid, conn)
@@ -585,7 +599,7 @@ async def _sync_member(fetch, profile, fid, alliance, take_slot, sleep, result, 
         await asyncio.to_thread(_apply, fid, alliance, read_player(answer.payload, profile), result)
     else:
         logger.info(f"Player Sync: API has no data for {fid} (HTTP {answer.status})")
-        await asyncio.to_thread(mark_synced, fid, utc_now())
+        await asyncio.to_thread(_no_data, fid, alliance, result)
     result.checked += 1
     return True
 
@@ -595,7 +609,7 @@ async def run_sync(fetch, profile, *, alliance_id=None, queue=None, started_at=N
     result = RunResult()
     missing = missing_for_sync(profile)
     if missing:
-        result.error = f"Player Sync still needs the {', '.join(missing)} before it can run."
+        result.error = f"Player Sync still needs {and_list(missing)} before it can run."
         return result
     members = await asyncio.to_thread(members_to_sync, alliance_id, started_at)
     if reporter:
@@ -821,6 +835,12 @@ def history_sections(result: RunResult, alliance) -> list:
     return sections
 
 
+def no_data_sections(result: RunResult, alliance) -> list:
+    missing = result.no_data.get(alliance, [])
+    return [_section(theme.warnIcon, "No Data from the API", [_member(fid, name) for fid, name in missing])] \
+        if missing else []
+
+
 def power_line(result: RunResult, alliance) -> str | None:
     count = sum(1 for c in result.changes.get(alliance, []) if c.label == "power")
     return f"{theme.upIcon} Power updated for {count_text(count, 'member')}." if count else None
@@ -922,11 +942,12 @@ class SyncLogReporter:
     async def finish(self, result: RunResult):
         for alliance, post in list(self.posts.items()):
             sections = history_sections(result, alliance)
+            shown = sections + no_data_sections(result, alliance)
             power = power_line(result, alliance)
             if result.preempted:
-                lines, color = paused_lines(post.done, post.total, sections, power), theme.emColor1
+                lines, color = paused_lines(post.done, post.total, shown, power), theme.emColor1
             else:
-                lines = results_lines(post.done, post.total, sections, power, result)
+                lines = results_lines(post.done, post.total, shown, power, result)
                 color = theme.emColor2 if result.error else theme.emColor3
             keep_minutes = None if sections and self.keep_history else self.keep_minutes
             await self._publish(alliance, post, pages(lines), color, keep_minutes)
